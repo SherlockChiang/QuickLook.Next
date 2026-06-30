@@ -38,6 +38,45 @@ public sealed record PreviewResult(string Kind, string Title)
 
     /// <summary>Structured file/folder listing for archive and directory previews.</summary>
     public PreviewListing? Listing { get; init; }
+
+    /// <summary>Approximate Office document layout produced by the Rust native parser.</summary>
+    public OfficeLayout? OfficeLayout { get; init; }
+}
+
+public sealed record OfficeLayout(string LayoutKind)
+{
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public OfficePage[] Pages { get; init; } = [];
+}
+
+public sealed record OfficePage(string Title)
+{
+    public int Index { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public OfficeCell[] Cells { get; init; } = [];
+    public OfficeLayoutItem[] Items { get; init; } = [];
+}
+
+public sealed record OfficeCell(int Row, int Column, string Text)
+{
+    public double X { get; init; }
+    public double Y { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+}
+
+public sealed record OfficeLayoutItem(string Kind)
+{
+    public double X { get; init; }
+    public double Y { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public string? Text { get; init; }
+    public string? ImageName { get; init; }
+    public string? MimeType { get; init; }
+    public string? ImageBase64 { get; init; }
 }
 
 public sealed record PreviewListing(string RootName, string RootPath, string ListingKind)

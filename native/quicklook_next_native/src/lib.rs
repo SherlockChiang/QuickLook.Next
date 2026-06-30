@@ -9,9 +9,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageReader};
 
@@ -49,6 +50,21 @@ const WM_QL_CLOSE: u32 = WM_APP + 3;
 const WM_QL_ZOOM_IN: u32 = WM_APP + 4;
 const WM_QL_ZOOM_OUT: u32 = WM_APP + 5;
 const WM_QL_SWITCH_DELAYED: u32 = WM_APP + 6;
+const SWITCH_TIMER_ID: usize = 1;
+static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
+static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
+
+type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
+
+struct ThumbnailRequest {
+    path: String,
+    size: i32,
+    reply: mpsc::Sender<ThumbnailResult>,
+}
+
+struct ThumbnailStaWorker {
+    sender: mpsc::Sender<ThumbnailRequest>,
+}
 
 /// Send a tagged UTF-16 string back to the managed host.
 fn emit(msg: &str) {
@@ -113,9 +129,9 @@ fn hook_thread() {
                 WM_QL_PREVIEW => do_selection_and_emit("OPEN"),
                 WM_QL_SWITCH_DELAYED => {
                     // Delayed switch: Explorer needs a beat to update its selection after the arrow key.
-                    // Use a short sleep on the pump thread (not the hook thread) — the hook already returned.
-                    std::thread::sleep(std::time::Duration::from_millis(80));
-                    do_selection_and_emit("SWITCH");
+                    // Use a thread timer so repeated arrow/mouse events do not block this message pump.
+                    SWITCH_TIMER_ARMED.store(1, Ordering::SeqCst);
+                    let _ = SetTimer(None, SWITCH_TIMER_ID, 80, Some(switch_timer_proc));
                 }
                 WM_QL_CLOSE => emit("CLOSE"),
                 WM_QL_ZOOM_IN => emit("ZOOM_IN"),
@@ -130,6 +146,13 @@ fn hook_thread() {
             let _ = UnhookWindowsHookEx(mouse_hook);
         }
         CoUninitialize();
+    }
+}
+
+unsafe extern "system" fn switch_timer_proc(_hwnd: HWND, _msg: u32, id: usize, _tick: u32) {
+    let _ = KillTimer(None, id);
+    if SWITCH_TIMER_ARMED.swap(0, Ordering::SeqCst) != 0 {
+        do_selection_and_emit("SWITCH");
     }
 }
 
@@ -154,7 +177,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             } else if is_up {
                 SPACE_HELD.store(false, Ordering::SeqCst);
             }
-        } else if matches!(kb.vkCode, VK_LEFT_U32 | VK_UP_U32 | VK_RIGHT_U32 | VK_DOWN_U32) {
+        } else if matches!(
+            kb.vkCode,
+            VK_LEFT_U32 | VK_UP_U32 | VK_RIGHT_U32 | VK_DOWN_U32
+        ) {
             if is_down {
                 let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
             }
@@ -217,8 +243,7 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
     let count = shell_windows.Count()?;
     emit(&format!(
         "DBG windows={count} fg=0x{:X} last=0x{:X} visible={preview_visible}",
-        foreground.0 as isize,
-        last_explorer
+        foreground.0 as isize, last_explorer
     ));
 
     let mut fallback_paths: Option<(isize, Vec<String>)> = None;
@@ -236,7 +261,11 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
         if hwnd == foreground {
             LAST_EXPLORER_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
             let paths = read_window_selection(&wb).unwrap_or_default();
-            emit(&format!("DBG win=0x{:X} sel={} (foreground)", hwnd.0 as isize, paths.len()));
+            emit(&format!(
+                "DBG win=0x{:X} sel={} (foreground)",
+                hwnd.0 as isize,
+                paths.len()
+            ));
             return Ok(paths);
         }
         if preview_visible && last_explorer != 0 && hwnd.0 as isize == last_explorer {
@@ -245,7 +274,10 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
         }
     }
     if let Some((hwnd, paths)) = fallback_paths {
-        emit(&format!("DBG win=0x{hwnd:X} sel={} (last explorer)", paths.len()));
+        emit(&format!(
+            "DBG win=0x{hwnd:X} sel={} (last explorer)",
+            paths.len()
+        ));
         return Ok(paths);
     }
     emit("DBG foreground is not Explorer — ignoring space");
@@ -286,7 +318,8 @@ fn probe_cache_evict(cache: &mut HashMap<String, (i64, String)>) {
         return;
     }
     // Evict the entry with the smallest mtime (oldest probed file).
-    let oldest_key = cache.iter()
+    let oldest_key = cache
+        .iter()
         .min_by_key(|(_, (mt, _))| *mt)
         .map(|(k, _)| k.clone());
     if let Some(key) = oldest_key {
@@ -297,7 +330,12 @@ fn probe_cache_evict(cache: &mut HashMap<String, (i64, String)>) {
 /// Probe a file (UTF-8 path) and write its FileProbe JSON (UTF-8) into `out`.
 /// Returns the JSON byte length, `-needed` if the buffer is too small, or a negative error.
 #[no_mangle]
-pub extern "C" fn ql_probe_file(path_utf8: *const u8, path_len: usize, out: *mut u8, out_cap: usize) -> i32 {
+pub extern "C" fn ql_probe_file(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
     if path_utf8.is_null() {
         return -1;
     }
@@ -344,11 +382,18 @@ fn probe_json(path: &str) -> Option<String> {
     let n = if meta.is_dir() {
         0
     } else {
-        fs::File::open(path).ok().map(|mut f| f.read(&mut buf).unwrap_or(0)).unwrap_or(0)
+        fs::File::open(path)
+            .ok()
+            .map(|mut f| f.read(&mut buf).unwrap_or(0))
+            .unwrap_or(0)
     };
     let magic = &buf[..n];
 
-    let kind = if meta.is_dir() { "folder" } else { classify(&ext, magic) };
+    let kind = if meta.is_dir() {
+        "folder"
+    } else {
+        classify(&ext, magic)
+    };
     let magic_hex: String = magic.iter().map(|b| format!("{b:02X}")).collect();
 
     let json = format!(
@@ -372,22 +417,36 @@ fn probe_json(path: &str) -> Option<String> {
 /// Coarse type classification. Container formats are recognized by extension first (e.g. .docx is a
 /// ZIP by magic but should be "office"), then images/pdf/archives by magic, then text.
 fn classify(ext: &str, magic: &[u8]) -> &'static str {
-    const OFFICE_EXTS: &[&str] =
-        &[".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".rtf", ".odt", ".ods", ".odp"];
-    const VIDEO_EXTS: &[&str] =
-        &[".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".mpg", ".mpeg", ".3gp"];
-    const AUDIO_EXTS: &[&str] =
-        &[".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid"];
-    const ARCHIVE_EXTS: &[&str] =
-        &[".zip", ".jar", ".epub", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz"];
-    const PACKAGE_EXTS: &[&str] =
-        &[".apk", ".apks", ".aab", ".msix", ".msixbundle", ".appx", ".appxbundle"];
-    const DISK_IMAGE_EXTS: &[&str] =
-        &[".img", ".iso", ".vhd", ".vhdx", ".vmdk", ".dmg"];
-    const EXECUTABLE_EXTS: &[&str] =
-        &[".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx"];
+    const OFFICE_EXTS: &[&str] = &[
+        ".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm", ".rtf",
+        ".odt", ".ods", ".odp",
+    ];
+    const VIDEO_EXTS: &[&str] = &[
+        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".mpg", ".mpeg", ".3gp",
+    ];
+    const AUDIO_EXTS: &[&str] = &[
+        ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid",
+    ];
+    const ARCHIVE_EXTS: &[&str] = &[
+        ".zip", ".jar", ".epub", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz",
+    ];
+    const PACKAGE_EXTS: &[&str] = &[
+        ".apk",
+        ".apks",
+        ".aab",
+        ".msix",
+        ".msixbundle",
+        ".appx",
+        ".appxbundle",
+    ];
+    const DISK_IMAGE_EXTS: &[&str] = &[".img", ".iso", ".vhd", ".vhdx", ".vmdk", ".dmg"];
+    const EXECUTABLE_EXTS: &[&str] = &[".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx"];
+    const CERTIFICATE_EXTS: &[&str] = &[".cer", ".crt", ".der", ".pem", ".p7b", ".p7c"];
     if OFFICE_EXTS.contains(&ext) {
         return "office";
+    }
+    if CERTIFICATE_EXTS.contains(&ext) {
+        return "certificate";
     }
     if EXECUTABLE_EXTS.contains(&ext) || magic.starts_with(b"MZ") {
         return "executable";
@@ -426,7 +485,8 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
         return "pdf";
     }
     if m.starts_with(&[0x50, 0x4B, 0x03, 0x04])             // ZIP / OOXML
-        || m.starts_with(&[0x1F, 0x8B])                     // gzip
+        || m.starts_with(&[0x1F, 0x8B])
+    // gzip
     {
         return "archive";
     }
@@ -434,16 +494,74 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     // Text by extension only. Unknown binary formats often have ASCII-looking headers
     // (.torrent, disk images, package metadata), so avoid decoding arbitrary bytes as text.
     const TEXT_EXTS: &[&str] = &[
-        ".txt", ".md", ".markdown", ".log", ".csv", ".tsv", ".env",
-        ".json", ".xml", ".xaml", ".xsd", ".resx", ".config",
-        ".ini", ".cfg", ".conf", ".properties", ".yml", ".yaml", ".toml",
-        ".bat", ".cmd", ".ps1", ".sh", ".bash", ".zsh",
-        ".cs", ".csproj", ".sln", ".props", ".targets", ".rs",
-        ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
-        ".css", ".scss", ".sass", ".less", ".html", ".htm", ".py",
-        ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx",
-        ".java", ".go", ".php", ".rb", ".pl", ".swift", ".kt", ".kts",
-        ".sql", ".lua", ".fs", ".fsx", ".vb", ".dart", ".scala", ".r",
+        ".txt",
+        ".md",
+        ".markdown",
+        ".log",
+        ".csv",
+        ".tsv",
+        ".env",
+        ".json",
+        ".xml",
+        ".xaml",
+        ".xsd",
+        ".resx",
+        ".config",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".properties",
+        ".yml",
+        ".yaml",
+        ".toml",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".cs",
+        ".csproj",
+        ".sln",
+        ".props",
+        ".targets",
+        ".rs",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".html",
+        ".htm",
+        ".py",
+        ".c",
+        ".h",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".hpp",
+        ".hxx",
+        ".java",
+        ".go",
+        ".php",
+        ".rb",
+        ".pl",
+        ".swift",
+        ".kt",
+        ".kts",
+        ".sql",
+        ".lua",
+        ".fs",
+        ".fsx",
+        ".vb",
+        ".dart",
+        ".scala",
+        ".r",
         ".dockerfile",
     ];
     if TEXT_EXTS.contains(&ext) {
@@ -494,7 +612,12 @@ pub extern "C" fn ql_decode_image(
 }
 
 fn decode_image_bgra(path: &str) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
-    let image = ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
+    let image = ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
     let (original_width, original_height) = image.dimensions();
     if original_width == 0 || original_height == 0 {
         return None;
@@ -553,16 +676,7 @@ pub extern "C" fn ql_get_thumbnail(
         Err(_) => return -1,
     };
 
-    // Run on a dedicated STA thread so we don't fight the caller's COM apartment.
-    let result = std::thread::spawn(move || unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let r = shell_thumbnail(&path, size.max(16));
-        CoUninitialize();
-        r
-    })
-    .join()
-    .ok()
-    .flatten();
+    let result = shell_thumbnail_on_sta(path, size.max(16));
 
     let (w, h, bgra) = match result {
         Some(x) => x,
@@ -580,18 +694,116 @@ pub extern "C" fn ql_get_thumbnail(
     total as i32
 }
 
+fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
+    THUMBNAIL_STA.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<ThumbnailRequest>();
+        std::thread::spawn(move || unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            while let Ok(request) = receiver.recv() {
+                let result = shell_thumbnail(&request.path, request.size.max(16));
+                let _ = request.reply.send(result);
+            }
+            CoUninitialize();
+        });
+        ThumbnailStaWorker { sender }
+    })
+}
+
+fn shell_thumbnail_on_sta(path: String, size: i32) -> ThumbnailResult {
+    let (reply, result) = mpsc::channel();
+    let request = ThumbnailRequest { path, size, reply };
+    if thumbnail_sta_worker().sender.send(request).is_err() {
+        return None;
+    }
+    result.recv_timeout(Duration::from_secs(4)).ok().flatten()
+}
+
+/// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).
+/// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
+#[no_mangle]
+pub extern "C" fn ql_extract_package_icon(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if path_utf8.is_null() {
+        return -1;
+    }
+    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let (w, h, bgra) = match preview::extract_package_icon_bgra(path) {
+        Some(x) => x,
+        None => return -2,
+    };
+    let total = 8 + bgra.len();
+    if out.is_null() || out_cap < total {
+        return -(total as i32);
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
+    }
+    total as i32
+}
+
+/// Extract the first useful embedded image from an OOXML Office document.
+/// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
+#[no_mangle]
+pub extern "C" fn ql_extract_office_image(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if path_utf8.is_null() {
+        return -1;
+    }
+    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let (w, h, bgra) = match preview::extract_office_image_bgra(path) {
+        Some(x) => x,
+        None => return -2,
+    };
+    let total = 8 + bgra.len();
+    if out.is_null() || out_cap < total {
+        return -(total as i32);
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
+    }
+    total as i32
+}
+
 unsafe fn shell_thumbnail(path: &str, size: i32) -> Option<(u32, u32, Vec<u8>)> {
-    use windows::Win32::UI::Shell::{SHCreateItemFromParsingName, IShellItemImageFactory, SIIGBF_BIGGERSIZEOK};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
+    };
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()?;
     let factory: IShellItemImageFactory = item.cast().ok()?;
-    let hbm = factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_BIGGERSIZEOK).ok()?;
+    let hbm = factory
+        .GetImage(SIZE { cx: size, cy: size }, SIIGBF_BIGGERSIZEOK)
+        .ok()?;
     let result = hbitmap_to_bgra(hbm);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbm.into());
     result
 }
 
-unsafe fn hbitmap_to_bgra(hbm: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
+unsafe fn hbitmap_to_bgra(
+    hbm: windows::Win32::Graphics::Gdi::HBITMAP,
+) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::Graphics::Gdi::*;
     let mut bm = BITMAP::default();
     let got = GetObjectW(
@@ -620,7 +832,15 @@ unsafe fn hbitmap_to_bgra(hbm: windows::Win32::Graphics::Gdi::HBITMAP) -> Option
     };
 
     let hdc = GetDC(None);
-    let lines = GetDIBits(hdc, hbm, 0, h, Some(pixels.as_mut_ptr() as *mut _), &mut info, DIB_RGB_COLORS);
+    let lines = GetDIBits(
+        hdc,
+        hbm,
+        0,
+        h,
+        Some(pixels.as_mut_ptr() as *mut _),
+        &mut info,
+        DIB_RGB_COLORS,
+    );
     ReleaseDC(None, hdc);
     if lines == 0 {
         return None;
@@ -692,12 +912,37 @@ pub extern "C" fn ql_preview_info(
         return 0;
     }
     let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) { Ok(s) => s, Err(_) => return 0 };
-    let kind = if kind_utf8.is_null() { "" } else {
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let kind = if kind_utf8.is_null() {
+        ""
+    } else {
         let k = unsafe { std::slice::from_raw_parts(kind_utf8, kind_len) };
         std::str::from_utf8(k).unwrap_or("")
     };
     let json = preview::render_info(path, kind, size, modified_unix);
+    write_json_out(&json, out_buf, out_cap)
+}
+
+/// Render an Office document preview. OOXML/ODF paths are parsed in Rust; legacy OLE formats fall back to info.
+#[no_mangle]
+pub extern "C" fn ql_preview_office(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+        return 0;
+    }
+    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let json = preview::render_office(path);
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -713,7 +958,10 @@ pub extern "C" fn ql_preview_executable(
         return 0;
     }
     let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) { Ok(s) => s, Err(_) => return 0 };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     let json = preview::render_executable(path);
     write_json_out(&json, out_buf, out_cap)
 }
@@ -730,7 +978,10 @@ pub extern "C" fn ql_preview_archive(
         return 0;
     }
     let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) { Ok(s) => s, Err(_) => return 0 };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     let json = preview::render_archive(path);
     write_json_out(&json, out_buf, out_cap)
 }
@@ -747,7 +998,10 @@ pub extern "C" fn ql_preview_torrent(
         return 0;
     }
     let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) { Ok(s) => s, Err(_) => return 0 };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     let json = preview::render_torrent(path);
     write_json_out(&json, out_buf, out_cap)
 }
@@ -764,7 +1018,10 @@ pub extern "C" fn ql_preview_folder(
         return 0;
     }
     let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) { Ok(s) => s, Err(_) => return 0 };
+    let path = match std::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     let json = preview::render_folder(path);
     write_json_out(&json, out_buf, out_cap)
 }
@@ -777,14 +1034,22 @@ pub extern "C" fn ql_is_text(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = if ext_utf8.is_null() { "" } else {
+    let ext = if ext_utf8.is_null() {
+        ""
+    } else {
         let e = unsafe { std::slice::from_raw_parts(ext_utf8, ext_len) };
         std::str::from_utf8(e).unwrap_or("")
     };
-    let magic = if magic.is_null() { &[] as &[u8] } else {
+    let magic = if magic.is_null() {
+        &[] as &[u8]
+    } else {
         unsafe { std::slice::from_raw_parts(magic, magic_len) }
     };
-    if preview::is_text(ext, magic) { 1 } else { 0 }
+    if preview::is_text(ext, magic) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Check if a file is an archive (for routing).
@@ -797,18 +1062,28 @@ pub extern "C" fn ql_is_archive(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = if ext_utf8.is_null() { "" } else {
+    let ext = if ext_utf8.is_null() {
+        ""
+    } else {
         let e = unsafe { std::slice::from_raw_parts(ext_utf8, ext_len) };
         std::str::from_utf8(e).unwrap_or("")
     };
-    let kind = if kind_utf8.is_null() { "" } else {
+    let kind = if kind_utf8.is_null() {
+        ""
+    } else {
         let k = unsafe { std::slice::from_raw_parts(kind_utf8, kind_len) };
         std::str::from_utf8(k).unwrap_or("")
     };
-    let magic = if magic.is_null() { &[] as &[u8] } else {
+    let magic = if magic.is_null() {
+        &[] as &[u8]
+    } else {
         unsafe { std::slice::from_raw_parts(magic, magic_len) }
     };
-    if preview::is_archive(ext, kind, magic) { 1 } else { 0 }
+    if preview::is_archive(ext, kind, magic) {
+        1
+    } else {
+        0
+    }
 }
 
 fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {

@@ -49,6 +49,7 @@ public sealed record PreviewReady(
     public string? TextLanguage { get; init; }
     public string? MediaPath { get; init; }
     public PreviewListing? Listing { get; init; }
+    public OfficeLayout? OfficeLayout { get; init; }
 }
 
 /// <summary>Host → App: terminal failure for a RequestId.</summary>

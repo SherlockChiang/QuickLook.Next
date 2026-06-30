@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using QuickLook.Next.Contracts;
@@ -34,6 +36,8 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_torrent(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -49,9 +53,17 @@ internal sealed class NativeBridge
         long modifiedUnix,
         byte[] outBuf,
         nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_get_thumbnail(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    private const int MaxNativePreviewJsonBytes = 4 * 1024 * 1024;
+    private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
+    private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
 
     private NativeCallback? _callback; // keep alive: native stores the function pointer
     private Action<NativeIntent>? _onIntent;
@@ -110,11 +122,15 @@ internal sealed class NativeBridge
 
     public PreviewReady? TryPreview(string requestId, string path, FileProbe probe)
     {
+        if (probe.Kind.Equals("certificate", StringComparison.OrdinalIgnoreCase))
+            return TryPreviewCertificate(requestId, path, probe);
+
         NativePreviewCall? call = probe.Kind.ToLowerInvariant() switch
         {
             "text" => ql_preview_text,
             "archive" => ql_preview_archive,
             "package" => ql_preview_archive,
+            "office" => ql_preview_office,
             "executable" => ql_preview_executable,
             "torrent" => ql_preview_torrent,
             "folder" => ql_preview_folder,
@@ -139,6 +155,38 @@ internal sealed class NativeBridge
             return doc.RootElement.TryGetProperty("listing", out var listing)
                 ? JsonSerializer.Deserialize<PreviewListing>(listing.GetRawText(), ProtocolJson.Options)
                 : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public NativeRasterImage? TryExtractPackageIcon(string path)
+        => CallRaster(ql_extract_package_icon, path);
+
+    public NativeRasterImage? TryExtractOfficeImage(string path)
+        => CallRaster(ql_extract_office_image, path);
+
+    public NativeRasterImage? TryGetThumbnail(string path, int size)
+    {
+        try
+        {
+            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            return ReadRasterBuffer(cap =>
+            {
+                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
+                try
+                {
+                    int n = ql_get_thumbnail(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length);
+                    return (n, outBuf);
+                }
+                catch
+                {
+                    ArrayPool<byte>.Shared.Return(outBuf);
+                    throw;
+                }
+            });
         }
         catch
         {
@@ -184,8 +232,126 @@ internal sealed class NativeBridge
         return null;
     }
 
+    private static NativeRasterImage? CallRaster(NativeRasterCall call, string path)
+    {
+        try
+        {
+            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            return ReadRasterBuffer(cap =>
+            {
+                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
+                try
+                {
+                    int n = call(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length);
+                    return (n, outBuf);
+                }
+                catch
+                {
+                    ArrayPool<byte>.Shared.Return(outBuf);
+                    throw;
+                }
+            });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static NativeRasterImage? ReadRasterBuffer(Func<int, (int Length, byte[] Buffer)> read)
+    {
+        int cap = 2 * 1024 * 1024;
+        while (cap <= MaxNativeRasterBytes)
+        {
+            var (n, outBuf) = read(cap);
+            try
+            {
+                if (n > 8)
+                {
+                    int width = BitConverter.ToInt32(outBuf, 0);
+                    int height = BitConverter.ToInt32(outBuf, 4);
+                    int bytes = checked(width * height * 4);
+                    if (width <= 0 || height <= 0 || n < 8 + bytes)
+                        return null;
+                    byte[] bgra = new byte[bytes];
+                    Array.Copy(outBuf, 8, bgra, 0, bytes);
+                    return new NativeRasterImage(bgra, width, height);
+                }
+                if (n < 0)
+                {
+                    int needed = -n;
+                    if (needed <= cap || needed > MaxNativeRasterBytes)
+                        return null;
+                    cap = needed;
+                    continue;
+                }
+                return null;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(outBuf);
+            }
+        }
+
+        return null;
+    }
+
     private static bool ShouldUseNativeInfo(FileProbe probe)
-        => probe.Kind is "binary" or "unknown" or "office" or "disk-image";
+        => probe.Kind is "binary" or "unknown" or "disk-image";
+
+    private static PreviewReady TryPreviewCertificate(string requestId, string path, FileProbe probe)
+    {
+        string fileName = Path.GetFileName(path);
+        try
+        {
+            using X509Certificate2 cert = X509CertificateLoader.LoadCertificateFromFile(path);
+            string[] usages = cert.Extensions
+                .OfType<X509EnhancedKeyUsageExtension>()
+                .SelectMany(e => e.EnhancedKeyUsages.Cast<Oid>())
+                .Select(oid =>
+                {
+                    string value = oid.Value ?? "";
+                    return string.IsNullOrWhiteSpace(oid.FriendlyName) ? value : $"{oid.FriendlyName} ({value})";
+                })
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToArray();
+
+            var builder = new StringBuilder();
+            builder.AppendLine($"Name: {fileName}");
+            builder.AppendLine("Kind: certificate");
+            builder.AppendLine($"Subject: {cert.Subject}");
+            builder.AppendLine($"Issuer: {cert.Issuer}");
+            builder.AppendLine($"Serial number: {cert.SerialNumber}");
+            builder.AppendLine($"Thumbprint: {cert.Thumbprint}");
+            builder.AppendLine($"Valid from: {cert.NotBefore:G}");
+            builder.AppendLine($"Valid until: {cert.NotAfter:G}");
+            builder.AppendLine($"Signature algorithm: {cert.SignatureAlgorithm.FriendlyName ?? cert.SignatureAlgorithm.Value}");
+            builder.AppendLine($"Public key: {cert.PublicKey.Oid.FriendlyName ?? cert.PublicKey.Oid.Value}");
+            builder.AppendLine($"Has private key: {(cert.HasPrivateKey ? "yes" : "no")}");
+            if (usages.Length > 0)
+                builder.AppendLine($"Enhanced key usage: {string.Join(", ", usages)}");
+            builder.AppendLine($"File size: {FormatNumber(probe.Size)} bytes");
+
+            return new PreviewReady(requestId, "certificate", $"{fileName} - {cert.GetNameInfo(X509NameType.SimpleName, false)}", 720, 520)
+            {
+                TextContent = builder.ToString(),
+                TextFormat = "plain",
+                TextLanguage = "text",
+            };
+        }
+        catch (Exception ex)
+        {
+            return new PreviewReady(requestId, "certificate", fileName, 640, 420)
+            {
+                TextContent = $"Name: {fileName}\nKind: certificate\nSize: {FormatNumber(probe.Size)} bytes\nStatus: failed to parse certificate\nError: {ex.Message}",
+                TextFormat = "plain",
+                TextLanguage = "text",
+            };
+        }
+    }
+
+    private static string FormatNumber(long value)
+        => value.ToString("N0");
 
     private static string? CallInfoPreview(string path, FileProbe probe)
     {
@@ -239,6 +405,10 @@ internal sealed class NativeBridge
                 };
             }
 
+            OfficeLayout? officeLayout = null;
+            if (root.TryGetProperty("officeLayout", out var layout))
+                officeLayout = JsonSerializer.Deserialize<OfficeLayout>(layout.GetRawText(), ProtocolJson.Options);
+
             if (root.TryGetProperty("text", out var text))
             {
                 return ready with
@@ -246,8 +416,12 @@ internal sealed class NativeBridge
                     TextContent = text.GetString(),
                     TextFormat = root.TryGetProperty("format", out var format) ? format.GetString() : "plain",
                     TextLanguage = root.TryGetProperty("language", out var language) ? language.GetString() : "text",
+                    OfficeLayout = officeLayout,
                 };
             }
+
+            if (officeLayout is not null)
+                return ready with { OfficeLayout = officeLayout };
 
             return null;
         }
@@ -257,3 +431,5 @@ internal sealed class NativeBridge
         }
     }
 }
+
+internal sealed record NativeRasterImage(byte[] Bgra, int Width, int Height);

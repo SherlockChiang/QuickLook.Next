@@ -46,6 +46,9 @@ public static class QuickLookNativeSmoke {
   public static extern int ql_preview_archive(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_preview_office(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_preview_executable(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
@@ -56,6 +59,12 @@ public static class QuickLookNativeSmoke {
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_decode_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_extract_package_icon(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_extract_office_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 }
 "@
 
@@ -107,6 +116,13 @@ function Invoke-Torrent([string]$path) {
     }
 }
 
+function Invoke-Office([string]$path) {
+    Invoke-NativeJson $path {
+        param($pathBytes, $buffer)
+        [QuickLookNativeSmoke]::ql_preview_office($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+    }
+}
+
 function Invoke-Executable([string]$path) {
     Invoke-NativeJson $path {
         param($pathBytes, $buffer)
@@ -132,6 +148,30 @@ function Invoke-ImageDecode([string]$path) {
         Height = [BitConverter]::ToUInt32($buffer, 4)
         OriginalWidth = [BitConverter]::ToUInt32($buffer, 8)
         OriginalHeight = [BitConverter]::ToUInt32($buffer, 12)
+    }
+}
+
+function Invoke-PackageIcon([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (8 + 512 * 512 * 4)
+    $n = [QuickLookNativeSmoke]::ql_extract_package_icon($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+    Assert-True ($n -gt 8) "Package icon extract failed for $path with code $n"
+    [pscustomobject]@{
+        Bytes = $n
+        Width = [BitConverter]::ToUInt32($buffer, 0)
+        Height = [BitConverter]::ToUInt32($buffer, 4)
+    }
+}
+
+function Invoke-OfficeImage([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (8 + 768 * 768 * 4)
+    $n = [QuickLookNativeSmoke]::ql_extract_office_image($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+    Assert-True ($n -gt 8) "Office image extract failed for $path with code $n"
+    [pscustomobject]@{
+        Bytes = $n
+        Width = [BitConverter]::ToUInt32($buffer, 0)
+        Height = [BitConverter]::ToUInt32($buffer, 4)
     }
 }
 
@@ -164,8 +204,10 @@ $tmp = New-TempSmokeDir
 try {
     $payload = Join-Path $tmp "payload"
     New-Item -ItemType Directory -Force $payload | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $payload "Assets") | Out-Null
     Copy-Item -LiteralPath $txt -Destination (Join-Path $payload "test.txt")
     Copy-Item -LiteralPath $bat -Destination (Join-Path $payload "script.bat")
+    Copy-Item -LiteralPath $png -Destination (Join-Path $payload "Assets\Square150x150Logo.png")
 
     $zip = Join-Path $tmp "sample.zip"
     Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $zip -Force
@@ -195,12 +237,83 @@ try {
 
     foreach ($archive in @($zip, $tar, $tgz, $gz, $apk, $msix)) {
         $preview = Invoke-Archive $archive
-        Assert-True ($preview.kind -eq "archive") "Expected archive preview for $archive"
-        Assert-True ($preview.listing.items.Count -ge 1) "Expected archive items for $archive"
+        $expectedKind = if ($archive.EndsWith(".apk") -or $archive.EndsWith(".msix")) { "package" } else { "archive" }
+        Assert-True ($preview.kind -eq $expectedKind) "Expected $expectedKind preview for $archive, got $($preview.kind)"
+        if ($expectedKind -eq "package") {
+            Assert-True ($preview.text -match "app package") "Expected package app info for $archive"
+            Assert-True ($null -eq $preview.listing) "Expected package preview not to expose archive listing for $archive"
+        }
+        else {
+            Assert-True ($preview.listing.items.Count -ge 1) "Expected archive items for $archive"
+        }
     }
 
     Assert-True ((Invoke-Probe $apk).kind -eq "package") "Expected APK package probe"
     Assert-True ((Invoke-Probe $msix).kind -eq "package") "Expected MSIX package probe"
+    $packageIcon = Invoke-PackageIcon $msix
+    Assert-True ($packageIcon.Width -gt 0 -and $packageIcon.Height -gt 0) "Expected extracted package icon dimensions"
+
+    $docxRoot = Join-Path $tmp "docx"
+    New-Item -ItemType Directory -Force (Join-Path $docxRoot "word") | Out-Null
+    Set-Content -LiteralPath (Join-Path $docxRoot "word\document.xml") -Encoding UTF8 -Value '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello Word</w:t></w:r></w:p><w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p></w:body></w:document>'
+    $docxZip = Join-Path $tmp "sample-docx.zip"
+    $docx = Join-Path $tmp "sample.docx"
+    if (Test-Path $docxZip) { Remove-Item -LiteralPath $docxZip -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($docxRoot, $docxZip)
+    Copy-Item -LiteralPath $docxZip -Destination $docx
+    Assert-True ((Invoke-Probe $docx).kind -eq "office") "Expected DOCX office probe"
+    $docxPreview = Invoke-Office $docx
+    Assert-True ($docxPreview.text -match "Hello Word") "Expected DOCX extracted text, got: $($docxPreview.text)"
+
+    $xlsxRoot = Join-Path $tmp "xlsx"
+    New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\worksheets") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\worksheets\_rels") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\drawings\_rels") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\drawings") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\media") | Out-Null
+    Copy-Item -LiteralPath $png -Destination (Join-Path $xlsxRoot "xl\media\image1.png")
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\sharedStrings.xml") -Encoding UTF8 -Value '<sst><si><t>Name</t></si><si><t>Alice</t></si></sst>'
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\worksheets\sheet1.xml") -Encoding UTF8 -Value '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="B2"><v>42</v></c></row></sheetData><drawing r:id="rIdDrawing"/></worksheet>'
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\worksheets\_rels\sheet1.xml.rels") -Encoding UTF8 -Value '<Relationships><Relationship Id="rIdDrawing" Target="../drawings/drawing1.xml"/></Relationships>'
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\drawings\drawing1.xml") -Encoding UTF8 -Value '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:row>5</xdr:row></xdr:to><xdr:pic><xdr:blipFill><a:blip r:embed="rIdImage"/></xdr:blipFill></xdr:pic></xdr:twoCellAnchor></xdr:wsDr>'
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\drawings\_rels\drawing1.xml.rels") -Encoding UTF8 -Value '<Relationships><Relationship Id="rIdImage" Target="../media/image1.png"/></Relationships>'
+    $xlsxZip = Join-Path $tmp "sample-xlsx.zip"
+    $xlsx = Join-Path $tmp "sample.xlsx"
+    if (Test-Path $xlsxZip) { Remove-Item -LiteralPath $xlsxZip -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($xlsxRoot, $xlsxZip)
+    Copy-Item -LiteralPath $xlsxZip -Destination $xlsx
+    Assert-True ((Invoke-Probe $xlsx).kind -eq "office") "Expected XLSX office probe"
+    $xlsxPreview = Invoke-Office $xlsx
+    Assert-True ($xlsxPreview.text -match "Name\s+Alice") "Expected XLSX shared-string row"
+    Assert-True ($xlsxPreview.text -match "42") "Expected XLSX numeric cell"
+    Assert-True ($xlsxPreview.text -match "Images: 1") "Expected XLSX image summary"
+    Assert-True ($null -ne $xlsxPreview.officeLayout) "Expected XLSX office layout"
+    Assert-True ($xlsxPreview.officeLayout.pages[0].cells.Count -ge 2) "Expected XLSX layout cells"
+    Assert-True ($xlsxPreview.officeLayout.pages[0].items.Count -ge 1) "Expected XLSX anchored image item"
+    $xlsxImage = Invoke-OfficeImage $xlsx
+    Assert-True ($xlsxImage.Width -gt 0 -and $xlsxImage.Height -gt 0) "Expected extracted XLSX image dimensions"
+
+    $pptxRoot = Join-Path $tmp "pptx"
+    New-Item -ItemType Directory -Force (Join-Path $pptxRoot "ppt\slides") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $pptxRoot "ppt\slides\_rels") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $pptxRoot "ppt\media") | Out-Null
+    Copy-Item -LiteralPath $png -Destination (Join-Path $pptxRoot "ppt\media\image1.png")
+    Set-Content -LiteralPath (Join-Path $pptxRoot "ppt\presentation.xml") -Encoding UTF8 -Value '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="9144000" cy="5143500"/></p:presentation>'
+    Set-Content -LiteralPath (Join-Path $pptxRoot "ppt\slides\slide1.xml") -Encoding UTF8 -Value '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:sp><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="3657600" cy="914400"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:t>Hello Slide</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:spPr><a:xfrm><a:off x="914400" y="2286000"/><a:ext cx="1828800" cy="1371600"/></a:xfrm></p:spPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill></p:pic></p:spTree></p:cSld></p:sld>'
+    Set-Content -LiteralPath (Join-Path $pptxRoot "ppt\slides\_rels\slide1.xml.rels") -Encoding UTF8 -Value '<Relationships><Relationship Id="rIdImage" Target="../media/image1.png"/></Relationships>'
+    $pptxZip = Join-Path $tmp "sample-pptx.zip"
+    $pptx = Join-Path $tmp "sample.pptx"
+    if (Test-Path $pptxZip) { Remove-Item -LiteralPath $pptxZip -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($pptxRoot, $pptxZip)
+    Copy-Item -LiteralPath $pptxZip -Destination $pptx
+    Assert-True ((Invoke-Probe $pptx).kind -eq "office") "Expected PPTX office probe"
+    $pptxPreview = Invoke-Office $pptx
+    Assert-True ($pptxPreview.text -match "Hello Slide") "Expected PPTX extracted slide text"
+    Assert-True ($pptxPreview.text -match "Images: 1") "Expected PPTX image summary"
+    Assert-True ($null -ne $pptxPreview.officeLayout) "Expected PPTX office layout"
+    Assert-True ($pptxPreview.officeLayout.pages[0].items.Count -ge 2) "Expected PPTX text and image layout items"
+    $pptxImage = Invoke-OfficeImage $pptx
+    Assert-True ($pptxImage.Width -gt 0 -and $pptxImage.Height -gt 0) "Expected extracted PPTX image dimensions"
 
     $torrent = Join-Path $tmp "sample.torrent"
     [System.IO.File]::WriteAllText($torrent, "d8:announce23:https://tracker.example4:infod6:lengthi12345e4:name8:file.bin12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrstee", [System.Text.Encoding]::ASCII)
@@ -213,6 +326,10 @@ try {
     $img = Join-Path $tmp "sample.img"
     [System.IO.File]::WriteAllBytes($img, (New-Object byte[] 512))
     Assert-True ((Invoke-Probe $img).kind -eq "disk-image") "Expected disk-image probe"
+
+    $cer = Join-Path $tmp "sample.cer"
+    [System.IO.File]::WriteAllBytes($cer, (New-Object byte[] 128))
+    Assert-True ((Invoke-Probe $cer).kind -eq "certificate") "Expected certificate probe"
 
     $unknownAscii = Join-Path $tmp "unknown.bin"
     [System.IO.File]::WriteAllText($unknownAscii, "d4:fake4:datae", [System.Text.Encoding]::ASCII)
