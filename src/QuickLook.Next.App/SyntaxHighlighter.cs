@@ -12,6 +12,48 @@ internal static class SyntaxHighlighter
 {
     private sealed record Lang(string[] LineComments, string? BlockStart, string? BlockEnd, char[] Quotes);
 
+    private static readonly Lang CLikeLang = new(["//"], "/*", "*/", ['"', '\'']);
+    private static readonly Lang SqlLang = new(["--"], "/*", "*/", ['"', '\'']);
+    private static readonly Lang BatchLang = new(["::", "REM ", "rem "], null, null, ['"']);
+    private static readonly Lang PropertyLang = new([";", "#"], null, null, ['"', '\'']);
+    private static readonly Lang HashCommentLang = new(["#"], null, null, ['"', '\'']);
+    private static readonly Lang LuaLang = new(["--"], "--[[", "]]", ['"', '\'']);
+    private static readonly Lang FSharpLang = new(["//"], "(*", "*)", ['"', '\'']);
+    private static readonly Lang DefaultLang = new(["//", "#"], "/*", "*/", ['"', '\'']);
+
+    private static readonly Dictionary<string, Lang> LanguageSpecs = new(StringComparer.Ordinal)
+    {
+        ["csharp"] = CLikeLang,
+        ["rust"] = CLikeLang,
+        ["javascript"] = CLikeLang,
+        ["typescript"] = CLikeLang,
+        ["java"] = CLikeLang,
+        ["go"] = CLikeLang,
+        ["c"] = CLikeLang,
+        ["cpp"] = CLikeLang,
+        ["php"] = CLikeLang,
+        ["swift"] = CLikeLang,
+        ["kotlin"] = CLikeLang,
+        ["scala"] = CLikeLang,
+        ["dart"] = CLikeLang,
+        ["sql"] = SqlLang,
+        ["batch"] = BatchLang,
+        ["ini"] = PropertyLang,
+        ["toml"] = PropertyLang,
+        ["properties"] = PropertyLang,
+        ["env"] = PropertyLang,
+        ["python"] = HashCommentLang,
+        ["shell"] = HashCommentLang,
+        ["powershell"] = HashCommentLang,
+        ["yaml"] = HashCommentLang,
+        ["ruby"] = HashCommentLang,
+        ["perl"] = HashCommentLang,
+        ["makefile"] = HashCommentLang,
+        ["dockerfile"] = HashCommentLang,
+        ["lua"] = LuaLang,
+        ["fsharp"] = FSharpLang,
+    };
+
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
         "if","else","elif","for","foreach","while","do","switch","case","default","break","continue","return",
@@ -404,18 +446,6 @@ internal static class SyntaxHighlighter
     private static bool IsCssNameStart(char c) => char.IsLetter(c) || c is '_' or '-' or '.';
     private static bool IsCssNamePart(char c) => char.IsLetterOrDigit(c) || c is '_' or '-' or '.';
 
-    private static Lang SpecFor(string language) => language switch
-    {
-        "csharp" or "rust" or "javascript" or "typescript" or "java" or "go" or "c" or "cpp"
-            or "php" or "swift" or "kotlin" or "scala" or "dart"
-            => new(["//"], "/*", "*/", ['"', '\'']),
-        "sql" => new(["--"], "/*", "*/", ['"', '\'']),
-        "batch" => new(["::", "REM ", "rem "], null, null, ['"']),
-        "ini" or "toml" or "properties" or "env" => new([";", "#"], null, null, ['"', '\'']),
-        "python" or "shell" or "powershell" or "yaml" or "ruby" or "perl" or "makefile" or "dockerfile"
-            => new(["#"], null, null, ['"', '\'']),
-        "lua" => new(["--"], "--[[", "]]", ['"', '\'']),
-        "fsharp" => new(["//"], "(*", "*)", ['"', '\'']),
-        _ => new(["//", "#"], "/*", "*/", ['"', '\'']),
-    };
+    private static Lang SpecFor(string language)
+        => LanguageSpecs.TryGetValue(language, out var lang) ? lang : DefaultLang;
 }

@@ -1,5 +1,7 @@
 using System.Numerics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
@@ -8,7 +10,9 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
+using Windows.Storage.Streams;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -73,6 +77,16 @@ public sealed partial class MainWindow : Window
     private bool? _backgroundEfficiencyEnabled;
     private CancellationTokenSource? _switchDebounceCts;
     private long _pdfPageTouchTick;
+    private bool _previewRevealPending;
+    private bool _previewTemporarilyHidden;
+
+    private static readonly SolidColorBrush OfficeWhiteBrush = new(Colors.White);
+    private static readonly SolidColorBrush OfficeBlackBrush = new(Colors.Black);
+    private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
+    private static readonly SolidColorBrush OfficeBorderBrush = new(ColorHelper.FromArgb(255, 210, 210, 210));
+    private static readonly SolidColorBrush OfficeCellBorderBrush = new(ColorHelper.FromArgb(255, 225, 225, 225));
+    private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
+    private static readonly Dictionary<string, FontFamily> FontFamilyCache = new(StringComparer.Ordinal);
 
     // Show the top status text (file name / errors) only while debugging; normal use is chromeless.
     private const bool ShowStatusBar = false;
@@ -93,6 +107,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
         PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
+        PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
         PdfScrollViewer.ViewChanged += (_, _) => RequestVisiblePdfPages();
         GetAppWindow().Closing += (_, args) =>
         {
@@ -178,15 +193,28 @@ public sealed partial class MainWindow : Window
         _switchDebounceCts = cts;
         Task.Delay(SwitchDebounceMs, cts.Token).ContinueWith(task =>
         {
-            if (task.IsCanceled) return;
-            DispatcherQueue.TryEnqueue(() =>
+            if (task.IsCanceled)
             {
-                if (_switchDebounceCts != cts || cts.IsCancellationRequested)
-                    return;
-                _switchDebounceCts = null;
                 cts.Dispose();
-                _ = HandleNativeIntentSafelyAsync(intent);
-            });
+                return;
+            }
+            if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (_switchDebounceCts != cts || cts.IsCancellationRequested)
+                        return;
+                    _switchDebounceCts = null;
+                    _ = HandleNativeIntentSafelyAsync(intent);
+                }
+                finally
+                {
+                    cts.Dispose();
+                }
+            }))
+            {
+                cts.Dispose();
+            }
         }, TaskScheduler.Default);
     }
 
@@ -210,8 +238,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", "intent handler FAILED: " + ex);
-            StatusText.Text = "error: " + ex.Message;
-            ShowPreviewWindow(activate: false);
+            StatusText.Text = ShowErrorPreview(ex.Message);
+            RevealPreviewWindow(activate: false);
         }
     }
 
@@ -291,8 +319,8 @@ public sealed partial class MainWindow : Window
             }
 
             int generation = BeginPreviewGeneration();
+            BeginPreviewTransition();
             ResetPreview();
-            ShowPreviewWindow(activate: false);
             Title = System.IO.Path.GetFileName(path);   // file name shows in the title bar
             AppTitle.Text = Title;
             StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
@@ -305,9 +333,7 @@ public sealed partial class MainWindow : Window
 
                 if (IsMediaProbe(probe))
                 {
-                    _currentPath = path;
-                    _currentRequestId = null;
-                    StatusText.Text = ShowMediaPreview(new PreviewReady(
+                    var mediaReady = new PreviewReady(
                         $"media-{generation}",
                         "media",
                         System.IO.Path.GetFileName(path),
@@ -315,7 +341,11 @@ public sealed partial class MainWindow : Window
                         probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase) ? 140 : 450)
                     {
                         MediaPath = path,
-                    });
+                    };
+                    _currentPath = path;
+                    _currentRequestId = null;
+                    StatusText.Text = ShowMediaPreview(mediaReady);
+                    RevealPreviewWindow(ShouldActivatePreview(mediaReady));
                     return;
                 }
 
@@ -327,10 +357,12 @@ public sealed partial class MainWindow : Window
                     _currentRequestId = null;
                     StatusText.Text = nativeReady switch
                     {
+                        PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
                         PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                         PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                         _ => $"{nativeReady.Kind}: {nativeReady.Title}",
                     };
+                    RevealPreviewWindow(ShouldActivatePreview(nativeReady));
                     return;
                 }
 
@@ -345,21 +377,97 @@ public sealed partial class MainWindow : Window
                 StatusText.Text = result switch
                 {
                     PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
+                    PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
                     PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                     PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
                     PreviewReady r => ShowRasterPreview(r),
-                    PreviewError er => $"error: {er.Message}",
+                    PreviewError er => ShowErrorPreview(er.Message),
                     _ => "?",
                 };
+                RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
             }
-            catch (TimeoutException) { StatusText.Text = "preview timed out"; }
+            catch (TimeoutException)
+            {
+                StatusText.Text = ShowErrorPreview("preview timed out");
+                RevealPreviewWindow(activate: false);
+            }
         }
     }
 
     private int BeginPreviewGeneration() => ++_previewGeneration;
 
     private bool IsPreviewGenerationCurrent(int generation) => generation == _previewGeneration;
+
+    private void BeginPreviewTransition()
+    {
+        _previewRevealPending = true;
+        PreviewContentHost.Opacity = 0;
+        ErrorPanel.Visibility = Visibility.Collapsed;
+        LoadingRing.Visibility = Visibility.Visible;
+        LoadingRing.IsActive = true;
+    }
+
+    private void RevealPreviewWindow(bool activate)
+    {
+        _previewRevealPending = false;
+        LoadingRing.IsActive = false;
+        LoadingRing.Visibility = Visibility.Collapsed;
+        if (!_previewVisible || _previewTemporarilyHidden)
+        {
+            ShowPreviewWindow(activate, resizeToDefault: false);
+            _previewTemporarilyHidden = false;
+        }
+        else
+        {
+            if (activate)
+            {
+                SetNoActivateStyle(enabled: false);
+                Activate();
+            }
+            else
+            {
+                ApplyNoActivateStyle();
+            }
+            SetWindowTopmost();
+            EnsureCompositor();
+        }
+        FadeInPreviewContent();
+    }
+
+    private static bool ShouldActivatePreview(PreviewReady ready)
+        => ready.TextContent is not null || ready.Listing is not null || ready.OfficeLayout is not null;
+
+    private string ShowErrorPreview(string message)
+    {
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        ErrorText.Text = string.IsNullOrWhiteSpace(message) ? "Unable to preview this file." : message;
+        ErrorPanel.Visibility = Visibility.Visible;
+        ResizeWindowForContent(520, 260, MaxTextWindowWidth, MaxTextWindowHeight);
+        return "error: " + ErrorText.Text;
+    }
+
+    private void FadeInPreviewContent()
+    {
+        PreviewContentHost.Opacity = 1;
+        var visual = ElementCompositionPreview.GetElementVisual(PreviewContentHost);
+        var compositor = visual.Compositor;
+        var animation = compositor.CreateScalarKeyFrameAnimation();
+        animation.InsertKeyFrame(0f, 0f);
+        animation.InsertKeyFrame(
+            1f,
+            1f,
+            compositor.CreateCubicBezierEasingFunction(
+                new Vector2(0.1f, 0.9f),
+                new Vector2(0.2f, 1f)));
+        animation.Duration = TimeSpan.FromMilliseconds(180);
+        visual.StartAnimation("Opacity", animation);
+    }
 
     private void OnSurfaceReceived(PreviewSurface surface)
     {
@@ -404,6 +512,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
         _imageZoom = 1.0;
@@ -433,6 +542,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
         ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
@@ -488,10 +598,9 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Visible;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
-        SetNoActivateStyle(enabled: false);
-        Activate();
         ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
         _rasterSprite = null;
         _rasterSurfaceWidth = 0;
@@ -503,7 +612,7 @@ public sealed partial class MainWindow : Window
         // Prose (markdown/plain) wraps to the viewport; code scrolls horizontally to keep line structure.
         bool wrap = ready.TextFormat is "markdown" or "plain";
         TextScrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-        TextPreviewBlock.FontFamily = new FontFamily(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
+        TextPreviewBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
         TextPreviewBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
 
         try
@@ -517,16 +626,182 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
             TextPreviewBlock.Blocks.Clear();
-            TextPreviewBlock.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+            TextPreviewBlock.FontFamily = FontFamilyFor("Cascadia Mono, Consolas");
             TextPreviewBlock.TextWrapping = TextWrapping.NoWrap;
             TextScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
             AddCodeBlock(text);
         }
 
         TextPreviewBlock.Focus(FocusState.Programmatic);
+        StartPreviewHeroLoad(ready);
         var textSize = EstimateTextPreviewSize(text, ready.TextFormat, wrap);
         ResizeWindowForContent(textSize.Width, textSize.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private string ShowOfficeLayoutPreview(PreviewReady ready)
+    {
+        OfficeLayout layout = ready.OfficeLayout!;
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Visible;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        _rasterSprite = null;
+        _rasterSurfaceWidth = 0;
+        _rasterSurfaceHeight = 0;
+        _imageZoom = 1.0;
+
+        OfficePagesPanel.Children.Clear();
+        OfficeScrollViewer.ChangeView(0, 0, null, true);
+        var maxContent = GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight);
+        double maxPageWidth = Math.Max(360, maxContent.Width - 72);
+        foreach (OfficePage page in layout.Pages.Take(16))
+            OfficePagesPanel.Children.Add(CreateOfficePageView(layout, page, maxPageWidth));
+
+        var first = layout.Pages.FirstOrDefault();
+        double firstWidth = first?.Width > 0 ? first.Width : layout.Width;
+        double firstHeight = first?.Height > 0 ? first.Height : layout.Height;
+        double scale = OfficeLayoutScale(layout, firstWidth, maxPageWidth);
+        double contentWidth = Math.Min(maxContent.Width, firstWidth * scale + 64);
+        double contentHeight = Math.Min(maxContent.Height, firstHeight * scale + 112);
+        ResizeWindowForContent(contentWidth, contentHeight, MaxTextWindowWidth, MaxTextWindowHeight);
+        return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private FrameworkElement CreateOfficePageView(OfficeLayout layout, OfficePage page, double maxPageWidth)
+    {
+        double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
+        double pageHeight = Math.Max(180, page.Height > 0 ? page.Height : layout.Height);
+        double scale = OfficeLayoutScale(layout, pageWidth, maxPageWidth);
+        double viewWidth = pageWidth * scale;
+        double viewHeight = pageHeight * scale;
+
+        var stack = new StackPanel { Spacing = 6 };
+        stack.Children.Add(new TextBlock
+        {
+            Text = page.Title,
+            FontSize = 12,
+            Foreground = UiGrayBrush,
+            Margin = new Thickness(2, 0, 0, 0),
+        });
+
+        var canvas = new Canvas
+        {
+            Width = viewWidth,
+            Height = viewHeight,
+            Background = OfficeWhiteBrush,
+        };
+
+        if (layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (OfficeCell cell in page.Cells)
+                AddOfficeCell(canvas, cell, scale);
+        }
+
+        foreach (OfficeLayoutItem item in page.Items)
+            AddOfficeLayoutItem(canvas, item, scale, layout.LayoutKind);
+
+        stack.Children.Add(new Border
+        {
+            Width = viewWidth,
+            Height = viewHeight,
+            Background = OfficeWhiteBrush,
+            BorderBrush = OfficeBorderBrush,
+            BorderThickness = new Thickness(1),
+            Child = canvas,
+        });
+        return stack;
+    }
+
+    private static double OfficeLayoutScale(OfficeLayout layout, double pageWidth, double maxPageWidth)
+    {
+        double target = layout.LayoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase)
+            ? Math.Min(1.0, maxPageWidth / Math.Max(1, pageWidth))
+            : Math.Min(1.0, maxPageWidth / Math.Max(1, pageWidth));
+        return Math.Clamp(target, 0.35, 1.0);
+    }
+
+    private void AddOfficeCell(Canvas canvas, OfficeCell cell, double scale)
+    {
+        var border = new Border
+        {
+            Width = Math.Max(12, cell.Width * scale),
+            Height = Math.Max(12, cell.Height * scale),
+            BorderBrush = OfficeCellBorderBrush,
+            BorderThickness = new Thickness(0, 0, 1, 1),
+            Padding = new Thickness(5, 2, 5, 2),
+            Child = new TextBlock
+            {
+                Text = cell.Text,
+                FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = OfficeBlackBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        Canvas.SetLeft(border, cell.X * scale);
+        Canvas.SetTop(border, cell.Y * scale);
+        canvas.Children.Add(border);
+    }
+
+    private void AddOfficeLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind)
+    {
+        double x = item.X * scale;
+        double y = item.Y * scale;
+        double width = Math.Max(12, item.Width * scale);
+        double height = Math.Max(12, item.Height * scale);
+
+        if (item.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(item.ImageBase64)
+            && CreateImageSourceFromBase64(item.ImageBase64) is { } source)
+        {
+            var image = new Image
+            {
+                Source = source,
+                Width = width,
+                Height = height,
+                Stretch = Stretch.Uniform,
+            };
+            Canvas.SetLeft(image, x);
+            Canvas.SetTop(image, y);
+            canvas.Children.Add(image);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Text))
+        {
+            var text = new TextBlock
+            {
+                Text = item.Text,
+                FontSize = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase) ? Math.Max(12, 15 * scale) : 12,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = OfficeBlackBrush,
+                MaxWidth = width,
+                MaxHeight = height,
+            };
+            Canvas.SetLeft(text, x);
+            Canvas.SetTop(text, y);
+            canvas.Children.Add(text);
+        }
+    }
+
+    private static ImageSource? CreateImageSourceFromBase64(string base64)
+    {
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(base64);
+            var bitmap = new BitmapImage();
+            using var memory = new MemoryStream(bytes);
+            bitmap.SetSource(memory.AsRandomAccessStream());
+            return bitmap;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private string ShowMediaPreview(PreviewReady ready)
@@ -534,6 +809,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Visible;
         ListingPanel.Visibility = Visibility.Collapsed;
         ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
@@ -570,10 +846,9 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Visible;
-        SetNoActivateStyle(enabled: false);
-        Activate();
         ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
         _rasterSprite = null;
         _rasterSurfaceWidth = 0;
@@ -581,6 +856,7 @@ public sealed partial class MainWindow : Window
         _imageZoom = 1.0;
 
         RenderListing();
+        StartPreviewHeroLoad(ready);
         var listingSize = EstimateListingPreviewSize();
         ResizeWindowForContent(listingSize.Width, listingSize.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return $"{ready.Kind}: {ready.Title}";
@@ -681,7 +957,7 @@ public sealed partial class MainWindow : Window
             {
                 Text = ">",
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = new SolidColorBrush(Colors.Gray),
+                Foreground = UiGrayBrush,
             });
             acc = acc.Length == 0 ? part + "/" : acc + part + "/";
             AddBreadcrumbButton(part, acc);
@@ -892,17 +1168,15 @@ public sealed partial class MainWindow : Window
         int renderFirst = Math.Max(0, firstVisible - 1);
         int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
 
-        for (int index = 0; index < pageCount; index++)
+        for (int index = renderFirst; index <= renderLast; index++)
         {
-            bool inRenderWindow = index >= renderFirst && index <= renderLast;
-
-            if (inRenderWindow && !_requestedPdfPages.Contains(index))
+            if (!_requestedPdfPages.Contains(index))
             {
                 _requestedPdfPages.Add(index);
                 TouchPdfPage(index);
                 _ = _supervisor.RenderPageAsync(_currentRequestId, index, _currentPdfScale);
             }
-            else if (inRenderWindow && _requestedPdfPages.Contains(index))
+            else
             {
                 TouchPdfPage(index);
             }
@@ -926,14 +1200,26 @@ public sealed partial class MainWindow : Window
         if (_requestedPdfPages.Count <= maxSurfaces)
             return;
 
-        var evict = _requestedPdfPages
-            .Where(i => i < protectedFirst || i > protectedLast)
-            .OrderBy(i => _pdfPageLastTouched.TryGetValue(i, out long tick) ? tick : 0)
-            .Take(Math.Max(0, _requestedPdfPages.Count - maxSurfaces))
-            .ToArray();
-
-        foreach (int index in evict)
-            ReleasePdfPageSurface(index);
+        int excess = _requestedPdfPages.Count - maxSurfaces;
+        while (excess-- > 0)
+        {
+            int oldestIndex = -1;
+            long oldestTick = long.MaxValue;
+            foreach (int index in _requestedPdfPages)
+            {
+                if (index >= protectedFirst && index <= protectedLast)
+                    continue;
+                long tick = _pdfPageLastTouched.TryGetValue(index, out long value) ? value : 0;
+                if (tick < oldestTick)
+                {
+                    oldestTick = tick;
+                    oldestIndex = index;
+                }
+            }
+            if (oldestIndex < 0)
+                break;
+            ReleasePdfPageSurface(oldestIndex);
+        }
     }
 
     private void ReleasePdfPageSurface(int pageIndex)
@@ -960,14 +1246,25 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
+        ErrorPanel.Visibility = Visibility.Collapsed;
+        if (!_previewRevealPending)
+        {
+            LoadingRing.IsActive = false;
+            LoadingRing.Visibility = Visibility.Collapsed;
+            PreviewContentHost.Opacity = 1;
+        }
         if (MediaPreviewElement.Source is not null)
         {
+            MediaPreviewElement.MediaPlayer?.Pause();
             MediaPreviewElement.Source = null;
         }
         PdfPagesPanel.Children.Clear();
+        OfficePagesPanel.Children.Clear();
         TextPreviewBlock.Blocks.Clear();
+        ClearPreviewHeroImages();
         ListingListView.ItemsSource = null;
         ListingBreadcrumbPanel.Children.Clear();
         _currentListing = null;
@@ -979,6 +1276,146 @@ public sealed partial class MainWindow : Window
         if (_compositor is not null)
             ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
         AppTitle.Text = "QuickLook Next";
+    }
+
+    private void StartPreviewHeroLoad(PreviewReady ready)
+    {
+        string? path = _currentPath;
+        if (string.IsNullOrWhiteSpace(path) || !ShouldLoadPreviewHero(ready, path))
+        {
+            ClearPreviewHeroImages();
+            return;
+        }
+
+        int generation = _previewGeneration;
+        Task.Run(() => LoadPreviewHeroRaster(ready, path)).ContinueWith(task =>
+        {
+            if (task.IsFaulted || task.IsCanceled || task.Result is null)
+                return;
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!IsPreviewGenerationCurrent(generation) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                var source = CreateBitmapSource(task.Result);
+                if (source is null)
+                    return;
+
+                if (ListingPanel.Visibility == Visibility.Visible)
+                {
+                    ListingHeroImage.Source = source;
+                    ListingHeroFrame.Visibility = Visibility.Visible;
+                }
+                else if (TextScrollViewer.Visibility == Visibility.Visible)
+                {
+                    TextHeroImage.Source = source;
+                    TextHeroTitle.Text = ready.Title;
+                    TextHeroSubtitle.Text = BuildPreviewHeroSubtitle(ready, path);
+                    TextHeroFrame.Visibility = Visibility.Visible;
+                    TextHeroPanel.Visibility = Visibility.Visible;
+                }
+            });
+        }, TaskScheduler.Default);
+    }
+
+    private NativeRasterImage? LoadPreviewHeroRaster(PreviewReady ready, string path)
+    {
+        if (IsPackagePreview(ready, path))
+            return _native.TryExtractPackageIcon(path) ?? _native.TryGetThumbnail(path, 512);
+
+        if (IsOfficePreviewWithImages(ready))
+            return _native.TryExtractOfficeImage(path);
+
+        if (IsExecutablePreview(ready, path))
+            return _native.TryGetThumbnail(path, 512);
+
+        if (ready.Kind == "certificate")
+            return _native.TryGetThumbnail(path, 256);
+
+        return null;
+    }
+
+    private static bool ShouldLoadPreviewHero(PreviewReady ready, string path)
+        => ready.OfficeLayout is null
+           && (IsPackagePreview(ready, path)
+           || IsExecutablePreview(ready, path)
+           || ready.Kind == "certificate"
+           || IsOfficePreviewWithImages(ready));
+
+    private static bool IsPackagePreview(PreviewReady ready, string path)
+    {
+        string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        return ready.Kind == "package"
+            || ext is ".apk" or ".apks" or ".aab" or ".msix" or ".msixbundle" or ".appx" or ".appxbundle";
+    }
+
+    private static bool IsExecutablePreview(PreviewReady ready, string path)
+    {
+        string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        return ready.Kind == "executable"
+            || ext is ".exe" or ".dll" or ".sys" or ".scr" or ".cpl" or ".ocx";
+    }
+
+    private static bool IsOfficePreviewWithImages(PreviewReady ready)
+    {
+        if (ready.Kind != "office" || string.IsNullOrWhiteSpace(ready.TextContent))
+            return false;
+
+        foreach (string line in ready.TextContent.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            string trimmed = line.Trim();
+            if (!trimmed.StartsWith("Images:", StringComparison.OrdinalIgnoreCase))
+                continue;
+            return !trimmed.Equals("Images: 0", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    private static string BuildPreviewHeroSubtitle(PreviewReady ready, string path)
+    {
+        string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
+        return ready.Kind switch
+        {
+            "office" => string.IsNullOrEmpty(ext) ? "Embedded image preview" : $"{ext} embedded image preview",
+            "package" => "App package icon",
+            "executable" => "Application icon",
+            "certificate" => "Certificate",
+            _ => ext,
+        };
+    }
+
+    private static ImageSource? CreateBitmapSource(NativeRasterImage raster)
+    {
+        if (raster.Width <= 0 || raster.Height <= 0 || raster.Bgra.Length < raster.Width * raster.Height * 4)
+            return null;
+
+        try
+        {
+            var bitmap = new WriteableBitmap(raster.Width, raster.Height);
+            using (var stream = bitmap.PixelBuffer.AsStream())
+            {
+                stream.Write(raster.Bgra, 0, raster.Width * raster.Height * 4);
+            }
+            bitmap.Invalidate();
+            return bitmap;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "preview hero bitmap failed: " + ex.Message);
+            return null;
+        }
+    }
+
+    private void ClearPreviewHeroImages()
+    {
+        TextHeroImage.Source = null;
+        TextHeroTitle.Text = "";
+        TextHeroSubtitle.Text = "";
+        TextHeroPanel.Visibility = Visibility.Collapsed;
+        TextHeroFrame.Visibility = Visibility.Collapsed;
+        ListingHeroImage.Source = null;
+        ListingHeroFrame.Visibility = Visibility.Collapsed;
     }
 
     private (double Width, double Height) EstimateTextPreviewSize(string text, string? format, bool wrap)
@@ -1094,9 +1531,44 @@ public sealed partial class MainWindow : Window
 
         double width = Math.Clamp(contentWidth + WindowHorizontalChrome, MinWindowWidth, maxWindow.Width);
         double height = Math.Clamp(contentHeight + WindowVerticalChrome, MinWindowHeight, maxWindow.Height);
+        TemporarilyHideWindowForTransitionResize();
         GetAppWindow().Resize(new SizeInt32((int)Math.Round(width), (int)Math.Round(height)));
         if (setTopmost)
             SetWindowTopmost();
+    }
+
+    private void CenterPreviewWindowInCurrentDisplay(AppWindow appWindow)
+    {
+        try
+        {
+            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            DisplayArea? displayArea = DisplayArea.GetFromWindowId(
+                Win32Interop.GetWindowIdFromWindow(hwnd),
+                DisplayAreaFallback.Nearest);
+            if (displayArea is null)
+                return;
+
+            var workArea = displayArea.WorkArea;
+            var size = appWindow.Size;
+            int x = workArea.X + Math.Max(0, (workArea.Width - size.Width) / 2);
+            int y = workArea.Y + Math.Max(0, (workArea.Height - size.Height) / 2);
+            appWindow.Move(new PointInt32(x, y));
+        }
+        catch
+        {
+            // Centering is best-effort; preview should still open even if display lookup fails.
+        }
+    }
+
+    private void TemporarilyHideWindowForTransitionResize()
+    {
+        if (!_previewRevealPending || !_previewVisible || _previewTemporarilyHidden)
+            return;
+
+        try { GetAppWindow().Hide(); }
+        catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
+        _previewTemporarilyHidden = true;
+        _isTopmost = false;
     }
 
     /// <summary>Dispose the current raster sprite + its brush to release the GPU composition surface.</summary>
@@ -1178,6 +1650,18 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void OnPreviewRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
+    {
+        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
+            return;
+
+        _imageZoom = 1.0;
+        _imagePanX = 0;
+        _imagePanY = 0;
+        UpdateRasterSpriteLayout();
+        e.Handled = true;
+    }
+
     private void RenderMarkdown(string text)
     {
         string[] lines = NormalizeLines(text);
@@ -1246,7 +1730,7 @@ public sealed partial class MainWindow : Window
             {
                 FlushParagraph();
                 var p = CreateParagraph(14, "Segoe UI", 4, 8);
-                p.Foreground = new SolidColorBrush(Colors.Gray);
+                p.Foreground = UiGrayBrush;
                 p.Inlines.Add(new Run { Text = "│ " });
                 AddInlineMarkdown(p, trimmed[2..]);
                 TextPreviewBlock.Blocks.Add(p);
@@ -1282,7 +1766,7 @@ public sealed partial class MainWindow : Window
     private void RenderCodeOrPlainText(string text, string language)
     {
         var header = CreateParagraph(12, "Segoe UI", 0, 10);
-        header.Foreground = new SolidColorBrush(Colors.Gray);
+        header.Foreground = UiGrayBrush;
         header.Inlines.Add(new Run { Text = language });
         TextPreviewBlock.Blocks.Add(header);
 
@@ -1392,52 +1876,35 @@ public sealed partial class MainWindow : Window
         return $"{files:N0} files, {folders:N0} folders - {FormatBytes(bytes)}";
     }
 
-    public sealed class ListingRow
+    internal static string FormatBytes(long bytes)
     {
-        public ListingRow(PreviewListingItem item)
-        {
-            Name = item.Name;
-            Path = item.Path;
-            NativePath = item.NativePath;
-            IsFolder = item.IsFolder;
-            Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
-            TypeDisplay = item.IsFolder ? "文件夹" : item.Type;
-            SizeDisplay = item.IsFolder ? "" : FormatBytes(item.Size);
-            ModifiedDisplay = item.ModifiedUnix > 0
-                ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
-                : "";
-        }
-
-        public string Name { get; }
-        public string Path { get; }
-        public string? NativePath { get; }
-        public bool IsFolder { get; }
-        public string Glyph { get; }
-        public string ModifiedDisplay { get; }
-        public string TypeDisplay { get; }
-        public string SizeDisplay { get; }
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
         double value = bytes;
         int unit = 0;
-        while (value >= 1024 && unit < units.Length - 1)
+        while (value >= 1024 && unit < ByteUnits.Length - 1)
         {
             value /= 1024;
             unit++;
         }
-        return unit == 0 ? $"{bytes:N0} B" : $"{value:0.##} {units[unit]}";
+        return unit == 0 ? $"{bytes:N0} B" : $"{value:0.##} {ByteUnits[unit]}";
     }
 
     private static Paragraph CreateParagraph(double fontSize, string fontFamily, double top, double bottom)
         => new()
         {
             FontSize = fontSize,
-            FontFamily = new FontFamily(fontFamily),
+            FontFamily = FontFamilyFor(fontFamily),
             Margin = new Thickness(0, top, 0, bottom),
         };
+
+    private static FontFamily FontFamilyFor(string fontFamily)
+    {
+        if (!FontFamilyCache.TryGetValue(fontFamily, out var cached))
+        {
+            cached = new FontFamily(fontFamily);
+            FontFamilyCache[fontFamily] = cached;
+        }
+        return cached;
+    }
 
     private static string[] NormalizeLines(string text)
         => text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -1455,7 +1922,7 @@ public sealed partial class MainWindow : Window
                     paragraph.Inlines.Add(new Run
                     {
                         Text = text[(i + 1)..end],
-                        FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+                        FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
                         Foreground = BrushFor(TokenKind.Keyword),
                     });
                     i = end + 1;
@@ -1555,12 +2022,18 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ShowPreviewWindow(bool activate)
+    private void ShowPreviewWindow(bool activate, bool resizeToDefault = true)
     {
-        ApplyNoActivateStyle();
+        bool openingFromHidden = !_previewVisible;
+        if (activate)
+            SetNoActivateStyle(enabled: false);
+        else
+            ApplyNoActivateStyle();
         var appWindow = GetAppWindow();
-        if (!_previewVisible)
+        if (!_previewVisible && resizeToDefault)
             ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
+        if (openingFromHidden)
+            CenterPreviewWindowInCurrentDisplay(appWindow);
         TrySetAppWindowTopmost(appWindow);
         try { appWindow.Show(activate); }
         catch
@@ -1574,11 +2047,18 @@ public sealed partial class MainWindow : Window
         SetBackgroundEfficiency(enabled: false);
         _native.SetPreviewVisible(true);
         _topmostTimer?.Start(); // keep re-asserting topmost while visible
+        PreviewContentHost.Opacity = 1;
     }
 
     private void HidePreviewWindow()
     {
         CancelSwitchDebounce();
+        _previewRevealPending = false;
+        _previewTemporarilyHidden = false;
+        LoadingRing.IsActive = false;
+        LoadingRing.Visibility = Visibility.Collapsed;
+        ErrorPanel.Visibility = Visibility.Collapsed;
+        PreviewContentHost.Opacity = 1;
         _topmostTimer?.Stop();
         try { GetAppWindow().Hide(); }
         catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
@@ -1957,4 +2437,30 @@ public sealed partial class MainWindow : Window
             ? themedPath
             : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
     }
+}
+
+public sealed class ListingRow
+{
+    public ListingRow(PreviewListingItem item)
+    {
+        Name = item.Name;
+        Path = item.Path;
+        NativePath = item.NativePath;
+        IsFolder = item.IsFolder;
+        Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
+        TypeDisplay = item.IsFolder ? "文件夹" : item.Type;
+        SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
+        ModifiedDisplay = item.ModifiedUnix > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
+            : "";
+    }
+
+    public string Name { get; }
+    public string Path { get; }
+    public string? NativePath { get; }
+    public bool IsFolder { get; }
+    public string Glyph { get; }
+    public string ModifiedDisplay { get; }
+    public string TypeDisplay { get; }
+    public string SizeDisplay { get; }
 }
