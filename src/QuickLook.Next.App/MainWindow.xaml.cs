@@ -1,0 +1,1960 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
+using Microsoft.UI;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
+using Windows.Graphics;
+using QuickLook.Next.Contracts;
+using QuickLook.Next.Core;
+
+namespace QuickLook.Next.App;
+
+public sealed partial class MainWindow : Window
+{
+    private const double MaxImageWindowWidth = 1200;
+    private const double MaxImageWindowHeight = 900;
+    private const double MaxPdfWindowWidth = 1040;
+    private const double MaxPdfWindowHeight = 900;
+    private const double MaxTextWindowWidth = 1100;
+    private const double MaxTextWindowHeight = 860;
+    private const double PdfPageTargetWidth = 860;
+    private const double WindowHorizontalChrome = 48;
+    private const double WindowVerticalChrome = 72;
+    private const double MinWindowWidth = 360;
+    private const double MinWindowHeight = 260;
+    private const double MaxWindowScreenRatio = 0.86;
+    private const double MinImageZoom = 0.1;
+    private const double MaxImageZoom = 12.0;
+    private const int MaxHighlightedChars = 256 * 1024;
+    private const int MaxHighlightedRuns = 7000;
+    private const int SwitchDebounceMs = 110;
+    private const int PdfOffscreenSurfaceCachePages = 5;
+
+    private readonly NativeBridge _native = new();
+    private readonly Dictionary<int, Border> _pdfPageHosts = new();
+    private readonly HashSet<int> _requestedPdfPages = new();
+    private readonly Dictionary<int, long> _pdfPageLastTouched = new();
+    private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = new();
+    private Compositor? _compositor;
+    private SpriteVisual? _rasterSprite;
+    private uint _rasterSurfaceWidth;
+    private uint _rasterSurfaceHeight;
+    private double _imageZoom = 1.0;
+    private double _imagePanX;
+    private double _imagePanY;
+    private bool _isPanning;
+    private Windows.Foundation.Point _panStart;
+    private double _panStartX;
+    private double _panStartY;
+    private bool _trayIconAdded;
+    private WndProcDelegate? _wndProc;
+    private nint _oldWndProc;
+    private RasterHostSupervisor? _supervisor;
+    private string? _currentRequestId;
+    private string? _currentPath;
+    private double _currentPdfScale = 1.0;
+    private bool _isStarted;
+    private bool _previewVisible;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _topmostTimer;
+    private bool? _brushThemeDark;
+    private nint _trayIconHandle;
+    private bool _ownsTrayIconHandle;
+    private string? _trayIconPath;
+    private int _previewGeneration;
+    private PreviewListing? _currentListing;
+    private string _currentListingPath = "";
+    private string _listingSortColumn = "name";
+    private bool _listingSortAscending = true;
+    private bool? _backgroundEfficiencyEnabled;
+    private CancellationTokenSource? _switchDebounceCts;
+    private long _pdfPageTouchTick;
+
+    // Show the top status text (file name / errors) only while debugging; normal use is chromeless.
+    private const bool ShowStatusBar = false;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        Title = "QuickLook Next";
+        TrySetBackdrop();
+        _topmostTimer = DispatcherQueue.CreateTimer();
+        _topmostTimer.Interval = TimeSpan.FromMilliseconds(400);
+        _topmostTimer.IsRepeating = true;
+        _topmostTimer.Tick += (_, _) => { if (_previewVisible) SetWindowTopmost(); };
+        PreviewRoot.SizeChanged += OnRootSizeChanged;
+        PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
+        PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
+        PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
+        PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
+        PdfScrollViewer.ViewChanged += (_, _) => RequestVisiblePdfPages();
+        GetAppWindow().Closing += (_, args) =>
+        {
+            // Intercept the close (X button / Alt+F4 / taskbar close): hide the window instead of
+            // destroying it. The app stays alive in the tray; Escape or tray "Exit" truly quits.
+            args.Cancel = true;
+            HidePreviewWindow();
+        };
+        Closed += (_, _) =>
+        {
+            RemoveTrayIcon();
+            _supervisor?.Stop();
+        };
+
+        RootGrid.ActualThemeChanged += (s, e) =>
+        {
+            UpdateTitleBarColors();
+            ApplyWindowIcon();
+            RefreshTrayIcon();
+        };
+        UpdateTitleBarColors();
+        UpdateListingSortHeaders();
+    }
+
+    public async Task StartBackgroundAsync()
+    {
+        if (_isStarted) return;
+        _isStarted = true;
+
+        DiagLog.Write("App", $"background start; pid={Environment.ProcessId}");
+        SetBackgroundEfficiency(enabled: true);
+        StatusBar.Visibility = ShowStatusBar ? Visibility.Visible : Visibility.Collapsed;
+        ApplyWindowIcon();
+        EnsureTrayIcon();
+        ApplyNoActivateStyle();
+
+        try
+        {
+            _supervisor = new RasterHostSupervisor(ResolveHostExePath(), DispatcherQueue);
+            _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
+            _supervisor.SurfaceReceived += OnSurfaceReceived;
+            _native.Start(OnNativeIntent);
+            StatusText.Text = "ready";
+            DiagLog.Write("App", "native hook installed; RasterHost is lazy");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "startup FAILED: " + ex);
+            // Pipe-in-use means another instance is already running — exit quietly instead of
+            // becoming a broken tray-zombie process. (Don't match the message string — it's
+            // localized; match by the pipe-creation stack frame instead.)
+            if (ex is System.IO.IOException && ex.StackTrace?.Contains("NamedPipeServerStream", StringComparison.Ordinal) == true)
+            {
+                DiagLog.Write("App", "another instance holds the pipe — exiting");
+                Environment.Exit(0);
+            }
+            StatusText.Text = "startup error: " + ex.Message;
+            ShowPreviewWindow(activate: true);
+        }
+    }
+
+    private void OnNativeIntent(NativeIntent intent)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (intent.Intent == PreviewIntent.Switch)
+                DebounceSwitchIntent(intent);
+            else
+            {
+                CancelSwitchDebounce();
+                _ = HandleNativeIntentSafelyAsync(intent);
+            }
+        });
+    }
+
+    private void DebounceSwitchIntent(NativeIntent intent)
+    {
+        if (!_previewVisible)
+            return;
+
+        CancelSwitchDebounce();
+        var cts = new CancellationTokenSource();
+        _switchDebounceCts = cts;
+        Task.Delay(SwitchDebounceMs, cts.Token).ContinueWith(task =>
+        {
+            if (task.IsCanceled) return;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_switchDebounceCts != cts || cts.IsCancellationRequested)
+                    return;
+                _switchDebounceCts = null;
+                cts.Dispose();
+                _ = HandleNativeIntentSafelyAsync(intent);
+            });
+        }, TaskScheduler.Default);
+    }
+
+    private void CancelSwitchDebounce()
+    {
+        if (_switchDebounceCts is null)
+            return;
+
+        try { _switchDebounceCts.Cancel(); }
+        catch { }
+        _switchDebounceCts.Dispose();
+        _switchDebounceCts = null;
+    }
+
+    private async Task HandleNativeIntentSafelyAsync(NativeIntent intent)
+    {
+        try
+        {
+            await HandleNativeIntentAsync(intent);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "intent handler FAILED: " + ex);
+            StatusText.Text = "error: " + ex.Message;
+            ShowPreviewWindow(activate: false);
+        }
+    }
+
+    /// <summary>
+    /// Close the in-flight preview. Clears <see cref="_currentRequestId"/> <i>before</i> awaiting the send
+    /// (atomic on the UI dispatcher — no yield in between), so any late surface for it is dropped by the
+    /// guard, and a second concurrent caller sees null and skips (de-dupes the close).
+    /// </summary>
+    private async Task CloseCurrentAsync()
+    {
+        var id = _currentRequestId;
+        if (id is null) return;
+        _currentRequestId = null;
+        await _supervisor!.CloseAsync(id);
+    }
+
+    private async Task EnsureRasterHostStartedAsync()
+    {
+        if (_supervisor is null)
+        {
+            _supervisor = new RasterHostSupervisor(ResolveHostExePath(), DispatcherQueue);
+            _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
+            _supervisor.SurfaceReceived += OnSurfaceReceived;
+        }
+
+        await _supervisor.EnsureStartedAsync();
+    }
+
+    private async Task HandleNativeIntentAsync(NativeIntent intent)
+    {
+        // +/- zoom the image preview (only when one is showing; the global key isn't swallowed elsewhere).
+        if (intent.Intent is PreviewIntent.ZoomIn or PreviewIntent.ZoomOut)
+        {
+            if (_rasterSprite is not null && PreviewRoot.Visibility == Visibility.Visible)
+            {
+                double factor = intent.Intent == PreviewIntent.ZoomIn ? 1.15 : 1.0 / 1.15;
+                _imageZoom = Math.Clamp(_imageZoom * factor, MinImageZoom, MaxImageZoom);
+                UpdateRasterSpriteLayout();
+            }
+            return;
+        }
+
+        if (intent.Intent == PreviewIntent.Close)
+        {
+            int generation = BeginPreviewGeneration();
+            ResetPreview();
+            await CloseCurrentAsync();
+            if (!IsPreviewGenerationCurrent(generation)) return;
+            _currentPath = null;
+            HidePreviewWindow();
+            return;
+        }
+
+        if (intent.Intent is PreviewIntent.Open or PreviewIntent.Switch && intent.PrimaryPath is { } path)
+        {
+            if (intent.Intent == PreviewIntent.Switch && !_previewVisible)
+                return;
+            if (intent.Intent == PreviewIntent.Switch
+                && _currentPath is not null
+                && string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (intent.Intent == PreviewIntent.Open
+                && _previewVisible
+                && _currentPath is not null
+                && string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                int closeGeneration = BeginPreviewGeneration();
+                ResetPreview();
+                await CloseCurrentAsync();
+                if (!IsPreviewGenerationCurrent(closeGeneration)) return;
+                _currentPath = null;
+                HidePreviewWindow();
+                return;
+            }
+
+            int generation = BeginPreviewGeneration();
+            ResetPreview();
+            ShowPreviewWindow(activate: false);
+            Title = System.IO.Path.GetFileName(path);   // file name shows in the title bar
+            AppTitle.Text = Title;
+            StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
+            try
+            {
+                await CloseCurrentAsync();
+                if (!IsPreviewGenerationCurrent(generation)) return;
+                FileProbe probe = _native.ProbeFile(path) ?? BuildProbe(path);
+                if (!IsPreviewGenerationCurrent(generation)) return;
+
+                if (IsMediaProbe(probe))
+                {
+                    _currentPath = path;
+                    _currentRequestId = null;
+                    StatusText.Text = ShowMediaPreview(new PreviewReady(
+                        $"media-{generation}",
+                        "media",
+                        System.IO.Path.GetFileName(path),
+                        800,
+                        probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase) ? 140 : 450)
+                    {
+                        MediaPath = path,
+                    });
+                    return;
+                }
+
+                PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe));
+                if (!IsPreviewGenerationCurrent(generation)) return;
+                if (nativeReady is not null)
+                {
+                    _currentPath = path;
+                    _currentRequestId = null;
+                    StatusText.Text = nativeReady switch
+                    {
+                        PreviewReady r when r.Listing is not null => ShowListingPreview(r),
+                        PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
+                        _ => $"{nativeReady.Kind}: {nativeReady.Title}",
+                    };
+                    return;
+                }
+
+                await EnsureRasterHostStartedAsync();
+                if (!IsPreviewGenerationCurrent(generation)) return;
+                var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
+                _currentRequestId = requestId;
+                _currentPath = path;
+                ControlMessage result = await completion;
+                if (!IsPreviewGenerationCurrent(generation) || _currentRequestId != requestId)
+                    return;
+                StatusText.Text = result switch
+                {
+                    PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
+                    PreviewReady r when r.Listing is not null => ShowListingPreview(r),
+                    PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
+                    PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
+                    PreviewReady r => ShowRasterPreview(r),
+                    PreviewError er => $"error: {er.Message}",
+                    _ => "?",
+                };
+            }
+            catch (TimeoutException) { StatusText.Text = "preview timed out"; }
+        }
+    }
+
+    private int BeginPreviewGeneration() => ++_previewGeneration;
+
+    private bool IsPreviewGenerationCurrent(int generation) => generation == _previewGeneration;
+
+    private void OnSurfaceReceived(PreviewSurface surface)
+    {
+        EnsureCompositor();
+        if (_compositor is null) return;
+        // Only accept surfaces for the exact current request. While switching/closing _currentRequestId is
+        // null, so late surfaces for a just-closed request are dropped — never build a composition surface
+        // from a handle whose swapchain the host may already be retiring.
+        if (surface.RequestId != _currentRequestId) return;
+
+        if (surface.PageIndex >= 0)
+        {
+            AttachPdfPageSurface(surface);
+            return;
+        }
+
+        var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(_compositor, (nint)surface.SharedHandle);
+        if (hr < 0 || compSurface is null) { StatusText.Text = $"surface failed 0x{hr:X8}"; return; }
+
+        // Dispose the previous sprite + brush to release GPU surface before creating a new one.
+        DisposeRasterSprite();
+
+        var brush = _compositor.CreateSurfaceBrush(compSurface);
+        brush.Stretch = CompositionStretch.Fill;
+        var sprite = _compositor.CreateSpriteVisual();
+        sprite.Brush = brush;
+        _rasterSprite = sprite;
+        _rasterSurfaceWidth = surface.Width;
+        _rasterSurfaceHeight = surface.Height;
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, sprite);
+        DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
+        SetWindowTopmost();
+    }
+
+    private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateRasterSpriteLayout();
+    }
+
+    private string ShowRasterPreview(PreviewReady ready)
+    {
+        PreviewRoot.Visibility = Visibility.Visible;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        _imageZoom = 1.0;
+        _imagePanX = 0;
+        _imagePanY = 0;
+        // Size the window to the image's aspect ratio (fit within max), so there's no empty letterbox.
+        double w = ready.PreferredWidth, h = ready.PreferredHeight;
+        if (w > 0 && h > 0)
+        {
+            var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
+            double scale = Math.Min(1.0, Math.Min(maxContent.Width / w, maxContent.Height / h));
+            ResizeWindowForContent(w * scale, h * scale, MaxImageWindowWidth, MaxImageWindowHeight);
+        }
+        else
+        {
+            ResizeWindowForContent(w, h, MaxImageWindowWidth, MaxImageWindowHeight);
+        }
+        DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
+        return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush PdfPageBackground =
+        new(Microsoft.UI.Colors.White);
+
+    private string ShowPdfDocument(string requestId, PreviewReady ready)
+    {
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Visible;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        _rasterSprite = null;
+        _rasterSurfaceWidth = 0;
+        _rasterSurfaceHeight = 0;
+        _imageZoom = 1.0;
+
+        _pdfPageHosts.Clear();
+        _requestedPdfPages.Clear();
+        _pdfPageLastTouched.Clear();
+        _pdfPageTouchTick = 0;
+        PdfPagesPanel.Children.Clear();
+
+        double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
+        double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
+        var maxPdfContent = GetMaxContentSize(MaxPdfWindowWidth, MaxPdfWindowHeight);
+        double targetPageWidth = Math.Min(PdfPageTargetWidth, Math.Max(320, maxPdfContent.Width - 64));
+        double targetPageHeight = Math.Max(320, maxPdfContent.Height - 96);
+        _currentPdfScale = Math.Clamp(
+            Math.Min(targetPageWidth / pageWidth, targetPageHeight / pageHeight),
+            0.25,
+            1.6);
+        double displayWidth = Math.Round(pageWidth * _currentPdfScale);
+        double displayHeight = Math.Round(pageHeight * _currentPdfScale);
+
+        int pageCount = Math.Max(1, ready.PageCount);
+        for (int i = 0; i < pageCount; i++)
+        {
+            var pageHost = new Border
+            {
+                Width = displayWidth,
+                Height = displayHeight,
+                Background = PdfPageBackground,
+            };
+            _pdfPageHosts[i] = pageHost;
+            PdfPagesPanel.Children.Add(pageHost);
+        }
+
+        ResizeWindowForContent(
+            Math.Min(maxPdfContent.Width, displayWidth + 64),
+            Math.Min(maxPdfContent.Height, displayHeight + 96),
+            MaxPdfWindowWidth,
+            MaxPdfWindowHeight);
+        Task.Delay(100).ContinueWith(_ => DispatcherQueue.TryEnqueue(RequestVisiblePdfPages));
+        return $"pdf: {ready.Title}";
+    }
+
+    private string ShowTextPreview(PreviewReady ready)
+    {
+        string text = TrimForDisplay(ready.TextContent ?? "");
+        DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Visible;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        SetNoActivateStyle(enabled: false);
+        Activate();
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        _rasterSprite = null;
+        _rasterSurfaceWidth = 0;
+        _rasterSurfaceHeight = 0;
+        _imageZoom = 1.0;
+
+        TextPreviewBlock.Blocks.Clear();
+        TextPreviewBlock.IsTextSelectionEnabled = true;
+        // Prose (markdown/plain) wraps to the viewport; code scrolls horizontally to keep line structure.
+        bool wrap = ready.TextFormat is "markdown" or "plain";
+        TextScrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        TextPreviewBlock.FontFamily = new FontFamily(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
+        TextPreviewBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+
+        try
+        {
+            if (ready.TextFormat == "markdown")
+                RenderMarkdown(text);
+            else
+                RenderCodeOrPlainText(text, ready.TextLanguage ?? "text");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
+            TextPreviewBlock.Blocks.Clear();
+            TextPreviewBlock.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+            TextPreviewBlock.TextWrapping = TextWrapping.NoWrap;
+            TextScrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            AddCodeBlock(text);
+        }
+
+        TextPreviewBlock.Focus(FocusState.Programmatic);
+        var textSize = EstimateTextPreviewSize(text, ready.TextFormat, wrap);
+        ResizeWindowForContent(textSize.Width, textSize.Height, MaxTextWindowWidth, MaxTextWindowHeight);
+        return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private string ShowMediaPreview(PreviewReady ready)
+    {
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Visible;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        _rasterSprite = null;
+        _rasterSurfaceWidth = 0;
+        _rasterSurfaceHeight = 0;
+        _imageZoom = 1.0;
+
+        try
+        {
+            var uri = new Uri(ready.MediaPath!);
+            MediaPreviewElement.Source = Windows.Media.Core.MediaSource.CreateFromUri(uri);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "media load failed: " + ex);
+        }
+
+        double w = ready.PreferredWidth > 0 ? ready.PreferredWidth : 800;
+        double h = ready.PreferredHeight > 0 ? ready.PreferredHeight : 450;
+        var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
+        double scale = w > 0 && h > 0
+            ? Math.Min(1.0, Math.Min(maxContent.Width / w, maxContent.Height / h))
+            : 1.0;
+        ResizeWindowForContent(w * scale, h * scale, MaxImageWindowWidth, MaxImageWindowHeight);
+        return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private string ShowListingPreview(PreviewReady ready)
+    {
+        _currentListing = ready.Listing;
+        _currentListingPath = "";
+
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Visible;
+        SetNoActivateStyle(enabled: false);
+        Activate();
+        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        _rasterSprite = null;
+        _rasterSurfaceWidth = 0;
+        _rasterSurfaceHeight = 0;
+        _imageZoom = 1.0;
+
+        RenderListing();
+        var listingSize = EstimateListingPreviewSize();
+        ResizeWindowForContent(listingSize.Width, listingSize.Height, MaxTextWindowWidth, MaxTextWindowHeight);
+        return $"{ready.Kind}: {ready.Title}";
+    }
+
+    private void RenderListing()
+    {
+        if (_currentListing is null)
+            return;
+
+        string title = _currentListing.RootName;
+        if (!string.IsNullOrEmpty(_currentListingPath))
+        {
+            string path = _currentListingPath.TrimEnd('/');
+            int slash = path.LastIndexOf('/');
+            title = slash >= 0 ? path[(slash + 1)..] : path;
+        }
+
+        RenderListingBreadcrumb();
+
+        var visibleItems = _currentListing.Items
+            .Where(i => string.Equals(NormalizeListingPath(i.ParentPath), _currentListingPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var rows = visibleItems
+            .OrderBy(i => i, Comparer<PreviewListingItem>.Create(CompareListingItems))
+            .Select(i => new ListingRow(i))
+            .ToList();
+
+        ListingTitle.Text = title;
+        ListingSummary.Text = BuildListingSummary(_currentListing, visibleItems);
+        ListingListView.ItemsSource = rows;
+        UpdateListingSortHeaders();
+    }
+
+    private int CompareListingItems(PreviewListingItem left, PreviewListingItem right)
+    {
+        int folderCompare = right.IsFolder.CompareTo(left.IsFolder);
+        if (folderCompare != 0)
+            return folderCompare;
+
+        int result = _listingSortColumn switch
+        {
+            "modified" => left.ModifiedUnix.CompareTo(right.ModifiedUnix),
+            "type" => string.Compare(left.IsFolder ? "文件夹" : left.Type, right.IsFolder ? "文件夹" : right.Type, StringComparison.OrdinalIgnoreCase),
+            "size" => left.Size.CompareTo(right.Size),
+            _ => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase),
+        };
+        if (result == 0)
+            result = string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+        return _listingSortAscending ? result : -result;
+    }
+
+    private void UpdateListingSortHeaders()
+    {
+        SetListingHeader(ListingNameHeader, "name", "名称");
+        SetListingHeader(ListingModifiedHeader, "modified", "修改日期");
+        SetListingHeader(ListingTypeHeader, "type", "类型");
+        SetListingHeader(ListingSizeHeader, "size", "大小");
+    }
+
+    private void SetListingHeader(Button button, string column, string label)
+    {
+        string arrow = _listingSortColumn == column ? (_listingSortAscending ? " ↑" : " ↓") : "";
+        button.Content = label + arrow;
+    }
+
+    private void OnListingSortClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string column })
+            return;
+
+        if (_listingSortColumn == column)
+            _listingSortAscending = !_listingSortAscending;
+        else
+        {
+            _listingSortColumn = column;
+            _listingSortAscending = column != "modified";
+        }
+        RenderListing();
+    }
+
+    private void RenderListingBreadcrumb()
+    {
+        ListingBreadcrumbPanel.Children.Clear();
+        if (_currentListing is null)
+            return;
+
+        AddBreadcrumbButton(_currentListing.RootName, "");
+
+        string current = _currentListingPath.TrimEnd('/');
+        if (current.Length == 0)
+            return;
+
+        string acc = "";
+        foreach (string part in current.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            ListingBreadcrumbPanel.Children.Add(new TextBlock
+            {
+                Text = ">",
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = new SolidColorBrush(Colors.Gray),
+            });
+            acc = acc.Length == 0 ? part + "/" : acc + part + "/";
+            AddBreadcrumbButton(part, acc);
+        }
+    }
+
+    private void AddBreadcrumbButton(string text, string path)
+    {
+        var button = new Button
+        {
+            Content = text,
+            Tag = path,
+            Padding = new Thickness(8, 2, 8, 2),
+            MinHeight = 26,
+        };
+        button.Click += OnListingBreadcrumbClick;
+        ListingBreadcrumbPanel.Children.Add(button);
+    }
+
+    private void OnListingBreadcrumbClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string path })
+        {
+            _currentListingPath = NormalizeListingPath(path);
+            RenderListing();
+        }
+    }
+
+    private async void OnListingItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is ListingRow { IsFolder: true } row)
+            await NavigateIntoListingFolderAsync(row);
+    }
+
+    private async void OnListingListViewDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
+    {
+        if (ListingListView.SelectedItem is not ListingRow row)
+            return;
+
+        if (row.IsFolder)
+            await NavigateIntoListingFolderAsync(row);
+        else
+            OpenListingItem(row);
+    }
+
+    private async void OnListingListViewKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Back)
+        {
+            NavigateListingBack();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Enter && ListingListView.SelectedItem is ListingRow row)
+        {
+            if (row.IsFolder)
+                await NavigateIntoListingFolderAsync(row);
+            else
+                OpenListingItem(row);
+            e.Handled = true;
+        }
+    }
+
+    private async Task NavigateIntoListingFolderAsync(ListingRow row)
+    {
+        _currentListingPath = NormalizeListingPath(row.Path);
+        RenderListing();
+        await TryLoadPhysicalFolderLevelAsync(row, _currentListingPath, _previewGeneration);
+    }
+
+    private void NavigateListingBack()
+    {
+        if (string.IsNullOrEmpty(_currentListingPath))
+            return;
+
+        string current = _currentListingPath.TrimEnd('/');
+        int slash = current.LastIndexOf('/');
+        _currentListingPath = slash < 0 ? "" : current[..(slash + 1)];
+        RenderListing();
+    }
+
+    private void OpenListingItem(ListingRow row)
+    {
+        if (string.IsNullOrWhiteSpace(row.NativePath))
+            return;
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(row.NativePath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "open listing item failed: " + ex);
+        }
+    }
+
+    private async Task TryLoadPhysicalFolderLevelAsync(ListingRow row, string parentPath, int generation)
+    {
+        if (_currentListing is null
+            || !_currentListing.ListingKind.Equals("folder", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(row.NativePath))
+        {
+            return;
+        }
+
+        bool alreadyLoaded = _currentListing.Items.Any(i =>
+            string.Equals(NormalizeListingPath(i.ParentPath), parentPath, StringComparison.OrdinalIgnoreCase));
+        if (alreadyLoaded)
+            return;
+
+        try
+        {
+            ListingSummary.Text = "正在读取文件夹...";
+            var childListing = await Task.Run(() => _native.TryPreviewFolderListing(row.NativePath));
+            if (!IsPreviewGenerationCurrent(generation) || _currentListing is null)
+                return;
+            if (childListing is null)
+                return;
+
+            var children = childListing.Items
+                .Select(i => PrefixListingItem(parentPath, i))
+                .ToArray();
+            var merged = _currentListing.Items
+                .Concat(children)
+                .GroupBy(i => NormalizeListingPath(i.Path), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Last())
+                .ToArray();
+
+            _currentListing = _currentListing with
+            {
+                Items = merged,
+                IsPartial = _currentListing.IsPartial || childListing.IsPartial,
+            };
+            if (string.Equals(_currentListingPath, parentPath, StringComparison.OrdinalIgnoreCase))
+                RenderListing();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "folder navigation failed: " + ex);
+            ListingSummary.Text = "无法读取此文件夹";
+        }
+    }
+
+    private static PreviewListingItem PrefixListingItem(string parentPath, PreviewListingItem item)
+    {
+        string itemPath = item.Path.Replace('\\', '/').TrimStart('/');
+        string itemParent = item.ParentPath.Replace('\\', '/').TrimStart('/');
+        return item with
+        {
+            Path = parentPath + itemPath,
+            ParentPath = string.IsNullOrEmpty(itemParent) ? parentPath : parentPath + NormalizeListingPath(itemParent),
+        };
+    }
+
+    private void AttachPdfPageSurface(PreviewSurface surface)
+    {
+        if (_compositor is null || !_pdfPageHosts.TryGetValue(surface.PageIndex, out var pageHost))
+            return;
+
+        var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(_compositor, (nint)surface.SharedHandle);
+        if (hr < 0 || compSurface is null)
+        {
+            StatusText.Text = $"pdf page failed 0x{hr:X8}";
+            return;
+        }
+
+        pageHost.Width = surface.Width;
+        pageHost.Height = surface.Height;
+        TouchPdfPage(surface.PageIndex);
+        // Dispose the previous sprite on this page host before attaching a new one.
+        var oldChild = ElementCompositionPreview.GetElementChildVisual(pageHost);
+        if (oldChild is SpriteVisual oldSprite)
+        {
+            try { (oldSprite.Brush as IDisposable)?.Dispose(); } catch { }
+            try { oldSprite.Dispose(); } catch { }
+        }
+        var brush = _compositor.CreateSurfaceBrush(compSurface);
+        brush.Stretch = CompositionStretch.Fill;
+        var sprite = _compositor.CreateSpriteVisual();
+        sprite.RelativeSizeAdjustment = Vector2.One;
+        sprite.Brush = brush;
+        ElementCompositionPreview.SetElementChildVisual(pageHost, sprite);
+        DispatcherQueue.TryEnqueue(() => pageHost.InvalidateArrange());
+    }
+
+    private void RequestVisiblePdfPages()
+    {
+        if (_supervisor is null || _currentRequestId is null || PdfScrollViewer.Visibility != Visibility.Visible)
+            return;
+
+        // O(1) visible-page computation: all pages share the same height (displayHeight), so
+        // the visible page range is a simple arithmetic calculation from the scroll offset.
+        if (_pdfPageHosts.Count == 0) return;
+        int pageCount = _pdfPageHosts.Count;
+        double pageHeight = _pdfPageHosts[0].ActualHeight;
+        if (pageHeight <= 0) return;
+
+        double vp = Math.Max(1, PdfScrollViewer.ViewportHeight);
+        double scrollOffset = PdfScrollViewer.VerticalOffset;
+        int firstVisible = (int)Math.Floor(scrollOffset / pageHeight);
+        int lastVisible = (int)Math.Ceiling((scrollOffset + vp) / pageHeight);
+
+        // Expand the render window: render a few pages above/below the viewport for smooth scrolling.
+        int renderFirst = Math.Max(0, firstVisible - 1);
+        int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
+
+        for (int index = 0; index < pageCount; index++)
+        {
+            bool inRenderWindow = index >= renderFirst && index <= renderLast;
+
+            if (inRenderWindow && !_requestedPdfPages.Contains(index))
+            {
+                _requestedPdfPages.Add(index);
+                TouchPdfPage(index);
+                _ = _supervisor.RenderPageAsync(_currentRequestId, index, _currentPdfScale);
+            }
+            else if (inRenderWindow && _requestedPdfPages.Contains(index))
+            {
+                TouchPdfPage(index);
+            }
+        }
+
+        TrimPdfPageSurfaceCache(renderFirst, renderLast);
+    }
+
+    private void TouchPdfPage(int pageIndex)
+    {
+        _pdfPageLastTouched[pageIndex] = ++_pdfPageTouchTick;
+    }
+
+    private void TrimPdfPageSurfaceCache(int protectedFirst, int protectedLast)
+    {
+        if (_currentRequestId is null)
+            return;
+
+        int protectedCount = Math.Max(0, protectedLast - protectedFirst + 1);
+        int maxSurfaces = protectedCount + PdfOffscreenSurfaceCachePages;
+        if (_requestedPdfPages.Count <= maxSurfaces)
+            return;
+
+        var evict = _requestedPdfPages
+            .Where(i => i < protectedFirst || i > protectedLast)
+            .OrderBy(i => _pdfPageLastTouched.TryGetValue(i, out long tick) ? tick : 0)
+            .Take(Math.Max(0, _requestedPdfPages.Count - maxSurfaces))
+            .ToArray();
+
+        foreach (int index in evict)
+            ReleasePdfPageSurface(index);
+    }
+
+    private void ReleasePdfPageSurface(int pageIndex)
+    {
+        _requestedPdfPages.Remove(pageIndex);
+        _pdfPageLastTouched.Remove(pageIndex);
+        if (_pdfPageHosts.TryGetValue(pageIndex, out var host))
+        {
+            var oldChild = ElementCompositionPreview.GetElementChildVisual(host);
+            if (oldChild is SpriteVisual oldSprite)
+            {
+                try { (oldSprite.Brush as IDisposable)?.Dispose(); } catch { }
+                try { oldSprite.Dispose(); } catch { }
+            }
+            ElementCompositionPreview.SetElementChildVisual(host, null);
+        }
+        if (_currentRequestId is not null)
+            _ = _supervisor?.ClosePageAsync(_currentRequestId, pageIndex);
+    }
+
+    private void ResetPreview()
+    {
+        DisposeRasterSprite();
+        PreviewRoot.Visibility = Visibility.Visible;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        if (MediaPreviewElement.Source is not null)
+        {
+            MediaPreviewElement.Source = null;
+        }
+        PdfPagesPanel.Children.Clear();
+        TextPreviewBlock.Blocks.Clear();
+        ListingListView.ItemsSource = null;
+        ListingBreadcrumbPanel.Children.Clear();
+        _currentListing = null;
+        _currentListingPath = "";
+        _pdfPageHosts.Clear();
+        _requestedPdfPages.Clear();
+        _pdfPageLastTouched.Clear();
+        _pdfPageTouchTick = 0;
+        if (_compositor is not null)
+            ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
+        AppTitle.Text = "QuickLook Next";
+    }
+
+    private (double Width, double Height) EstimateTextPreviewSize(string text, string? format, bool wrap)
+    {
+        var maxContent = GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight);
+        string[] lines = text.Length == 0 ? [""] : text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        int lineCount = Math.Max(1, lines.Length);
+        int maxLineLength = lines
+            .Take(500)
+            .Select(line => line.Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        bool markdown = string.Equals(format, "markdown", StringComparison.OrdinalIgnoreCase);
+        bool code = !wrap && !markdown;
+        double charWidth = code ? 8.2 : 7.2;
+        double lineHeight = code ? 20 : 22;
+
+        double width;
+        if (wrap)
+        {
+            double contentWeight = Math.Sqrt(Math.Min(text.Length, MaxHighlightedChars));
+            width = 500 + Math.Min(360, contentWeight * 8);
+            if (markdown)
+                width = Math.Max(width, 620);
+        }
+        else
+        {
+            width = Math.Min(980, Math.Max(520, Math.Min(maxLineLength, 120) * charWidth + 96));
+        }
+
+        int desiredLines = lineCount <= 12 ? lineCount : Math.Min(lineCount, code ? 30 : 26);
+        double height = desiredLines * lineHeight + (markdown ? 120 : 96);
+
+        return (
+            Math.Clamp(width, 460, maxContent.Width),
+            Math.Clamp(height, 260, maxContent.Height));
+    }
+
+    private (double Width, double Height) EstimateListingPreviewSize()
+    {
+        var maxContent = GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight);
+        if (_currentListing is null)
+            return (Math.Min(720, maxContent.Width), Math.Min(480, maxContent.Height));
+
+        var visibleItems = _currentListing.Items
+            .Where(i => string.Equals(NormalizeListingPath(i.ParentPath), _currentListingPath, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        int visibleRows = Math.Clamp(visibleItems.Length, 4, 16);
+        int longestName = visibleItems
+            .Take(200)
+            .Select(i => i.Name.Length)
+            .DefaultIfEmpty(_currentListing.RootName.Length)
+            .Max();
+
+        double nameColumn = Math.Clamp(longestName * 7.4 + 96, 300, 520);
+        double width = nameColumn + 170 + 140 + 110 + 110;
+        double height = 128 + visibleRows * 36;
+
+        return (
+            Math.Clamp(width, 620, maxContent.Width),
+            Math.Clamp(height, 320, maxContent.Height));
+    }
+
+    private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
+    {
+        var maxWindow = GetMaxWindowSize(preferredMaxWidth, preferredMaxHeight);
+        return (
+            Math.Max(1, maxWindow.Width - WindowHorizontalChrome),
+            Math.Max(1, maxWindow.Height - WindowVerticalChrome));
+    }
+
+    private (double Width, double Height) GetMaxWindowSize(double preferredMaxWidth, double preferredMaxHeight)
+    {
+        double screenMaxWidth = preferredMaxWidth;
+        double screenMaxHeight = preferredMaxHeight;
+
+        try
+        {
+            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            DisplayArea? displayArea = DisplayArea.GetFromWindowId(
+                Win32Interop.GetWindowIdFromWindow(hwnd),
+                DisplayAreaFallback.Nearest);
+            if (displayArea is not null)
+            {
+                screenMaxWidth = Math.Max(MinWindowWidth, displayArea.WorkArea.Width * MaxWindowScreenRatio);
+                screenMaxHeight = Math.Max(MinWindowHeight, displayArea.WorkArea.Height * MaxWindowScreenRatio);
+            }
+        }
+        catch
+        {
+            // DisplayArea is best-effort; fall back to the conservative per-kind caps.
+        }
+
+        return (
+            Math.Max(MinWindowWidth, Math.Min(preferredMaxWidth, screenMaxWidth)),
+            Math.Max(MinWindowHeight, Math.Min(preferredMaxHeight, screenMaxHeight)));
+    }
+
+    private void ResizeWindowForContent(
+        double contentWidth,
+        double contentHeight,
+        double maxWidth,
+        double maxHeight,
+        bool setTopmost = true)
+    {
+        var maxWindow = GetMaxWindowSize(maxWidth, maxHeight);
+        if (!double.IsFinite(contentWidth) || contentWidth <= 0)
+            contentWidth = MinWindowWidth - WindowHorizontalChrome;
+        if (!double.IsFinite(contentHeight) || contentHeight <= 0)
+            contentHeight = MinWindowHeight - WindowVerticalChrome;
+
+        double width = Math.Clamp(contentWidth + WindowHorizontalChrome, MinWindowWidth, maxWindow.Width);
+        double height = Math.Clamp(contentHeight + WindowVerticalChrome, MinWindowHeight, maxWindow.Height);
+        GetAppWindow().Resize(new SizeInt32((int)Math.Round(width), (int)Math.Round(height)));
+        if (setTopmost)
+            SetWindowTopmost();
+    }
+
+    /// <summary>Dispose the current raster sprite + its brush to release the GPU composition surface.</summary>
+    private void DisposeRasterSprite()
+    {
+        if (_rasterSprite is not null)
+        {
+            try { (_rasterSprite.Brush as IDisposable)?.Dispose(); } catch { }
+            try { _rasterSprite.Dispose(); } catch { }
+            _rasterSprite = null;
+        }
+    }
+
+    private void UpdateRasterSpriteLayout()
+    {
+        if (_rasterSprite is null || _rasterSurfaceWidth == 0 || _rasterSurfaceHeight == 0)
+            return;
+
+        double availableWidth = Math.Max(1, PreviewRoot.ActualWidth);
+        double availableHeight = Math.Max(1, PreviewRoot.ActualHeight);
+        double fitScale = Math.Min(availableWidth / _rasterSurfaceWidth, availableHeight / _rasterSurfaceHeight);
+        double scale = fitScale * _imageZoom;
+        double scaledWidth = _rasterSurfaceWidth * scale;
+        double scaledHeight = _rasterSurfaceHeight * scale;
+
+        // Clamp pan so the image edge can't be dragged past the viewport (no pan while it fits).
+        double maxPanX = Math.Max(0, (scaledWidth - availableWidth) / 2);
+        double maxPanY = Math.Max(0, (scaledHeight - availableHeight) / 2);
+        _imagePanX = Math.Clamp(_imagePanX, -maxPanX, maxPanX);
+        _imagePanY = Math.Clamp(_imagePanY, -maxPanY, maxPanY);
+
+        // Swapchain-backed composition surfaces don't honor CompositionSurfaceBrush stretch, so size the
+        // sprite to the surface's native pixels (whole image, 1:1) and scale the visual to fit/zoom.
+        _rasterSprite.Size = new Vector2(_rasterSurfaceWidth, _rasterSurfaceHeight);
+        _rasterSprite.Scale = new Vector3((float)scale, (float)scale, 1f);
+        _rasterSprite.Offset = new Vector3(
+            (float)Math.Round((availableWidth - scaledWidth) / 2 + _imagePanX),
+            (float)Math.Round((availableHeight - scaledHeight) / 2 + _imagePanY),
+            0);
+    }
+
+    private void OnPreviewRootPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible) return;
+        _isPanning = true;
+        _panStart = e.GetCurrentPoint(PreviewRoot).Position;
+        _panStartX = _imagePanX;
+        _panStartY = _imagePanY;
+        PreviewRoot.CapturePointer(e.Pointer);
+    }
+
+    private void OnPreviewRootPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_isPanning) return;
+        var p = e.GetCurrentPoint(PreviewRoot).Position;
+        _imagePanX = _panStartX + (p.X - _panStart.X);
+        _imagePanY = _panStartY + (p.Y - _panStart.Y);
+        UpdateRasterSpriteLayout();
+    }
+
+    private void OnPreviewRootPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_isPanning) return;
+        _isPanning = false;
+        PreviewRoot.ReleasePointerCapture(e.Pointer);
+    }
+
+    private void OnPreviewRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
+            return;
+
+        int delta = e.GetCurrentPoint(PreviewRoot).Properties.MouseWheelDelta;
+        if (delta == 0) return;
+
+        double factor = delta > 0 ? 1.15 : 1.0 / 1.15;
+        _imageZoom = Math.Clamp(_imageZoom * factor, MinImageZoom, MaxImageZoom);
+        UpdateRasterSpriteLayout();
+        e.Handled = true;
+    }
+
+    private void RenderMarkdown(string text)
+    {
+        string[] lines = NormalizeLines(text);
+        bool inCode = false;
+        string code = "";
+        string codeLanguage = "text";
+        var paragraphBuffer = new List<string>();
+
+        void FlushParagraph()
+        {
+            if (paragraphBuffer.Count == 0) return;
+            var p = CreateParagraph(14, "Segoe UI", 0, 8);
+            AddInlineMarkdown(p, string.Join(" ", paragraphBuffer));
+            TextPreviewBlock.Blocks.Add(p);
+            paragraphBuffer.Clear();
+        }
+
+        foreach (string raw in lines)
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                if (inCode)
+                {
+                    AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
+                    code = "";
+                    codeLanguage = "text";
+                    inCode = false;
+                }
+                else
+                {
+                    FlushParagraph();
+                    inCode = true;
+                    codeLanguage = SyntaxHighlighter.NormalizeLanguage(line.TrimStart()[3..].Trim());
+                    if (codeLanguage.Length == 0)
+                        codeLanguage = "text";
+                }
+                continue;
+            }
+
+            if (inCode)
+            {
+                code += raw + "\n";
+                continue;
+            }
+
+            string trimmed = line.Trim();
+            if (trimmed.Length == 0)
+            {
+                FlushParagraph();
+                continue;
+            }
+
+            if (trimmed.StartsWith("#", StringComparison.Ordinal))
+            {
+                FlushParagraph();
+                int level = Math.Min(6, trimmed.TakeWhile(c => c == '#').Count());
+                string title = trimmed[level..].Trim();
+                var p = CreateParagraph(level <= 1 ? 26 : level == 2 ? 22 : 18, "Segoe UI", 14, 8);
+                p.Inlines.Add(new Bold { Inlines = { new Run { Text = title } } });
+                TextPreviewBlock.Blocks.Add(p);
+                continue;
+            }
+
+            if (trimmed.StartsWith("> ", StringComparison.Ordinal))
+            {
+                FlushParagraph();
+                var p = CreateParagraph(14, "Segoe UI", 4, 8);
+                p.Foreground = new SolidColorBrush(Colors.Gray);
+                p.Inlines.Add(new Run { Text = "│ " });
+                AddInlineMarkdown(p, trimmed[2..]);
+                TextPreviewBlock.Blocks.Add(p);
+                continue;
+            }
+
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal) || trimmed.StartsWith("* ", StringComparison.Ordinal))
+            {
+                FlushParagraph();
+                var p = CreateParagraph(14, "Segoe UI", 2, 4);
+                p.Inlines.Add(new Run { Text = "• " });
+                AddInlineMarkdown(p, trimmed[2..]);
+                TextPreviewBlock.Blocks.Add(p);
+                continue;
+            }
+
+            paragraphBuffer.Add(trimmed);
+        }
+
+        FlushParagraph();
+        if (inCode && code.Length > 0)
+            AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
+    }
+
+    private void AddMarkdownCodeBlock(string code, string language)
+    {
+        if (language is "text" or "log")
+            AddCodeBlock(code);
+        else
+            AddHighlightedCode(code, language);
+    }
+
+    private void RenderCodeOrPlainText(string text, string language)
+    {
+        var header = CreateParagraph(12, "Segoe UI", 0, 10);
+        header.Foreground = new SolidColorBrush(Colors.Gray);
+        header.Inlines.Add(new Run { Text = language });
+        TextPreviewBlock.Blocks.Add(header);
+
+        string code = text.TrimEnd('\r', '\n');
+        if (language is "text" or "log")
+            AddCodeBlock(code);          // plain text: no highlighting
+        else
+            AddHighlightedCode(code, language);
+    }
+
+    private void AddHighlightedCode(string code, string language)
+    {
+        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 2, 10);
+        if (code.Length == 0)
+        {
+            p.Inlines.Add(new Run { Text = " " });
+        }
+        else if (code.Length > MaxHighlightedChars)
+        {
+            p.Foreground = BrushFor(TokenKind.Default);
+            p.Inlines.Add(new Run
+            {
+                Text = code[..MaxHighlightedChars]
+                    + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
+            });
+        }
+        else
+        {
+            int runs = 0;
+            foreach (var (txt, kind) in SyntaxHighlighter.Highlight(code, language))
+            {
+                if (txt.Length == 0) continue;
+                if (++runs > MaxHighlightedRuns)
+                {
+                    DiagLog.Write("App", $"highlight run limit hit: language={language}; chars={code.Length}; runs>{MaxHighlightedRuns}");
+                    p.Inlines.Clear();
+                    p.Foreground = BrushFor(TokenKind.Default);
+                    p.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+                    break;
+                }
+
+                p.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
+            }
+        }
+        TextPreviewBlock.Blocks.Add(p);
+    }
+
+    private SolidColorBrush BrushFor(TokenKind kind)
+    {
+        bool dark = RootGrid.ActualTheme != ElementTheme.Light;
+        if (_brushThemeDark != dark) { _tokenBrushes.Clear(); _brushThemeDark = dark; }
+        if (_tokenBrushes.TryGetValue(kind, out var brush))
+            return brush;
+
+        Windows.UI.Color c = kind switch
+        {
+            TokenKind.Keyword => dark ? Rgb(0x56, 0x9C, 0xD6) : Rgb(0x00, 0x00, 0xFF),
+            TokenKind.Str => dark ? Rgb(0xCE, 0x91, 0x78) : Rgb(0xA3, 0x15, 0x15),
+            TokenKind.Comment => dark ? Rgb(0x6A, 0x99, 0x55) : Rgb(0x00, 0x80, 0x00),
+            TokenKind.Number => dark ? Rgb(0xB5, 0xCE, 0xA8) : Rgb(0x09, 0x86, 0x58),
+            TokenKind.Type => dark ? Rgb(0x4E, 0xC9, 0xB0) : Rgb(0x2B, 0x91, 0xAF),
+            TokenKind.Property => dark ? Rgb(0x9C, 0xDC, 0xFE) : Rgb(0x00, 0x16, 0x80),
+            TokenKind.Punctuation => dark ? Rgb(0xD4, 0xD4, 0xD4) : Rgb(0x39, 0x39, 0x39),
+            _ => ThemeTextColor(),
+        };
+        brush = new SolidColorBrush(c);
+        _tokenBrushes[kind] = brush;
+        return brush;
+    }
+
+    private static Windows.UI.Color Rgb(byte r, byte g, byte b) => ColorHelper.FromArgb(255, r, g, b);
+
+    private static Windows.UI.Color ThemeTextColor()
+    {
+        try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorPrimary"]; }
+        catch { return Colors.Gainsboro; }
+    }
+
+    private void AddCodeBlock(string code)
+    {
+        code = TrimForDisplay(code);
+        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 2, 10);
+        p.Foreground = BrushFor(TokenKind.Default);
+        p.Inlines.Add(new Run { Text = code.Length == 0 ? " " : code });
+        TextPreviewBlock.Blocks.Add(p);
+    }
+
+    private static string TrimForDisplay(string text)
+        => text.Length <= MaxHighlightedChars
+            ? text
+            : text[..MaxHighlightedChars] + $"\n\n[Preview truncated at {MaxHighlightedChars:N0} characters]";
+
+    private static string NormalizeListingPath(string path)
+    {
+        path = path.Replace('\\', '/').TrimStart('/');
+        return path.Length > 0 && !path.EndsWith('/') ? path + "/" : path;
+    }
+
+    private string BuildListingSummary(PreviewListing listing, IReadOnlyCollection<PreviewListingItem> visibleItems)
+    {
+        if (string.IsNullOrEmpty(_currentListingPath))
+            return listing.Summary + (listing.IsPartial ? " - 部分内容" : "");
+
+        int folders = visibleItems.Count(i => i.IsFolder);
+        int files = visibleItems.Count - folders;
+        long bytes = visibleItems.Where(i => !i.IsFolder).Sum(i => i.Size);
+        return $"{files:N0} files, {folders:N0} folders - {FormatBytes(bytes)}";
+    }
+
+    public sealed class ListingRow
+    {
+        public ListingRow(PreviewListingItem item)
+        {
+            Name = item.Name;
+            Path = item.Path;
+            NativePath = item.NativePath;
+            IsFolder = item.IsFolder;
+            Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
+            TypeDisplay = item.IsFolder ? "文件夹" : item.Type;
+            SizeDisplay = item.IsFolder ? "" : FormatBytes(item.Size);
+            ModifiedDisplay = item.ModifiedUnix > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
+                : "";
+        }
+
+        public string Name { get; }
+        public string Path { get; }
+        public string? NativePath { get; }
+        public bool IsFolder { get; }
+        public string Glyph { get; }
+        public string ModifiedDisplay { get; }
+        public string TypeDisplay { get; }
+        public string SizeDisplay { get; }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double value = bytes;
+        int unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return unit == 0 ? $"{bytes:N0} B" : $"{value:0.##} {units[unit]}";
+    }
+
+    private static Paragraph CreateParagraph(double fontSize, string fontFamily, double top, double bottom)
+        => new()
+        {
+            FontSize = fontSize,
+            FontFamily = new FontFamily(fontFamily),
+            Margin = new Thickness(0, top, 0, bottom),
+        };
+
+    private static string[] NormalizeLines(string text)
+        => text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+
+    private void AddInlineMarkdown(Paragraph paragraph, string text)
+    {
+        int i = 0;
+        while (i < text.Length)
+        {
+            if (text[i] == '`')
+            {
+                int end = text.IndexOf('`', i + 1);
+                if (end > i)
+                {
+                    paragraph.Inlines.Add(new Run
+                    {
+                        Text = text[(i + 1)..end],
+                        FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+                        Foreground = BrushFor(TokenKind.Keyword),
+                    });
+                    i = end + 1;
+                    continue;
+                }
+            }
+            if (i + 1 < text.Length && text[i] == '*' && text[i + 1] == '*')
+            {
+                int end = text.IndexOf("**", i + 2, StringComparison.Ordinal);
+                if (end > i)
+                {
+                    paragraph.Inlines.Add(new Bold { Inlines = { new Run { Text = text[(i + 2)..end] } } });
+                    i = end + 2;
+                    continue;
+                }
+            }
+            if (text[i] == '*')
+            {
+                int end = text.IndexOf('*', i + 1);
+                if (end > i)
+                {
+                    paragraph.Inlines.Add(new Italic { Inlines = { new Run { Text = text[(i + 1)..end] } } });
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            int next = NextMarkdownToken(text, i + 1);
+            paragraph.Inlines.Add(new Run { Text = text[i..next] });
+            i = next;
+        }
+    }
+
+    private static int NextMarkdownToken(string text, int start)
+    {
+        int next = text.Length;
+        foreach (char c in new[] { '`', '*' })
+        {
+            int at = text.IndexOf(c, start);
+            if (at >= 0 && at < next) next = at;
+        }
+        return next;
+    }
+
+    private void EnsureCompositor()
+    {
+        _compositor ??= ElementCompositionPreview.GetElementVisual(PreviewRoot).Compositor;
+    }
+
+
+    private void TrySetBackdrop()
+    {
+        try
+        {
+            SystemBackdrop = new MicaBackdrop();
+        }
+        catch { /* no backdrop on older systems */ }
+    }
+
+    private void UpdateTitleBarColors()
+    {
+        try
+        {
+            if (AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = GetAppWindow().TitleBar;
+                bool isDark = RootGrid.ActualTheme == ElementTheme.Dark;
+
+                if (isDark)
+                {
+                    titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+                    titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.White;
+                    titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF);
+                    titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.White;
+                    titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x3F, 0xFF, 0xFF, 0xFF);
+                    titleBar.ButtonInactiveForegroundColor = Microsoft.UI.Colors.DarkGray;
+                    titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+                }
+                else
+                {
+                    titleBar.ButtonForegroundColor = Microsoft.UI.Colors.Black;
+                    titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.Black;
+                    titleBar.ButtonHoverBackgroundColor = Windows.UI.Color.FromArgb(0x1F, 0, 0, 0);
+                    titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.Black;
+                    titleBar.ButtonPressedBackgroundColor = Windows.UI.Color.FromArgb(0x3F, 0, 0, 0);
+                    titleBar.ButtonInactiveForegroundColor = Microsoft.UI.Colors.Gray;
+                    titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+                }
+
+                titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Failed to customize title bar: " + ex.Message);
+        }
+    }
+
+    private void ShowPreviewWindow(bool activate)
+    {
+        ApplyNoActivateStyle();
+        var appWindow = GetAppWindow();
+        if (!_previewVisible)
+            ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
+        TrySetAppWindowTopmost(appWindow);
+        try { appWindow.Show(activate); }
+        catch
+        {
+            if (activate) Activate();
+            else ShowWindowNoActivate(WinRT.Interop.WindowNative.GetWindowHandle(this));
+        }
+        SetWindowTopmost();
+        EnsureCompositor();
+        _previewVisible = true;
+        SetBackgroundEfficiency(enabled: false);
+        _native.SetPreviewVisible(true);
+        _topmostTimer?.Start(); // keep re-asserting topmost while visible
+    }
+
+    private void HidePreviewWindow()
+    {
+        CancelSwitchDebounce();
+        _topmostTimer?.Stop();
+        try { GetAppWindow().Hide(); }
+        catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
+        _previewVisible = false;
+        SetBackgroundEfficiency(enabled: true);
+        _native.SetPreviewVisible(false);
+        _isTopmost = false; // re-assert topmost when shown again
+    }
+
+    private void SetBackgroundEfficiency(bool enabled)
+    {
+        if (_backgroundEfficiencyEnabled == enabled)
+            return;
+
+        _backgroundEfficiencyEnabled = enabled;
+        ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled, "App");
+        _supervisor?.SetBackgroundEfficiency(enabled);
+    }
+
+    private AppWindow GetAppWindow()
+    {
+        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        return AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(hwnd));
+    }
+
+    private bool _isTopmost;
+
+    private void SetWindowTopmost()
+    {
+        if (_isTopmost) return; // skip the P/Invoke if we're already topmost
+        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        _isTopmost = true;
+    }
+
+    private static void TrySetAppWindowTopmost(AppWindow appWindow)
+    {
+        try
+        {
+            if (appWindow.Presenter is OverlappedPresenter presenter)
+                presenter.IsAlwaysOnTop = true;
+        }
+        catch { }
+    }
+
+    private void EnsureTrayIcon()
+    {
+        if (_trayIconAdded) return;
+
+        var data = CreateNotifyIconData();
+        _trayIconAdded = Shell_NotifyIcon(NIM_ADD, ref data);
+    }
+
+    private void RemoveTrayIcon()
+    {
+        if (_trayIconAdded)
+        {
+            var data = CreateNotifyIconData();
+            Shell_NotifyIcon(NIM_DELETE, ref data);
+            _trayIconAdded = false;
+        }
+
+        ReleaseTrayIconHandle();
+    }
+
+    private NOTIFYICONDATA CreateNotifyIconData()
+    {
+        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        EnsureTrayWndProc(hwnd);
+        return new NOTIFYICONDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<NOTIFYICONDATA>(),
+            hWnd = hwnd,
+            uID = 1,
+            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage = WM_TRAYICON,
+            hIcon = GetTrayIconHandle(),
+            szTip = "QuickLook Next",
+            szInfo = "",
+            szInfoTitle = "",
+        };
+    }
+
+    private void ApplyWindowIcon()
+    {
+        string iconPath = ResolveAppIconPath();
+        if (!System.IO.File.Exists(iconPath))
+            return;
+
+        try { GetAppWindow().SetIcon(iconPath); }
+        catch (Exception ex) { DiagLog.Write("App", "window icon failed: " + ex.Message); }
+    }
+
+    private nint GetTrayIconHandle()
+    {
+        string iconPath = ResolveAppIconPath();
+        if (_trayIconHandle != nint.Zero && string.Equals(_trayIconPath, iconPath, StringComparison.OrdinalIgnoreCase))
+            return _trayIconHandle;
+
+        ReleaseTrayIconHandle();
+        if (System.IO.File.Exists(iconPath))
+        {
+            _trayIconHandle = LoadImage(nint.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+            _ownsTrayIconHandle = _trayIconHandle != nint.Zero;
+            if (_ownsTrayIconHandle)
+                _trayIconPath = iconPath;
+        }
+
+        if (_trayIconHandle == nint.Zero)
+        {
+            _trayIconHandle = LoadIcon(nint.Zero, IDI_APPLICATION);
+            _ownsTrayIconHandle = false;
+            _trayIconPath = null;
+        }
+
+        return _trayIconHandle;
+    }
+
+    private void RefreshTrayIcon()
+    {
+        if (!_trayIconAdded)
+            return;
+
+        ReleaseTrayIconHandle();
+        var data = CreateNotifyIconData();
+        Shell_NotifyIcon(NIM_MODIFY, ref data);
+    }
+
+    private void ShowTrayBalloon(string title, string message)
+    {
+        if (!_trayIconAdded)
+            return;
+
+        var data = CreateNotifyIconData();
+        data.uFlags |= NIF_INFO;
+        data.szInfoTitle = title;
+        data.szInfo = message;
+        data.dwInfoFlags = NIIF_WARNING;
+        Shell_NotifyIcon(NIM_MODIFY, ref data);
+    }
+
+    private void ReleaseTrayIconHandle()
+    {
+        if (_ownsTrayIconHandle && _trayIconHandle != nint.Zero)
+            DestroyIcon(_trayIconHandle);
+
+        _trayIconHandle = nint.Zero;
+        _ownsTrayIconHandle = false;
+        _trayIconPath = null;
+    }
+
+    private void EnsureTrayWndProc(nint hwnd)
+    {
+        if (_wndProc is not null) return;
+        _wndProc = TrayWndProc;
+        _oldWndProc = SetWindowLongPtr(hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_wndProc));
+    }
+
+    private nint TrayWndProc(nint hwnd, uint msg, nint wParam, nint lParam)
+    {
+        if (msg == WM_TRAYICON)
+        {
+            if (lParam == WM_LBUTTONDBLCLK)
+                ShowPreviewWindow(activate: true);
+            else if (lParam == WM_RBUTTONUP)
+                ShowTrayMenu(hwnd);
+            return nint.Zero;
+        }
+
+        return CallWindowProc(_oldWndProc, hwnd, msg, wParam, lParam);
+    }
+
+    private void ShowTrayMenu(nint hwnd)
+    {
+        nint menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, 1, "显示预览");
+        AppendMenuW(menu, MF_STRING | (AutoStart.IsEnabled() ? MF_CHECKED : 0), 3, "开机自启");
+        AppendMenuW(menu, MF_STRING, 2, "退出 QuickLook Next");
+
+        GetCursorPos(out POINT pt);
+        SetForegroundWindow(hwnd); // required so the menu dismisses when clicking elsewhere
+        uint cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.X, pt.Y, 0, hwnd, nint.Zero);
+        PostMessage(hwnd, WM_NULL, nint.Zero, nint.Zero);
+        DestroyMenu(menu);
+
+        if (cmd == 1) ShowPreviewWindow(activate: true);
+        else if (cmd == 3) ToggleAutoStart();
+        else if (cmd == 2) ExitApp();
+    }
+
+    private void ToggleAutoStart()
+    {
+        bool enable = !AutoStart.IsEnabled();
+        if (AutoStart.SetEnabled(enable))
+            return;
+
+        string message = enable ? "开机自启开启失败" : "开机自启关闭失败";
+        StatusText.Text = message;
+        DiagLog.Write("App", message);
+        ShowTrayBalloon("QuickLook Next", message);
+    }
+
+    private void ExitApp()
+    {
+        RemoveTrayIcon();
+        _supervisor?.Stop();
+        try { Microsoft.UI.Xaml.Application.Current.Exit(); }
+        catch { Environment.Exit(0); }
+    }
+
+    private void ApplyNoActivateStyle()
+        => SetNoActivateStyle(enabled: true);
+
+    private void SetNoActivateStyle(bool enabled)
+    {
+        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        nint ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        nint next = enabled ? ex | WS_EX_NOACTIVATE : ex & ~WS_EX_NOACTIVATE;
+        if (next != ex)
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, next);
+    }
+
+    private static void ShowWindowNoActivate(nint hwnd)
+    {
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
+    private const int GWL_EXSTYLE = -20;
+    private const int GWLP_WNDPROC = -4;
+    private const int SW_HIDE = 0;
+    private const int SW_SHOWNOACTIVATE = 4;
+    private const uint IMAGE_ICON = 1;
+    private const uint NIM_ADD = 0x00000000;
+    private const uint NIM_MODIFY = 0x00000001;
+    private const uint NIM_DELETE = 0x00000002;
+    private const uint NIF_MESSAGE = 0x00000001;
+    private const uint NIF_ICON = 0x00000002;
+    private const uint NIF_TIP = 0x00000004;
+    private const uint NIF_INFO = 0x00000010;
+    private const uint NIIF_WARNING = 0x00000002;
+    private const uint WM_APP = 0x8000;
+    private const uint WM_TRAYICON = WM_APP + 101;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_SHOWWINDOW = 0x0040;
+    private const uint LR_LOADFROMFILE = 0x00000010;
+    private const uint LR_DEFAULTSIZE = 0x00000040;
+    private static readonly nint HWND_TOPMOST = new(-1);
+    private static readonly nint WS_EX_NOACTIVATE = new(0x08000000);
+    private static readonly nint IDI_APPLICATION = new(32512);
+    private static readonly nint WM_LBUTTONDBLCLK = new(0x0203);
+    private static readonly nint WM_RBUTTONUP = new(0x0205);
+
+    private delegate nint WndProcDelegate(nint hwnd, uint msg, nint wParam, nint lParam);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct NOTIFYICONDATA
+    {
+        public uint cbSize;
+        public nint hWnd;
+        public uint uID;
+        public uint uFlags;
+        public uint uCallbackMessage;
+        public nint hIcon;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string szTip;
+        public uint dwState;
+        public uint dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string szInfo;
+        public uint uVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+        public string szInfoTitle;
+        public uint dwInfoFlags;
+        public Guid guidItem;
+        public nint hBalloonIcon;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern nint CallWindowProc(nint lpPrevWndFunc, nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadIcon(nint hInstance, nint lpIconName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadImage(nint hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(nint hIcon);
+
+    private const uint MF_STRING = 0x0000;
+    private const uint MF_CHECKED = 0x0008;
+    private const uint TPM_RIGHTBUTTON = 0x0002;
+    private const uint TPM_NONOTIFY = 0x0080;
+    private const uint TPM_RETURNCMD = 0x0100;
+    private const uint WM_NULL = 0x0000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [DllImport("user32.dll")] private static extern nint CreatePopupMenu();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool AppendMenuW(nint hMenu, uint uFlags, nuint uIDNewItem, string lpNewItem);
+    [DllImport("user32.dll")] private static extern uint TrackPopupMenu(nint hMenu, uint uFlags, int x, int y, int nReserved, nint hWnd, nint prcRect);
+    [DllImport("user32.dll")] private static extern bool DestroyMenu(nint hMenu);
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hWnd);
+    [DllImport("user32.dll")] private static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    private static FileProbe BuildProbe(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            long modified = 0;
+            try { modified = new DateTimeOffset(new DirectoryInfo(path).LastWriteTimeUtc).ToUnixTimeSeconds(); } catch { }
+            return new FileProbe(path, "", [])
+            {
+                Kind = "folder",
+                ModifiedUnix = modified,
+            };
+        }
+
+        byte[] magic = new byte[16];
+        try
+        {
+            using var fs = System.IO.File.OpenRead(path);
+            int n = fs.Read(magic, 0, magic.Length);
+            if (n < magic.Length) Array.Resize(ref magic, n);
+        }
+        catch { /* probe is best-effort in the scaffold; the real probe comes from native */ }
+        return new FileProbe(path, System.IO.Path.GetExtension(path), magic);
+    }
+
+    private static bool IsMediaProbe(FileProbe probe)
+        => probe.Kind.Equals("video", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("media", StringComparison.OrdinalIgnoreCase);
+
+    private static string ResolveHostExePath()
+    {
+        // Deployed layout: RasterHost in a subfolder next to the App.
+        string rasterHost = System.IO.Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        if (System.IO.File.Exists(rasterHost)) return rasterHost;
+        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.RasterHost.exe");
+        if (System.IO.File.Exists(local)) return local;
+        // dev fallback: sibling project build output (…/src/QuickLook.Next.App/bin/<cfg>/<tfm>/<rid> → up 5 to src)
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
+            @"..\..\..\..\..\QuickLook.Next.RasterHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.RasterHost.exe"));
+    }
+
+    private string ResolveAppIconPath()
+    {
+        string fileName = RootGrid.ActualTheme == ElementTheme.Light
+            ? "QuickLookNextLight.ico"
+            : "QuickLookNextDark.ico";
+        string themedPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", fileName);
+        return System.IO.File.Exists(themedPath)
+            ? themedPath
+            : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
+    }
+}

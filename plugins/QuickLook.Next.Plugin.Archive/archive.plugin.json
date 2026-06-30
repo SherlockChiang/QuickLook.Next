@@ -1,0 +1,8 @@
+{
+  "id": "archive",
+  "assembly": "QuickLook.Next.Plugin.Archive.dll",
+  "type": "QuickLook.Next.Plugin.Archive.ArchiveProvider",
+  "priority": 80,
+  "kinds": [ "archive" ],
+  "extensions": [ ".zip", ".jar", ".apk", ".epub", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi" ]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "image",
+  "assembly": "QuickLook.Next.Plugin.Image.dll",
+  "type": "QuickLook.Next.Plugin.Image.ImageProvider",
+  "priority": 100,
+  "kinds": [ "image" ],
+  "extensions": [ ".bmp", ".gif", ".ico", ".jfif", ".jpe", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp", ".heic", ".heif", ".avif", ".jxr", ".hdp", ".wdp", ".dds" ]
+}

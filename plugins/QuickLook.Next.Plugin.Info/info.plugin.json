@@ -1,0 +1,7 @@
+{
+  "id": "info",
+  "assembly": "QuickLook.Next.Plugin.Info.dll",
+  "type": "QuickLook.Next.Plugin.Info.InfoProvider",
+  "priority": 1,
+  "extensions": [ "*" ]
+}

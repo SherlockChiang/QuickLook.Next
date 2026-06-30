@@ -1,0 +1,8 @@
+{
+  "id": "folder",
+  "assembly": "QuickLook.Next.Plugin.Archive.dll",
+  "type": "QuickLook.Next.Plugin.Archive.FolderProvider",
+  "priority": 95,
+  "kinds": [ "folder" ],
+  "extensions": [ "*" ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "text",
+  "assembly": "QuickLook.Next.Plugin.Text.dll",
+  "type": "QuickLook.Next.Plugin.Text.TextProvider",
+  "priority": 90,
+  "kinds": [ "text" ],
+  "extensions": [
+    ".md", ".markdown", ".txt", ".log", ".csv", ".tsv", ".env",
+    ".bat", ".cmd", ".ps1", ".sh", ".bash", ".zsh",
+    ".json", ".xml", ".xaml", ".xsd", ".resx", ".config",
+    ".ini", ".cfg", ".conf", ".properties", ".yml", ".yaml", ".toml",
+    ".cs", ".csproj", ".sln", ".props", ".targets", ".rs",
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".css", ".scss", ".sass", ".less", ".html", ".htm", ".py",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx",
+    ".java", ".go", ".php", ".rb", ".pl", ".swift", ".kt", ".kts",
+    ".sql", ".lua", ".fs", ".fsx", ".vb", ".dart", ".scala", ".r",
+    ".dockerfile"
+  ]
+}

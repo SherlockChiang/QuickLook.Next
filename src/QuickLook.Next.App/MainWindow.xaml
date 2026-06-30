@@ -1,0 +1,210 @@
+<Window
+    x:Class="QuickLook.Next.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Transparent root so the window's Mica/Acrylic backdrop shows through (margins & image letterbox). -->
+    <Grid x:Name="RootGrid" Background="Transparent">
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#F3FFFFFF" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#CC1F1F1F" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom Title Bar -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="32" Background="Transparent">
+            <TextBlock x:Name="AppTitle" 
+                       Text="QuickLook Next"
+                       VerticalAlignment="Center" 
+                       HorizontalAlignment="Left"
+                       Margin="16,0,0,0"
+                       FontSize="12"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </Grid>
+
+        <!-- Content Area -->
+        <Grid Grid.Row="1">
+            <Border x:Name="PreviewRoot" Margin="14,0,14,14" Background="Transparent" />
+            <ScrollViewer x:Name="PdfScrollViewer"
+                          Visibility="Collapsed"
+                          Margin="14,0,14,14"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{ThemeResource LayerFillColorDefaultBrush}"
+                          CornerRadius="6">
+                <StackPanel x:Name="PdfPagesPanel"
+                            HorizontalAlignment="Center"
+                            Padding="0,16,0,16"
+                            Spacing="16" />
+            </ScrollViewer>
+            <ScrollViewer x:Name="TextScrollViewer"
+                          Visibility="Collapsed"
+                          Margin="14,0,14,14"
+                          Padding="24"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{ThemeResource LayerFillColorDefaultBrush}"
+                          CornerRadius="6">
+                <RichTextBlock x:Name="TextPreviewBlock"
+                               IsTextSelectionEnabled="True"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                               FontSize="14"
+                               FontFamily="Segoe UI"
+                               TextWrapping="Wrap"
+                               MaxWidth="980" />
+            </ScrollViewer>
+            <MediaPlayerElement x:Name="MediaPreviewElement"
+                                Visibility="Collapsed"
+                                Margin="14,0,14,14"
+                                AreTransportControlsEnabled="True"
+                                AutoPlay="True"
+                                Background="Transparent"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch" />
+            <Border x:Name="ListingPanel"
+                    Visibility="Collapsed"
+                    Margin="14,0,14,14"
+                    Padding="18"
+                    Background="{ThemeResource ExplorerListingSurfaceBrush}"
+                    CornerRadius="6">
+                <Grid RowSpacing="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Spacing="3">
+                        <TextBlock x:Name="ListingTitle"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <TextBlock x:Name="ListingSummary"
+                                   FontSize="12"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="ListingBreadcrumbPanel"
+                                Grid.Row="1"
+                                Orientation="Horizontal"
+                                Spacing="4" />
+
+                    <Grid Grid.Row="2" Padding="36,0,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="260" />
+                            <ColumnDefinition Width="170" />
+                            <ColumnDefinition Width="140" />
+                            <ColumnDefinition Width="110" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Grid>
+
+                    <ListView x:Name="ListingListView"
+                              Grid.Row="3"
+                              IsItemClickEnabled="True"
+                              ItemClick="OnListingItemClick"
+                              DoubleTapped="OnListingListViewDoubleTapped"
+                              KeyDown="OnListingListViewKeyDown"
+                              SelectionMode="Single">
+                        <ListView.Resources>
+                            <ResourceDictionary>
+                                <ResourceDictionary.ThemeDictionaries>
+                                    <ResourceDictionary x:Key="Light">
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#0A000000" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#12000000" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#CCE8FF" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#BBDDFF" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#A7D3F6" />
+                                        <SolidColorBrush x:Key="ListViewItemFocusBorderBrush" Color="#8A000000" />
+                                    </ResourceDictionary>
+                                    <ResourceDictionary x:Key="Dark">
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="#12FFFFFF" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="#1FFFFFFF" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#244E78" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2B5D8F" />
+                                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#346CA3" />
+                                        <SolidColorBrush x:Key="ListViewItemFocusBorderBrush" Color="#99FFFFFF" />
+                                    </ResourceDictionary>
+                                </ResourceDictionary.ThemeDictionaries>
+                            </ResourceDictionary>
+                        </ListView.Resources>
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,1,0,1" />
+                                <Setter Property="MinHeight" Value="34" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid MinHeight="34" Padding="8,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="28" />
+                                        <ColumnDefinition Width="*" MinWidth="220" />
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="110" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Glyph}"
+                                               VerticalAlignment="Center"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="15" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Name}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding ModifiedDisplay}"
+                                               VerticalAlignment="Center"
+                                               FontSize="12"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding TypeDisplay}"
+                                               VerticalAlignment="Center"
+                                               FontSize="12"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Grid.Column="4"
+                                               Text="{Binding SizeDisplay}"
+                                               VerticalAlignment="Center"
+                                               HorizontalAlignment="Right"
+                                               FontSize="12"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+            <Border x:Name="StatusBar"
+                    Visibility="Collapsed"
+                    VerticalAlignment="Top" HorizontalAlignment="Center"
+                    Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                    CornerRadius="0,0,8,8" Padding="12,3">
+                <TextBlock x:Name="StatusText" Text=""
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

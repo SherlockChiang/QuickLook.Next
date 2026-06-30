@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- WinExe: background helper, no console window pops up when the App launches it. -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>QuickLook.Next.RasterHost</AssemblyName>
+    <RootNamespace>QuickLook.Next.RasterHost</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
+    <ProjectReference Include="..\QuickLook.Next.Contracts\QuickLook.Next.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll"
+          Link="quicklook_next_native.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll')" />
+  </ItemGroup>
+</Project>

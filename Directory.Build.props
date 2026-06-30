@@ -1,0 +1,12 @@
+<Project>
+  <!-- Shared settings for all QuickLook Next .NET projects. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Company>QuickLook Next</Company>
+  </PropertyGroup>
+</Project>
