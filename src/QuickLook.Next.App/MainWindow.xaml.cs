@@ -64,7 +64,6 @@ public sealed partial class MainWindow : Window
     private double _currentPdfScale = 1.0;
     private bool _isStarted;
     private bool _previewVisible;
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _topmostTimer;
     private bool? _brushThemeDark;
     private nint _trayIconHandle;
     private bool _ownsTrayIconHandle;
@@ -98,10 +97,6 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = "QuickLook Next";
         TrySetBackdrop();
-        _topmostTimer = DispatcherQueue.CreateTimer();
-        _topmostTimer.Interval = TimeSpan.FromMilliseconds(400);
-        _topmostTimer.IsRepeating = true;
-        _topmostTimer.Tick += (_, _) => { if (_previewVisible) SetWindowTopmost(); };
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
         PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
@@ -429,7 +424,7 @@ public sealed partial class MainWindow : Window
             {
                 ApplyNoActivateStyle();
             }
-            SetWindowTopmost();
+            RaisePreviewWindow(activate);
             EnsureCompositor();
         }
         FadeInPreviewContent();
@@ -499,7 +494,6 @@ public sealed partial class MainWindow : Window
         _rasterSurfaceHeight = surface.Height;
         ElementCompositionPreview.SetElementChildVisual(PreviewRoot, sprite);
         DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
-        SetWindowTopmost();
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
@@ -1533,8 +1527,8 @@ public sealed partial class MainWindow : Window
         double height = Math.Clamp(contentHeight + WindowVerticalChrome, MinWindowHeight, maxWindow.Height);
         TemporarilyHideWindowForTransitionResize();
         GetAppWindow().Resize(new SizeInt32((int)Math.Round(width), (int)Math.Round(height)));
-        if (setTopmost)
-            SetWindowTopmost();
+        if (setTopmost && _previewVisible)
+            RaisePreviewWindow(activate: false);
     }
 
     private void CenterPreviewWindowInCurrentDisplay(AppWindow appWindow)
@@ -1568,7 +1562,6 @@ public sealed partial class MainWindow : Window
         try { GetAppWindow().Hide(); }
         catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
         _previewTemporarilyHidden = true;
-        _isTopmost = false;
     }
 
     /// <summary>Dispose the current raster sprite + its brush to release the GPU composition surface.</summary>
@@ -2034,19 +2027,17 @@ public sealed partial class MainWindow : Window
             ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
         if (openingFromHidden)
             CenterPreviewWindowInCurrentDisplay(appWindow);
-        TrySetAppWindowTopmost(appWindow);
         try { appWindow.Show(activate); }
         catch
         {
             if (activate) Activate();
             else ShowWindowNoActivate(WinRT.Interop.WindowNative.GetWindowHandle(this));
         }
-        SetWindowTopmost();
+        RaisePreviewWindow(activate);
         EnsureCompositor();
         _previewVisible = true;
         SetBackgroundEfficiency(enabled: false);
         _native.SetPreviewVisible(true);
-        _topmostTimer?.Start(); // keep re-asserting topmost while visible
         PreviewContentHost.Opacity = 1;
     }
 
@@ -2059,13 +2050,12 @@ public sealed partial class MainWindow : Window
         LoadingRing.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         PreviewContentHost.Opacity = 1;
-        _topmostTimer?.Stop();
         try { GetAppWindow().Hide(); }
         catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
+        ReleasePreviewTopmost();
         _previewVisible = false;
         SetBackgroundEfficiency(enabled: true);
         _native.SetPreviewVisible(false);
-        _isTopmost = false; // re-assert topmost when shown again
     }
 
     private void SetBackgroundEfficiency(bool enabled)
@@ -2084,25 +2074,26 @@ public sealed partial class MainWindow : Window
         return AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(hwnd));
     }
 
-    private bool _isTopmost;
-
-    private void SetWindowTopmost()
+    private void RaisePreviewWindow(bool activate)
     {
-        if (_isTopmost) return; // skip the P/Invoke if we're already topmost
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        _isTopmost = true;
+        uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW;
+        if (!activate)
+            flags |= SWP_NOACTIVATE;
+
+        // Pulse topmost only long enough to place the preview above Explorer, then immediately
+        // release it so other apps can cover the preview normally.
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        if (activate)
+            Activate();
     }
 
-    private static void TrySetAppWindowTopmost(AppWindow appWindow)
+    private void ReleasePreviewTopmost()
     {
-        try
-        {
-            if (appWindow.Presenter is OverlappedPresenter presenter)
-                presenter.IsAlwaysOnTop = true;
-        }
-        catch { }
+        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     private void EnsureTrayIcon()
@@ -2287,6 +2278,8 @@ public sealed partial class MainWindow : Window
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     private const int GWL_EXSTYLE = -20;
@@ -2311,6 +2304,7 @@ public sealed partial class MainWindow : Window
     private const uint LR_LOADFROMFILE = 0x00000010;
     private const uint LR_DEFAULTSIZE = 0x00000040;
     private static readonly nint HWND_TOPMOST = new(-1);
+    private static readonly nint HWND_NOTOPMOST = new(-2);
     private static readonly nint WS_EX_NOACTIVATE = new(0x08000000);
     private static readonly nint IDI_APPLICATION = new(32512);
     private static readonly nint WM_LBUTTONDBLCLK = new(0x0203);

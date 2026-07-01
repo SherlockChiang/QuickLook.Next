@@ -7,12 +7,28 @@
     <Grid x:Name="RootGrid" Background="Transparent">
         <Grid.Resources>
             <ResourceDictionary>
+                <Style x:Key="ListingHeaderButtonStyle" TargetType="Button">
+                    <Setter Property="MinHeight" Value="28" />
+                    <Setter Property="Padding" Value="8,0" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="CornerRadius" Value="4" />
+                    <Setter Property="FontSize" Value="12" />
+                    <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <Setter Property="HorizontalContentAlignment" Value="Left" />
+                </Style>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
-                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#F3FFFFFF" />
+                        <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="#F8FFFFFF" />
+                        <SolidColorBrush x:Key="PreviewSurfaceBorderBrush" Color="#18000000" />
+                        <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#0A000000" />
+                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#F7FFFFFF" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
-                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#CC1F1F1F" />
+                        <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="#D91F1F1F" />
+                        <SolidColorBrush x:Key="PreviewSurfaceBorderBrush" Color="#24FFFFFF" />
+                        <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#12FFFFFF" />
+                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#D41F1F1F" />
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
@@ -24,14 +40,15 @@
         </Grid.RowDefinitions>
 
         <!-- Custom Title Bar -->
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="32" Background="Transparent">
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="38" Background="Transparent">
             <TextBlock x:Name="AppTitle" 
                        Text="QuickLook Next"
                        VerticalAlignment="Center" 
                        HorizontalAlignment="Left"
-                       Margin="16,0,0,0"
-                       FontSize="12"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                       Margin="18,0,0,0"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
         </Grid>
 
         <!-- Content Area -->
@@ -42,8 +59,10 @@
                           Margin="14,0,14,14"
                           HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto"
-                          Background="{ThemeResource LayerFillColorDefaultBrush}"
-                          CornerRadius="6">
+                          Background="{ThemeResource PreviewSurfaceBrush}"
+                          BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                          BorderThickness="1"
+                          CornerRadius="8">
                 <StackPanel x:Name="PdfPagesPanel"
                             HorizontalAlignment="Center"
                             Padding="0,16,0,16"
@@ -55,8 +74,10 @@
                           Padding="24"
                           HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto"
-                          Background="{ThemeResource LayerFillColorDefaultBrush}"
-                          CornerRadius="6">
+                          Background="{ThemeResource PreviewSurfaceBrush}"
+                          BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                          BorderThickness="1"
+                          CornerRadius="8">
                 <StackPanel Spacing="14">
                     <Grid x:Name="TextHeroPanel"
                           Visibility="Collapsed"
@@ -69,8 +90,10 @@
                         <Border x:Name="TextHeroFrame"
                                 Width="64"
                                 Height="64"
-                                CornerRadius="6"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                CornerRadius="8"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                Background="{ThemeResource PreviewHeroSurfaceBrush}">
                             <Image x:Name="TextHeroImage"
                                    Stretch="Uniform"
                                    Margin="6" />
@@ -104,8 +127,10 @@
                           Padding="20"
                           HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto"
-                          Background="{ThemeResource LayerFillColorDefaultBrush}"
-                          CornerRadius="6">
+                          Background="{ThemeResource PreviewSurfaceBrush}"
+                          BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                          BorderThickness="1"
+                          CornerRadius="8">
                 <StackPanel x:Name="OfficePagesPanel"
                             HorizontalAlignment="Center"
                             Spacing="18" />
@@ -123,7 +148,9 @@
                     Margin="14,0,14,14"
                     Padding="18"
                     Background="{ThemeResource ExplorerListingSurfaceBrush}"
-                    CornerRadius="6">
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
                 <Grid RowSpacing="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -141,8 +168,10 @@
                                 Visibility="Collapsed"
                                 Width="48"
                                 Height="48"
-                                CornerRadius="6"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                CornerRadius="8"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                Background="{ThemeResource PreviewHeroSurfaceBrush}">
                             <Image x:Name="ListingHeroImage"
                                    Stretch="Uniform"
                                    Margin="5" />
@@ -172,10 +201,10 @@
                             <ColumnDefinition Width="140" />
                             <ColumnDefinition Width="110" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <Button x:Name="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <Button x:Name="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <Button x:Name="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" Padding="0" Background="Transparent" BorderThickness="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" />
+                        <Button x:Name="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" />
+                        <Button x:Name="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" />
+                        <Button x:Name="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Style="{StaticResource ListingHeaderButtonStyle}" />
                     </Grid>
 
                     <ListView x:Name="ListingListView"
