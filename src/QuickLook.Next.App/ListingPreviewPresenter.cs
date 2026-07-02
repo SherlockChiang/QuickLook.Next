@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
@@ -213,6 +214,7 @@ internal sealed class ListingPreviewPresenter
             Padding = new Thickness(8, 2, 8, 2),
             MinHeight = 26,
         };
+        AutomationProperties.SetName(button, $"Open {text} in listing");
         button.Click += OnBreadcrumbClick;
         _breadcrumbPanel.Children.Add(button);
     }

@@ -51,7 +51,13 @@
         </Grid.RowDefinitions>
 
         <!-- Custom Title Bar -->
-        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="52" Background="Transparent" ColumnSpacing="12" Padding="14,0,144,0">
+        <Grid x:Name="AppTitleBar"
+              Grid.Row="0"
+              Height="52"
+              Background="Transparent"
+              ColumnSpacing="12"
+              Padding="14,0,144,0"
+              AutomationProperties.Name="Preview title bar">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="1" />
@@ -106,8 +112,13 @@
         </Grid>
 
         <!-- Content Area -->
-        <Grid x:Name="PreviewContentHost" Grid.Row="1">
-            <Border x:Name="PreviewRoot" Margin="14,0,14,14" Background="Transparent" />
+        <Grid x:Name="PreviewContentHost"
+              Grid.Row="1"
+              AutomationProperties.Name="Preview content">
+            <Border x:Name="PreviewRoot"
+                    Margin="14,0,14,14"
+                    Background="Transparent"
+                    AutomationProperties.Name="Image preview surface" />
             <ScrollViewer x:Name="PdfScrollViewer"
                           Visibility="Collapsed"
                           Margin="14,0,14,14"
@@ -116,7 +127,8 @@
                           Background="{ThemeResource PreviewSurfaceBrush}"
                           BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                           BorderThickness="1"
-                          CornerRadius="8">
+                          CornerRadius="8"
+                          AutomationProperties.Name="PDF preview pages">
                 <StackPanel x:Name="PdfPagesPanel"
                             HorizontalAlignment="Center"
                             Padding="0,16,0,16"
@@ -131,7 +143,8 @@
                           Background="{ThemeResource PreviewSurfaceBrush}"
                           BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                           BorderThickness="1"
-                          CornerRadius="8">
+                          CornerRadius="8"
+                          AutomationProperties.Name="Text preview">
                 <StackPanel Spacing="14">
                     <Grid x:Name="TextHeroPanel"
                           Visibility="Collapsed"
@@ -172,7 +185,8 @@
                                    FontSize="14"
                                    FontFamily="Segoe UI"
                                    TextWrapping="Wrap"
-                                   MaxWidth="980" />
+                                   MaxWidth="980"
+                                   AutomationProperties.Name="Text preview content" />
                 </StackPanel>
             </ScrollViewer>
             <ScrollViewer x:Name="OfficeScrollViewer"
@@ -184,7 +198,8 @@
                           Background="{ThemeResource PreviewSurfaceBrush}"
                           BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                           BorderThickness="1"
-                          CornerRadius="8">
+                          CornerRadius="8"
+                          AutomationProperties.Name="Office document preview">
                 <StackPanel x:Name="OfficePagesPanel"
                             HorizontalAlignment="Center"
                             Spacing="18" />
@@ -196,7 +211,8 @@
                                 AutoPlay="True"
                                 Background="Transparent"
                                 HorizontalAlignment="Stretch"
-                                VerticalAlignment="Stretch" />
+                                VerticalAlignment="Stretch"
+                                AutomationProperties.Name="Media preview player" />
             <Border x:Name="PreviewInfoRail"
                     Visibility="Collapsed"
                     Width="230"
@@ -207,7 +223,8 @@
                     Background="{ThemeResource PreviewFloatingSurfaceBrush}"
                     BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="8">
+                    CornerRadius="8"
+                    AutomationProperties.Name="Preview details">
                 <Grid RowSpacing="14">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -293,7 +310,8 @@
                     Background="{ThemeResource PreviewFloatingSurfaceBrush}"
                     BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="8">
+                    CornerRadius="8"
+                    AutomationProperties.Name="Image preview toolbar">
                 <Grid ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -312,7 +330,8 @@
                                    VerticalAlignment="Center"
                                    TextAlignment="Center"
                                    FontSize="12"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   AutomationProperties.Name="Current zoom level" />
                         <Button Click="OnImageZoomInClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"
                                 AutomationProperties.Name="Zoom in">
@@ -345,7 +364,8 @@
                     Background="{ThemeResource ExplorerListingSurfaceBrush}"
                     BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="8">
+                    CornerRadius="8"
+                    AutomationProperties.Name="Folder or archive preview">
                 <Grid RowSpacing="10">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -387,7 +407,8 @@
                     <StackPanel x:Name="ListingBreadcrumbPanel"
                                 Grid.Row="1"
                                 Orientation="Horizontal"
-                                Spacing="4" />
+                                Spacing="4"
+                                AutomationProperties.Name="Listing path breadcrumbs" />
 
                     <Grid Grid.Row="2" Padding="36,0,12,0">
                         <Grid.ColumnDefinitions>
@@ -501,14 +522,16 @@
                       Width="32"
                       Height="32"
                       HorizontalAlignment="Center"
-                      VerticalAlignment="Center" />
+                      VerticalAlignment="Center"
+                      AutomationProperties.Name="Loading preview" />
 
         <StackPanel x:Name="ErrorPanel"
                     Grid.Row="1"
                     Visibility="Collapsed"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
-                    Spacing="8">
+                    Spacing="8"
+                    AutomationProperties.Name="Preview error">
             <FontIcon Glyph="&#xE783;"
                       FontSize="36"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -517,7 +540,8 @@
                        TextWrapping="Wrap"
                        MaxWidth="420"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       FontSize="13" />
+                       FontSize="13"
+                       AutomationProperties.Name="Preview error message" />
         </StackPanel>
     </Grid>
 </Window>
