@@ -11,17 +11,17 @@ DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "raster-host.log"));
 DiagLog.Write("RasterHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "RasterHost");
 
-NamedPipeClientStream pipe;
+using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
 try
 {
-    pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
     await pipe.ConnectAsync(5000);
     channel = new PipeChannel(pipe);
     DiagLog.Write("RasterHost", "connected to App pipe");
 }
 catch (Exception ex) { DiagLog.Write("RasterHost", "pipe connect FAILED: " + ex); return; }
 
+using var channelLifetime = channel;
 using var producer = new CompositionProducer();
 using var idleTrimmer = new IdleTrimmer(producer);
 var pdfSessions = new Dictionary<string, PdfPreviewSession>();

@@ -50,6 +50,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
             throw new InvalidOperationException($"D3D11CreateDevice failed 0x{hr.Value:X8}");
         _device = device;
         _ctx = ctx;
+        AdapterLuid = ReadAdapterLuid(_device);
 
         Guid mediaIid = typeof(IDXGIFactoryMedia).GUID;
         hr = PInvoke.CreateDXGIFactory2((DXGI_CREATE_FACTORY_FLAGS)0, &mediaIid, out object factoryObj);
@@ -64,6 +65,21 @@ internal sealed unsafe class CompositionProducer : IDisposable
                 throw new InvalidOperationException("OpenProcess(App) failed");
         }
 
+    }
+
+    private static long ReadAdapterLuid(ID3D11Device device)
+    {
+        IDXGIDevice dxgiDevice = (IDXGIDevice)device;
+        dxgiDevice.GetAdapter(out IDXGIAdapter adapter);
+        try
+        {
+            DXGI_ADAPTER_DESC desc = adapter.GetDesc();
+            return ((long)desc.AdapterLuid.HighPart << 32) | desc.AdapterLuid.LowPart;
+        }
+        finally
+        {
+            ReleaseCom(adapter);
+        }
     }
 
     /// <summary>Create (or recreate, on resize) the shared surface; returns the App-process handle value.</summary>
@@ -275,5 +291,12 @@ internal sealed unsafe class CompositionProducer : IDisposable
     {
         Reset();
         if ((nint)_appProc.Value != 0) PInvoke.CloseHandle(_appProc);
+        _appProc = default;
+        ReleaseCom(_factory);
+        ReleaseCom(_ctx);
+        ReleaseCom(_device);
+        _factory = null!;
+        _ctx = null!;
+        _device = null!;
     }
 }
