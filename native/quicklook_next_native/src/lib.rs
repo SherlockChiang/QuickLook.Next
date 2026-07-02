@@ -7,6 +7,7 @@
 //!   3. Explorer current selection via COM (IShellWindows → IShellBrowser → IFolderView).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
@@ -23,11 +24,15 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const VK_SPACE_U32: u32 = 0x20;
 const VK_ESCAPE_U32: u32 = 0x1B;
+const VK_SHIFT_U32: u32 = 0x10;
+const VK_CONTROL_U32: u32 = 0x11;
+const VK_MENU_U32: u32 = 0x12;
 const VK_LEFT_U32: u32 = 0x25;
 const VK_UP_U32: u32 = 0x26;
 const VK_RIGHT_U32: u32 = 0x27;
@@ -195,9 +200,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         let m = wparam.0 as u32;
         let is_down = m == WM_KEYDOWN || m == WM_SYSKEYDOWN;
         let is_up = m == WM_KEYUP || m == WM_SYSKEYUP;
+        let bare_key = !modifier_key_down();
 
         if kb.vkCode == VK_SPACE_U32 {
-            if is_down && !SPACE_HELD.swap(true, Ordering::SeqCst) {
+            if is_down && bare_key && !SPACE_HELD.swap(true, Ordering::SeqCst) {
                 let message = if PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                     WM_QL_CLOSE
                 } else {
@@ -211,7 +217,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             kb.vkCode,
             VK_LEFT_U32 | VK_UP_U32 | VK_RIGHT_U32 | VK_DOWN_U32
         ) {
-            if is_down {
+            if is_down && bare_key {
                 let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
@@ -229,6 +235,14 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+unsafe fn modifier_key_down() -> bool {
+    key_down(VK_SHIFT_U32) || key_down(VK_CONTROL_U32) || key_down(VK_MENU_U32)
+}
+
+unsafe fn key_down(vk: u32) -> bool {
+    (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -325,10 +339,15 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     for k in 0..n {
         let item = items.GetItemAt(k)?;
         let pw: PWSTR = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-        out.push(pw.to_string()?);
-        CoTaskMemFree(Some(pw.0 as *const _));
+        out.push(pwstr_to_string_and_free(pw)?);
     }
     Ok(out)
+}
+
+unsafe fn pwstr_to_string_and_free(pw: PWSTR) -> Result<String> {
+    let result = pw.to_string();
+    CoTaskMemFree(Some(pw.0 as *const _));
+    result.map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))
 }
 
 // ── File probe + cache ───────────────────────────────────────────────────────────────────────
@@ -392,9 +411,11 @@ fn probe_json(path: &str) -> Option<String> {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    if let Some((m, json)) = probe_cache().lock().unwrap().get(path) {
-        if *m == modified {
-            return Some(json.clone());
+    if let Ok(cache) = probe_cache().lock() {
+        if let Some((m, json)) = cache.get(path) {
+            if *m == modified {
+                return Some(json.clone());
+            }
         }
     }
 
@@ -433,9 +454,10 @@ fn probe_json(path: &str) -> Option<String> {
     );
 
     {
-        let mut cache = probe_cache().lock().unwrap();
-        cache.insert(path.to_string(), (modified, json.clone()));
-        probe_cache_evict(&mut cache);
+        if let Ok(mut cache) = probe_cache().lock() {
+            cache.insert(path.to_string(), (modified, json.clone()));
+            probe_cache_evict(&mut cache);
+        }
     }
     Some(json)
 }
@@ -878,6 +900,9 @@ fn json_escape(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            c if c < ' ' => {
+                let _ = write!(&mut out, "\\u{:04X}", c as u32);
+            }
             c => out.push(c),
         }
     }
