@@ -1,6 +1,5 @@
 using System.Numerics;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
@@ -25,33 +24,29 @@ public sealed partial class MainWindow : Window
     private const double MaxPdfWindowHeight = 900;
     private const double MaxTextWindowWidth = 1100;
     private const double MaxTextWindowHeight = 860;
-    private const double PdfPageTargetWidth = 860;
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 82;
     private const int SwitchDebounceMs = 110;
-    private const int PdfOffscreenSurfaceCachePages = 5;
 
     private readonly NativeBridge _native = new();
-    private readonly Dictionary<int, Border> _pdfPageHosts = new();
-    private readonly HashSet<int> _requestedPdfPages = new();
-    private readonly Dictionary<int, long> _pdfPageLastTouched = new();
+    private readonly PreviewWindowController _windowController;
     private TextPreviewPresenter? _textPresenter;
     private ListingPreviewPresenter? _listingPresenter;
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
+    private PdfPreviewPresenter? _pdfPresenter;
+    private MediaPreviewPresenter? _mediaPresenter;
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
     private string? _currentRequestId;
     private string? _currentPath;
-    private double _currentPdfScale = 1.0;
     private bool _isStarted;
     private bool _previewVisible;
     private int _previewGeneration;
     private bool? _backgroundEfficiencyEnabled;
     private CancellationTokenSource? _switchDebounceCts;
     private CancellationTokenSource? _previewOperationCts;
-    private long _pdfPageTouchTick;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
 
@@ -63,9 +58,17 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
         _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
+        _pdfPresenter = new PdfPreviewPresenter(
+            PdfScrollViewer,
+            PdfPagesPanel,
+            DispatcherQueue,
+            () => _compositor,
+            () => _supervisor);
+        _mediaPresenter = new MediaPreviewPresenter(MediaPreviewElement);
         _listingPresenter = new ListingPreviewPresenter(
             ListingTitle,
             ListingSummary,
@@ -90,7 +93,6 @@ public sealed partial class MainWindow : Window
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
         PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
         RootGrid.KeyDown += OnRootGridKeyDown;
-        PdfScrollViewer.ViewChanged += (_, _) => RequestVisiblePdfPages();
         GetAppWindow().Closing += (_, args) =>
         {
             // Intercept the close (X button / Alt+F4 / taskbar close): hide the window instead of
@@ -124,7 +126,7 @@ public sealed partial class MainWindow : Window
         StatusBar.Visibility = ShowStatusBar ? Visibility.Visible : Visibility.Collapsed;
         ApplyWindowIcon();
         EnsureTrayIcon();
-        ApplyNoActivateStyle();
+        _windowController.ApplyNoActivateStyle();
 
         try
         {
@@ -317,7 +319,7 @@ public sealed partial class MainWindow : Window
                 FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
 
-                if (IsMediaProbe(probe))
+                if (MediaPreviewPresenter.IsMediaProbe(probe))
                 {
                     var mediaReady = new PreviewReady(
                         $"media-{generation}",
@@ -434,14 +436,14 @@ public sealed partial class MainWindow : Window
         {
             if (activate)
             {
-                SetNoActivateStyle(enabled: false);
+                _windowController.SetNoActivateStyle(enabled: false);
                 Activate();
             }
             else
             {
-                ApplyNoActivateStyle();
+                _windowController.ApplyNoActivateStyle();
             }
-            RaisePreviewWindow(activate);
+            _windowController.Raise(activate);
             EnsureCompositor();
         }
         FadeInPreviewContent();
@@ -607,7 +609,8 @@ public sealed partial class MainWindow : Window
 
         if (surface.PageIndex >= 0)
         {
-            AttachPdfPageSurface(surface);
+            if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
+                StatusText.Text = pdfError ?? "pdf page failed";
             return;
         }
 
@@ -637,9 +640,6 @@ public sealed partial class MainWindow : Window
         return result.Status;
     }
 
-    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush PdfPageBackground =
-        new(Microsoft.UI.Colors.White);
-
     private string ShowPdfDocument(string requestId, PreviewReady ready)
     {
         UpdatePreviewChrome(ready);
@@ -650,45 +650,9 @@ public sealed partial class MainWindow : Window
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
         _rasterPresenter?.Clear();
-
-        _pdfPageHosts.Clear();
-        _requestedPdfPages.Clear();
-        _pdfPageLastTouched.Clear();
-        _pdfPageTouchTick = 0;
-        PdfPagesPanel.Children.Clear();
-
-        double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
-        double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
-        var maxPdfContent = GetMaxContentSize(MaxPdfWindowWidth, MaxPdfWindowHeight);
-        double targetPageWidth = Math.Min(PdfPageTargetWidth, Math.Max(320, maxPdfContent.Width - 64));
-        double targetPageHeight = Math.Max(320, maxPdfContent.Height - 96);
-        _currentPdfScale = Math.Clamp(
-            Math.Min(targetPageWidth / pageWidth, targetPageHeight / pageHeight),
-            0.25,
-            1.6);
-        double displayWidth = Math.Round(pageWidth * _currentPdfScale);
-        double displayHeight = Math.Round(pageHeight * _currentPdfScale);
-
-        int pageCount = Math.Max(1, ready.PageCount);
-        for (int i = 0; i < pageCount; i++)
-        {
-            var pageHost = new Border
-            {
-                Width = displayWidth,
-                Height = displayHeight,
-                Background = PdfPageBackground,
-            };
-            _pdfPageHosts[i] = pageHost;
-            PdfPagesPanel.Children.Add(pageHost);
-        }
-
-        ResizeWindowForContent(
-            Math.Min(maxPdfContent.Width, displayWidth + 64),
-            Math.Min(maxPdfContent.Height, displayHeight + 96),
-            MaxPdfWindowWidth,
-            MaxPdfWindowHeight);
-        Task.Delay(100).ContinueWith(_ => DispatcherQueue.TryEnqueue(RequestVisiblePdfPages));
-        return $"pdf: {ready.Title}";
+        PdfPreviewResult result = _pdfPresenter!.Render(requestId, ready, GetMaxContentSize(MaxPdfWindowWidth, MaxPdfWindowHeight));
+        ResizeWindowForContent(result.Width, result.Height, MaxPdfWindowWidth, MaxPdfWindowHeight);
+        return result.Status;
     }
 
     private string ShowTextPreview(PreviewReady ready)
@@ -735,24 +699,9 @@ public sealed partial class MainWindow : Window
         ListingPanel.Visibility = Visibility.Collapsed;
         _rasterPresenter?.Clear();
 
-        try
-        {
-            var uri = new Uri(ready.MediaPath!);
-            MediaPreviewElement.Source = Windows.Media.Core.MediaSource.CreateFromUri(uri);
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "media load failed: " + ex);
-        }
-
-        double w = ready.PreferredWidth > 0 ? ready.PreferredWidth : 800;
-        double h = ready.PreferredHeight > 0 ? ready.PreferredHeight : 450;
-        var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
-        double scale = w > 0 && h > 0
-            ? Math.Min(1.0, Math.Min(maxContent.Width / w, maxContent.Height / h))
-            : 1.0;
-        ResizeWindowForContent(w * scale, h * scale, MaxImageWindowWidth, MaxImageWindowHeight);
-        return $"{ready.Kind}: {ready.Title}";
+        MediaPreviewResult result = _mediaPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        return result.Status;
     }
 
     private string ShowListingPreview(PreviewReady ready)
@@ -802,130 +751,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void AttachPdfPageSurface(PreviewSurface surface)
-    {
-        if (_compositor is null || !_pdfPageHosts.TryGetValue(surface.PageIndex, out var pageHost))
-            return;
-
-        var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(_compositor, (nint)surface.SharedHandle);
-        if (hr < 0 || compSurface is null)
-        {
-            StatusText.Text = $"pdf page failed 0x{hr:X8}";
-            return;
-        }
-
-        pageHost.Width = surface.Width;
-        pageHost.Height = surface.Height;
-        TouchPdfPage(surface.PageIndex);
-        // Dispose the previous sprite on this page host before attaching a new one.
-        var oldChild = ElementCompositionPreview.GetElementChildVisual(pageHost);
-        if (oldChild is SpriteVisual oldSprite)
-        {
-            try { (oldSprite.Brush as IDisposable)?.Dispose(); } catch { }
-            try { oldSprite.Dispose(); } catch { }
-        }
-        var brush = _compositor.CreateSurfaceBrush(compSurface);
-        brush.Stretch = CompositionStretch.Fill;
-        var sprite = _compositor.CreateSpriteVisual();
-        sprite.RelativeSizeAdjustment = Vector2.One;
-        sprite.Brush = brush;
-        ElementCompositionPreview.SetElementChildVisual(pageHost, sprite);
-        DispatcherQueue.TryEnqueue(() => pageHost.InvalidateArrange());
-    }
-
-    private void RequestVisiblePdfPages()
-    {
-        if (_supervisor is null || _currentRequestId is null || PdfScrollViewer.Visibility != Visibility.Visible)
-            return;
-
-        // O(1) visible-page computation: all pages share the same height (displayHeight), so
-        // the visible page range is a simple arithmetic calculation from the scroll offset.
-        if (_pdfPageHosts.Count == 0) return;
-        int pageCount = _pdfPageHosts.Count;
-        double pageHeight = _pdfPageHosts[0].ActualHeight;
-        if (pageHeight <= 0) return;
-
-        double vp = Math.Max(1, PdfScrollViewer.ViewportHeight);
-        double scrollOffset = PdfScrollViewer.VerticalOffset;
-        int firstVisible = (int)Math.Floor(scrollOffset / pageHeight);
-        int lastVisible = (int)Math.Ceiling((scrollOffset + vp) / pageHeight);
-
-        // Expand the render window: render a few pages above/below the viewport for smooth scrolling.
-        int renderFirst = Math.Max(0, firstVisible - 1);
-        int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
-
-        for (int index = renderFirst; index <= renderLast; index++)
-        {
-            if (!_requestedPdfPages.Contains(index))
-            {
-                _requestedPdfPages.Add(index);
-                TouchPdfPage(index);
-                _ = _supervisor.RenderPageAsync(_currentRequestId, index, _currentPdfScale);
-            }
-            else
-            {
-                TouchPdfPage(index);
-            }
-        }
-
-        TrimPdfPageSurfaceCache(renderFirst, renderLast);
-    }
-
-    private void TouchPdfPage(int pageIndex)
-    {
-        _pdfPageLastTouched[pageIndex] = ++_pdfPageTouchTick;
-    }
-
-    private void TrimPdfPageSurfaceCache(int protectedFirst, int protectedLast)
-    {
-        if (_currentRequestId is null)
-            return;
-
-        int protectedCount = Math.Max(0, protectedLast - protectedFirst + 1);
-        int maxSurfaces = protectedCount + PdfOffscreenSurfaceCachePages;
-        if (_requestedPdfPages.Count <= maxSurfaces)
-            return;
-
-        int excess = _requestedPdfPages.Count - maxSurfaces;
-        while (excess-- > 0)
-        {
-            int oldestIndex = -1;
-            long oldestTick = long.MaxValue;
-            foreach (int index in _requestedPdfPages)
-            {
-                if (index >= protectedFirst && index <= protectedLast)
-                    continue;
-                long tick = _pdfPageLastTouched.TryGetValue(index, out long value) ? value : 0;
-                if (tick < oldestTick)
-                {
-                    oldestTick = tick;
-                    oldestIndex = index;
-                }
-            }
-            if (oldestIndex < 0)
-                break;
-            ReleasePdfPageSurface(oldestIndex);
-        }
-    }
-
-    private void ReleasePdfPageSurface(int pageIndex)
-    {
-        _requestedPdfPages.Remove(pageIndex);
-        _pdfPageLastTouched.Remove(pageIndex);
-        if (_pdfPageHosts.TryGetValue(pageIndex, out var host))
-        {
-            var oldChild = ElementCompositionPreview.GetElementChildVisual(host);
-            if (oldChild is SpriteVisual oldSprite)
-            {
-                try { (oldSprite.Brush as IDisposable)?.Dispose(); } catch { }
-                try { oldSprite.Dispose(); } catch { }
-            }
-            ElementCompositionPreview.SetElementChildVisual(host, null);
-        }
-        if (_currentRequestId is not null)
-            _ = _supervisor?.ClosePageAsync(_currentRequestId, pageIndex);
-    }
-
     private void ResetPreview()
     {
         _rasterPresenter?.Clear();
@@ -944,22 +769,12 @@ public sealed partial class MainWindow : Window
             LoadingRing.Visibility = Visibility.Collapsed;
             PreviewContentHost.Opacity = 1;
         }
-        if (MediaPreviewElement.Source is not null)
-        {
-            MediaPreviewElement.MediaPlayer?.Pause();
-            if (MediaPreviewElement.Source is IDisposable disposableSource)
-                disposableSource.Dispose();
-            MediaPreviewElement.Source = null;
-        }
-        PdfPagesPanel.Children.Clear();
+        _mediaPresenter?.Clear();
+        _pdfPresenter?.Clear();
         OfficePagesPanel.Children.Clear();
         TextPreviewBlock.Blocks.Clear();
         ClearPreviewHeroImages();
         _listingPresenter?.Reset();
-        _pdfPageHosts.Clear();
-        _requestedPdfPages.Clear();
-        _pdfPageLastTouched.Clear();
-        _pdfPageTouchTick = 0;
         ResetPreviewChrome();
     }
 
@@ -1122,7 +937,7 @@ public sealed partial class MainWindow : Window
         TemporarilyHideWindowForTransitionResize();
         GetAppWindow().Resize(size);
         if (setTopmost && _previewVisible)
-            RaisePreviewWindow(activate: false);
+            _windowController.Raise(activate: false);
     }
 
     private void CenterPreviewWindowInCurrentDisplay(AppWindow appWindow)
@@ -1138,7 +953,7 @@ public sealed partial class MainWindow : Window
             return;
 
         try { GetAppWindow().Hide(); }
-        catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
+        catch { _windowController.Hide(); }
         _previewTemporarilyHidden = true;
     }
 
@@ -1288,9 +1103,9 @@ public sealed partial class MainWindow : Window
     {
         bool openingFromHidden = !_previewVisible;
         if (activate)
-            SetNoActivateStyle(enabled: false);
+            _windowController.SetNoActivateStyle(enabled: false);
         else
-            ApplyNoActivateStyle();
+            _windowController.ApplyNoActivateStyle();
         var appWindow = GetAppWindow();
         if (!_previewVisible && resizeToDefault)
             ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
@@ -1300,9 +1115,9 @@ public sealed partial class MainWindow : Window
         catch
         {
             if (activate) Activate();
-            else ShowWindowNoActivate(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            else _windowController.ShowNoActivate();
         }
-        RaisePreviewWindow(activate);
+        _windowController.Raise(activate);
         EnsureCompositor();
         _previewVisible = true;
         SetBackgroundEfficiency(enabled: false);
@@ -1321,8 +1136,8 @@ public sealed partial class MainWindow : Window
         PreviewContentHost.Opacity = 1;
         PreviewContentHost.IsHitTestVisible = true;
         try { GetAppWindow().Hide(); }
-        catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
-        ReleasePreviewTopmost();
+        catch { _windowController.Hide(); }
+        _windowController.ReleaseTopmost();
         _previewVisible = false;
         SetBackgroundEfficiency(enabled: true);
         _native.SetPreviewVisible(false);
@@ -1343,28 +1158,6 @@ public sealed partial class MainWindow : Window
 
     private WindowId GetWindowId()
         => Win32Interop.GetWindowIdFromWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
-
-    private void RaisePreviewWindow(bool activate)
-    {
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW;
-        if (!activate)
-            flags |= SWP_NOACTIVATE;
-
-        // Pulse topmost only long enough to place the preview above Explorer, then immediately
-        // release it so other apps can cover the preview normally.
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
-        if (activate)
-            Activate();
-    }
-
-    private void ReleasePreviewTopmost()
-    {
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
 
     private void EnsureTrayIcon()
     {
@@ -1404,50 +1197,6 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { DiagLog.Write("App", "graceful exit failed: " + ex); }
     }
 
-    private void ApplyNoActivateStyle()
-        => SetNoActivateStyle(enabled: true);
-
-    private void SetNoActivateStyle(bool enabled)
-    {
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        nint ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-        nint next = enabled ? ex | WS_EX_NOACTIVATE : ex & ~WS_EX_NOACTIVATE;
-        if (next != ex)
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, next);
-    }
-
-    private static void ShowWindowNoActivate(nint hwnd)
-    {
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
-
-    private const int GWL_EXSTYLE = -20;
-    private const int SW_HIDE = 0;
-    private const int SW_SHOWNOACTIVATE = 4;
-    private const uint SWP_NOSIZE = 0x0001;
-    private const uint SWP_NOMOVE = 0x0002;
-    private const uint SWP_NOACTIVATE = 0x0010;
-    private const uint SWP_SHOWWINDOW = 0x0040;
-    private static readonly nint HWND_TOPMOST = new(-1);
-    private static readonly nint HWND_NOTOPMOST = new(-2);
-    private static readonly nint WS_EX_NOACTIVATE = new(0x08000000);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
-    private static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
-    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool ShowWindow(nint hWnd, int nCmdShow);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
-
     private static FileProbe BuildProbe(string path)
     {
         if (Directory.Exists(path))
@@ -1471,11 +1220,6 @@ public sealed partial class MainWindow : Window
         catch { /* probe is best-effort in the scaffold; the real probe comes from native */ }
         return new FileProbe(path, System.IO.Path.GetExtension(path), magic);
     }
-
-    private static bool IsMediaProbe(FileProbe probe)
-        => probe.Kind.Equals("video", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("media", StringComparison.OrdinalIgnoreCase);
 
     private static string ResolveHostExePath()
     {
