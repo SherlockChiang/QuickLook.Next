@@ -26,7 +26,7 @@ public sealed record NativeIntent(PreviewIntent Intent, IReadOnlyList<string> Pa
     {
         if (string.IsNullOrEmpty(line)) return null;
         string[] parts = line.Split('\t');
-        PreviewIntent intent = parts[0] switch
+        PreviewIntent? intent = parts[0] switch
         {
             "OPEN" => PreviewIntent.Open,
             "TOGGLE" => PreviewIntent.Toggle,
@@ -36,10 +36,10 @@ public sealed record NativeIntent(PreviewIntent Intent, IReadOnlyList<string> Pa
             "FULLSCREEN" => PreviewIntent.Fullscreen,
             "ZOOM_IN" => PreviewIntent.ZoomIn,
             "ZOOM_OUT" => PreviewIntent.ZoomOut,
-            _ => (PreviewIntent)(-1),
+            _ => null,
         };
-        if ((int)intent < 0) return null;
+        if (intent is null) return null;
         var paths = parts.Skip(1).Where(p => p.Length > 0 && !p.StartsWith('<')).ToArray();
-        return new NativeIntent(intent, paths);
+        return new NativeIntent(intent.Value, paths);
     }
 }
