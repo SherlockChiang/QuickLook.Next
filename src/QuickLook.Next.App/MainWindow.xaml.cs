@@ -20,7 +20,7 @@ namespace QuickLook.Next.App;
 
 public sealed partial class MainWindow : Window
 {
-    private const double MaxImageWindowWidth = 1200;
+    private const double MaxImageWindowWidth = 1320;
     private const double MaxImageWindowHeight = 900;
     private const double MaxPdfWindowWidth = 1040;
     private const double MaxPdfWindowHeight = 900;
@@ -34,6 +34,8 @@ public sealed partial class MainWindow : Window
     private const double MaxWindowScreenRatio = 0.86;
     private const double MinImageZoom = 0.1;
     private const double MaxImageZoom = 12.0;
+    private const double RasterInfoRailWidth = 246;
+    private const double RasterToolbarHeight = 82;
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
     private const int SwitchDebounceMs = 110;
@@ -316,8 +318,8 @@ public sealed partial class MainWindow : Window
             int generation = BeginPreviewGeneration();
             BeginPreviewTransition();
             ResetPreview();
-            Title = System.IO.Path.GetFileName(path);   // file name shows in the title bar
-            AppTitle.Text = Title;
+            Title = System.IO.Path.GetFileName(path);
+            PreviewTitleText.Text = Title;
             StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
             try
             {
@@ -433,6 +435,115 @@ public sealed partial class MainWindow : Window
     private static bool ShouldActivatePreview(PreviewReady ready)
         => ready.TextContent is not null || ready.Listing is not null || ready.OfficeLayout is not null;
 
+    private void UpdatePreviewChrome(PreviewReady ready, bool showRasterTools = false)
+    {
+        string? path = _currentPath ?? ready.MediaPath;
+        string title = !string.IsNullOrWhiteSpace(path)
+            ? System.IO.Path.GetFileName(path)
+            : ready.Title;
+        if (string.IsNullOrWhiteSpace(title))
+            title = "QuickLook Next";
+
+        Title = title;
+        PreviewTitleText.Text = title;
+        PreviewKindPillText.Text = ready.Kind.ToUpperInvariant();
+        PreviewMetaText.Text = BuildPreviewMetaLine(ready, path);
+
+        PreviewInfoRail.Visibility = showRasterTools ? Visibility.Visible : Visibility.Collapsed;
+        ImagePreviewToolbar.Visibility = showRasterTools ? Visibility.Visible : Visibility.Collapsed;
+        PreviewRoot.Margin = showRasterTools
+            ? new Thickness(14, 0, RasterInfoRailWidth + 14, RasterToolbarHeight)
+            : new Thickness(14, 0, 14, 14);
+
+        PreviewDimensionsText.Text = BuildDimensionsText(ready);
+        PreviewSizeText.Text = FileSizeText(path);
+        PreviewTypeText.Text = PreviewTypeTextFor(ready, path);
+        PreviewModifiedText.Text = ModifiedText(path);
+        PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? "-" : path;
+        UpdateImageZoomLabel();
+    }
+
+    private void ResetPreviewChrome()
+    {
+        Title = "QuickLook Next";
+        PreviewTitleText.Text = "QuickLook Next";
+        PreviewMetaText.Text = "Ready";
+        PreviewKindPillText.Text = "READY";
+        PreviewInfoRail.Visibility = Visibility.Collapsed;
+        ImagePreviewToolbar.Visibility = Visibility.Collapsed;
+        PreviewRoot.Margin = new Thickness(14, 0, 14, 14);
+        PreviewDimensionsText.Text = "-";
+        PreviewSizeText.Text = "-";
+        PreviewTypeText.Text = "-";
+        PreviewModifiedText.Text = "-";
+        PreviewPathText.Text = "-";
+        ImageZoomText.Text = "Fit";
+    }
+
+    private static string BuildPreviewMetaLine(PreviewReady ready, string? path)
+    {
+        var parts = new List<string>();
+        string dimensions = BuildDimensionsText(ready);
+        if (dimensions != "-")
+            parts.Add(dimensions);
+        string size = FileSizeText(path);
+        if (size != "-")
+            parts.Add(size);
+        parts.Add(PreviewTypeTextFor(ready, path));
+        string modified = ModifiedText(path);
+        if (modified != "-")
+            parts.Add("Modified: " + modified);
+        return string.Join("  |  ", parts);
+    }
+
+    private static string BuildDimensionsText(PreviewReady ready)
+    {
+        if (ready.Kind == "pdf" && ready.PageCount > 0)
+            return $"{ready.PageCount:N0} pages";
+        if (ready.PreferredWidth > 0 && ready.PreferredHeight > 0)
+            return $"{ready.PreferredWidth:N0} x {ready.PreferredHeight:N0}";
+        if (ready.OfficeLayout is { Pages.Length: > 0 } layout)
+            return $"{layout.Pages.Length:N0} pages";
+        if (ready.Listing is { } listing)
+            return listing.Summary;
+        return "-";
+    }
+
+    private static string PreviewTypeTextFor(PreviewReady ready, string? path)
+    {
+        string ext = string.IsNullOrWhiteSpace(path)
+            ? ""
+            : System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
+        return string.IsNullOrEmpty(ext) ? ready.Kind : $"{ext} {ready.Kind}";
+    }
+
+    private static string FileSizeText(string? path)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(path) && System.IO.File.Exists(path))
+                return FormatBytes(new FileInfo(path).Length);
+        }
+        catch { }
+        return "-";
+    }
+
+    private static string ModifiedText(string? path)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                if (System.IO.File.Exists(path))
+                    return new FileInfo(path).LastWriteTime.ToString("g");
+                if (Directory.Exists(path))
+                    return new DirectoryInfo(path).LastWriteTime.ToString("g");
+            }
+        }
+        catch { }
+        return "-";
+    }
+
     private string ShowErrorPreview(string message)
     {
         PreviewRoot.Visibility = Visibility.Collapsed;
@@ -441,8 +552,13 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
+        PreviewInfoRail.Visibility = Visibility.Collapsed;
+        ImagePreviewToolbar.Visibility = Visibility.Collapsed;
         ErrorText.Text = string.IsNullOrWhiteSpace(message) ? "Unable to preview this file." : message;
         ErrorPanel.Visibility = Visibility.Visible;
+        PreviewTitleText.Text = "Preview unavailable";
+        PreviewMetaText.Text = ErrorText.Text;
+        PreviewKindPillText.Text = "ERROR";
         ResizeWindowForContent(520, 260, MaxTextWindowWidth, MaxTextWindowHeight);
         return "error: " + ErrorText.Text;
     }
@@ -503,6 +619,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowRasterPreview(PreviewReady ready)
     {
+        UpdatePreviewChrome(ready, showRasterTools: true);
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
@@ -517,12 +634,18 @@ public sealed partial class MainWindow : Window
         if (w > 0 && h > 0)
         {
             var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
-            double scale = Math.Min(1.0, Math.Min(maxContent.Width / w, maxContent.Height / h));
-            ResizeWindowForContent(w * scale, h * scale, MaxImageWindowWidth, MaxImageWindowHeight);
+            double imageMaxWidth = Math.Max(1, maxContent.Width - RasterInfoRailWidth);
+            double imageMaxHeight = Math.Max(1, maxContent.Height - RasterToolbarHeight);
+            double scale = Math.Min(1.0, Math.Min(imageMaxWidth / w, imageMaxHeight / h));
+            ResizeWindowForContent(
+                w * scale + RasterInfoRailWidth,
+                h * scale + RasterToolbarHeight,
+                MaxImageWindowWidth,
+                MaxImageWindowHeight);
         }
         else
         {
-            ResizeWindowForContent(w, h, MaxImageWindowWidth, MaxImageWindowHeight);
+            ResizeWindowForContent(w + RasterInfoRailWidth, h + RasterToolbarHeight, MaxImageWindowWidth, MaxImageWindowHeight);
         }
         DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
         return $"{ready.Kind}: {ready.Title}";
@@ -533,6 +656,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowPdfDocument(string requestId, PreviewReady ready)
     {
+        UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
         TextScrollViewer.Visibility = Visibility.Collapsed;
@@ -587,6 +711,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowTextPreview(PreviewReady ready)
     {
+        UpdatePreviewChrome(ready);
         string text = TrimForDisplay(ready.TextContent ?? "");
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
         PreviewRoot.Visibility = Visibility.Collapsed;
@@ -635,6 +760,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowOfficeLayoutPreview(PreviewReady ready)
     {
+        UpdatePreviewChrome(ready);
         OfficeLayout layout = ready.OfficeLayout!;
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
@@ -800,6 +926,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowMediaPreview(PreviewReady ready)
     {
+        UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
@@ -834,6 +961,7 @@ public sealed partial class MainWindow : Window
 
     private string ShowListingPreview(PreviewReady ready)
     {
+        UpdatePreviewChrome(ready);
         _currentListing = ready.Listing;
         _currentListingPath = "";
 
@@ -1243,6 +1371,8 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
+        PreviewInfoRail.Visibility = Visibility.Collapsed;
+        ImagePreviewToolbar.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         if (!_previewRevealPending)
         {
@@ -1269,7 +1399,7 @@ public sealed partial class MainWindow : Window
         _pdfPageTouchTick = 0;
         if (_compositor is not null)
             ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        AppTitle.Text = "QuickLook Next";
+        ResetPreviewChrome();
     }
 
     private void StartPreviewHeroLoad(PreviewReady ready)
@@ -1601,6 +1731,70 @@ public sealed partial class MainWindow : Window
             (float)Math.Round((availableWidth - scaledWidth) / 2 + _imagePanX),
             (float)Math.Round((availableHeight - scaledHeight) / 2 + _imagePanY),
             0);
+        UpdateImageZoomLabel();
+    }
+
+    private void UpdateImageZoomLabel()
+        => ImageZoomText.Text = Math.Abs(_imageZoom - 1.0) < 0.01 ? "Fit" : $"{_imageZoom * 100:0}%";
+
+    private void ResetImageView()
+    {
+        _imageZoom = 1.0;
+        _imagePanX = 0;
+        _imagePanY = 0;
+        UpdateRasterSpriteLayout();
+        UpdateImageZoomLabel();
+    }
+
+    private void OnImageZoomOutClick(object sender, RoutedEventArgs e)
+    {
+        if (_rasterSprite is null) return;
+        _imageZoom = Math.Clamp(_imageZoom / 1.15, MinImageZoom, MaxImageZoom);
+        UpdateRasterSpriteLayout();
+    }
+
+    private void OnImageZoomInClick(object sender, RoutedEventArgs e)
+    {
+        if (_rasterSprite is null) return;
+        _imageZoom = Math.Clamp(_imageZoom * 1.15, MinImageZoom, MaxImageZoom);
+        UpdateRasterSpriteLayout();
+    }
+
+    private void OnImageZoomFitClick(object sender, RoutedEventArgs e)
+        => ResetImageView();
+
+    private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
+    {
+        string? path = _currentPath;
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true,
+                });
+                return;
+            }
+
+            if (System.IO.File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "/select,\"" + path + "\"",
+                    UseShellExecute = true,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "open file location failed: " + ex.Message);
+        }
     }
 
     private void OnPreviewRootPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -1648,10 +1842,7 @@ public sealed partial class MainWindow : Window
         if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
             return;
 
-        _imageZoom = 1.0;
-        _imagePanX = 0;
-        _imagePanY = 0;
-        UpdateRasterSpriteLayout();
+        ResetImageView();
         e.Handled = true;
     }
 
