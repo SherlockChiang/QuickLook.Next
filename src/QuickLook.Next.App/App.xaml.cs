@@ -16,9 +16,16 @@ public partial class App : Application
         InitializeComponent();
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = new MainWindow();
-        _ = _window.StartBackgroundAsync();
+        try
+        {
+            await _window.StartBackgroundAsync();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "background start unhandled: " + ex);
+        }
     }
 }

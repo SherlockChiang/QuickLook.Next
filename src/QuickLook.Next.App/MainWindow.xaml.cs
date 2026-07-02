@@ -160,7 +160,8 @@ public sealed partial class MainWindow : Window
             if (ex is System.IO.IOException && ex.StackTrace?.Contains("NamedPipeServerStream", StringComparison.Ordinal) == true)
             {
                 DiagLog.Write("App", "another instance holds the pipe — exiting");
-                Environment.Exit(0);
+                ExitApp();
+                return;
             }
             StatusText.Text = "startup error: " + ex.Message;
             ShowPreviewWindow(activate: true);
@@ -2470,7 +2471,7 @@ public sealed partial class MainWindow : Window
         RemoveTrayIcon();
         _supervisor?.Stop();
         try { Microsoft.UI.Xaml.Application.Current.Exit(); }
-        catch { Environment.Exit(0); }
+        catch (Exception ex) { DiagLog.Write("App", "graceful exit failed: " + ex); }
     }
 
     private void ApplyNoActivateStyle()
