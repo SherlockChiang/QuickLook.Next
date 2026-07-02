@@ -290,10 +290,27 @@ unsafe fn explorer_text_input_active() -> bool {
     }
 
     let name = String::from_utf16_lossy(&class_name[..len as usize]);
+    is_text_input_class_name(&name)
+}
+
+fn is_text_input_class_name(name: &str) -> bool {
     matches!(
-        name.as_str(),
+        name,
         "Edit" | "RichEdit20W" | "RichEdit50W" | "RICHEDIT50W"
     )
+}
+
+/// Test-only ABI used by smoke-native.ps1 to lock the Explorer rename guard's class filter.
+#[no_mangle]
+pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: usize) -> i32 {
+    let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+        return 0;
+    };
+    if is_text_input_class_name(class_name) {
+        1
+    } else {
+        0
+    }
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

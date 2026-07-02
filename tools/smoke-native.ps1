@@ -65,6 +65,9 @@ public static class QuickLookNativeSmoke {
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_extract_office_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_test_is_text_input_class(byte[] classUtf8, UIntPtr classLen);
 }
 "@
 
@@ -174,6 +177,16 @@ function Invoke-OfficeImage([string]$path) {
         Height = [BitConverter]::ToUInt32($buffer, 4)
     }
 }
+
+function Test-TextInputClass([string]$className) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($className)
+    [QuickLookNativeSmoke]::ql_test_is_text_input_class($bytes, (New-UIntPtr $bytes.Length))
+}
+
+Assert-True ((Test-TextInputClass "Edit") -eq 1) "Expected Explorer rename Edit class to suppress preview hotkeys"
+Assert-True ((Test-TextInputClass "RichEdit20W") -eq 1) "Expected RichEdit20W class to suppress preview hotkeys"
+Assert-True ((Test-TextInputClass "RichEdit50W") -eq 1) "Expected RichEdit50W class to suppress preview hotkeys"
+Assert-True ((Test-TextInputClass "DirectUIHWND") -eq 0) "Expected normal Explorer view class to allow preview hotkeys"
 
 $testRoot = Resolve-Path -LiteralPath $TestFiles
 $txt = Join-Path $testRoot "test.txt"
