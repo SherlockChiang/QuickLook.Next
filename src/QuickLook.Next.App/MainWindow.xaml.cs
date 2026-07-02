@@ -27,11 +27,6 @@ public sealed partial class MainWindow : Window
     private const double MaxTextWindowWidth = 1100;
     private const double MaxTextWindowHeight = 860;
     private const double PdfPageTargetWidth = 860;
-    private const double WindowHorizontalChrome = 48;
-    private const double WindowVerticalChrome = 72;
-    private const double MinWindowWidth = 360;
-    private const double MinWindowHeight = 260;
-    private const double MaxWindowScreenRatio = 0.86;
     private const double MinImageZoom = 0.1;
     private const double MaxImageZoom = 12.0;
     private const double RasterInfoRailWidth = 246;
@@ -1638,39 +1633,7 @@ public sealed partial class MainWindow : Window
     }
 
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
-    {
-        var maxWindow = GetMaxWindowSize(preferredMaxWidth, preferredMaxHeight);
-        return (
-            Math.Max(1, maxWindow.Width - WindowHorizontalChrome),
-            Math.Max(1, maxWindow.Height - WindowVerticalChrome));
-    }
-
-    private (double Width, double Height) GetMaxWindowSize(double preferredMaxWidth, double preferredMaxHeight)
-    {
-        double screenMaxWidth = preferredMaxWidth;
-        double screenMaxHeight = preferredMaxHeight;
-
-        try
-        {
-            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            DisplayArea? displayArea = DisplayArea.GetFromWindowId(
-                Win32Interop.GetWindowIdFromWindow(hwnd),
-                DisplayAreaFallback.Nearest);
-            if (displayArea is not null)
-            {
-                screenMaxWidth = Math.Max(MinWindowWidth, displayArea.WorkArea.Width * MaxWindowScreenRatio);
-                screenMaxHeight = Math.Max(MinWindowHeight, displayArea.WorkArea.Height * MaxWindowScreenRatio);
-            }
-        }
-        catch
-        {
-            // DisplayArea is best-effort; fall back to the conservative per-kind caps.
-        }
-
-        return (
-            Math.Max(MinWindowWidth, Math.Min(preferredMaxWidth, screenMaxWidth)),
-            Math.Max(MinWindowHeight, Math.Min(preferredMaxHeight, screenMaxHeight)));
-    }
+        => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
 
     private void ResizeWindowForContent(
         double contentWidth,
@@ -1679,41 +1642,23 @@ public sealed partial class MainWindow : Window
         double maxHeight,
         bool setTopmost = true)
     {
-        var maxWindow = GetMaxWindowSize(maxWidth, maxHeight);
-        if (!double.IsFinite(contentWidth) || contentWidth <= 0)
-            contentWidth = MinWindowWidth - WindowHorizontalChrome;
-        if (!double.IsFinite(contentHeight) || contentHeight <= 0)
-            contentHeight = MinWindowHeight - WindowVerticalChrome;
-
-        double width = Math.Clamp(contentWidth + WindowHorizontalChrome, MinWindowWidth, maxWindow.Width);
-        double height = Math.Clamp(contentHeight + WindowVerticalChrome, MinWindowHeight, maxWindow.Height);
+        SizeInt32 size = PreviewWindowSizer.GetWindowSizeForContent(
+            GetWindowId(),
+            contentWidth,
+            contentHeight,
+            maxWidth,
+            maxHeight);
         TemporarilyHideWindowForTransitionResize();
-        GetAppWindow().Resize(new SizeInt32((int)Math.Round(width), (int)Math.Round(height)));
+        GetAppWindow().Resize(size);
         if (setTopmost && _previewVisible)
             RaisePreviewWindow(activate: false);
     }
 
     private void CenterPreviewWindowInCurrentDisplay(AppWindow appWindow)
     {
-        try
-        {
-            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            DisplayArea? displayArea = DisplayArea.GetFromWindowId(
-                Win32Interop.GetWindowIdFromWindow(hwnd),
-                DisplayAreaFallback.Nearest);
-            if (displayArea is null)
-                return;
-
-            var workArea = displayArea.WorkArea;
-            var size = appWindow.Size;
-            int x = workArea.X + Math.Max(0, (workArea.Width - size.Width) / 2);
-            int y = workArea.Y + Math.Max(0, (workArea.Height - size.Height) / 2);
-            appWindow.Move(new PointInt32(x, y));
-        }
-        catch
-        {
-            // Centering is best-effort; preview should still open even if display lookup fails.
-        }
+        PointInt32? position = PreviewWindowSizer.GetCenteredPosition(GetWindowId(), appWindow.Size);
+        if (position is { } point)
+            appWindow.Move(point);
     }
 
     private void TemporarilyHideWindowForTransitionResize()
@@ -2310,10 +2255,10 @@ public sealed partial class MainWindow : Window
     }
 
     private AppWindow GetAppWindow()
-    {
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        return AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(hwnd));
-    }
+        => AppWindow.GetFromWindowId(GetWindowId());
+
+    private WindowId GetWindowId()
+        => Win32Interop.GetWindowIdFromWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
 
     private void RaisePreviewWindow(bool activate)
     {
