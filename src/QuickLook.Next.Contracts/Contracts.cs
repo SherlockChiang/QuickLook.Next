@@ -3,6 +3,8 @@ namespace QuickLook.Next.Contracts;
 /// <summary>
 /// Cheap, host-produced facts about a file. Produced by the Rust native layer (type/magic/metadata)
 /// and shipped to preview components; providers consume it for routing/CanHandle and never redo shell/IO probing.
+/// <see cref="MagicPrefix"/> is a small immutable-by-convention prefix snapshot; hot-path probing should not
+/// mutate or retain the backing array beyond the current preview request.
 /// </summary>
 public sealed record FileProbe(string Path, string Extension, byte[] MagicPrefix)
 {
@@ -13,9 +15,8 @@ public sealed record FileProbe(string Path, string Extension, byte[] MagicPrefix
 }
 
 /// <summary>
-/// Result of opening a file for preview. A raster provider (image/PDF/…) decodes the content to
-/// premultiplied BGRA and the host uploads it into the shared composition surface; an info provider
-/// leaves <see cref="Bgra"/> null and only supplies metadata.
+/// Legacy .NET plugin result. The default preview hot path uses Rust/native JSON, Rust/native raster
+/// buffers, and RasterHost shared surfaces instead of this large managed payload contract.
 /// </summary>
 public sealed record PreviewResult(string Kind, string Title)
 {
@@ -23,7 +24,12 @@ public sealed record PreviewResult(string Kind, string Title)
     public double PreferredWidth { get; init; }
     public double PreferredHeight { get; init; }
 
-    /// <summary>Decoded pixels: premultiplied BGRA, row-major, stride = <see cref="PixelWidth"/> * 4. Null = info-only.</summary>
+    /// <summary>
+    /// Legacy plugin-only decoded pixels: premultiplied BGRA, row-major, stride =
+    /// <see cref="PixelWidth"/> * 4. Null = info-only. New raster preview paths should use the
+    /// native raster ABI plus shared surfaces to avoid LOH-sized managed arrays.
+    /// </summary>
+    [Obsolete("Legacy .NET plugin-only payload. Use Rust/native raster ABI plus shared surfaces for hot paths.")]
     public byte[]? Bgra { get; init; }
     public int PixelWidth { get; init; }
     public int PixelHeight { get; init; }
@@ -106,12 +112,13 @@ public interface IPreviewContext
 }
 
 /// <summary>
-/// Implemented by every viewer plugin. Loaded on demand into a collectible AssemblyLoadContext inside
-/// Legacy plugin host. Manifest-level routing (id/priority/extensions) selects candidates without loading;
-/// <see cref="CanHandle"/> is the authoritative check that may inspect the magic prefix.
+/// Legacy .NET preview provider contract. It is kept so old provider source remains readable, but default
+/// releases do not discover or load these providers; new preview logic should be implemented in Rust/native
+/// preview code and rendered by the WinUI shell/RasterHost.
 /// </summary>
 public interface IPreviewProvider
 {
     bool CanHandle(FileProbe probe);
     Task<PreviewResult> OpenAsync(string path, FileProbe probe, IPreviewContext context);
+    ValueTask CloseAsync() => ValueTask.CompletedTask;
 }

@@ -79,6 +79,24 @@ if (Test-Path $pluginLoaderPath) {
     Add-Failure "RasterHost must not include PluginLoadContext: $(Get-RelativePath $pluginLoaderPath)"
 }
 
+# Rule 3b: product projects must not reference legacy .NET preview plugins.
+$productProjectFiles = @(
+    "src/QuickLook.Next.App/QuickLook.Next.App.csproj",
+    "src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj"
+)
+foreach ($projectRelative in $productProjectFiles) {
+    $projectPath = Join-Path $Root $projectRelative
+    if (-not (Test-Path $projectPath)) {
+        Add-Failure "Missing product project: $projectRelative"
+        continue
+    }
+
+    $projectText = Get-Content -LiteralPath $projectPath -Raw
+    if ($projectText -match 'QuickLook\.Next\.Plugin\.|[\\/]+plugins[\\/]') {
+        Add-Failure "Product project references legacy .NET preview plugins: $projectRelative"
+    }
+}
+
 # Rule 4: high-risk .NET file/archive APIs are allowlisted by exact source file.
 $apiRules = @(
     @{

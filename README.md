@@ -11,11 +11,11 @@ QuickLook.Next/
   native/
     quicklook_next_native/              Rust cdylib — Win32/Shell/COM + hotkey + FFI  (Spike 3)
   src/
-    QuickLook.Next.Contracts/           plugin-facing contract: IPreviewProvider, FileProbe…
+    QuickLook.Next.Contracts/           control DTOs + legacy plugin-facing contracts
     QuickLook.Next.Core/                stable control protocol + FFI intents + pipe channel + watchdog
     QuickLook.Next.RasterHost/          .NET RasterHost process: D3D surfaces + PDF/thumbnail bridges  (Spike 1)
     QuickLook.Next.App/                 WinUI 3 shell: native bridge + supervision + composition consumer  (Spikes 1+3)
-  plugins/                              legacy/reference .NET plugin sources (not in the default hot path)
+  plugins/                              legacy/reference .NET plugin sources (reference-only)
 ```
 
 ## Dependency direction
@@ -35,9 +35,11 @@ to BGRA in Rust, then RasterHost uploads those pixels to a shared D3D surface.
   raster upload, and shell-thumbnail fallback.
 
 The old .NET text/archive/info/image plugins are compatibility scaffolding, not the preferred
-architecture. New preview business logic should land in `native/quicklook_next_native/src/preview.rs`
-or a narrow Rust C ABI returning structured JSON/BGRA for the WinUI shell and RasterHost to render. Do
-not reintroduce WebView/HTML output for Office previews.
+architecture. They are kept under `plugins/` as reference source only: they are not included in the
+default solution, not copied by the release packager, and not used as a default plugin discovery path.
+New preview business logic should land in `native/quicklook_next_native/src/preview.rs` or a narrow
+Rust C ABI returning structured JSON/BGRA for the WinUI shell and RasterHost to render. Do not
+reintroduce WebView/HTML output for Office previews.
 
 ## The two boundaries
 - **App ⇄ native (Rust):** in-process FFI. `quicklook_next_native` installs the WH_KEYBOARD_LL hook and
@@ -74,18 +76,19 @@ RasterHost is lazy-started: text, Office metadata/layout, archive/folder listing
 certificates, executables, and other lightweight Rust previews do not start the surface host. It is
 started only when a preview needs a D3D surface, PDF page rasterization, or shell thumbnail fallback.
 
-The WinUI shell is split into focused presenters for text, listing, Office layout, and raster/image
-surfaces. MainWindow remains the application coordinator: native intents, request cancellation,
+The WinUI shell is split into focused presenters/controllers for text, listing, Office layout,
+raster/image surfaces, PDF page virtualization/cache, media playback, and topmost/no-activate window
+behavior. MainWindow remains the application coordinator: native intents, request cancellation,
 RasterHost pipe lifetime, panel switching, and window placement.
 
 The default release path is Rust/App/RasterHost only. `tools/guard-architecture.ps1` enforces the
-current boundaries: no WebView/WebView2, no default .NET preview plugin path, no RasterHost plugin
-registry/loader, and no legacy .NET preview plugins in release output.
+current boundaries: no WebView/WebView2, no default .NET preview plugin path or project reference, no
+RasterHost plugin registry/loader, and no legacy .NET preview plugins in release output.
 
 ## Remaining work
-1. Extract the PDF page/list/cache behavior into a `PdfPreviewPresenter`.
-2. Split preview panel visibility/reset choreography out of `MainWindow`.
+1. Split preview panel visibility/reset choreography out of `MainWindow`.
+2. Move static XAML labels from the interim `UiStrings`/inline text layer into `.resw` resources.
 3. Keep improving Rust-native document fidelity, especially Office layout reconstruction.
-4. Add broader smoke assets for Office, PDF, package, certificate, image, archive, folder, and text previews.
+4. Add broader smoke assets for real-world Office, PDF, package, certificate, image, archive, folder, and text previews.
 
 See `../spikes/spike{1,2,3}-*/SPIKE*_FINDINGS.md` for the validated recipes behind each piece.
