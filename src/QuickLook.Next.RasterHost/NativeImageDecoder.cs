@@ -17,6 +17,7 @@ internal static class NativeImageDecoder
     private const int HeaderBytes = 16;
     private const int MaxDecodedImageBytes = HeaderBytes + (4096 * 4096 * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
+    private static readonly SemaphoreSlim DecodeGate = new(1, 1);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -26,8 +27,9 @@ internal static class NativeImageDecoder
         if (IsTooLarge(path))
             return null;
 
+        cancellationToken.ThrowIfCancellationRequested();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<NativeDecodedImage?> decodeTask = Task.Run(() => TryDecode(path), CancellationToken.None);
+        Task<NativeDecodedImage?> decodeTask = DecodeOnGateAsync(path, cancellationToken);
         Task delayTask = Task.Delay(timeout, timeoutCts.Token);
         Task completed = await Task.WhenAny(decodeTask, delayTask);
         if (completed != decodeTask)
@@ -35,6 +37,27 @@ internal static class NativeImageDecoder
 
         timeoutCts.Cancel();
         return await decodeTask;
+    }
+
+    private static async Task<NativeDecodedImage?> DecodeOnGateAsync(string path, CancellationToken cancellationToken)
+    {
+        await DecodeGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return null;
+
+            return await Task.Run(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return null;
+                return TryDecode(path);
+            }, CancellationToken.None);
+        }
+        finally
+        {
+            DecodeGate.Release();
+        }
     }
 
     public static NativeDecodedImage? TryDecode(string path)
