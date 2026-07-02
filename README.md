@@ -15,7 +15,7 @@ QuickLook.Next/
     QuickLook.Next.Core/                stable control protocol + FFI intents + pipe channel + watchdog
     QuickLook.Next.RasterHost/          .NET RasterHost process: D3D surfaces + PDF/thumbnail bridges  (Spike 1)
     QuickLook.Next.App/                 WinUI 3 shell: native bridge + supervision + composition consumer  (Spikes 1+3)
-  plugins/                              viewer modules (each: dll + .deps.json + *.plugin.json)
+  plugins/                              legacy/reference .NET plugin sources (not in the default hot path)
 ```
 
 ## Dependency direction
@@ -29,7 +29,7 @@ previews; these do not require RasterHost or .NET plugins in the hot path. Raste
 to BGRA in Rust, then RasterHost uploads those pixels to a shared D3D surface.
 
 .NET remains intentional only where it is currently a frontend or surface-hosting component:
-- WinUI 3 window, tray menu, title bar, text/list/folder UI controls, media element, and input gestures.
+- WinUI 3 window, tray menu, title bar, presenter-driven preview UI, media element, and input gestures.
 - Composition interop and shared-surface consumption in the App.
 - RasterHost D3D composition surface production, PDF page rendering through `Windows.Data.Pdf`, image
   raster upload, and shell-thumbnail fallback.
@@ -51,23 +51,41 @@ Handshake: App (pipe server) launches Host → `hello{appPid}` → Host `host.re
 `preview.open{requestId,path,probe}` → `preview.surface{handle,…}` + `preview.ready{…}`. Resize →
 `preview.resize` → new `preview.surface`. Host crash → App restarts it (supervisor).
 
-## Build
+## Build / checks
 ```
 # native (needs MSVC C++ Build Tools — see spikes/spike3-native/SPIKE3_FINDINGS.md)
 cargo build --release --manifest-path native/quicklook_next_native/Cargo.toml
 # .NET solution
 dotnet build QuickLook.Next.slnx -c Debug
+# native smoke
+powershell -ExecutionPolicy Bypass -File tools/smoke-native.ps1
+# architecture guard
+powershell -ExecutionPolicy Bypass -File tools/guard-architecture.ps1
 ```
 
-## Wired vs. next phase
-Wired & compiling now: the four projects, the full control protocol, the FFI bridge, RasterHost
-supervision + restart, the composition producer/consumer, App-direct media playback, and the raster paths:
+## Current status
+Wired & compiling now: the four projects, the full control protocol, the FFI bridge, tray-background
+startup, no-activate preview behavior, Explorer selection switching, RasterHost supervision + restart,
+the composition producer/consumer, App-direct media playback, and the raster paths:
 Rust image decode or Windows PDF render → BGRA pixels → RasterHost D3D texture → shared composition
 surface.
 
-Next phase (clearly marked `TODO` in code):
-1. Deploy `quicklook_next_native.dll` + `plugins/` next to the App; wire `adapterLuid` agreement.
-2. Hotkey state-machine refinements in Rust (750 ms hold, ~1 s invalid-key suppression, WinEvent reset).
-3. `WS_EX_NOACTIVATE` on the preview window so Explorer keeps focus for arrow-key switching.
+RasterHost is lazy-started: text, Office metadata/layout, archive/folder listings, package metadata,
+certificates, executables, and other lightweight Rust previews do not start the surface host. It is
+started only when a preview needs a D3D surface, PDF page rasterization, or shell thumbnail fallback.
+
+The WinUI shell is split into focused presenters for text, listing, Office layout, and raster/image
+surfaces. MainWindow remains the application coordinator: native intents, request cancellation,
+RasterHost pipe lifetime, panel switching, and window placement.
+
+The default release path is Rust/App/RasterHost only. `tools/guard-architecture.ps1` enforces the
+current boundaries: no WebView/WebView2, no default .NET preview plugin path, no RasterHost plugin
+registry/loader, and no legacy .NET preview plugins in release output.
+
+## Remaining work
+1. Extract the PDF page/list/cache behavior into a `PdfPreviewPresenter`.
+2. Split preview panel visibility/reset choreography out of `MainWindow`.
+3. Keep improving Rust-native document fidelity, especially Office layout reconstruction.
+4. Add broader smoke assets for Office, PDF, package, certificate, image, archive, folder, and text previews.
 
 See `../spikes/spike{1,2,3}-*/SPIKE*_FINDINGS.md` for the validated recipes behind each piece.
