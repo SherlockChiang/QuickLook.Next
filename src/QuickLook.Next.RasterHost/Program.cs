@@ -227,7 +227,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
         previousCts.Cancel();
         previousCts.Dispose();
     }
-    using var pageCts = new CancellationTokenSource();
+    var pageCts = new CancellationTokenSource();
     pdfPageRenderCts[key] = pageCts;
 
     try
@@ -257,6 +257,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     {
         if (pdfPageRenderCts.TryGetValue(key, out var currentCts) && ReferenceEquals(currentCts, pageCts))
             pdfPageRenderCts.Remove(key);
+        pageCts.Dispose();
     }
 }
 
