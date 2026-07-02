@@ -16,6 +16,8 @@ internal sealed class OfficePreviewPresenter
     private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
     private static readonly SolidColorBrush OfficeBorderBrush = new(ColorHelper.FromArgb(255, 210, 210, 210));
     private static readonly SolidColorBrush OfficeCellBorderBrush = new(ColorHelper.FromArgb(255, 225, 225, 225));
+    private static readonly SolidColorBrush OfficeHeaderBrush = new(ColorHelper.FromArgb(255, 246, 247, 249));
+    private static readonly SolidColorBrush OfficeHeaderTextBrush = new(ColorHelper.FromArgb(255, 86, 92, 104));
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
@@ -41,8 +43,11 @@ internal sealed class OfficePreviewPresenter
         double firstWidth = first?.Width > 0 ? first.Width : layout.Width;
         double firstHeight = first?.Height > 0 ? first.Height : layout.Height;
         double scale = LayoutScale(layout, firstWidth, maxPageWidth);
-        double contentWidth = Math.Min(maxContent.Width, firstWidth * scale + 64);
-        double contentHeight = Math.Min(maxContent.Height, firstHeight * scale + 112);
+        bool isWorkbook = layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase);
+        double headerWidth = isWorkbook ? 42 : 0;
+        double headerHeight = isWorkbook ? 24 : 0;
+        double contentWidth = Math.Min(maxContent.Width, firstWidth * scale + headerWidth + 64);
+        double contentHeight = Math.Min(maxContent.Height, firstHeight * scale + headerHeight + 112);
         return new OfficePreviewResult($"{ready.Kind}: {ready.Title}", contentWidth, contentHeight);
     }
 
@@ -51,8 +56,13 @@ internal sealed class OfficePreviewPresenter
         double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
         double pageHeight = Math.Max(180, page.Height > 0 ? page.Height : layout.Height);
         double scale = LayoutScale(layout, pageWidth, maxPageWidth);
-        double viewWidth = pageWidth * scale;
-        double viewHeight = pageHeight * scale;
+        bool isWorkbook = layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase);
+        double rowHeaderWidth = isWorkbook ? 42 : 0;
+        double columnHeaderHeight = isWorkbook ? 24 : 0;
+        double contentWidth = pageWidth * scale;
+        double contentHeight = pageHeight * scale;
+        double viewWidth = contentWidth + rowHeaderWidth;
+        double viewHeight = contentHeight + columnHeaderHeight;
 
         var stack = new StackPanel { Spacing = 6 };
         stack.Children.Add(new TextBlock
@@ -70,14 +80,15 @@ internal sealed class OfficePreviewPresenter
             Background = OfficeWhiteBrush,
         };
 
-        if (layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase))
+        if (isWorkbook)
         {
+            AddWorkbookHeaders(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
             foreach (OfficeCell cell in page.Cells)
-                AddCell(canvas, cell, scale);
+                AddCell(canvas, cell, scale, rowHeaderWidth, columnHeaderHeight);
         }
 
         foreach (OfficeLayoutItem item in page.Items)
-            AddLayoutItem(canvas, item, scale, layout.LayoutKind);
+            AddLayoutItem(canvas, item, scale, layout.LayoutKind, rowHeaderWidth, columnHeaderHeight);
 
         stack.Children.Add(new Border
         {
@@ -99,12 +110,113 @@ internal sealed class OfficePreviewPresenter
         return Math.Clamp(target, 0.35, 1.0);
     }
 
-    private static void AddCell(Canvas canvas, OfficeCell cell, double scale)
+    private static void AddWorkbookHeaders(
+        Canvas canvas,
+        OfficePage page,
+        double scale,
+        double rowHeaderWidth,
+        double columnHeaderHeight,
+        double contentWidth,
+        double contentHeight)
     {
+        canvas.Children.Add(new Border
+        {
+            Width = rowHeaderWidth,
+            Height = columnHeaderHeight,
+            Background = OfficeHeaderBrush,
+            BorderBrush = OfficeCellBorderBrush,
+            BorderThickness = new Thickness(0, 0, 1, 1),
+        });
+
+        var columnHeaders = page.Cells
+            .OrderBy(cell => cell.Column)
+            .GroupBy(cell => cell.Column)
+            .Select(group => group.First())
+            .Take(32);
+        foreach (OfficeCell cell in columnHeaders)
+        {
+            var header = CreateHeaderCell(ColumnName(cell.Column), cell.Width * scale, columnHeaderHeight);
+            Canvas.SetLeft(header, rowHeaderWidth + cell.X * scale);
+            Canvas.SetTop(header, 0);
+            canvas.Children.Add(header);
+        }
+
+        var rowHeaders = page.Cells
+            .OrderBy(cell => cell.Row)
+            .GroupBy(cell => cell.Row)
+            .Select(group => group.First())
+            .Take(128);
+        foreach (OfficeCell cell in rowHeaders)
+        {
+            var header = CreateHeaderCell((cell.Row + 1).ToString(), rowHeaderWidth, cell.Height * scale);
+            Canvas.SetLeft(header, 0);
+            Canvas.SetTop(header, columnHeaderHeight + cell.Y * scale);
+            canvas.Children.Add(header);
+        }
+
+        var bottomLine = new Border
+        {
+            Width = contentWidth,
+            Height = 1,
+            Background = OfficeCellBorderBrush,
+        };
+        Canvas.SetLeft(bottomLine, rowHeaderWidth);
+        Canvas.SetTop(bottomLine, columnHeaderHeight + contentHeight);
+        canvas.Children.Add(bottomLine);
+
+        var rightLine = new Border
+        {
+            Width = 1,
+            Height = contentHeight,
+            Background = OfficeCellBorderBrush,
+        };
+        Canvas.SetLeft(rightLine, rowHeaderWidth + contentWidth);
+        Canvas.SetTop(rightLine, columnHeaderHeight);
+        canvas.Children.Add(rightLine);
+    }
+
+    private static Border CreateHeaderCell(string text, double width, double height)
+    {
+        return new Border
+        {
+            Width = Math.Max(12, width),
+            Height = Math.Max(12, height),
+            Background = OfficeHeaderBrush,
+            BorderBrush = OfficeCellBorderBrush,
+            BorderThickness = new Thickness(0, 0, 1, 1),
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 11,
+                Foreground = OfficeHeaderTextBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+            },
+        };
+    }
+
+    private static string ColumnName(int zeroBasedColumn)
+    {
+        int value = zeroBasedColumn + 1;
+        string name = "";
+        while (value > 0)
+        {
+            value--;
+            name = (char)('A' + value % 26) + name;
+            value /= 26;
+        }
+        return name;
+    }
+
+    private static void AddCell(Canvas canvas, OfficeCell cell, double scale, double offsetX, double offsetY)
+    {
+        double width = Math.Max(12, cell.Width * scale);
+        double height = Math.Max(12, cell.Height * scale);
         var border = new Border
         {
-            Width = Math.Max(12, cell.Width * scale),
-            Height = Math.Max(12, cell.Height * scale),
+            Width = width,
+            Height = height,
             BorderBrush = OfficeCellBorderBrush,
             BorderThickness = new Thickness(0, 0, 1, 1),
             Padding = new Thickness(5, 2, 5, 2),
@@ -112,20 +224,23 @@ internal sealed class OfficePreviewPresenter
             {
                 Text = cell.Text,
                 FontSize = 12,
-                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = Math.Max(4, width - 10),
+                MaxHeight = Math.Max(4, height - 4),
+                TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.WordEllipsis,
                 Foreground = OfficeBlackBrush,
                 VerticalAlignment = VerticalAlignment.Center,
             },
         };
-        Canvas.SetLeft(border, cell.X * scale);
-        Canvas.SetTop(border, cell.Y * scale);
+        Canvas.SetLeft(border, offsetX + cell.X * scale);
+        Canvas.SetTop(border, offsetY + cell.Y * scale);
         canvas.Children.Add(border);
     }
 
-    private static void AddLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind)
+    private static void AddLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind, double offsetX, double offsetY)
     {
-        double x = item.X * scale;
-        double y = item.Y * scale;
+        double x = offsetX + item.X * scale;
+        double y = offsetY + item.Y * scale;
         double width = Math.Max(12, item.Width * scale);
         double height = Math.Max(12, item.Height * scale);
 
@@ -148,18 +263,27 @@ internal sealed class OfficePreviewPresenter
 
         if (!string.IsNullOrWhiteSpace(item.Text))
         {
-            var text = new TextBlock
+            var textBox = new Border
             {
-                Text = item.Text,
-                FontSize = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase) ? Math.Max(12, 15 * scale) : 12,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = OfficeBlackBrush,
-                MaxWidth = width,
-                MaxHeight = height,
+                Width = width,
+                Height = height,
+                Padding = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase)
+                    ? new Thickness(6 * scale, 3 * scale, 6 * scale, 3 * scale)
+                    : new Thickness(0),
+                Child = new TextBlock
+                {
+                    Text = item.Text,
+                    FontSize = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase) ? Math.Clamp(16 * scale, 10, 18) : 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextTrimming = TextTrimming.WordEllipsis,
+                    Foreground = OfficeBlackBrush,
+                    MaxWidth = width,
+                    MaxHeight = height,
+                },
             };
-            Canvas.SetLeft(text, x);
-            Canvas.SetTop(text, y);
-            canvas.Children.Add(text);
+            Canvas.SetLeft(textBox, x);
+            Canvas.SetTop(textBox, y);
+            canvas.Children.Add(textBox);
         }
     }
 

@@ -414,6 +414,7 @@ public sealed partial class MainWindow : Window
     {
         _previewRevealPending = true;
         PreviewContentHost.Opacity = 0;
+        PreviewContentHost.IsHitTestVisible = false;
         ErrorPanel.Visibility = Visibility.Collapsed;
         LoadingRing.Visibility = Visibility.Visible;
         LoadingRing.IsActive = true;
@@ -580,6 +581,7 @@ public sealed partial class MainWindow : Window
     private void FadeInPreviewContent()
     {
         PreviewContentHost.Opacity = 1;
+        PreviewContentHost.IsHitTestVisible = true;
         var visual = ElementCompositionPreview.GetElementVisual(PreviewContentHost);
         var compositor = visual.Compositor;
         var animation = compositor.CreateScalarKeyFrameAnimation();
@@ -1317,6 +1319,7 @@ public sealed partial class MainWindow : Window
         LoadingRing.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         PreviewContentHost.Opacity = 1;
+        PreviewContentHost.IsHitTestVisible = true;
         try { GetAppWindow().Hide(); }
         catch { ShowWindow(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_HIDE); }
         ReleasePreviewTopmost();

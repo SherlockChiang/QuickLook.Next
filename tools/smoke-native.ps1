@@ -286,7 +286,7 @@ try {
     New-Item -ItemType Directory -Force (Join-Path $xlsxRoot "xl\media") | Out-Null
     Copy-Item -LiteralPath $png -Destination (Join-Path $xlsxRoot "xl\media\image1.png")
     Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\sharedStrings.xml") -Encoding UTF8 -Value '<sst><si><t>Name</t></si><si><t>Alice</t></si></sst>'
-    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\worksheets\sheet1.xml") -Encoding UTF8 -Value '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="B2"><v>42</v></c></row></sheetData><drawing r:id="rIdDrawing"/></worksheet>'
+    Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\worksheets\sheet1.xml") -Encoding UTF8 -Value '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cols><col min="1" max="1" width="18"/><col min="2" max="3" width="12"/></cols><sheetData><row r="1" ht="24"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="B2"><v>42</v></c></row></sheetData><drawing r:id="rIdDrawing"/></worksheet>'
     Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\worksheets\_rels\sheet1.xml.rels") -Encoding UTF8 -Value '<Relationships><Relationship Id="rIdDrawing" Target="../drawings/drawing1.xml"/></Relationships>'
     Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\drawings\drawing1.xml") -Encoding UTF8 -Value '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:to><xdr:col>3</xdr:col><xdr:row>5</xdr:row></xdr:to><xdr:pic><xdr:blipFill><a:blip r:embed="rIdImage"/></xdr:blipFill></xdr:pic></xdr:twoCellAnchor></xdr:wsDr>'
     Set-Content -LiteralPath (Join-Path $xlsxRoot "xl\drawings\_rels\drawing1.xml.rels") -Encoding UTF8 -Value '<Relationships><Relationship Id="rIdImage" Target="../media/image1.png"/></Relationships>'
@@ -302,6 +302,8 @@ try {
     Assert-True ($xlsxPreview.text -match "Images: 1") "Expected XLSX image summary"
     Assert-True ($null -ne $xlsxPreview.officeLayout) "Expected XLSX office layout"
     Assert-True ($xlsxPreview.officeLayout.pages[0].cells.Count -ge 2) "Expected XLSX layout cells"
+    Assert-True ($xlsxPreview.officeLayout.pages[0].cells[0].width -gt 120) "Expected XLSX layout to honor column widths"
+    Assert-True ($xlsxPreview.officeLayout.pages[0].cells[0].height -gt 30) "Expected XLSX layout to honor row heights"
     Assert-True ($xlsxPreview.officeLayout.pages[0].items.Count -ge 1) "Expected XLSX anchored image item"
     $xlsxImage = Invoke-OfficeImage $xlsx
     Assert-True ($xlsxImage.Width -gt 0 -and $xlsxImage.Height -gt 0) "Expected extracted XLSX image dimensions"

@@ -662,8 +662,10 @@ fn build_xlsx_layout(
             break;
         };
 
-        let mut cells = parse_worksheet_layout_cells(&sheet_xml, shared_strings);
-        let mut items = parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &mut image_budget);
+        let metrics = parse_xlsx_sheet_metrics(&sheet_xml);
+        let mut cells = parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics);
+        let mut items =
+            parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
         let (width, height) = xlsx_page_size(&cells, &items);
         if cells.is_empty() && items.is_empty() {
             continue;
@@ -828,7 +830,11 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     items
 }
 
-fn parse_worksheet_layout_cells(xml: &str, shared_strings: &[String]) -> Vec<OfficeCellDto> {
+fn parse_worksheet_layout_cells(
+    xml: &str,
+    shared_strings: &[String],
+    metrics: &XlsxSheetMetrics,
+) -> Vec<OfficeCellDto> {
     let mut reader = Reader::from_str(xml);
     let mut cells = Vec::new();
     let mut in_row = false;
@@ -884,10 +890,10 @@ fn parse_worksheet_layout_cells(xml: &str, shared_strings: &[String]) -> Vec<Off
                                 row: row_index,
                                 column: cell_col,
                                 text: clean_table_cell(&value),
-                                x: cell_col as f64 * XLSX_CELL_WIDTH,
-                                y: row_index as f64 * XLSX_ROW_HEIGHT,
-                                width: XLSX_CELL_WIDTH,
-                                height: XLSX_ROW_HEIGHT,
+                                x: xlsx_col_x(metrics, cell_col),
+                                y: xlsx_row_y(metrics, row_index),
+                                width: xlsx_col_width(metrics, cell_col),
+                                height: xlsx_row_height(metrics, row_index),
                             });
                         }
                         in_cell = false;
@@ -914,6 +920,7 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     sheet_idx: usize,
     sheet_xml: &str,
+    metrics: &XlsxSheetMetrics,
     image_budget: &mut usize,
 ) -> Vec<OfficeLayoutItemDto> {
     let Some(drawing_rid) = parse_worksheet_drawing_rid(sheet_xml) else {
@@ -935,7 +942,14 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
         .map(|xml| parse_relationships(&xml))
         .unwrap_or_default();
     let base = part_base_dir(&drawing_path);
-    parse_xlsx_drawing_items(zip, &base, &drawing_xml, &drawing_rels, image_budget)
+    parse_xlsx_drawing_items(
+        zip,
+        &base,
+        &drawing_xml,
+        &drawing_rels,
+        metrics,
+        image_budget,
+    )
 }
 
 fn parse_worksheet_drawing_rid(xml: &str) -> Option<String> {
@@ -960,6 +974,7 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
     base_dir: &str,
     xml: &str,
     rels: &BTreeMap<String, String>,
+    metrics: &XlsxSheetMetrics,
     image_budget: &mut usize,
 ) -> Vec<OfficeLayoutItemDto> {
     let mut reader = Reader::from_str(xml);
@@ -1023,15 +1038,15 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
                 }
                 anchor_depth = anchor_depth.saturating_sub(1);
                 if anchor_depth == 0 {
-                    let x = from_col as f64 * XLSX_CELL_WIDTH;
-                    let y = from_row as f64 * XLSX_ROW_HEIGHT;
+                    let x = xlsx_col_x(metrics, from_col);
+                    let y = xlsx_row_y(metrics, from_row);
                     let width = if to_col > from_col {
-                        (to_col - from_col) as f64 * XLSX_CELL_WIDTH
+                        xlsx_col_span_width(metrics, from_col, to_col)
                     } else {
                         ext_w.max(140.0)
                     };
                     let height = if to_row > from_row {
-                        (to_row - from_row) as f64 * XLSX_ROW_HEIGHT
+                        xlsx_row_span_height(metrics, from_row, to_row)
                     } else {
                         ext_h.max(90.0)
                     };
@@ -1140,6 +1155,103 @@ fn attr_value(e: &BytesStart<'_>, name: &str) -> Option<String> {
 
 fn attr_f64(e: &BytesStart<'_>, name: &str) -> Option<f64> {
     attr_value(e, name).and_then(|v| v.parse::<f64>().ok())
+}
+
+#[derive(Default)]
+struct XlsxSheetMetrics {
+    col_widths: BTreeMap<usize, f64>,
+    row_heights: BTreeMap<usize, f64>,
+}
+
+fn parse_xlsx_sheet_metrics(xml: &str) -> XlsxSheetMetrics {
+    let mut reader = Reader::from_str(xml);
+    let mut metrics = XlsxSheetMetrics::default();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "col" {
+                    let Some(min) = attr_value(&e, "min").and_then(|v| v.parse::<usize>().ok())
+                    else {
+                        continue;
+                    };
+                    let max = attr_value(&e, "max")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(min);
+                    let Some(width) = attr_f64(&e, "width").map(xlsx_column_width_to_dip) else {
+                        continue;
+                    };
+                    for one_based_col in min..=max.min(64) {
+                        metrics
+                            .col_widths
+                            .insert(one_based_col.saturating_sub(1), width);
+                    }
+                } else if local == "row" {
+                    let Some(row) = attr_value(&e, "r").and_then(|v| v.parse::<usize>().ok())
+                    else {
+                        continue;
+                    };
+                    if let Some(height) = attr_f64(&e, "ht").map(xlsx_row_height_to_dip) {
+                        metrics.row_heights.insert(row.saturating_sub(1), height);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    metrics
+}
+
+fn xlsx_column_width_to_dip(width: f64) -> f64 {
+    (width * 7.0 + 12.0).clamp(36.0, 260.0)
+}
+
+fn xlsx_row_height_to_dip(height_points: f64) -> f64 {
+    (height_points * 96.0 / 72.0).clamp(18.0, 120.0)
+}
+
+fn xlsx_col_width(metrics: &XlsxSheetMetrics, col: usize) -> f64 {
+    metrics
+        .col_widths
+        .get(&col)
+        .copied()
+        .unwrap_or(XLSX_CELL_WIDTH)
+}
+
+fn xlsx_row_height(metrics: &XlsxSheetMetrics, row: usize) -> f64 {
+    metrics
+        .row_heights
+        .get(&row)
+        .copied()
+        .unwrap_or(XLSX_ROW_HEIGHT)
+}
+
+fn xlsx_col_x(metrics: &XlsxSheetMetrics, col: usize) -> f64 {
+    (0..col.min(64)).map(|idx| xlsx_col_width(metrics, idx)).sum()
+}
+
+fn xlsx_row_y(metrics: &XlsxSheetMetrics, row: usize) -> f64 {
+    (0..row.min(MAX_OFFICE_ROWS))
+        .map(|idx| xlsx_row_height(metrics, idx))
+        .sum()
+}
+
+fn xlsx_col_span_width(metrics: &XlsxSheetMetrics, from_col: usize, to_col: usize) -> f64 {
+    (from_col..to_col.min(64))
+        .map(|idx| xlsx_col_width(metrics, idx))
+        .sum::<f64>()
+        .max(24.0)
+}
+
+fn xlsx_row_span_height(metrics: &XlsxSheetMetrics, from_row: usize, to_row: usize) -> f64 {
+    (from_row..to_row.min(MAX_OFFICE_ROWS))
+        .map(|idx| xlsx_row_height(metrics, idx))
+        .sum::<f64>()
+        .max(18.0)
 }
 
 fn xlsx_page_size(cells: &[OfficeCellDto], items: &[OfficeLayoutItemDto]) -> (f64, f64) {
