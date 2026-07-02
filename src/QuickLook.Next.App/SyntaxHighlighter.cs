@@ -135,8 +135,7 @@ internal static class SyntaxHighlighter
                 continue;
             }
 
-            string? lc = lang.LineComments.FirstOrDefault(p => Match(code, i, p));
-            if (lc is not null)
+            if (MatchesAny(code, i, lang.LineComments))
             {
                 Flush();
                 int eol = code.IndexOf('\n', i);
@@ -439,6 +438,17 @@ internal static class SyntaxHighlighter
 
     private static bool Match(string s, int i, string token)
         => i + token.Length <= s.Length && string.CompareOrdinal(s, i, token, 0, token.Length) == 0;
+
+    private static bool MatchesAny(string s, int i, string[] tokens)
+    {
+        for (int tokenIndex = 0; tokenIndex < tokens.Length; tokenIndex++)
+        {
+            if (Match(s, i, tokens[tokenIndex]))
+                return true;
+        }
+
+        return false;
+    }
 
     private static bool IsWordStart(char c) => char.IsLetter(c) || c == '_' || c == '$';
     private static bool IsWordPart(char c) => char.IsLetterOrDigit(c) || c is '_' or '-' or '$';
