@@ -11,7 +11,7 @@ public sealed class ListingRow
         NativePath = item.NativePath;
         IsFolder = item.IsFolder;
         Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
-        TypeDisplay = item.IsFolder ? "文件夹" : item.Type;
+        TypeDisplay = item.IsFolder ? UiStrings.FolderTypeDisplay : item.Type;
         SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
         ModifiedDisplay = item.ModifiedUnix > 0
             ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")

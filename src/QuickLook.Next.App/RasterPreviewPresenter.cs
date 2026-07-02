@@ -119,7 +119,7 @@ internal sealed class RasterPreviewPresenter
     }
 
     public void UpdateZoomLabel()
-        => _zoomText.Text = Math.Abs(_zoom - 1.0) < 0.01 ? "Fit" : $"{_zoom * 100:0}%";
+        => _zoomText.Text = Math.Abs(_zoom - 1.0) < 0.01 ? UiStrings.FitZoom : $"{_zoom * 100:0}%";
 
     public void ResetView()
     {

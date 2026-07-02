@@ -86,7 +86,7 @@ internal sealed class TrayIconManager
             uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage = WM_TRAYICON,
             hIcon = GetTrayIconHandle(),
-            szTip = "QuickLook Next",
+            szTip = UiStrings.AppName,
             szInfo = "",
             szInfoTitle = "",
         };
@@ -160,10 +160,10 @@ internal sealed class TrayIconManager
         if (AutoStart.SetEnabled(enable))
             return;
 
-        string message = enable ? "开机自启开启失败" : "开机自启关闭失败";
+        string message = enable ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
         _setStatus(message);
         DiagLog.Write("App", message);
-        ShowBalloon("QuickLook Next", message);
+        ShowBalloon(UiStrings.AppName, message);
     }
 
     private delegate nint WndProcDelegate(nint hwnd, uint msg, nint wParam, nint lParam);

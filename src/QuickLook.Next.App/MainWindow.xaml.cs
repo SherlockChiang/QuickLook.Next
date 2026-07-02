@@ -84,7 +84,7 @@ public sealed partial class MainWindow : Window
             OpenListingItem);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        Title = "QuickLook Next";
+        Title = UiStrings.AppName;
         TrySetBackdrop();
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
@@ -134,7 +134,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _native.Start(OnNativeIntent);
-            StatusText.Text = "ready";
+            StatusText.Text = UiStrings.Ready.ToLowerInvariant();
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
         }
         catch (Exception ex)
@@ -377,7 +377,7 @@ public sealed partial class MainWindow : Window
             }
             catch (TimeoutException)
             {
-                StatusText.Text = ShowErrorPreview("preview timed out");
+                StatusText.Text = ShowErrorPreview(UiStrings.PreviewTimedOut);
                 RevealPreviewWindow(activate: false);
             }
             catch (OperationCanceledException)
@@ -459,7 +459,7 @@ public sealed partial class MainWindow : Window
             ? System.IO.Path.GetFileName(path)
             : ready.Title;
         if (string.IsNullOrWhiteSpace(title))
-            title = "QuickLook Next";
+            title = UiStrings.AppName;
 
         Title = title;
         PreviewTitleText.Text = title;
@@ -476,39 +476,39 @@ public sealed partial class MainWindow : Window
         PreviewSizeText.Text = FileSizeText(path);
         PreviewTypeText.Text = PreviewTypeTextFor(ready, path);
         PreviewModifiedText.Text = ModifiedText(path);
-        PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? "-" : path;
+        PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? UiStrings.EmptyValue : path;
         _rasterPresenter?.UpdateZoomLabel();
     }
 
     private void ResetPreviewChrome()
     {
-        Title = "QuickLook Next";
-        PreviewTitleText.Text = "QuickLook Next";
-        PreviewMetaText.Text = "Ready";
-        PreviewKindPillText.Text = "READY";
+        Title = UiStrings.AppName;
+        PreviewTitleText.Text = UiStrings.AppName;
+        PreviewMetaText.Text = UiStrings.Ready;
+        PreviewKindPillText.Text = UiStrings.ReadyKind;
         PreviewInfoRail.Visibility = Visibility.Collapsed;
         ImagePreviewToolbar.Visibility = Visibility.Collapsed;
         PreviewRoot.Margin = new Thickness(14, 0, 14, 14);
-        PreviewDimensionsText.Text = "-";
-        PreviewSizeText.Text = "-";
-        PreviewTypeText.Text = "-";
-        PreviewModifiedText.Text = "-";
-        PreviewPathText.Text = "-";
-        ImageZoomText.Text = "Fit";
+        PreviewDimensionsText.Text = UiStrings.EmptyValue;
+        PreviewSizeText.Text = UiStrings.EmptyValue;
+        PreviewTypeText.Text = UiStrings.EmptyValue;
+        PreviewModifiedText.Text = UiStrings.EmptyValue;
+        PreviewPathText.Text = UiStrings.EmptyValue;
+        ImageZoomText.Text = UiStrings.FitZoom;
     }
 
     private static string BuildPreviewMetaLine(PreviewReady ready, string? path)
     {
         var parts = new List<string>();
         string dimensions = BuildDimensionsText(ready);
-        if (dimensions != "-")
+        if (dimensions != UiStrings.EmptyValue)
             parts.Add(dimensions);
         string size = FileSizeText(path);
-        if (size != "-")
+        if (size != UiStrings.EmptyValue)
             parts.Add(size);
         parts.Add(PreviewTypeTextFor(ready, path));
         string modified = ModifiedText(path);
-        if (modified != "-")
+        if (modified != UiStrings.EmptyValue)
             parts.Add("Modified: " + modified);
         return string.Join("  |  ", parts);
     }
@@ -523,7 +523,7 @@ public sealed partial class MainWindow : Window
             return $"{layout.Pages.Length:N0} pages";
         if (ready.Listing is { } listing)
             return listing.Summary;
-        return "-";
+        return UiStrings.EmptyValue;
     }
 
     private static string PreviewTypeTextFor(PreviewReady ready, string? path)
@@ -542,7 +542,7 @@ public sealed partial class MainWindow : Window
                 return FormatBytes(new FileInfo(path).Length);
         }
         catch { }
-        return "-";
+        return UiStrings.EmptyValue;
     }
 
     private static string ModifiedText(string? path)
@@ -558,7 +558,7 @@ public sealed partial class MainWindow : Window
             }
         }
         catch { }
-        return "-";
+        return UiStrings.EmptyValue;
     }
 
     private string ShowErrorPreview(string message)
@@ -571,9 +571,9 @@ public sealed partial class MainWindow : Window
         ListingPanel.Visibility = Visibility.Collapsed;
         PreviewInfoRail.Visibility = Visibility.Collapsed;
         ImagePreviewToolbar.Visibility = Visibility.Collapsed;
-        ErrorText.Text = string.IsNullOrWhiteSpace(message) ? "Unable to preview this file." : message;
+        ErrorText.Text = string.IsNullOrWhiteSpace(message) ? UiStrings.PreviewUnavailableMessage : message;
         ErrorPanel.Visibility = Visibility.Visible;
-        PreviewTitleText.Text = "Preview unavailable";
+        PreviewTitleText.Text = UiStrings.PreviewUnavailableTitle;
         PreviewMetaText.Text = ErrorText.Text;
         PreviewKindPillText.Text = "ERROR";
         ResizeWindowForContent(520, 260, MaxTextWindowWidth, MaxTextWindowHeight);
@@ -610,13 +610,13 @@ public sealed partial class MainWindow : Window
         if (surface.PageIndex >= 0)
         {
             if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
-                StatusText.Text = pdfError ?? "pdf page failed";
+                StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
             return;
         }
 
         if (!_rasterPresenter!.AttachSurface(_compositor, surface, out string? error))
         {
-            StatusText.Text = error ?? "surface failed";
+            StatusText.Text = error ?? UiStrings.SurfaceFailed;
             return;
         }
         DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
@@ -877,10 +877,10 @@ public sealed partial class MainWindow : Window
         string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
         return ready.Kind switch
         {
-            "office" => string.IsNullOrEmpty(ext) ? "Embedded image preview" : $"{ext} embedded image preview",
-            "package" => "App package icon",
-            "executable" => "Application icon",
-            "certificate" => "Certificate",
+            "office" => string.IsNullOrEmpty(ext) ? UiStrings.OfficeEmbeddedImagePreview : $"{ext} embedded image preview",
+            "package" => UiStrings.PackageHeroSubtitle,
+            "executable" => UiStrings.ExecutableHeroSubtitle,
+            "certificate" => UiStrings.CertificateHeroSubtitle,
             _ => ext,
         };
     }
@@ -1195,19 +1195,19 @@ public sealed partial class MainWindow : Window
         {
             var flyout = new MenuFlyout();
 
-            var showItem = new MenuFlyoutItem { Text = "显示预览" };
+            var showItem = new MenuFlyoutItem { Text = UiStrings.TrayShowPreview };
             showItem.Click += (_, _) => ShowPreviewWindow(activate: true);
             flyout.Items.Add(showItem);
 
             var autoStartItem = new ToggleMenuFlyoutItem
             {
-                Text = "开机自启",
+                Text = UiStrings.TrayAutoStart,
                 IsChecked = AutoStart.IsEnabled(),
             };
             autoStartItem.Click += (_, _) => _trayIcon?.ToggleAutoStart();
             flyout.Items.Add(autoStartItem);
 
-            var exitItem = new MenuFlyoutItem { Text = "退出 QuickLook Next" };
+            var exitItem = new MenuFlyoutItem { Text = UiStrings.TrayExit };
             exitItem.Click += (_, _) => ExitApp();
             flyout.Items.Add(exitItem);
 
