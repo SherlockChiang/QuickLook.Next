@@ -128,6 +128,8 @@ fn to_json<T: Serialize>(value: &T) -> String {
 const MAX_TEXT_BYTES: usize = 512 * 1024;
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 
 fn file_size_modified(path: &str) -> (i64, i64) {
     let meta = fs::metadata(path).ok();
@@ -154,8 +156,39 @@ fn read_text_preview_bytes(path: &str) -> Option<(Vec<u8>, bool)> {
     let truncated = bytes.len() > MAX_TEXT_BYTES;
     if truncated {
         bytes.truncate(MAX_TEXT_BYTES);
+        trim_text_bytes_to_safe_boundary(&mut bytes);
     }
     Some((bytes, truncated))
+}
+
+fn trim_text_bytes_to_safe_boundary(bytes: &mut Vec<u8>) {
+    if bytes.len() < 2 {
+        return;
+    }
+
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        if (bytes.len() - 2) % 2 != 0 {
+            bytes.pop();
+        }
+        return;
+    }
+
+    let start = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else {
+        0
+    };
+    if start >= bytes.len() {
+        return;
+    }
+
+    let min_end = bytes.len().saturating_sub(3).max(start);
+    for end in (min_end..=bytes.len()).rev() {
+        if std::str::from_utf8(&bytes[start..end]).is_ok() {
+            bytes.truncate(end);
+            return;
+        }
+    }
 }
 
 fn known_text_formats() -> &'static [(&'static str, &'static str, &'static str)] {
@@ -516,8 +549,7 @@ fn read_zip_text<R: Read + Seek>(
         if entry.size() > max_size {
             return None;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes).ok()?;
+        let bytes = read_limited_to_end(&mut entry, max_size)?;
         return Some(String::from_utf8_lossy(&bytes).to_string());
     }
 
@@ -529,8 +561,7 @@ fn read_zip_text<R: Read + Seek>(
         if entry.size() > max_size {
             return None;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes).ok()?;
+        let bytes = read_limited_to_end(&mut entry, max_size)?;
         return Some(String::from_utf8_lossy(&bytes).to_string());
     }
 
@@ -546,9 +577,7 @@ fn read_zip_bytes<R: Read + Seek>(
         if entry.size() > max_size {
             return None;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes).ok()?;
-        return Some(bytes);
+        return read_limited_to_end(&mut entry, max_size);
     }
 
     for i in 0..zip.len() {
@@ -559,12 +588,21 @@ fn read_zip_bytes<R: Read + Seek>(
         if entry.size() > max_size {
             return None;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut bytes).ok()?;
-        return Some(bytes);
+        return read_limited_to_end(&mut entry, max_size);
     }
 
     None
+}
+
+fn read_limited_to_end<R: Read>(reader: &mut R, max_size: u64) -> Option<Vec<u8>> {
+    let cap = max_size.min(64 * 1024) as usize;
+    let mut limited = reader.take(max_size.saturating_add(1));
+    let mut bytes = Vec::with_capacity(cap);
+    limited.read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > max_size {
+        return None;
+    }
+    Some(bytes)
 }
 
 fn office_media_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, roots: &[&str]) -> Vec<String> {
@@ -1688,15 +1726,14 @@ fn office_error_json(path: &str, kind_label: &str, message: &str) -> String {
 }
 
 fn truncate_preview_text(text: &str) -> String {
-    if text.len() <= MAX_OFFICE_TEXT_CHARS {
-        text.to_string()
-    } else {
-        format!(
-            "{}\n\n[Preview truncated at {} characters]",
-            &text[..MAX_OFFICE_TEXT_CHARS],
-            MAX_OFFICE_TEXT_CHARS
-        )
-    }
+    let Some((end, _)) = text.char_indices().nth(MAX_OFFICE_TEXT_CHARS) else {
+        return text.to_string();
+    };
+    format!(
+        "{}\n\n[Preview truncated at {} characters]",
+        &text[..end],
+        MAX_OFFICE_TEXT_CHARS
+    )
 }
 
 fn normalize_preview_lines(text: &str) -> String {
@@ -1714,11 +1751,55 @@ fn local_xml_name(bytes: &[u8]) -> String {
 
 fn xml_unescape_bytes(bytes: &[u8]) -> String {
     let s = String::from_utf8_lossy(bytes);
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+    xml_unescape_str(&s)
+}
+
+fn xml_unescape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let entity_start = amp + 1;
+        let Some(semi_rel) = rest[entity_start..].find(';') else {
+            out.push_str(&rest[amp..]);
+            return out;
+        };
+
+        let entity_end = entity_start + semi_rel;
+        let entity = &rest[entity_start..entity_end];
+        if let Some(ch) = decode_xml_entity(entity) {
+            out.push(ch);
+        } else {
+            out.push('&');
+            out.push_str(entity);
+            out.push(';');
+        }
+        rest = &rest[(entity_end + 1)..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn decode_xml_entity(entity: &str) -> Option<char> {
+    match entity {
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "amp" => Some('&'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => decode_numeric_xml_entity(entity),
+    }
+}
+
+fn decode_numeric_xml_entity(entity: &str) -> Option<char> {
+    let digits = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X"));
+    let value = if let Some(hex) = digits {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        let dec = entity.strip_prefix('#')?;
+        dec.parse::<u32>().ok()?
+    };
+    char::from_u32(value)
 }
 
 fn file_name(path: &str) -> &str {
@@ -2026,10 +2107,9 @@ fn render_package(path: &str) -> String {
         if lower_name == "androidmanifest.xml" || lower_name.ends_with("/androidmanifest.xml") {
             has_manifest = true;
         }
-        if lower_name == "appxmanifest.xml" && entry.size() <= 2 * 1024 * 1024 {
+        if lower_name == "appxmanifest.xml" && entry.size() <= MAX_APPX_MANIFEST_BYTES {
             has_manifest = true;
-            let mut bytes = Vec::with_capacity(entry.size() as usize);
-            if entry.read_to_end(&mut bytes).is_ok() {
+            if let Some(bytes) = read_limited_to_end(&mut entry, MAX_APPX_MANIFEST_BYTES) {
                 appx_manifest = Some(String::from_utf8_lossy(&bytes).to_string());
             }
         }
@@ -2231,10 +2311,9 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
         let Ok(mut entry) = zip.by_name(&name) else {
             continue;
         };
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut bytes).is_err() {
+        let Some(bytes) = read_limited_to_end(&mut entry, MAX_OFFICE_MEDIA_BYTES) else {
             continue;
-        }
+        };
         let image = match image::load_from_memory(&bytes) {
             Ok(img) => img,
             Err(_) => continue,
@@ -2298,7 +2377,7 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
         let raw_name = entry.name().to_string();
         let normalized_name = raw_name.replace('\\', "/");
         let score = package_icon_candidate_score(&normalized_name);
-        if score > 0 && entry.size() <= 8 * 1024 * 1024 {
+        if score > 0 && entry.size() <= MAX_PACKAGE_ICON_BYTES {
             candidates.push((score, raw_name));
         }
     }
@@ -2307,10 +2386,9 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     for (path_score, name) in candidates.into_iter().take(32) {
         let mut entry = zip.by_name(&name).ok()?;
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut bytes).is_err() {
+        let Some(bytes) = read_limited_to_end(&mut entry, MAX_PACKAGE_ICON_BYTES) else {
             continue;
-        }
+        };
         let image = match image::load_from_memory(&bytes) {
             Ok(img) => img,
             Err(_) => continue,
@@ -3330,4 +3408,55 @@ fn days_to_date(days_since_epoch: i64) -> (i64, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn utf8_text_truncation_stays_on_char_boundary() {
+        let mut bytes = vec![b'a'; MAX_TEXT_BYTES - 1];
+        bytes.extend_from_slice("中".as_bytes());
+        bytes.truncate(MAX_TEXT_BYTES);
+
+        trim_text_bytes_to_safe_boundary(&mut bytes);
+
+        assert_eq!(bytes.len(), MAX_TEXT_BYTES - 1);
+        assert!(std::str::from_utf8(&bytes).is_ok());
+    }
+
+    #[test]
+    fn utf16_text_truncation_drops_half_code_unit() {
+        let mut bytes = vec![0xFF, 0xFE, 0x41];
+
+        trim_text_bytes_to_safe_boundary(&mut bytes);
+
+        assert_eq!(bytes, vec![0xFF, 0xFE]);
+    }
+
+    #[test]
+    fn xml_unescape_supports_named_and_numeric_entities() {
+        assert_eq!(
+            xml_unescape_str("A&#65;&#x41;&lt;&gt;&amp;&quot;&apos;&unknown;"),
+            "AAA<>&\"'&unknown;"
+        );
+    }
+
+    #[test]
+    fn limited_reader_rejects_payloads_over_cap() {
+        let mut reader = Cursor::new(vec![1, 2, 3, 4, 5]);
+
+        assert!(read_limited_to_end(&mut reader, 4).is_none());
+    }
+
+    #[test]
+    fn office_text_truncation_is_char_boundary_safe() {
+        let text = "中".repeat(MAX_OFFICE_TEXT_CHARS + 1);
+        let truncated = truncate_preview_text(&text);
+
+        assert!(truncated.starts_with(&"中".repeat(8)));
+        assert!(truncated.contains("[Preview truncated at"));
+    }
 }
