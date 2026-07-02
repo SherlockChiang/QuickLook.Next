@@ -64,6 +64,9 @@ public static class QuickLookNativeSmoke {
   public static extern int ql_extract_package_icon(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_get_thumbnail(byte[] pathUtf8, UIntPtr pathLen, int size, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_extract_office_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
@@ -159,6 +162,18 @@ function Invoke-PackageIcon([string]$path) {
     $buffer = New-Object byte[] (8 + 512 * 512 * 4)
     $n = [QuickLookNativeSmoke]::ql_extract_package_icon($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
     Assert-True ($n -gt 8) "Package icon extract failed for $path with code $n"
+    [pscustomobject]@{
+        Bytes = $n
+        Width = [BitConverter]::ToUInt32($buffer, 0)
+        Height = [BitConverter]::ToUInt32($buffer, 4)
+    }
+}
+
+function Invoke-ShellThumbnail([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (8 + 512 * 512 * 4)
+    $n = [QuickLookNativeSmoke]::ql_get_thumbnail($pathBytes, (New-UIntPtr $pathBytes.Length), 256, $buffer, (New-UIntPtr $buffer.Length))
+    Assert-True ($n -gt 8) "Shell thumbnail extract failed for $path with code $n"
     [pscustomobject]@{
         Bytes = $n
         Width = [BitConverter]::ToUInt32($buffer, 0)
@@ -263,8 +278,10 @@ try {
 
     Assert-True ((Invoke-Probe $apk).kind -eq "package") "Expected APK package probe"
     Assert-True ((Invoke-Probe $msix).kind -eq "package") "Expected MSIX package probe"
-    $packageIcon = Invoke-PackageIcon $msix
-    Assert-True ($packageIcon.Width -gt 0 -and $packageIcon.Height -gt 0) "Expected extracted package icon dimensions"
+    $apkIcon = Invoke-PackageIcon $apk
+    Assert-True ($apkIcon.Width -gt 0 -and $apkIcon.Height -gt 0) "Expected extracted APK icon dimensions"
+    $msixIcon = Invoke-PackageIcon $msix
+    Assert-True ($msixIcon.Width -gt 0 -and $msixIcon.Height -gt 0) "Expected extracted MSIX icon dimensions"
 
     $docxRoot = Join-Path $tmp "docx"
     New-Item -ItemType Directory -Force (Join-Path $docxRoot "word") | Out-Null
@@ -369,6 +386,9 @@ try {
     $exePreview = Invoke-Executable $exe
     Assert-True ($exePreview.kind -eq "executable") "Expected executable preview"
     Assert-True ($exePreview.text -match "Machine: x64") "Expected x64 PE metadata"
+    Assert-True ($exePreview.text -match "Subsystem: Windows GUI") "Expected executable subsystem metadata"
+    $exeIcon = Invoke-ShellThumbnail $exe
+    Assert-True ($exeIcon.Width -gt 0 -and $exeIcon.Height -gt 0) "Expected executable shell icon dimensions"
 }
 finally {
     if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
