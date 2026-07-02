@@ -77,6 +77,7 @@ public sealed partial class MainWindow : Window
     private bool _listingSortAscending = true;
     private bool? _backgroundEfficiencyEnabled;
     private CancellationTokenSource? _switchDebounceCts;
+    private CancellationTokenSource? _previewOperationCts;
     private long _pdfPageTouchTick;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
@@ -234,6 +235,10 @@ public sealed partial class MainWindow : Window
         {
             await HandleNativeIntentAsync(intent);
         }
+        catch (OperationCanceledException)
+        {
+            DiagLog.Write("App", "preview operation canceled");
+        }
         catch (Exception ex)
         {
             DiagLog.Write("App", "intent handler FAILED: " + ex);
@@ -284,9 +289,10 @@ public sealed partial class MainWindow : Window
         if (intent.Intent == PreviewIntent.Close)
         {
             int generation = BeginPreviewGeneration();
+            CancellationToken previewToken = CurrentPreviewToken;
             ResetPreview();
             await CloseCurrentAsync();
-            if (!IsPreviewGenerationCurrent(generation)) return;
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentPath = null;
             HidePreviewWindow();
             return;
@@ -309,15 +315,17 @@ public sealed partial class MainWindow : Window
                 && string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
             {
                 int closeGeneration = BeginPreviewGeneration();
+                CancellationToken closeToken = CurrentPreviewToken;
                 ResetPreview();
                 await CloseCurrentAsync();
-                if (!IsPreviewGenerationCurrent(closeGeneration)) return;
+                if (!IsPreviewGenerationCurrent(closeGeneration, closeToken)) return;
                 _currentPath = null;
                 HidePreviewWindow();
                 return;
             }
 
             int generation = BeginPreviewGeneration();
+            CancellationToken previewToken = CurrentPreviewToken;
             BeginPreviewTransition();
             ResetPreview();
             Title = System.IO.Path.GetFileName(path);
@@ -326,9 +334,9 @@ public sealed partial class MainWindow : Window
             try
             {
                 await CloseCurrentAsync();
-                if (!IsPreviewGenerationCurrent(generation)) return;
-                FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path));
-                if (!IsPreviewGenerationCurrent(generation)) return;
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+                FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
 
                 if (IsMediaProbe(probe))
                 {
@@ -348,8 +356,8 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
-                PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe));
-                if (!IsPreviewGenerationCurrent(generation)) return;
+                PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 if (nativeReady is not null)
                 {
                     _currentPath = path;
@@ -366,12 +374,12 @@ public sealed partial class MainWindow : Window
                 }
 
                 await EnsureRasterHostStartedAsync();
-                if (!IsPreviewGenerationCurrent(generation)) return;
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
                 _currentRequestId = requestId;
                 _currentPath = path;
-                ControlMessage result = await completion;
-                if (!IsPreviewGenerationCurrent(generation) || _currentRequestId != requestId)
+                ControlMessage result = await completion.WaitAsync(previewToken);
+                if (!IsPreviewGenerationCurrent(generation, previewToken) || _currentRequestId != requestId)
                     return;
                 StatusText.Text = result switch
                 {
@@ -391,12 +399,37 @@ public sealed partial class MainWindow : Window
                 StatusText.Text = ShowErrorPreview("preview timed out");
                 RevealPreviewWindow(activate: false);
             }
+            catch (OperationCanceledException)
+            {
+                DiagLog.Write("App", $"preview canceled: path={path}");
+            }
         }
     }
 
-    private int BeginPreviewGeneration() => ++_previewGeneration;
+    private int BeginPreviewGeneration()
+    {
+        CancelPreviewOperation();
+        _previewOperationCts = new CancellationTokenSource();
+        return ++_previewGeneration;
+    }
 
-    private bool IsPreviewGenerationCurrent(int generation) => generation == _previewGeneration;
+    private CancellationToken CurrentPreviewToken => _previewOperationCts?.Token ?? CancellationToken.None;
+
+    private bool IsPreviewGenerationCurrent(int generation) => IsPreviewGenerationCurrent(generation, CurrentPreviewToken);
+
+    private bool IsPreviewGenerationCurrent(int generation, CancellationToken cancellationToken)
+        => generation == _previewGeneration && !cancellationToken.IsCancellationRequested;
+
+    private void CancelPreviewOperation()
+    {
+        if (_previewOperationCts is null)
+            return;
+
+        try { _previewOperationCts.Cancel(); }
+        catch { }
+        _previewOperationCts.Dispose();
+        _previewOperationCts = null;
+    }
 
     private void BeginPreviewTransition()
     {
@@ -2644,30 +2677,4 @@ public sealed partial class MainWindow : Window
             ? themedPath
             : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
     }
-}
-
-public sealed class ListingRow
-{
-    public ListingRow(PreviewListingItem item)
-    {
-        Name = item.Name;
-        Path = item.Path;
-        NativePath = item.NativePath;
-        IsFolder = item.IsFolder;
-        Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
-        TypeDisplay = item.IsFolder ? "文件夹" : item.Type;
-        SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
-        ModifiedDisplay = item.ModifiedUnix > 0
-            ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
-            : "";
-    }
-
-    public string Name { get; }
-    public string Path { get; }
-    public string? NativePath { get; }
-    public bool IsFolder { get; }
-    public string Glyph { get; }
-    public string ModifiedDisplay { get; }
-    public string TypeDisplay { get; }
-    public string SizeDisplay { get; }
 }
