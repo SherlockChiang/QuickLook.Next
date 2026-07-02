@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace QuickLook.Next.Core;
 
@@ -10,6 +11,7 @@ public static class ProtocolJson
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
     };
 
     static ProtocolJson() => Options.MakeReadOnly();
