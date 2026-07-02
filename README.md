@@ -16,6 +16,7 @@ QuickLook.Next/
     QuickLook.Next.RasterHost/          .NET RasterHost process: D3D surfaces + PDF/thumbnail bridges  (Spike 1)
     QuickLook.Next.App/                 WinUI 3 shell: native bridge + supervision + composition consumer  (Spikes 1+3)
   plugins/                              legacy/reference .NET plugin sources (reference-only)
+  docs/review-readiness.md              reviewer-facing status, verification, and known remaining work
 ```
 
 ## Dependency direction
@@ -64,6 +65,9 @@ powershell -ExecutionPolicy Bypass -File tools/smoke-native.ps1
 # architecture guard
 powershell -ExecutionPolicy Bypass -File tools/guard-architecture.ps1
 ```
+
+For review handoff notes, fixed boundaries, and targeted verification commands, see
+[`docs/review-readiness.md`](docs/review-readiness.md).
 
 ## Current status
 Wired & compiling now: the four projects, the full control protocol, the FFI bridge, tray-background
