@@ -105,6 +105,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
         PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
+        RootGrid.KeyDown += OnRootGridKeyDown;
         PdfScrollViewer.ViewChanged += (_, _) => RequestVisiblePdfPages();
         GetAppWindow().Closing += (_, args) =>
         {
@@ -325,7 +326,7 @@ public sealed partial class MainWindow : Window
             {
                 await CloseCurrentAsync();
                 if (!IsPreviewGenerationCurrent(generation)) return;
-                FileProbe probe = _native.ProbeFile(path) ?? BuildProbe(path);
+                FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path));
                 if (!IsPreviewGenerationCurrent(generation)) return;
 
                 if (IsMediaProbe(probe))
@@ -1108,10 +1109,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnListingItemClick(object sender, ItemClickEventArgs e)
+    private void OnListingItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is ListingRow { IsFolder: true } row)
-            await NavigateIntoListingFolderAsync(row);
+        if (e.ClickedItem is ListingRow row)
+            ListingListView.SelectedItem = row;
     }
 
     private async void OnListingListViewDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
@@ -1383,6 +1384,8 @@ public sealed partial class MainWindow : Window
         if (MediaPreviewElement.Source is not null)
         {
             MediaPreviewElement.MediaPlayer?.Pause();
+            if (MediaPreviewElement.Source is IDisposable disposableSource)
+                disposableSource.Dispose();
             MediaPreviewElement.Source = null;
         }
         PdfPagesPanel.Children.Clear();
@@ -1763,6 +1766,23 @@ public sealed partial class MainWindow : Window
     private void OnImageZoomFitClick(object sender, RoutedEventArgs e)
         => ResetImageView();
 
+    private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
+            return;
+
+        bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
+
+        if (e.Key == Windows.System.VirtualKey.Home
+            || (controlDown && e.Key is Windows.System.VirtualKey.Number0 or Windows.System.VirtualKey.NumberPad0))
+        {
+            ResetImageView();
+            e.Handled = true;
+        }
+    }
+
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
     {
         string? path = _currentPath;
@@ -1800,6 +1820,7 @@ public sealed partial class MainWindow : Window
     private void OnPreviewRootPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible) return;
+        if (!e.GetCurrentPoint(PreviewRoot).Properties.IsLeftButtonPressed) return;
         _isPanning = true;
         _panStart = e.GetCurrentPoint(PreviewRoot).Position;
         _panStartX = _imagePanX;
