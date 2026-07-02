@@ -26,8 +26,6 @@ public sealed partial class MainWindow : Window
     private const double MaxTextWindowWidth = 1100;
     private const double MaxTextWindowHeight = 860;
     private const double PdfPageTargetWidth = 860;
-    private const double MinImageZoom = 0.1;
-    private const double MaxImageZoom = 12.0;
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 82;
     private const int SwitchDebounceMs = 110;
@@ -40,17 +38,8 @@ public sealed partial class MainWindow : Window
     private TextPreviewPresenter? _textPresenter;
     private ListingPreviewPresenter? _listingPresenter;
     private OfficePreviewPresenter? _officePresenter;
+    private RasterPreviewPresenter? _rasterPresenter;
     private Compositor? _compositor;
-    private SpriteVisual? _rasterSprite;
-    private uint _rasterSurfaceWidth;
-    private uint _rasterSurfaceHeight;
-    private double _imageZoom = 1.0;
-    private double _imagePanX;
-    private double _imagePanY;
-    private bool _isPanning;
-    private Windows.Foundation.Point _panStart;
-    private double _panStartX;
-    private double _panStartY;
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
     private string? _currentRequestId;
@@ -76,6 +65,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
+        _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _listingPresenter = new ListingPreviewPresenter(
             ListingTitle,
             ListingSummary,
@@ -270,12 +260,8 @@ public sealed partial class MainWindow : Window
         // +/- zoom the image preview (only when one is showing; the global key isn't swallowed elsewhere).
         if (intent.Intent is PreviewIntent.ZoomIn or PreviewIntent.ZoomOut)
         {
-            if (_rasterSprite is not null && PreviewRoot.Visibility == Visibility.Visible)
-            {
-                double factor = intent.Intent == PreviewIntent.ZoomIn ? 1.15 : 1.0 / 1.15;
-                _imageZoom = Math.Clamp(_imageZoom * factor, MinImageZoom, MaxImageZoom);
-                UpdateRasterSpriteLayout();
-            }
+            if (_rasterPresenter?.HasSurface == true && PreviewRoot.Visibility == Visibility.Visible)
+                _rasterPresenter.ZoomBy(intent.Intent == PreviewIntent.ZoomIn ? 1.15 : 1.0 / 1.15);
             return;
         }
 
@@ -488,7 +474,7 @@ public sealed partial class MainWindow : Window
         PreviewTypeText.Text = PreviewTypeTextFor(ready, path);
         PreviewModifiedText.Text = ModifiedText(path);
         PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? "-" : path;
-        UpdateImageZoomLabel();
+        _rasterPresenter?.UpdateZoomLabel();
     }
 
     private void ResetPreviewChrome()
@@ -623,27 +609,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(_compositor, (nint)surface.SharedHandle);
-        if (hr < 0 || compSurface is null) { StatusText.Text = $"surface failed 0x{hr:X8}"; return; }
-
-        // Dispose the previous sprite + brush to release GPU surface before creating a new one.
-        DisposeRasterSprite();
-
-        var brush = _compositor.CreateSurfaceBrush(compSurface);
-        brush.Stretch = CompositionStretch.Fill;
-        var sprite = _compositor.CreateSpriteVisual();
-        sprite.Brush = brush;
-        _rasterSprite = sprite;
-        _rasterSurfaceWidth = surface.Width;
-        _rasterSurfaceHeight = surface.Height;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, sprite);
-        DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
+        if (!_rasterPresenter!.AttachSurface(_compositor, surface, out string? error))
+        {
+            StatusText.Text = error ?? "surface failed";
+            return;
+        }
+        DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        UpdateRasterSpriteLayout();
-    }
+        => _rasterPresenter?.UpdateLayout();
 
     private string ShowRasterPreview(PreviewReady ready)
     {
@@ -654,29 +629,10 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
-        _imageZoom = 1.0;
-        _imagePanX = 0;
-        _imagePanY = 0;
-        // Size the window to the image's aspect ratio (fit within max), so there's no empty letterbox.
-        double w = ready.PreferredWidth, h = ready.PreferredHeight;
-        if (w > 0 && h > 0)
-        {
-            var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
-            double imageMaxWidth = Math.Max(1, maxContent.Width - RasterInfoRailWidth);
-            double imageMaxHeight = Math.Max(1, maxContent.Height - RasterToolbarHeight);
-            double scale = Math.Min(1.0, Math.Min(imageMaxWidth / w, imageMaxHeight / h));
-            ResizeWindowForContent(
-                w * scale + RasterInfoRailWidth,
-                h * scale + RasterToolbarHeight,
-                MaxImageWindowWidth,
-                MaxImageWindowHeight);
-        }
-        else
-        {
-            ResizeWindowForContent(w + RasterInfoRailWidth, h + RasterToolbarHeight, MaxImageWindowWidth, MaxImageWindowHeight);
-        }
-        DispatcherQueue.TryEnqueue(UpdateRasterSpriteLayout);
-        return $"{ready.Kind}: {ready.Title}";
+        RasterPreviewResult result = _rasterPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
+        return result.Status;
     }
 
     private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush PdfPageBackground =
@@ -691,11 +647,7 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        _rasterSprite = null;
-        _rasterSurfaceWidth = 0;
-        _rasterSurfaceHeight = 0;
-        _imageZoom = 1.0;
+        _rasterPresenter?.Clear();
 
         _pdfPageHosts.Clear();
         _requestedPdfPages.Clear();
@@ -746,11 +698,7 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        _rasterSprite = null;
-        _rasterSurfaceWidth = 0;
-        _rasterSurfaceHeight = 0;
-        _imageZoom = 1.0;
+        _rasterPresenter?.Clear();
 
         TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
         StartPreviewHeroLoad(ready);
@@ -767,11 +715,7 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Visible;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        _rasterSprite = null;
-        _rasterSurfaceWidth = 0;
-        _rasterSurfaceHeight = 0;
-        _imageZoom = 1.0;
+        _rasterPresenter?.Clear();
 
         OfficePreviewResult result = _officePresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
@@ -787,11 +731,7 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Visible;
         ListingPanel.Visibility = Visibility.Collapsed;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        _rasterSprite = null;
-        _rasterSurfaceWidth = 0;
-        _rasterSurfaceHeight = 0;
-        _imageZoom = 1.0;
+        _rasterPresenter?.Clear();
 
         try
         {
@@ -822,11 +762,7 @@ public sealed partial class MainWindow : Window
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Visible;
-        ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
-        _rasterSprite = null;
-        _rasterSurfaceWidth = 0;
-        _rasterSurfaceHeight = 0;
-        _imageZoom = 1.0;
+        _rasterPresenter?.Clear();
 
         ListingPreviewResult result = _listingPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
         StartPreviewHeroLoad(ready);
@@ -990,7 +926,7 @@ public sealed partial class MainWindow : Window
 
     private void ResetPreview()
     {
-        DisposeRasterSprite();
+        _rasterPresenter?.Clear();
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
@@ -1022,8 +958,6 @@ public sealed partial class MainWindow : Window
         _requestedPdfPages.Clear();
         _pdfPageLastTouched.Clear();
         _pdfPageTouchTick = 0;
-        if (_compositor is not null)
-            ElementCompositionPreview.SetElementChildVisual(PreviewRoot, null);
         ResetPreviewChrome();
     }
 
@@ -1206,78 +1140,18 @@ public sealed partial class MainWindow : Window
         _previewTemporarilyHidden = true;
     }
 
-    /// <summary>Dispose the current raster sprite + its brush to release the GPU composition surface.</summary>
-    private void DisposeRasterSprite()
-    {
-        if (_rasterSprite is not null)
-        {
-            try { (_rasterSprite.Brush as IDisposable)?.Dispose(); } catch { }
-            try { _rasterSprite.Dispose(); } catch { }
-            _rasterSprite = null;
-        }
-    }
-
-    private void UpdateRasterSpriteLayout()
-    {
-        if (_rasterSprite is null || _rasterSurfaceWidth == 0 || _rasterSurfaceHeight == 0)
-            return;
-
-        double availableWidth = Math.Max(1, PreviewRoot.ActualWidth);
-        double availableHeight = Math.Max(1, PreviewRoot.ActualHeight);
-        double fitScale = Math.Min(availableWidth / _rasterSurfaceWidth, availableHeight / _rasterSurfaceHeight);
-        double scale = fitScale * _imageZoom;
-        double scaledWidth = _rasterSurfaceWidth * scale;
-        double scaledHeight = _rasterSurfaceHeight * scale;
-
-        // Clamp pan so the image edge can't be dragged past the viewport (no pan while it fits).
-        double maxPanX = Math.Max(0, (scaledWidth - availableWidth) / 2);
-        double maxPanY = Math.Max(0, (scaledHeight - availableHeight) / 2);
-        _imagePanX = Math.Clamp(_imagePanX, -maxPanX, maxPanX);
-        _imagePanY = Math.Clamp(_imagePanY, -maxPanY, maxPanY);
-
-        // Swapchain-backed composition surfaces don't honor CompositionSurfaceBrush stretch, so size the
-        // sprite to the surface's native pixels (whole image, 1:1) and scale the visual to fit/zoom.
-        _rasterSprite.Size = new Vector2(_rasterSurfaceWidth, _rasterSurfaceHeight);
-        _rasterSprite.Scale = new Vector3((float)scale, (float)scale, 1f);
-        _rasterSprite.Offset = new Vector3(
-            (float)Math.Round((availableWidth - scaledWidth) / 2 + _imagePanX),
-            (float)Math.Round((availableHeight - scaledHeight) / 2 + _imagePanY),
-            0);
-        UpdateImageZoomLabel();
-    }
-
-    private void UpdateImageZoomLabel()
-        => ImageZoomText.Text = Math.Abs(_imageZoom - 1.0) < 0.01 ? "Fit" : $"{_imageZoom * 100:0}%";
-
-    private void ResetImageView()
-    {
-        _imageZoom = 1.0;
-        _imagePanX = 0;
-        _imagePanY = 0;
-        UpdateRasterSpriteLayout();
-        UpdateImageZoomLabel();
-    }
-
     private void OnImageZoomOutClick(object sender, RoutedEventArgs e)
-    {
-        if (_rasterSprite is null) return;
-        _imageZoom = Math.Clamp(_imageZoom / 1.15, MinImageZoom, MaxImageZoom);
-        UpdateRasterSpriteLayout();
-    }
+        => _rasterPresenter?.ZoomBy(1.0 / 1.15);
 
     private void OnImageZoomInClick(object sender, RoutedEventArgs e)
-    {
-        if (_rasterSprite is null) return;
-        _imageZoom = Math.Clamp(_imageZoom * 1.15, MinImageZoom, MaxImageZoom);
-        UpdateRasterSpriteLayout();
-    }
+        => _rasterPresenter?.ZoomBy(1.15);
 
     private void OnImageZoomFitClick(object sender, RoutedEventArgs e)
-        => ResetImageView();
+        => _rasterPresenter?.ResetView();
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
+        if (_rasterPresenter?.HasSurface != true || PreviewRoot.Visibility != Visibility.Visible)
             return;
 
         bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
@@ -1287,7 +1161,7 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Home
             || (controlDown && e.Key is Windows.System.VirtualKey.Number0 or Windows.System.VirtualKey.NumberPad0))
         {
-            ResetImageView();
+            _rasterPresenter.ResetView();
             e.Handled = true;
         }
     }
@@ -1327,54 +1201,19 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnPreviewRootPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible) return;
-        if (!e.GetCurrentPoint(PreviewRoot).Properties.IsLeftButtonPressed) return;
-        _isPanning = true;
-        _panStart = e.GetCurrentPoint(PreviewRoot).Position;
-        _panStartX = _imagePanX;
-        _panStartY = _imagePanY;
-        PreviewRoot.CapturePointer(e.Pointer);
-    }
+        => _rasterPresenter?.OnPointerPressed(e);
 
     private void OnPreviewRootPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (!_isPanning) return;
-        var p = e.GetCurrentPoint(PreviewRoot).Position;
-        _imagePanX = _panStartX + (p.X - _panStart.X);
-        _imagePanY = _panStartY + (p.Y - _panStart.Y);
-        UpdateRasterSpriteLayout();
-    }
+        => _rasterPresenter?.OnPointerMoved(e);
 
     private void OnPreviewRootPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (!_isPanning) return;
-        _isPanning = false;
-        PreviewRoot.ReleasePointerCapture(e.Pointer);
-    }
+        => _rasterPresenter?.OnPointerReleased(e);
 
     private void OnPreviewRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-    {
-        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
-            return;
-
-        int delta = e.GetCurrentPoint(PreviewRoot).Properties.MouseWheelDelta;
-        if (delta == 0) return;
-
-        double factor = delta > 0 ? 1.15 : 1.0 / 1.15;
-        _imageZoom = Math.Clamp(_imageZoom * factor, MinImageZoom, MaxImageZoom);
-        UpdateRasterSpriteLayout();
-        e.Handled = true;
-    }
+        => _rasterPresenter?.OnPointerWheelChanged(e);
 
     private void OnPreviewRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
-    {
-        if (_rasterSprite is null || PreviewRoot.Visibility != Visibility.Visible)
-            return;
-
-        ResetImageView();
-        e.Handled = true;
-    }
+        => _rasterPresenter?.OnDoubleTapped(e);
 
     internal static string FormatBytes(long bytes)
     {
