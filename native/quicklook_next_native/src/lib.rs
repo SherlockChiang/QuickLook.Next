@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
@@ -201,9 +202,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         let is_down = m == WM_KEYDOWN || m == WM_SYSKEYDOWN;
         let is_up = m == WM_KEYUP || m == WM_SYSKEYUP;
         let bare_key = !modifier_key_down();
+        let text_input_active = explorer_text_input_active();
 
         if kb.vkCode == VK_SPACE_U32 {
-            if is_down && bare_key && !SPACE_HELD.swap(true, Ordering::SeqCst) {
+            if is_down && bare_key && !text_input_active && !SPACE_HELD.swap(true, Ordering::SeqCst)
+            {
                 let message = if PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                     WM_QL_CLOSE
                 } else {
@@ -217,11 +220,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             kb.vkCode,
             VK_LEFT_U32 | VK_UP_U32 | VK_RIGHT_U32 | VK_DOWN_U32
         ) {
-            if is_down && bare_key {
+            if is_down && bare_key && !text_input_active {
                 let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
-            if is_down {
+            if is_down && !text_input_active {
                 let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
@@ -243,6 +246,54 @@ unsafe fn modifier_key_down() -> bool {
 
 unsafe fn key_down(vk: u32) -> bool {
     (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
+}
+
+unsafe fn explorer_text_input_active() -> bool {
+    let foreground = GetForegroundWindow();
+    if foreground.0.is_null() {
+        return false;
+    }
+
+    let thread_id = GetWindowThreadProcessId(foreground, None);
+    if thread_id == 0 {
+        return false;
+    }
+
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        flags: GUITHREADINFO_FLAGS(0),
+        hwndActive: HWND(std::ptr::null_mut()),
+        hwndFocus: HWND(std::ptr::null_mut()),
+        hwndCapture: HWND(std::ptr::null_mut()),
+        hwndMenuOwner: HWND(std::ptr::null_mut()),
+        hwndMoveSize: HWND(std::ptr::null_mut()),
+        hwndCaret: HWND(std::ptr::null_mut()),
+        rcCaret: RECT::default(),
+    };
+    if GetGUIThreadInfo(thread_id, &mut info).is_err() {
+        return false;
+    }
+
+    let focus = if !info.hwndFocus.0.is_null() {
+        info.hwndFocus
+    } else {
+        info.hwndCaret
+    };
+    if focus.0.is_null() {
+        return false;
+    }
+
+    let mut class_name = [0u16; 128];
+    let len = GetClassNameW(focus, &mut class_name);
+    if len <= 0 {
+        return false;
+    }
+
+    let name = String::from_utf16_lossy(&class_name[..len as usize]);
+    matches!(
+        name.as_str(),
+        "Edit" | "RichEdit20W" | "RichEdit50W" | "RICHEDIT50W"
+    )
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
