@@ -126,12 +126,30 @@ fn to_json<T: Serialize>(value: &T) -> String {
 // ── Text preview ─────────────────────────────────────────────────────────────
 
 const MAX_TEXT_BYTES: usize = 512 * 1024;
+const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
+const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
+
+fn file_size_modified(path: &str) -> (i64, i64) {
+    let meta = fs::metadata(path).ok();
+    let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+    let modified_unix = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    (size, modified_unix)
+}
+
+fn read_file_prefix(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = file.take(max_bytes as u64);
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    reader.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
 
 fn read_text_preview_bytes(path: &str) -> Option<(Vec<u8>, bool)> {
-    let file = fs::File::open(path).ok()?;
-    let mut reader = file.take((MAX_TEXT_BYTES + 1) as u64);
-    let mut bytes = Vec::with_capacity(64 * 1024);
-    reader.read_to_end(&mut bytes).ok()?;
+    let mut bytes = read_file_prefix(path, MAX_TEXT_BYTES + 1)?;
 
     let truncated = bytes.len() > MAX_TEXT_BYTES;
     if truncated {
@@ -1633,17 +1651,11 @@ pub fn render_executable(path: &str) -> String {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return String::new(),
+    let (size, modified_unix) = file_size_modified(path);
+    let bytes = match read_file_prefix(path, MAX_EXECUTABLE_HEADER_BYTES) {
+        Some(b) => b,
+        None => return String::new(),
     };
-    let meta = fs::metadata(path).ok();
-    let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-    let modified_unix = meta
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
 
     let Some(pe) = parse_pe_headers(&bytes) else {
         return render_info(path, "executable", size, modified_unix);
@@ -2309,6 +2321,11 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
 // ── Torrent preview ─────────────────────────────────────────────────────────
 
 pub fn render_torrent(path: &str) -> String {
+    let (size, modified_unix) = file_size_modified(path);
+    if size < 0 || size as u64 > MAX_TORRENT_BYTES {
+        return render_info(path, "torrent", size, modified_unix);
+    }
+
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(_) => return String::new(),
