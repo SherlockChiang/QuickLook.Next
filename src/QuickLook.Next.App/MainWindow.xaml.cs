@@ -1165,7 +1165,7 @@ public sealed partial class MainWindow : Window
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ResolveAppIconPath,
             () => ShowPreviewWindow(activate: true),
-            ExitApp,
+            ShowTrayContextMenu,
             message => StatusText.Text = message);
         _trayIcon.Ensure();
     }
@@ -1188,6 +1188,39 @@ public sealed partial class MainWindow : Window
 
     private void ShowTrayBalloon(string title, string message)
         => _trayIcon?.ShowBalloon(title, message);
+
+    private void ShowTrayContextMenu(int screenX, int screenY)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var flyout = new MenuFlyout();
+
+            var showItem = new MenuFlyoutItem { Text = "显示预览" };
+            showItem.Click += (_, _) => ShowPreviewWindow(activate: true);
+            flyout.Items.Add(showItem);
+
+            var autoStartItem = new ToggleMenuFlyoutItem
+            {
+                Text = "开机自启",
+                IsChecked = AutoStart.IsEnabled(),
+            };
+            autoStartItem.Click += (_, _) => _trayIcon?.ToggleAutoStart();
+            flyout.Items.Add(autoStartItem);
+
+            var exitItem = new MenuFlyoutItem { Text = "退出 QuickLook Next" };
+            exitItem.Click += (_, _) => ExitApp();
+            flyout.Items.Add(exitItem);
+
+            var options = new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions
+            {
+                Position = _windowController.ScreenToClientPoint(
+                    screenX,
+                    screenY,
+                    RootGrid.XamlRoot?.RasterizationScale ?? 1.0),
+            };
+            flyout.ShowAt(RootGrid, options);
+        });
+    }
 
     private void ExitApp()
     {
