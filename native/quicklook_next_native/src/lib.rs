@@ -54,6 +54,9 @@ const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 
+const MAX_FFI_STRING_BYTES: usize = 32 * 1024;
+const MAX_FFI_MAGIC_BYTES: usize = 4096;
+
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
 struct ThumbnailRequest {
@@ -66,9 +69,34 @@ struct ThumbnailStaWorker {
     sender: mpsc::Sender<ThumbnailRequest>,
 }
 
+fn utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
+    if ptr.is_null() || len > max_len {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).ok()
+}
+
+fn optional_utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
+    if ptr.is_null() {
+        return (len == 0).then_some("");
+    }
+    utf8_arg(ptr, len, max_len)
+}
+
+fn optional_bytes_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a [u8]> {
+    if ptr.is_null() {
+        return (len == 0).then_some(&[]);
+    }
+    if len > max_len {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
 /// Send a tagged UTF-16 string back to the managed host.
 fn emit(msg: &str) {
-    let cb = *CALLBACK.lock().unwrap();
+    let cb = CALLBACK.lock().ok().and_then(|guard| *guard);
     if let Some(cb) = cb {
         let mut wide: Vec<u16> = msg.encode_utf16().collect();
         wide.push(0);
@@ -84,8 +112,10 @@ pub extern "C" fn ql_probe(a: i32, b: i32) -> i32 {
 
 /// Register the managed callback (a function pointer obtained from a kept-alive delegate).
 #[no_mangle]
-pub extern "C" fn ql_set_callback(cb: Callback) {
-    *CALLBACK.lock().unwrap() = Some(cb);
+pub extern "C" fn ql_set_callback(cb: Option<Callback>) {
+    if let Ok(mut slot) = CALLBACK.lock() {
+        *slot = cb;
+    }
 }
 
 /// Let the App tell native when the preview window is open. While visible, Space closes the preview
@@ -336,13 +366,9 @@ pub extern "C" fn ql_probe_file(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() {
-        return -1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return -1,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
     };
     let json = match probe_json(path) {
         Some(j) => j,
@@ -583,13 +609,9 @@ pub extern "C" fn ql_decode_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() {
-        return -1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return -1,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
     };
 
     let (width, height, original_width, original_height, bgra) = match decode_image_bgra(path) {
@@ -667,13 +689,9 @@ pub extern "C" fn ql_get_thumbnail(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() {
-        return -1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s.to_string(),
-        Err(_) => return -1,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s.to_string(),
+        None => return -1,
     };
 
     let result = shell_thumbnail_on_sta(path, size.max(16));
@@ -727,13 +745,9 @@ pub extern "C" fn ql_extract_package_icon(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() {
-        return -1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return -1,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
     };
 
     let (w, h, bgra) = match preview::extract_package_icon_bgra(path) {
@@ -761,13 +775,9 @@ pub extern "C" fn ql_extract_office_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() {
-        return -1;
-    }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return -1,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
     };
 
     let (w, h, bgra) = match preview::extract_office_image_bgra(path) {
@@ -887,10 +897,9 @@ pub extern "C" fn ql_preview_text(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path_bytes = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path_bytes) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_text(path);
     write_json_out(&json, out_buf, out_cap)
@@ -911,17 +920,11 @@ pub extern "C" fn ql_preview_info(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
-    let kind = if kind_utf8.is_null() {
-        ""
-    } else {
-        let k = unsafe { std::slice::from_raw_parts(kind_utf8, kind_len) };
-        std::str::from_utf8(k).unwrap_or("")
-    };
+    let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
     let json = preview::render_info(path, kind, size, modified_unix);
     write_json_out(&json, out_buf, out_cap)
 }
@@ -937,10 +940,9 @@ pub extern "C" fn ql_preview_office(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_office(path);
     write_json_out(&json, out_buf, out_cap)
@@ -957,10 +959,9 @@ pub extern "C" fn ql_preview_executable(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_executable(path);
     write_json_out(&json, out_buf, out_cap)
@@ -977,10 +978,9 @@ pub extern "C" fn ql_preview_archive(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_archive(path);
     write_json_out(&json, out_buf, out_cap)
@@ -997,10 +997,9 @@ pub extern "C" fn ql_preview_torrent(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_torrent(path);
     write_json_out(&json, out_buf, out_cap)
@@ -1017,10 +1016,9 @@ pub extern "C" fn ql_preview_folder(
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
     }
-    let path = unsafe { std::slice::from_raw_parts(path_utf8, path_len) };
-    let path = match std::str::from_utf8(path) {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
     };
     let json = preview::render_folder(path);
     write_json_out(&json, out_buf, out_cap)
@@ -1034,16 +1032,10 @@ pub extern "C" fn ql_is_text(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = if ext_utf8.is_null() {
-        ""
-    } else {
-        let e = unsafe { std::slice::from_raw_parts(ext_utf8, ext_len) };
-        std::str::from_utf8(e).unwrap_or("")
-    };
-    let magic = if magic.is_null() {
-        &[] as &[u8]
-    } else {
-        unsafe { std::slice::from_raw_parts(magic, magic_len) }
+    let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+    let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+        Some(bytes) => bytes,
+        None => return 0,
     };
     if preview::is_text(ext, magic) {
         1
@@ -1062,22 +1054,11 @@ pub extern "C" fn ql_is_archive(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = if ext_utf8.is_null() {
-        ""
-    } else {
-        let e = unsafe { std::slice::from_raw_parts(ext_utf8, ext_len) };
-        std::str::from_utf8(e).unwrap_or("")
-    };
-    let kind = if kind_utf8.is_null() {
-        ""
-    } else {
-        let k = unsafe { std::slice::from_raw_parts(kind_utf8, kind_len) };
-        std::str::from_utf8(k).unwrap_or("")
-    };
-    let magic = if magic.is_null() {
-        &[] as &[u8]
-    } else {
-        unsafe { std::slice::from_raw_parts(magic, magic_len) }
+    let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+    let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+    let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+        Some(bytes) => bytes,
+        None => return 0,
     };
     if preview::is_archive(ext, kind, magic) {
         1
