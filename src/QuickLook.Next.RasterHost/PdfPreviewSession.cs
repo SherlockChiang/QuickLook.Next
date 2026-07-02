@@ -14,12 +14,20 @@ internal sealed class PdfPreviewSession : IDisposable
 
     // Cross-session rendered-page cache: re-previewing the same PDF at the same zoom skips the
     // Windows.Data.Pdf render entirely (and the surface churn it drives). Keyed by path+mtime+page+dims,
-    // bounded by total BGRA bytes with FIFO eviction.
+    // bounded by total BGRA bytes with LRU eviction.
     private const long MaxCacheBytes = 128L * 1024 * 1024;
     private static readonly object _cacheLock = new();
-    private static readonly Dictionary<string, (byte[] Bgra, int W, int H)> _pageCache = new();
-    private static readonly Queue<string> _cacheOrder = new();
+    private static readonly Dictionary<string, CachedPage> _pageCache = new();
+    private static readonly LinkedList<string> _cacheLru = new();
     private static long _cacheBytes;
+
+    private sealed class CachedPage(byte[] bgra, int w, int h, LinkedListNode<string> node)
+    {
+        public byte[] Bgra { get; } = bgra;
+        public int W { get; } = w;
+        public int H { get; } = h;
+        public LinkedListNode<string> Node { get; } = node;
+    }
 
     private readonly PdfDocument _document;
     private readonly SemaphoreSlim _renderLock = new(2, 2); // allow 2 pages to render in parallel
@@ -58,7 +66,7 @@ internal sealed class PdfPreviewSession : IDisposable
         lock (_cacheLock)
         {
             _pageCache.Clear();
-            _cacheOrder.Clear();
+            _cacheLru.Clear();
             _cacheBytes = 0;
         }
     }
@@ -67,7 +75,13 @@ internal sealed class PdfPreviewSession : IDisposable
     {
         lock (_cacheLock)
         {
-            if (_pageCache.TryGetValue(key, out var v)) { result = (v.Bgra, v.W, v.H); return true; }
+            if (_pageCache.TryGetValue(key, out var v))
+            {
+                _cacheLru.Remove(v.Node);
+                _cacheLru.AddLast(v.Node);
+                result = (v.Bgra, v.W, v.H);
+                return true;
+            }
         }
         result = default;
         return false;
@@ -77,13 +91,25 @@ internal sealed class PdfPreviewSession : IDisposable
     {
         lock (_cacheLock)
         {
-            if (!_pageCache.TryAdd(key, (bgra, w, h))) return;
-            _cacheOrder.Enqueue(key);
-            _cacheBytes += bgra.LongLength;
-            while (_cacheBytes > MaxCacheBytes && _cacheOrder.Count > 1)
+            if (_pageCache.TryGetValue(key, out var existing))
             {
-                string old = _cacheOrder.Dequeue();
-                if (_pageCache.Remove(old, out var evicted)) _cacheBytes -= evicted.Bgra.LongLength;
+                _cacheLru.Remove(existing.Node);
+                _cacheLru.AddLast(existing.Node);
+                return;
+            }
+
+            var node = _cacheLru.AddLast(key);
+            _pageCache.Add(key, new CachedPage(bgra, w, h, node));
+            _cacheBytes += bgra.LongLength;
+            while (_cacheBytes > MaxCacheBytes && _cacheLru.Count > 1)
+            {
+                LinkedListNode<string>? oldNode = _cacheLru.First;
+                if (oldNode is null)
+                    break;
+
+                _cacheLru.RemoveFirst();
+                if (_pageCache.Remove(oldNode.Value, out var evicted))
+                    _cacheBytes -= evicted.Bgra.LongLength;
             }
         }
     }
