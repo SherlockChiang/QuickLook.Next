@@ -127,6 +127,19 @@ fn to_json<T: Serialize>(value: &T) -> String {
 
 const MAX_TEXT_BYTES: usize = 512 * 1024;
 
+fn read_text_preview_bytes(path: &str) -> Option<(Vec<u8>, bool)> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = file.take((MAX_TEXT_BYTES + 1) as u64);
+    let mut bytes = Vec::with_capacity(64 * 1024);
+    reader.read_to_end(&mut bytes).ok()?;
+
+    let truncated = bytes.len() > MAX_TEXT_BYTES;
+    if truncated {
+        bytes.truncate(MAX_TEXT_BYTES);
+    }
+    Some((bytes, truncated))
+}
+
 fn known_text_formats() -> &'static [(&'static str, &'static str, &'static str)] {
     &[
         (".md", "markdown", "markdown"),
@@ -239,15 +252,10 @@ pub fn render_text(path: &str) -> String {
         .map(|(_, f, l)| (*f, *l))
         .unwrap_or(("plain", "text"));
 
-    let mut bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return String::new(),
+    let (bytes, truncated) = match read_text_preview_bytes(path) {
+        Some(result) => result,
+        None => return String::new(),
     };
-
-    let truncated = bytes.len() > MAX_TEXT_BYTES;
-    if truncated {
-        bytes.truncate(MAX_TEXT_BYTES);
-    }
 
     // BOM-aware decode via encoding_rs
     let (text, _enc, _had_bom) = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
