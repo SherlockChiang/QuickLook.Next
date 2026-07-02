@@ -12,6 +12,8 @@ public static class ProtocolJson
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
+    static ProtocolJson() => Options.MakeReadOnly();
+
     public static string Serialize(ControlMessage message) => JsonSerializer.Serialize(message, Options);
 
     public static ControlMessage Deserialize(string json) =>
@@ -50,10 +52,32 @@ public sealed class PipeChannel : IDisposable
 
     public async Task<ControlMessage?> ReceiveAsync(CancellationToken ct = default)
     {
-        string? line = await _reader.ReadLineAsync(ct).ConfigureAwait(false);
-        if (line?.Length > MaxControlLineChars)
-            throw new InvalidDataException($"control message is too large ({line.Length:N0} chars)");
+        string? line = await ReadBoundedLineAsync(ct).ConfigureAwait(false);
         return line is null ? null : ProtocolJson.Deserialize(line);
+    }
+
+    private async Task<string?> ReadBoundedLineAsync(CancellationToken ct)
+    {
+        var line = new StringBuilder();
+        var one = new char[1];
+        while (true)
+        {
+            int read = await _reader.ReadAsync(one.AsMemory(0, 1), ct).ConfigureAwait(false);
+            if (read == 0)
+                return line.Length == 0 ? null : line.ToString();
+
+            char c = one[0];
+            if (c == '\n')
+            {
+                if (line.Length > 0 && line[^1] == '\r')
+                    line.Length--;
+                return line.ToString();
+            }
+
+            if (line.Length >= MaxControlLineChars)
+                throw new InvalidDataException($"control message is too large (>{MaxControlLineChars:N0} chars)");
+            line.Append(c);
+        }
     }
 
     public void Dispose()
