@@ -10,7 +10,20 @@ namespace QuickLook.Next.Core;
 /// </summary>
 public sealed class PendingRequests
 {
-    private sealed record Entry(TaskCompletionSource<ControlMessage> Tcs, CancellationTokenSource Watchdog);
+    private sealed class Entry(TaskCompletionSource<ControlMessage> tcs, CancellationTokenSource watchdog) : IDisposable
+    {
+        public TaskCompletionSource<ControlMessage> Tcs { get; } = tcs;
+
+        public CancellationTokenSource Watchdog { get; } = watchdog;
+
+        public CancellationTokenRegistration WatchdogRegistration { get; set; }
+
+        public void Dispose()
+        {
+            WatchdogRegistration.Dispose();
+            Watchdog.Dispose();
+        }
+    }
 
     private readonly ConcurrentDictionary<string, Entry> _pending = new();
 
@@ -19,13 +32,18 @@ public sealed class PendingRequests
     {
         string id = Guid.NewGuid().ToString("n");
         var tcs = new TaskCompletionSource<ControlMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var watchdog = new CancellationTokenSource(timeout);
-        watchdog.Token.Register(() =>
+        var watchdog = new CancellationTokenSource();
+        var entry = new Entry(tcs, watchdog);
+        entry.WatchdogRegistration = watchdog.Token.Register(() =>
         {
             if (_pending.TryRemove(id, out var e))
+            {
                 e.Tcs.TrySetException(new TimeoutException($"preview request {id} timed out after {timeout.TotalMilliseconds:F0} ms"));
+                e.Watchdog.Dispose();
+            }
         });
-        _pending[id] = new Entry(tcs, watchdog);
+        _pending[id] = entry;
+        watchdog.CancelAfter(timeout);
         return (id, tcs.Task);
     }
 
@@ -34,7 +52,7 @@ public sealed class PendingRequests
     {
         if (_pending.TryRemove(requestId, out var e))
         {
-            e.Watchdog.Dispose();
+            e.Dispose();
             return e.Tcs.TrySetResult(terminal);
         }
         return false;
@@ -46,7 +64,7 @@ public sealed class PendingRequests
         foreach (var id in _pending.Keys)
             if (_pending.TryRemove(id, out var e))
             {
-                e.Watchdog.Dispose();
+                e.Dispose();
                 e.Tcs.TrySetException(reason);
             }
     }
