@@ -57,9 +57,7 @@ public sealed partial class MainWindow : Window
     private Windows.Foundation.Point _panStart;
     private double _panStartX;
     private double _panStartY;
-    private bool _trayIconAdded;
-    private WndProcDelegate? _wndProc;
-    private nint _oldWndProc;
+    private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
     private string? _currentRequestId;
     private string? _currentPath;
@@ -67,9 +65,6 @@ public sealed partial class MainWindow : Window
     private bool _isStarted;
     private bool _previewVisible;
     private bool? _brushThemeDark;
-    private nint _trayIconHandle;
-    private bool _ownsTrayIconHandle;
-    private string? _trayIconPath;
     private int _previewGeneration;
     private PreviewListing? _currentListing;
     private string _currentListingPath = "";
@@ -2344,41 +2339,17 @@ public sealed partial class MainWindow : Window
 
     private void EnsureTrayIcon()
     {
-        if (_trayIconAdded) return;
-
-        var data = CreateNotifyIconData();
-        _trayIconAdded = Shell_NotifyIcon(NIM_ADD, ref data);
+        _trayIcon ??= new TrayIconManager(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            ResolveAppIconPath,
+            () => ShowPreviewWindow(activate: true),
+            ExitApp,
+            message => StatusText.Text = message);
+        _trayIcon.Ensure();
     }
 
     private void RemoveTrayIcon()
-    {
-        if (_trayIconAdded)
-        {
-            var data = CreateNotifyIconData();
-            Shell_NotifyIcon(NIM_DELETE, ref data);
-            _trayIconAdded = false;
-        }
-
-        ReleaseTrayIconHandle();
-    }
-
-    private NOTIFYICONDATA CreateNotifyIconData()
-    {
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        EnsureTrayWndProc(hwnd);
-        return new NOTIFYICONDATA
-        {
-            cbSize = (uint)Marshal.SizeOf<NOTIFYICONDATA>(),
-            hWnd = hwnd,
-            uID = 1,
-            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
-            uCallbackMessage = WM_TRAYICON,
-            hIcon = GetTrayIconHandle(),
-            szTip = "QuickLook Next",
-            szInfo = "",
-            szInfoTitle = "",
-        };
-    }
+        => _trayIcon?.Remove();
 
     private void ApplyWindowIcon()
     {
@@ -2390,114 +2361,11 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { DiagLog.Write("App", "window icon failed: " + ex.Message); }
     }
 
-    private nint GetTrayIconHandle()
-    {
-        string iconPath = ResolveAppIconPath();
-        if (_trayIconHandle != nint.Zero && string.Equals(_trayIconPath, iconPath, StringComparison.OrdinalIgnoreCase))
-            return _trayIconHandle;
-
-        ReleaseTrayIconHandle();
-        if (System.IO.File.Exists(iconPath))
-        {
-            _trayIconHandle = LoadImage(nint.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
-            _ownsTrayIconHandle = _trayIconHandle != nint.Zero;
-            if (_ownsTrayIconHandle)
-                _trayIconPath = iconPath;
-        }
-
-        if (_trayIconHandle == nint.Zero)
-        {
-            _trayIconHandle = LoadIcon(nint.Zero, IDI_APPLICATION);
-            _ownsTrayIconHandle = false;
-            _trayIconPath = null;
-        }
-
-        return _trayIconHandle;
-    }
-
     private void RefreshTrayIcon()
-    {
-        if (!_trayIconAdded)
-            return;
-
-        ReleaseTrayIconHandle();
-        var data = CreateNotifyIconData();
-        Shell_NotifyIcon(NIM_MODIFY, ref data);
-    }
+        => _trayIcon?.Refresh();
 
     private void ShowTrayBalloon(string title, string message)
-    {
-        if (!_trayIconAdded)
-            return;
-
-        var data = CreateNotifyIconData();
-        data.uFlags |= NIF_INFO;
-        data.szInfoTitle = title;
-        data.szInfo = message;
-        data.dwInfoFlags = NIIF_WARNING;
-        Shell_NotifyIcon(NIM_MODIFY, ref data);
-    }
-
-    private void ReleaseTrayIconHandle()
-    {
-        if (_ownsTrayIconHandle && _trayIconHandle != nint.Zero)
-            DestroyIcon(_trayIconHandle);
-
-        _trayIconHandle = nint.Zero;
-        _ownsTrayIconHandle = false;
-        _trayIconPath = null;
-    }
-
-    private void EnsureTrayWndProc(nint hwnd)
-    {
-        if (_wndProc is not null) return;
-        _wndProc = TrayWndProc;
-        _oldWndProc = SetWindowLongPtr(hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_wndProc));
-    }
-
-    private nint TrayWndProc(nint hwnd, uint msg, nint wParam, nint lParam)
-    {
-        if (msg == WM_TRAYICON)
-        {
-            if (lParam == WM_LBUTTONDBLCLK)
-                ShowPreviewWindow(activate: true);
-            else if (lParam == WM_RBUTTONUP)
-                ShowTrayMenu(hwnd);
-            return nint.Zero;
-        }
-
-        return CallWindowProc(_oldWndProc, hwnd, msg, wParam, lParam);
-    }
-
-    private void ShowTrayMenu(nint hwnd)
-    {
-        nint menu = CreatePopupMenu();
-        AppendMenuW(menu, MF_STRING, 1, "显示预览");
-        AppendMenuW(menu, MF_STRING | (AutoStart.IsEnabled() ? MF_CHECKED : 0), 3, "开机自启");
-        AppendMenuW(menu, MF_STRING, 2, "退出 QuickLook Next");
-
-        GetCursorPos(out POINT pt);
-        SetForegroundWindow(hwnd); // required so the menu dismisses when clicking elsewhere
-        uint cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.X, pt.Y, 0, hwnd, nint.Zero);
-        PostMessage(hwnd, WM_NULL, nint.Zero, nint.Zero);
-        DestroyMenu(menu);
-
-        if (cmd == 1) ShowPreviewWindow(activate: true);
-        else if (cmd == 3) ToggleAutoStart();
-        else if (cmd == 2) ExitApp();
-    }
-
-    private void ToggleAutoStart()
-    {
-        bool enable = !AutoStart.IsEnabled();
-        if (AutoStart.SetEnabled(enable))
-            return;
-
-        string message = enable ? "开机自启开启失败" : "开机自启关闭失败";
-        StatusText.Text = message;
-        DiagLog.Write("App", message);
-        ShowTrayBalloon("QuickLook Next", message);
-    }
+        => _trayIcon?.ShowBalloon(title, message);
 
     private void ExitApp()
     {
@@ -2529,57 +2397,15 @@ public sealed partial class MainWindow : Window
     }
 
     private const int GWL_EXSTYLE = -20;
-    private const int GWLP_WNDPROC = -4;
     private const int SW_HIDE = 0;
     private const int SW_SHOWNOACTIVATE = 4;
-    private const uint IMAGE_ICON = 1;
-    private const uint NIM_ADD = 0x00000000;
-    private const uint NIM_MODIFY = 0x00000001;
-    private const uint NIM_DELETE = 0x00000002;
-    private const uint NIF_MESSAGE = 0x00000001;
-    private const uint NIF_ICON = 0x00000002;
-    private const uint NIF_TIP = 0x00000004;
-    private const uint NIF_INFO = 0x00000010;
-    private const uint NIIF_WARNING = 0x00000002;
-    private const uint WM_APP = 0x8000;
-    private const uint WM_TRAYICON = WM_APP + 101;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
-    private const uint LR_LOADFROMFILE = 0x00000010;
-    private const uint LR_DEFAULTSIZE = 0x00000040;
     private static readonly nint HWND_TOPMOST = new(-1);
     private static readonly nint HWND_NOTOPMOST = new(-2);
     private static readonly nint WS_EX_NOACTIVATE = new(0x08000000);
-    private static readonly nint IDI_APPLICATION = new(32512);
-    private static readonly nint WM_LBUTTONDBLCLK = new(0x0203);
-    private static readonly nint WM_RBUTTONUP = new(0x0205);
-
-    private delegate nint WndProcDelegate(nint hwnd, uint msg, nint wParam, nint lParam);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct NOTIFYICONDATA
-    {
-        public uint cbSize;
-        public nint hWnd;
-        public uint uID;
-        public uint uFlags;
-        public uint uCallbackMessage;
-        public nint hIcon;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string szTip;
-        public uint dwState;
-        public uint dwStateMask;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string szInfo;
-        public uint uVersion;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-        public string szInfoTitle;
-        public uint dwInfoFlags;
-        public Guid guidItem;
-        public nint hBalloonIcon;
-    }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     private static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
@@ -2592,39 +2418,6 @@ public sealed partial class MainWindow : Window
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern nint CallWindowProc(nint lpPrevWndFunc, nint hWnd, uint msg, nint wParam, nint lParam);
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint LoadIcon(nint hInstance, nint lpIconName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint LoadImage(nint hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(nint hIcon);
-
-    private const uint MF_STRING = 0x0000;
-    private const uint MF_CHECKED = 0x0008;
-    private const uint TPM_RIGHTBUTTON = 0x0002;
-    private const uint TPM_NONOTIFY = 0x0080;
-    private const uint TPM_RETURNCMD = 0x0100;
-    private const uint WM_NULL = 0x0000;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT { public int X; public int Y; }
-
-    [DllImport("user32.dll")] private static extern nint CreatePopupMenu();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool AppendMenuW(nint hMenu, uint uFlags, nuint uIDNewItem, string lpNewItem);
-    [DllImport("user32.dll")] private static extern uint TrackPopupMenu(nint hMenu, uint uFlags, int x, int y, int nReserved, nint hWnd, nint prcRect);
-    [DllImport("user32.dll")] private static extern bool DestroyMenu(nint hMenu);
-    [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
-    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hWnd);
-    [DllImport("user32.dll")] private static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
 
     private static FileProbe BuildProbe(string path)
     {
