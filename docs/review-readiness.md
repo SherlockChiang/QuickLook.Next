@@ -37,6 +37,9 @@ left visible instead of hidden behind vague TODOs.
   and image zoom presets no longer appear as non-functional visual controls.
 - Folder/listing previews keep glyph placeholders but asynchronously replace
   real filesystem rows with Shell thumbnail/icon cache images when available.
+- Virtual archive entries use extension-aware glyphs for common images, media,
+  archives, Office documents, code/text files, installers, certificates,
+  torrents, and disk images.
 - Folder navigation and listing icon work use the active preview cancellation
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a
@@ -81,8 +84,8 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - Push cancellation deeper into Rust/native decode/listing loops. The App now
   prevents stale merge/update work, but native FFI calls are still synchronous
   once entered.
-- Continue Shell icon coverage for virtual archive entries where a stable file
-  type icon can be resolved without pretending the virtual item is a real path.
+- Continue Shell icon coverage for virtual archive entries if a stable file type
+  icon can be resolved without pretending the virtual item is a real path.
 
 ## Why Legacy Plugin Source Remains
 

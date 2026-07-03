@@ -13,7 +13,7 @@ public sealed class ListingRow : INotifyPropertyChanged
         Path = item.Path;
         NativePath = item.NativePath;
         IsFolder = item.IsFolder;
-        Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5";
+        Glyph = ChooseGlyph(item);
         TypeDisplay = item.IsFolder ? UiStrings.FolderTypeDisplay : item.Type;
         SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
         ModifiedDisplay = item.ModifiedUnix > 0
@@ -47,4 +47,28 @@ public sealed class ListingRow : INotifyPropertyChanged
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+    private static string ChooseGlyph(PreviewListingItem item)
+    {
+        if (item.IsFolder)
+            return "\uE8B7";
+
+        string ext = System.IO.Path.GetExtension(item.Name).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".tif" or ".tiff" or ".ico" => "\uEB9F",
+            ".mp4" or ".mkv" or ".mov" or ".avi" or ".webm" or ".wmv" => "\uE8B2",
+            ".mp3" or ".wav" or ".flac" or ".aac" or ".m4a" or ".ogg" => "\uE8D6",
+            ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" => "\uF012",
+            ".pdf" => "\uEA90",
+            ".doc" or ".docx" or ".xls" or ".xlsx" or ".ppt" or ".pptx" or ".odt" or ".ods" or ".odp" => "\uE8A5",
+            ".txt" or ".md" or ".log" or ".csv" or ".json" or ".xml" or ".yaml" or ".yml" => "\uE8A5",
+            ".cs" or ".rs" or ".js" or ".ts" or ".py" or ".java" or ".cpp" or ".h" or ".ps1" or ".bat" or ".cmd" or ".sh" => "\uE943",
+            ".exe" or ".dll" or ".msi" or ".appx" or ".msix" or ".apk" => "\uE756",
+            ".cer" or ".crt" or ".pem" or ".pfx" => "\uEB95",
+            ".torrent" => "\uE896",
+            ".iso" or ".img" => "\uEDA2",
+            _ => "\uE8A5",
+        };
+    }
 }
