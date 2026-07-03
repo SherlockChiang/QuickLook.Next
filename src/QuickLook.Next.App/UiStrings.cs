@@ -2,27 +2,49 @@ namespace QuickLook.Next.App;
 
 internal static class UiStrings
 {
-    public const string AppName = "QuickLook Next";
-    public const string Ready = "Ready";
-    public const string ReadyKind = "READY";
-    public const string EmptyValue = "-";
-    public const string FitZoom = "Fit";
+    private static readonly Lazy<Microsoft.Windows.ApplicationModel.Resources.ResourceLoader?> Loader = new(CreateLoader);
 
-    public const string PreviewUnavailableTitle = "Preview unavailable";
-    public const string PreviewUnavailableMessage = "Unable to preview this file.";
-    public const string PreviewTimedOut = "preview timed out";
-    public const string PdfPageFailed = "pdf page failed";
-    public const string SurfaceFailed = "surface failed";
+    public static string AppName => Get(nameof(AppName), "QuickLook Next");
+    public static string Ready => Get(nameof(Ready), "Ready");
+    public static string ReadyKind => Get(nameof(ReadyKind), "READY");
+    public static string EmptyValue => Get(nameof(EmptyValue), "-");
+    public static string FitZoom => Get(nameof(FitZoom), "Fit");
 
-    public const string TrayShowPreview = "显示预览";
-    public const string TrayAutoStart = "开机自启";
-    public const string TrayExit = "退出 QuickLook Next";
-    public const string AutoStartEnableFailed = "开机自启开启失败";
-    public const string AutoStartDisableFailed = "开机自启关闭失败";
+    public static string PreviewUnavailableTitle => Get(nameof(PreviewUnavailableTitle), "Preview unavailable");
+    public static string PreviewUnavailableMessage => Get(nameof(PreviewUnavailableMessage), "Unable to preview this file.");
+    public static string PreviewTimedOut => Get(nameof(PreviewTimedOut), "preview timed out");
+    public static string PdfPageFailed => Get(nameof(PdfPageFailed), "pdf page failed");
+    public static string SurfaceFailed => Get(nameof(SurfaceFailed), "surface failed");
+    public static string PathCopied => Get(nameof(PathCopied), "Path copied");
 
-    public const string FolderTypeDisplay = "文件夹";
-    public const string CertificateHeroSubtitle = "Certificate";
-    public const string PackageHeroSubtitle = "App package icon";
-    public const string ExecutableHeroSubtitle = "Application icon";
-    public const string OfficeEmbeddedImagePreview = "Embedded image preview";
+    public static string TrayShowPreview => Get(nameof(TrayShowPreview), "显示预览");
+    public static string TrayAutoStart => Get(nameof(TrayAutoStart), "开机自启");
+    public static string TrayExit => Get(nameof(TrayExit), "退出 QuickLook Next");
+    public static string AutoStartEnableFailed => Get(nameof(AutoStartEnableFailed), "开机自启开启失败");
+    public static string AutoStartDisableFailed => Get(nameof(AutoStartDisableFailed), "开机自启关闭失败");
+
+    public static string FolderTypeDisplay => Get(nameof(FolderTypeDisplay), "文件夹");
+    public static string CertificateHeroSubtitle => Get(nameof(CertificateHeroSubtitle), "Certificate");
+    public static string PackageHeroSubtitle => Get(nameof(PackageHeroSubtitle), "App package icon");
+    public static string ExecutableHeroSubtitle => Get(nameof(ExecutableHeroSubtitle), "Application icon");
+    public static string OfficeEmbeddedImagePreview => Get(nameof(OfficeEmbeddedImagePreview), "Embedded image preview");
+
+    private static Microsoft.Windows.ApplicationModel.Resources.ResourceLoader? CreateLoader()
+    {
+        try { return new Microsoft.Windows.ApplicationModel.Resources.ResourceLoader(); }
+        catch { return null; }
+    }
+
+    private static string Get(string key, string fallback)
+    {
+        try
+        {
+            string? value = Loader.Value?.GetString(key);
+            return string.IsNullOrWhiteSpace(value) ? fallback : value;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
 }

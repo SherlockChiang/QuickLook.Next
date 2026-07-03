@@ -137,6 +137,15 @@ internal sealed class RasterPreviewPresenter
         UpdateLayout();
     }
 
+    public void SetZoom(double zoom)
+    {
+        if (_sprite is null) return;
+        _zoom = Math.Clamp(zoom, MinImageZoom, MaxImageZoom);
+        _panX = 0;
+        _panY = 0;
+        UpdateLayout();
+    }
+
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         if (_sprite is null || _previewRoot.Visibility != Visibility.Visible) return;

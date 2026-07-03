@@ -91,8 +91,9 @@ RasterHost plugin registry/loader, and no legacy .NET preview plugins in release
 
 ## Remaining work
 1. Split preview panel visibility/reset choreography out of `MainWindow`.
-2. Move static XAML labels from the interim `UiStrings`/inline text layer into `.resw` resources.
+2. Move the remaining static XAML labels into resource-backed bindings as the UI copy stabilizes.
 3. Keep improving Rust-native document fidelity, especially Office layout reconstruction.
 4. Add broader smoke assets for real-world Office, PDF, package, certificate, image, archive, folder, and text previews.
+5. Push cancellation deeper into native decode/listing loops after the current App-side generation guard.
 
 See `../spikes/spike{1,2,3}-*/SPIKE*_FINDINGS.md` for the validated recipes behind each piece.

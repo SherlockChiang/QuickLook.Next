@@ -29,6 +29,16 @@ left visible instead of hidden behind vague TODOs.
 - Archive/package internal reads now have a hard read cap in addition to ZIP
   metadata size checks. This covers Office XML parts, embedded Office images,
   MSIX/AppX manifests, and package icon extraction.
+- UI strings now flow through `Strings/en-US/Resources.resw` via `UiStrings`,
+  with fallback values for unpackaged/debug resource loading failures.
+- Preview chrome actions are wired: copy path, open file, reveal in Explorer,
+  and image zoom presets no longer appear as non-functional visual controls.
+- Folder/listing previews keep glyph placeholders but asynchronously replace
+  real filesystem rows with Shell thumbnail/icon cache images when available.
+- Folder navigation and listing icon work use the active preview cancellation
+  token/generation guard so stale results do not merge into a later preview.
+- Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a
+  fallback, and repairs stale QuickLookNext entries that point at an old exe.
 
 ## Verification Commands
 
@@ -59,16 +69,16 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 
 ## Known Remaining Work
 
-- Move centralized UI strings from `UiStrings` into full `.resw` resources when
-  the UI copy stabilizes.
 - Continue improving Office fidelity. The native renderer extracts text, tables,
   relationships, and representative layout/images, but it is not a full Office
   rendering engine.
 - Expand real-world smoke assets for larger PDFs, malformed archives, unusual
   APK/MSIX manifests, mixed-encoding text files, and complex Office files.
-- Add cancellation-aware decode/listing work for more long-running native paths.
-- Replace remaining glyph placeholders with Shell icon cache coverage where the
-  item maps cleanly to a real file type.
+- Push cancellation deeper into Rust/native decode/listing loops. The App now
+  prevents stale merge/update work, but native FFI calls are still synchronous
+  once entered.
+- Continue Shell icon coverage for virtual archive entries where a stable file
+  type icon can be resolved without pretending the virtual item is a real path.
 
 ## Why Legacy Plugin Source Remains
 

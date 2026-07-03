@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -20,8 +21,10 @@ internal sealed class ListingPreviewPresenter
     private readonly Button _sizeHeader;
     private readonly Func<string, PreviewListing?> _loadFolderListing;
     private readonly Func<int> _getGeneration;
+    private readonly Func<CancellationToken> _getCancellationToken;
     private readonly Func<int, bool> _isGenerationCurrent;
     private readonly Action<ListingRow> _openItem;
+    private readonly Func<ListingRow, int, Task<ImageSource?>> _loadIconAsync;
 
     private PreviewListing? _currentListing;
     private string _currentPath = "";
@@ -39,8 +42,10 @@ internal sealed class ListingPreviewPresenter
         Button sizeHeader,
         Func<string, PreviewListing?> loadFolderListing,
         Func<int> getGeneration,
+        Func<CancellationToken> getCancellationToken,
         Func<int, bool> isGenerationCurrent,
-        Action<ListingRow> openItem)
+        Action<ListingRow> openItem,
+        Func<ListingRow, int, Task<ImageSource?>> loadIconAsync)
     {
         _title = title;
         _summary = summary;
@@ -52,8 +57,10 @@ internal sealed class ListingPreviewPresenter
         _sizeHeader = sizeHeader;
         _loadFolderListing = loadFolderListing;
         _getGeneration = getGeneration;
+        _getCancellationToken = getCancellationToken;
         _isGenerationCurrent = isGenerationCurrent;
         _openItem = openItem;
+        _loadIconAsync = loadIconAsync;
     }
 
     public ListingPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -159,6 +166,26 @@ internal sealed class ListingPreviewPresenter
         _summary.Text = BuildSummary(_currentListing, visibleItems);
         _listView.ItemsSource = rows;
         UpdateSortHeaders();
+        StartIconLoads(rows);
+    }
+
+    private void StartIconLoads(IReadOnlyList<ListingRow> rows)
+    {
+        int generation = _getGeneration();
+        foreach (ListingRow row in rows.Take(240))
+        {
+            if (string.IsNullOrWhiteSpace(row.NativePath))
+                continue;
+
+            _ = LoadRowIconAsync(row, generation);
+        }
+    }
+
+    private async Task LoadRowIconAsync(ListingRow row, int generation)
+    {
+        ImageSource? source = await _loadIconAsync(row, generation);
+        if (source is not null && _isGenerationCurrent(generation))
+            row.IconSource = source;
     }
 
     private int CompareItems(PreviewListingItem left, PreviewListingItem right)
@@ -262,9 +289,10 @@ internal sealed class ListingPreviewPresenter
 
         try
         {
+            CancellationToken token = _getCancellationToken();
             _summary.Text = "正在读取文件夹...";
-            var childListing = await Task.Run(() => _loadFolderListing(row.NativePath));
-            if (!_isGenerationCurrent(generation) || _currentListing is null)
+            var childListing = await Task.Run(() => _loadFolderListing(row.NativePath), token);
+            if (token.IsCancellationRequested || !_isGenerationCurrent(generation) || _currentListing is null)
                 return;
             if (childListing is null)
                 return;
@@ -285,6 +313,9 @@ internal sealed class ListingPreviewPresenter
             };
             if (string.Equals(_currentPath, parentPath, StringComparison.OrdinalIgnoreCase))
                 RenderListing();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {

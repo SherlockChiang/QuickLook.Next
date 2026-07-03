@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
 using Windows.Storage.Streams;
 using QuickLook.Next.Contracts;
@@ -80,8 +81,10 @@ public sealed partial class MainWindow : Window
             ListingSizeHeader,
             path => _native.TryPreviewFolderListing(path),
             () => _previewGeneration,
+            () => CurrentPreviewToken,
             IsPreviewGenerationCurrent,
-            OpenListingItem);
+            OpenListingItem,
+            LoadListingIconAsync);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
@@ -124,6 +127,7 @@ public sealed partial class MainWindow : Window
         DiagLog.Write("App", $"background start; pid={Environment.ProcessId}");
         SetBackgroundEfficiency(enabled: true);
         StatusBar.Visibility = ShowStatusBar ? Visibility.Visible : Visibility.Collapsed;
+        AutoStart.RepairIfConfigured();
         ApplyWindowIcon();
         EnsureTrayIcon();
         _windowController.ApplyNoActivateStyle();
@@ -751,6 +755,38 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)
+    {
+        string? path = row.NativePath;
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            CancellationToken token = CurrentPreviewToken;
+            NativeRasterImage? raster = await Task.Run(() =>
+            {
+                if (token.IsCancellationRequested)
+                    return null;
+                return _native.TryGetThumbnail(path, 32);
+            }, token);
+
+            if (!IsPreviewGenerationCurrent(generation, token) || raster is null)
+                return null;
+
+            return CreateBitmapSource(raster);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "listing icon load failed: " + ex.Message);
+            return null;
+        }
+    }
+
     private void ResetPreview()
     {
         _rasterPresenter?.Clear();
@@ -966,6 +1002,12 @@ public sealed partial class MainWindow : Window
     private void OnImageZoomFitClick(object sender, RoutedEventArgs e)
         => _rasterPresenter?.ResetView();
 
+    private void OnImageZoomPresetClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string raw } && double.TryParse(raw, out double zoom))
+            _rasterPresenter?.SetZoom(zoom);
+    }
+
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         if (_rasterPresenter?.HasSurface != true || PreviewRoot.Visibility != Visibility.Visible)
@@ -984,6 +1026,12 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
+        => OpenCurrentPreviewPath(revealInExplorer: true);
+
+    private void OnOpenPreviewFileClick(object sender, RoutedEventArgs e)
+        => OpenCurrentPreviewPath(revealInExplorer: false);
+
+    private void OnCopyPreviewPathClick(object sender, RoutedEventArgs e)
     {
         string? path = _currentPath;
         if (string.IsNullOrWhiteSpace(path))
@@ -991,6 +1039,37 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            var package = new DataPackage();
+            package.SetText(path);
+            Clipboard.SetContent(package);
+            StatusText.Text = UiStrings.PathCopied;
+            StatusBar.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "copy preview path failed: " + ex.Message);
+        }
+    }
+
+    private void OpenCurrentPreviewPath(bool revealInExplorer)
+    {
+        string? path = _currentPath;
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            if (revealInExplorer && System.IO.File.Exists(path))
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "/select,\"" + path + "\"",
+                    UseShellExecute = true,
+                });
+                return;
+            }
+
             if (Directory.Exists(path))
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -1005,15 +1084,14 @@ public sealed partial class MainWindow : Window
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "explorer.exe",
-                    Arguments = "/select,\"" + path + "\"",
+                    FileName = path,
                     UseShellExecute = true,
                 });
             }
         }
         catch (Exception ex)
         {
-            DiagLog.Write("App", "open file location failed: " + ex.Message);
+            DiagLog.Write("App", "open preview path failed: " + ex.Message);
         }
     }
 

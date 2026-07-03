@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="AppName" xml:space="preserve">
+    <value>QuickLook Next</value>
+  </data>
+  <data name="Ready" xml:space="preserve">
+    <value>Ready</value>
+  </data>
+  <data name="ReadyKind" xml:space="preserve">
+    <value>READY</value>
+  </data>
+  <data name="EmptyValue" xml:space="preserve">
+    <value>-</value>
+  </data>
+  <data name="FitZoom" xml:space="preserve">
+    <value>Fit</value>
+  </data>
+  <data name="PreviewUnavailableTitle" xml:space="preserve">
+    <value>Preview unavailable</value>
+  </data>
+  <data name="PreviewUnavailableMessage" xml:space="preserve">
+    <value>Unable to preview this file.</value>
+  </data>
+  <data name="PreviewTimedOut" xml:space="preserve">
+    <value>preview timed out</value>
+  </data>
+  <data name="PdfPageFailed" xml:space="preserve">
+    <value>pdf page failed</value>
+  </data>
+  <data name="SurfaceFailed" xml:space="preserve">
+    <value>surface failed</value>
+  </data>
+  <data name="PathCopied" xml:space="preserve">
+    <value>Path copied</value>
+  </data>
+  <data name="TrayShowPreview" xml:space="preserve">
+    <value>显示预览</value>
+  </data>
+  <data name="TrayAutoStart" xml:space="preserve">
+    <value>开机自启</value>
+  </data>
+  <data name="TrayExit" xml:space="preserve">
+    <value>退出 QuickLook Next</value>
+  </data>
+  <data name="AutoStartEnableFailed" xml:space="preserve">
+    <value>开机自启开启失败</value>
+  </data>
+  <data name="AutoStartDisableFailed" xml:space="preserve">
+    <value>开机自启关闭失败</value>
+  </data>
+  <data name="FolderTypeDisplay" xml:space="preserve">
+    <value>文件夹</value>
+  </data>
+  <data name="CertificateHeroSubtitle" xml:space="preserve">
+    <value>Certificate</value>
+  </data>
+  <data name="PackageHeroSubtitle" xml:space="preserve">
+    <value>App package icon</value>
+  </data>
+  <data name="ExecutableHeroSubtitle" xml:space="preserve">
+    <value>Application icon</value>
+  </data>
+  <data name="OfficeEmbeddedImagePreview" xml:space="preserve">
+    <value>Embedded image preview</value>
+  </data>
+</root>

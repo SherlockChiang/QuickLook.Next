@@ -238,26 +238,42 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Border Height="34"
+                            <Button Height="34"
+                                    Click="OnCopyPreviewPathClick"
                                     CornerRadius="6"
-                                    Background="{ThemeResource PreviewHeroSurfaceBrush}">
+                                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                    BorderThickness="1"
+                                    AutomationProperties.Name="Copy preview path">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-                                    <FontIcon Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    <TextBlock Text="Info" FontSize="10" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    <FontIcon Glyph="&#xE8C8;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="Copy" FontSize="10" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                                 </StackPanel>
-                            </Border>
-                            <Border Grid.Column="1" Height="34" CornerRadius="6">
+                            </Button>
+                            <Button Grid.Column="1"
+                                    Height="34"
+                                    Click="OnOpenPreviewFileClick"
+                                    CornerRadius="6"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    AutomationProperties.Name="Open previewed file">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-                                    <FontIcon Glyph="&#xE713;" FontSize="14" />
-                                    <TextBlock Text="Meta" FontSize="10" />
+                                    <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                                    <TextBlock Text="Open" FontSize="10" />
                                 </StackPanel>
-                            </Border>
-                            <Border Grid.Column="2" Height="34" CornerRadius="6">
+                            </Button>
+                            <Button Grid.Column="2"
+                                    Height="34"
+                                    Click="OnOpenFileLocationClick"
+                                    CornerRadius="6"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    AutomationProperties.Name="Reveal previewed file in File Explorer">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
-                                    <FontIcon Glyph="&#xE712;" FontSize="14" />
-                                    <TextBlock Text="More" FontSize="10" />
+                                    <FontIcon Glyph="&#xE838;" FontSize="14" />
+                                    <TextBlock Text="Reveal" FontSize="10" />
                                 </StackPanel>
-                            </Border>
+                            </Button>
                         </Grid>
                         <Rectangle Height="1" Fill="{ThemeResource PreviewSurfaceBorderBrush}" />
                     </StackPanel>
@@ -344,9 +360,15 @@
                         </Button>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-                        <Border Width="48" Height="34" CornerRadius="5" Background="{ThemeResource PreviewHeroSurfaceBrush}" />
-                        <Border Width="54" Height="38" CornerRadius="5" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2" Background="{ThemeResource PreviewHeroSurfaceBrush}" />
-                        <Border Width="48" Height="34" CornerRadius="5" Background="{ThemeResource PreviewHeroSurfaceBrush}" />
+                        <Button Width="48" Height="34" Tag="0.5" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 50 percent">
+                            <TextBlock Text="50%" FontSize="12" />
+                        </Button>
+                        <Button Width="54" Height="38" Tag="1" Click="OnImageZoomPresetClick" CornerRadius="5" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2" AutomationProperties.Name="Set zoom to 100 percent">
+                            <TextBlock Text="100%" FontSize="12" />
+                        </Button>
+                        <Button Width="48" Height="34" Tag="2" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 200 percent">
+                            <TextBlock Text="200%" FontSize="12" />
+                        </Button>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <Button Click="OnImageZoomFitClick"
@@ -471,11 +493,21 @@
                                         <ColumnDefinition Width="140" />
                                         <ColumnDefinition Width="110" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0"
-                                               Text="{x:Bind Glyph}"
+                                    <Grid Grid.Column="0"
+                                          Width="22"
+                                          Height="22"
+                                          VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind Glyph}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="15" />
+                                        <Image Width="18"
+                                               Height="18"
+                                               HorizontalAlignment="Center"
                                                VerticalAlignment="Center"
-                                               FontFamily="Segoe MDL2 Assets"
-                                               FontSize="15" />
+                                               Source="{x:Bind IconSource, Mode=OneWay}" />
+                                    </Grid>
                                     <TextBlock Grid.Column="1"
                                                Text="{x:Bind Name}"
                                                VerticalAlignment="Center"

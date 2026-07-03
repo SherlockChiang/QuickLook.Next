@@ -1,8 +1,11 @@
 using QuickLook.Next.Contracts;
+using Microsoft.UI.Xaml.Media;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 
 namespace QuickLook.Next.App;
 
-public sealed class ListingRow
+public sealed class ListingRow : INotifyPropertyChanged
 {
     public ListingRow(PreviewListingItem item)
     {
@@ -26,4 +29,22 @@ public sealed class ListingRow
     public string ModifiedDisplay { get; }
     public string TypeDisplay { get; }
     public string SizeDisplay { get; }
+
+    private ImageSource? _iconSource;
+    public ImageSource? IconSource
+    {
+        get => _iconSource;
+        set
+        {
+            if (ReferenceEquals(_iconSource, value))
+                return;
+            _iconSource = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
