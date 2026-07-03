@@ -31,6 +31,8 @@ left visible instead of hidden behind vague TODOs.
   MSIX/AppX manifests, and package icon extraction.
 - UI strings now flow through `Strings/en-US/Resources.resw` via `UiStrings`,
   with fallback values for unpackaged/debug resource loading failures.
+- Stable visible XAML labels use `x:Uid` resource entries for the title brand,
+  preview detail labels, image zoom presets, and preview chrome actions.
 - Preview chrome actions are wired: copy path, open file, reveal in Explorer,
   and image zoom presets no longer appear as non-functional visual controls.
 - Folder/listing previews keep glyph placeholders but asynchronously replace
@@ -74,6 +76,8 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   rendering engine.
 - Expand real-world smoke assets for larger PDFs, malformed archives, unusual
   APK/MSIX manifests, mixed-encoding text files, and complex Office files.
+  Current smoke coverage includes UTF-16 text and corrupt ZIP fail-closed checks,
+  but still needs more externally sourced real-world files.
 - Push cancellation deeper into Rust/native decode/listing loops. The App now
   prevents stale merge/update work, but native FFI calls are still synchronous
   once entered.

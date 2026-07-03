@@ -75,4 +75,46 @@
   <data name="OfficeEmbeddedImagePreview" xml:space="preserve">
     <value>Embedded image preview</value>
   </data>
+  <data name="AppBrandText.Text" xml:space="preserve">
+    <value>QuickLook Next</value>
+  </data>
+  <data name="CopyPreviewPathText.Text" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="OpenPreviewFileText.Text" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="RevealPreviewFileText.Text" xml:space="preserve">
+    <value>Reveal</value>
+  </data>
+  <data name="DimensionsLabel.Text" xml:space="preserve">
+    <value>Dimensions</value>
+  </data>
+  <data name="SizeLabel.Text" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="TypeLabel.Text" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="ModifiedLabel.Text" xml:space="preserve">
+    <value>Modified</value>
+  </data>
+  <data name="PathLabel.Text" xml:space="preserve">
+    <value>Path</value>
+  </data>
+  <data name="OpenFileLocationText.Text" xml:space="preserve">
+    <value>Open file location</value>
+  </data>
+  <data name="ImageZoomText.Text" xml:space="preserve">
+    <value>Fit</value>
+  </data>
+  <data name="ZoomPreset50Text.Text" xml:space="preserve">
+    <value>50%</value>
+  </data>
+  <data name="ZoomPreset100Text.Text" xml:space="preserve">
+    <value>100%</value>
+  </data>
+  <data name="ZoomPreset200Text.Text" xml:space="preserve">
+    <value>200%</value>
+  </data>
 </root>

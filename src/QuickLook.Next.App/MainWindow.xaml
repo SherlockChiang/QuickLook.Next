@@ -52,6 +52,7 @@
 
         <!-- Custom Title Bar -->
         <Grid x:Name="AppTitleBar"
+              x:Uid="AppTitleBar"
               Grid.Row="0"
               Height="52"
               Background="Transparent"
@@ -68,7 +69,8 @@
                 <FontIcon Glyph="&#xE945;"
                           FontSize="17"
                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                <TextBlock Text="QuickLook Next"
+                <TextBlock x:Uid="AppBrandText"
+                           Text="QuickLook Next"
                            VerticalAlignment="Center"
                            FontSize="12"
                            FontWeight="SemiBold"
@@ -113,13 +115,16 @@
 
         <!-- Content Area -->
         <Grid x:Name="PreviewContentHost"
+              x:Uid="PreviewContentHost"
               Grid.Row="1"
               AutomationProperties.Name="Preview content">
             <Border x:Name="PreviewRoot"
+                    x:Uid="PreviewRoot"
                     Margin="14,0,14,14"
                     Background="Transparent"
                     AutomationProperties.Name="Image preview surface" />
             <ScrollViewer x:Name="PdfScrollViewer"
+                          x:Uid="PdfScrollViewer"
                           Visibility="Collapsed"
                           Margin="14,0,14,14"
                           HorizontalScrollBarVisibility="Auto"
@@ -135,6 +140,7 @@
                             Spacing="16" />
             </ScrollViewer>
             <ScrollViewer x:Name="TextScrollViewer"
+                          x:Uid="TextScrollViewer"
                           Visibility="Collapsed"
                           Margin="14,0,14,14"
                           Padding="24"
@@ -180,6 +186,7 @@
                         </StackPanel>
                     </Grid>
                     <RichTextBlock x:Name="TextPreviewBlock"
+                                   x:Uid="TextPreviewBlock"
                                    IsTextSelectionEnabled="True"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                    FontSize="14"
@@ -190,6 +197,7 @@
                 </StackPanel>
             </ScrollViewer>
             <ScrollViewer x:Name="OfficeScrollViewer"
+                          x:Uid="OfficeScrollViewer"
                           Visibility="Collapsed"
                           Margin="14,0,14,14"
                           Padding="20"
@@ -205,6 +213,7 @@
                             Spacing="18" />
             </ScrollViewer>
             <MediaPlayerElement x:Name="MediaPreviewElement"
+                                x:Uid="MediaPreviewElement"
                                 Visibility="Collapsed"
                                 Margin="14,0,14,14"
                                 AreTransportControlsEnabled="True"
@@ -214,6 +223,7 @@
                                 VerticalAlignment="Stretch"
                                 AutomationProperties.Name="Media preview player" />
             <Border x:Name="PreviewInfoRail"
+                    x:Uid="PreviewInfoRail"
                     Visibility="Collapsed"
                     Width="230"
                     HorizontalAlignment="Right"
@@ -238,7 +248,8 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Button Height="34"
+                            <Button x:Uid="CopyPreviewPathButton"
+                                    Height="34"
                                     Click="OnCopyPreviewPathClick"
                                     CornerRadius="6"
                                     Background="{ThemeResource PreviewHeroSurfaceBrush}"
@@ -247,10 +258,11 @@
                                     AutomationProperties.Name="Copy preview path">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
                                     <FontIcon Glyph="&#xE8C8;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                                    <TextBlock Text="Copy" FontSize="10" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    <TextBlock x:Uid="CopyPreviewPathText" Text="Copy" FontSize="10" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                                 </StackPanel>
                             </Button>
-                            <Button Grid.Column="1"
+                            <Button x:Uid="OpenPreviewFileButton"
+                                    Grid.Column="1"
                                     Height="34"
                                     Click="OnOpenPreviewFileClick"
                                     CornerRadius="6"
@@ -259,10 +271,11 @@
                                     AutomationProperties.Name="Open previewed file">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
                                     <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                                    <TextBlock Text="Open" FontSize="10" />
+                                    <TextBlock x:Uid="OpenPreviewFileText" Text="Open" FontSize="10" />
                                 </StackPanel>
                             </Button>
-                            <Button Grid.Column="2"
+                            <Button x:Uid="RevealPreviewFileButton"
+                                    Grid.Column="2"
                                     Height="34"
                                     Click="OnOpenFileLocationClick"
                                     CornerRadius="6"
@@ -271,7 +284,7 @@
                                     AutomationProperties.Name="Reveal previewed file in File Explorer">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
                                     <FontIcon Glyph="&#xE838;" FontSize="14" />
-                                    <TextBlock Text="Reveal" FontSize="10" />
+                                    <TextBlock x:Uid="RevealPreviewFileText" Text="Reveal" FontSize="10" />
                                 </StackPanel>
                             </Button>
                         </Grid>
@@ -279,27 +292,28 @@
                     </StackPanel>
                     <StackPanel Grid.Row="1" Spacing="12">
                         <StackPanel Spacing="2">
-                            <TextBlock Text="Dimensions" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="DimensionsLabel" Text="Dimensions" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewDimensionsText" Text="-" FontSize="13" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Text="Size" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="SizeLabel" Text="Size" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewSizeText" Text="-" FontSize="13" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Text="Type" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="TypeLabel" Text="Type" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewTypeText" Text="-" FontSize="13" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Text="Modified" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="ModifiedLabel" Text="Modified" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewModifiedText" Text="-" FontSize="13" TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                         <StackPanel Spacing="2">
-                            <TextBlock Text="Path" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="PathLabel" Text="Path" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewPathText" Text="-" FontSize="12" TextWrapping="WrapWholeWords" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </StackPanel>
-                    <Button Grid.Row="2"
+                    <Button x:Uid="OpenFileLocationButton"
+                            Grid.Row="2"
                             Height="36"
                             HorizontalAlignment="Stretch"
                             Click="OnOpenFileLocationClick"
@@ -308,7 +322,8 @@
                             BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                             BorderThickness="1"
                             AutomationProperties.Name="Open file location">
-                        <TextBlock Text="Open file location"
+                        <TextBlock x:Uid="OpenFileLocationText"
+                                   Text="Open file location"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    FontSize="12"
@@ -317,6 +332,7 @@
                 </Grid>
             </Border>
             <Border x:Name="ImagePreviewToolbar"
+                    x:Uid="ImagePreviewToolbar"
                     Visibility="Collapsed"
                     Height="58"
                     HorizontalAlignment="Stretch"
@@ -335,12 +351,14 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Button Click="OnImageZoomOutClick"
+                        <Button x:Uid="ZoomOutButton"
+                                Click="OnImageZoomOutClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"
                                 AutomationProperties.Name="Zoom out">
                             <FontIcon Glyph="&#xE71F;" FontSize="15" />
                         </Button>
                         <TextBlock x:Name="ImageZoomText"
+                                   x:Uid="ImageZoomText"
                                    Text="Fit"
                                    MinWidth="48"
                                    VerticalAlignment="Center"
@@ -348,30 +366,33 @@
                                    FontSize="12"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    AutomationProperties.Name="Current zoom level" />
-                        <Button Click="OnImageZoomInClick"
+                        <Button x:Uid="ZoomInButton"
+                                Click="OnImageZoomInClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"
                                 AutomationProperties.Name="Zoom in">
                             <FontIcon Glyph="&#xE8A3;" FontSize="15" />
                         </Button>
-                        <Button Click="OnImageZoomFitClick"
+                        <Button x:Uid="FitToWindowButton"
+                                Click="OnImageZoomFitClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"
                                 AutomationProperties.Name="Fit to window">
                             <FontIcon Glyph="&#xE740;" FontSize="15" />
                         </Button>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-                        <Button Width="48" Height="34" Tag="0.5" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 50 percent">
-                            <TextBlock Text="50%" FontSize="12" />
+                        <Button x:Uid="ZoomPreset50Button" Width="48" Height="34" Tag="0.5" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 50 percent">
+                            <TextBlock x:Uid="ZoomPreset50Text" Text="50%" FontSize="12" />
                         </Button>
-                        <Button Width="54" Height="38" Tag="1" Click="OnImageZoomPresetClick" CornerRadius="5" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2" AutomationProperties.Name="Set zoom to 100 percent">
-                            <TextBlock Text="100%" FontSize="12" />
+                        <Button x:Uid="ZoomPreset100Button" Width="54" Height="38" Tag="1" Click="OnImageZoomPresetClick" CornerRadius="5" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2" AutomationProperties.Name="Set zoom to 100 percent">
+                            <TextBlock x:Uid="ZoomPreset100Text" Text="100%" FontSize="12" />
                         </Button>
-                        <Button Width="48" Height="34" Tag="2" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 200 percent">
-                            <TextBlock Text="200%" FontSize="12" />
+                        <Button x:Uid="ZoomPreset200Button" Width="48" Height="34" Tag="2" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 200 percent">
+                            <TextBlock x:Uid="ZoomPreset200Text" Text="200%" FontSize="12" />
                         </Button>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Button Click="OnImageZoomFitClick"
+                        <Button x:Uid="ResetViewButton"
+                                Click="OnImageZoomFitClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"
                                 AutomationProperties.Name="Reset view">
                             <FontIcon Glyph="&#xE72C;" FontSize="15" />
@@ -380,6 +401,7 @@
                 </Grid>
             </Border>
             <Border x:Name="ListingPanel"
+                    x:Uid="ListingPanel"
                     Visibility="Collapsed"
                     Margin="14,0,14,14"
                     Padding="18"
@@ -430,6 +452,7 @@
                                 Grid.Row="1"
                                 Orientation="Horizontal"
                                 Spacing="4"
+                                x:Uid="ListingBreadcrumbPanel"
                                 AutomationProperties.Name="Listing path breadcrumbs" />
 
                     <Grid Grid.Row="2" Padding="36,0,12,0">
@@ -439,13 +462,14 @@
                             <ColumnDefinition Width="140" />
                             <ColumnDefinition Width="110" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by name" />
-                        <Button x:Name="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by modified date" />
-                        <Button x:Name="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by type" />
-                        <Button x:Name="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by size" />
+                        <Button x:Name="ListingNameHeader" x:Uid="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by name" />
+                        <Button x:Name="ListingModifiedHeader" x:Uid="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by modified date" />
+                        <Button x:Name="ListingTypeHeader" x:Uid="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by type" />
+                        <Button x:Name="ListingSizeHeader" x:Uid="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by size" />
                     </Grid>
 
                     <ListView x:Name="ListingListView"
+                              x:Uid="ListingListView"
                               Grid.Row="3"
                               IsItemClickEnabled="True"
                               ItemClick="OnListingItemClick"
@@ -548,6 +572,7 @@
         </Grid>
 
         <ProgressRing x:Name="LoadingRing"
+                      x:Uid="LoadingRing"
                       Grid.Row="1"
                       Visibility="Collapsed"
                       IsActive="False"
@@ -558,6 +583,7 @@
                       AutomationProperties.Name="Loading preview" />
 
         <StackPanel x:Name="ErrorPanel"
+                    x:Uid="ErrorPanel"
                     Grid.Row="1"
                     Visibility="Collapsed"
                     HorizontalAlignment="Center"
@@ -568,6 +594,7 @@
                       FontSize="36"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <TextBlock x:Name="ErrorText"
+                       x:Uid="ErrorText"
                        TextAlignment="Center"
                        TextWrapping="Wrap"
                        MaxWidth="420"

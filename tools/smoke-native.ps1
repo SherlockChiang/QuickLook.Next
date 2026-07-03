@@ -115,6 +115,12 @@ function Invoke-Archive([string]$path) {
     }
 }
 
+function Invoke-ArchiveRawCode([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (256 * 1024)
+    [QuickLookNativeSmoke]::ql_preview_archive($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+}
+
 function Invoke-Torrent([string]$path) {
     Invoke-NativeJson $path {
         param($pathBytes, $buffer)
@@ -262,6 +268,16 @@ try {
         finally { $targetStream.Dispose() }
     }
     finally { $sourceStream.Dispose() }
+
+    $utf16 = Join-Path $tmp "utf16.txt"
+    [System.IO.File]::WriteAllText($utf16, "Hello UTF16 文本", [System.Text.Encoding]::Unicode)
+    $utf16Preview = Invoke-Text $utf16
+    Assert-True ($utf16Preview.text -match "Hello UTF16") "Expected UTF-16 text preview"
+    Assert-True ($utf16Preview.text -match "文本") "Expected UTF-16 non-ASCII text preview"
+
+    $corruptZip = Join-Path $tmp "corrupt.zip"
+    [System.IO.File]::WriteAllBytes($corruptZip, [byte[]](0x50, 0x4B, 0x03, 0x04, 0x00, 0x00, 0x00))
+    Assert-True ((Invoke-ArchiveRawCode $corruptZip) -eq 0) "Expected corrupt ZIP preview to fail closed without a listing"
 
     foreach ($archive in @($zip, $tar, $tgz, $gz, $apk, $msix)) {
         $preview = Invoke-Archive $archive
