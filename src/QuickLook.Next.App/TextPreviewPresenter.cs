@@ -52,7 +52,7 @@ internal sealed class TextPreviewPresenter
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
-                RenderCodeOrPlainText(text, ready.TextLanguage ?? "text");
+                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text");
         }
         catch (Exception ex)
         {
@@ -381,18 +381,24 @@ internal sealed class TextPreviewPresenter
 
         FlushParagraph();
         if (inCode && code.Length > 0)
-            AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
+        {
+            // For simplicity in this demo, markdown parsing is synchronous but code highlighting can be async
+            // To preserve order properly we should await it, but RenderMarkdown is synchronous right now.
+            // A quick fix is to fire-and-forget or keep markdown code highlighting synchronous if it's small,
+            // but for full files, we use RenderCodeOrPlainTextAsync.
+            AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
+        }
     }
 
-    private void AddMarkdownCodeBlock(string code, string language)
+    private async Task AddMarkdownCodeBlockAsync(string code, string language)
     {
         if (language is "text" or "log")
             AddCodeBlock(code);
         else
-            AddHighlightedCode(code, language);
+            await AddHighlightedCodeAsync(code, language);
     }
 
-    private void RenderCodeOrPlainText(string text, string language)
+    private async Task RenderCodeOrPlainTextAsync(string text, string language)
     {
         var header = CreateParagraph(12, "Segoe UI", 0, 10);
         header.Foreground = UiGrayBrush;
@@ -403,10 +409,10 @@ internal sealed class TextPreviewPresenter
         if (language is "text" or "log")
             AddCodeBlock(code);
         else
-            AddHighlightedCode(code, language);
+            await AddHighlightedCodeAsync(code, language);
     }
 
-    private void AddHighlightedCode(string code, string language)
+    private async Task AddHighlightedCodeAsync(string code, string language)
     {
         var p = CreateParagraph(13, "Cascadia Mono, Consolas", 2, 10);
         if (code.Length == 0)
@@ -424,8 +430,9 @@ internal sealed class TextPreviewPresenter
         }
         else
         {
+            var spans = await Task.Run(() => SyntaxHighlighter.Highlight(code, language).ToList());
             int runs = 0;
-            foreach (var (txt, kind) in SyntaxHighlighter.Highlight(code, language))
+            foreach (var (txt, kind) in spans)
             {
                 if (txt.Length == 0) continue;
                 if (++runs > MaxHighlightedRuns)
