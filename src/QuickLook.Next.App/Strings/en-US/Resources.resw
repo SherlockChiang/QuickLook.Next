@@ -48,6 +48,9 @@
   <data name="FileCopied" xml:space="preserve">
     <value>File copied</value>
   </data>
+  <data name="NoExifData" xml:space="preserve">
+    <value>No EXIF data</value>
+  </data>
   <data name="TrayShowPreview" xml:space="preserve">
     <value>显示预览</value>
   </data>
@@ -80,6 +83,27 @@
   </data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
+  </data>
+  <data name="InfoTabText.Text" xml:space="preserve">
+    <value>Info</value>
+  </data>
+  <data name="ExifTabText.Text" xml:space="preserve">
+    <value>EXIF</value>
+  </data>
+  <data name="MoreTabText.Text" xml:space="preserve">
+    <value>More</value>
+  </data>
+  <data name="ExifUnavailableText.Text" xml:space="preserve">
+    <value>No EXIF data</value>
+  </data>
+  <data name="CopyPreviewFileText.Text" xml:space="preserve">
+    <value>Copy file</value>
+  </data>
+  <data name="OpenPreviewFileText.Text" xml:space="preserve">
+    <value>Open file</value>
+  </data>
+  <data name="RevealPreviewFileText.Text" xml:space="preserve">
+    <value>Reveal in Explorer</value>
   </data>
   <data name="DimensionsLabel.Text" xml:space="preserve">
     <value>Dimensions</value>

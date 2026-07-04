@@ -175,7 +175,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
 
         if (IsImage(open.Probe))
         {
-            var image = await NativeImageDecoder.TryDecodeAsync(open.Path, imageDecodeTimeout, cancellationToken);
+            var image = await DecodeImageAsync(open.Path, imageDecodeTimeout, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
@@ -217,6 +217,30 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         DiagLog.Write("RasterHost", "open ERROR: " + ex);
         await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
     }
+}
+
+static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+{
+    if (PreferSystemImageDecoder(path))
+    {
+        var systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+        if (systemImage is not null)
+            return systemImage;
+    }
+
+    var nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken);
+    if (nativeImage is not null)
+        return nativeImage;
+
+    return PreferSystemImageDecoder(path)
+        ? null
+        : await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+}
+
+static bool PreferSystemImageDecoder(string path)
+{
+    string ext = Path.GetExtension(path).ToLowerInvariant();
+    return ext is ".jpg" or ".jpeg" or ".jpe" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
 }
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)

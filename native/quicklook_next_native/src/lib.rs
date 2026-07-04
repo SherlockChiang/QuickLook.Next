@@ -546,6 +546,10 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     const ARCHIVE_EXTS: &[&str] = &[
         ".zip", ".jar", ".epub", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz",
     ];
+    const IMAGE_EXTS: &[&str] = &[
+        ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
+        ".heic", ".heif", ".avif", ".jxl",
+    ];
     const PACKAGE_EXTS: &[&str] = &[
         ".apk",
         ".apks",
@@ -584,6 +588,9 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     }
     if ARCHIVE_EXTS.contains(&ext) {
         return "archive";
+    }
+    if IMAGE_EXTS.contains(&ext) {
+        return "image";
     }
 
     let m = magic;

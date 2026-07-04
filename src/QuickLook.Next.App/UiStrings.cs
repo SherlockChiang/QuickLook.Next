@@ -17,6 +17,7 @@ internal static class UiStrings
     public static string SurfaceFailed => Get(nameof(SurfaceFailed), "surface failed");
     public static string PathCopied => Get(nameof(PathCopied), "Path copied");
     public static string FileCopied => Get(nameof(FileCopied), "File copied");
+    public static string NoExifData => Get(nameof(NoExifData), "No EXIF data");
 
     public static string TrayShowPreview => Get(nameof(TrayShowPreview), "显示预览");
     public static string TrayAutoStart => Get(nameof(TrayAutoStart), "开机自启");

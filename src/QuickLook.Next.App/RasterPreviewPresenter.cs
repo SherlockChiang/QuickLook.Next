@@ -12,7 +12,7 @@ internal sealed class RasterPreviewPresenter
     private const double MinImageZoom = 0.1;
     private const double MaxImageZoom = 12.0;
     private const double InfoRailWidth = 246;
-    private const double ToolbarHeight = 82;
+    private const double ToolbarHeight = 162;
 
     private readonly Border _previewRoot;
     private readonly TextBlock _zoomText;

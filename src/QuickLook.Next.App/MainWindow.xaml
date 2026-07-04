@@ -26,6 +26,16 @@
                     <Setter Property="BorderThickness" Value="0" />
                     <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
                 </Style>
+                <Style x:Key="PreviewZoomPresetButtonStyle" TargetType="Button">
+                    <Setter Property="Width" Value="46" />
+                    <Setter Property="Height" Value="32" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="CornerRadius" Value="16" />
+                    <Setter Property="Background" Value="{ThemeResource PreviewHeroSurfaceBrush}" />
+                    <Setter Property="BorderBrush" Value="{ThemeResource PreviewSurfaceBorderBrush}" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Style>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
                         <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="#F8FFFFFF" />
@@ -225,7 +235,7 @@
             <Border x:Name="PreviewInfoRail"
                     x:Uid="PreviewInfoRail"
                     Visibility="Collapsed"
-                    Width="230"
+                    Width="246"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Stretch"
                     Margin="0,0,14,82"
@@ -248,49 +258,57 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Button x:Uid="CopyPreviewFileButton"
-                                    Width="40"
-                                    Height="36"
-                                    HorizontalAlignment="Center"
-                                    Click="OnCopyPreviewFileClick"
+                            <Button x:Name="InfoTabButton"
+                                    x:Uid="InfoTabButton"
+                                    Height="50"
+                                    Click="OnPreviewInfoTabClick"
                                     CornerRadius="6"
                                     Background="{ThemeResource PreviewHeroSurfaceBrush}"
                                     BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                     BorderThickness="1"
-                                    ToolTipService.ToolTip="Copy file"
-                                    AutomationProperties.Name="Copy previewed file">
-                                <FontIcon Glyph="&#xE8C8;" FontSize="15" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                    AutomationProperties.Name="Show file information">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                                    <FontIcon Glyph="&#xE946;" FontSize="15" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                    <TextBlock x:Uid="InfoTabText" Text="Info" FontSize="10" FontWeight="SemiBold" />
+                                    <Border x:Name="InfoTabUnderline" Width="24" Height="2" CornerRadius="1" Background="{ThemeResource AccentFillColorDefaultBrush}" />
+                                </StackPanel>
                             </Button>
-                            <Button x:Uid="OpenPreviewFileButton"
+                            <Button x:Name="ExifTabButton"
+                                    x:Uid="ExifTabButton"
                                     Grid.Column="1"
-                                    Width="40"
-                                    Height="36"
-                                    HorizontalAlignment="Center"
-                                    Click="OnOpenPreviewFileClick"
+                                    Height="50"
+                                    Click="OnPreviewExifTabClick"
                                     CornerRadius="6"
-                                    Background="Transparent"
+                                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                     BorderThickness="0"
-                                    ToolTipService.ToolTip="Open file"
-                                    AutomationProperties.Name="Open previewed file">
-                                <FontIcon Glyph="&#xE8E5;" FontSize="15" />
+                                    AutomationProperties.Name="Show EXIF information">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                                    <FontIcon Glyph="&#xE713;" FontSize="15" />
+                                    <TextBlock x:Uid="ExifTabText" Text="EXIF" FontSize="10" />
+                                    <Border x:Name="ExifTabUnderline" Width="24" Height="2" CornerRadius="1" Background="{ThemeResource AccentFillColorDefaultBrush}" Visibility="Collapsed" />
+                                </StackPanel>
                             </Button>
-                            <Button x:Uid="RevealPreviewFileButton"
+                            <Button x:Name="MoreTabButton"
+                                    x:Uid="MoreTabButton"
                                     Grid.Column="2"
-                                    Width="40"
-                                    Height="36"
-                                    HorizontalAlignment="Center"
-                                    Click="OnOpenFileLocationClick"
+                                    Height="50"
+                                    Click="OnPreviewMoreTabClick"
                                     CornerRadius="6"
-                                    Background="Transparent"
+                                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                     BorderThickness="0"
-                                    ToolTipService.ToolTip="Reveal in File Explorer"
-                                    AutomationProperties.Name="Reveal previewed file in File Explorer">
-                                <FontIcon Glyph="&#xE838;" FontSize="15" />
+                                    AutomationProperties.Name="Show more preview actions">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="2">
+                                    <FontIcon Glyph="&#xE712;" FontSize="15" />
+                                    <TextBlock x:Uid="MoreTabText" Text="More" FontSize="10" />
+                                    <Border x:Name="MoreTabUnderline" Width="24" Height="2" CornerRadius="1" Background="{ThemeResource AccentFillColorDefaultBrush}" Visibility="Collapsed" />
+                                </StackPanel>
                             </Button>
                         </Grid>
                         <Rectangle Height="1" Fill="{ThemeResource PreviewSurfaceBorderBrush}" />
                     </StackPanel>
-                    <StackPanel Grid.Row="1" Spacing="12">
+                    <StackPanel x:Name="InfoDetailsPanel" Grid.Row="1" Spacing="12">
                         <StackPanel Spacing="2">
                             <TextBlock x:Uid="DimensionsLabel" Text="Dimensions" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <TextBlock x:Name="PreviewDimensionsText" Text="-" FontSize="13" TextTrimming="CharacterEllipsis" />
@@ -312,7 +330,81 @@
                             <TextBlock x:Name="PreviewPathText" Text="-" FontSize="12" TextWrapping="WrapWholeWords" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </StackPanel>
-                    <Button x:Uid="OpenFileLocationButton"
+                    <Grid x:Name="ExifDetailsPanel"
+                          Grid.Row="1"
+                          Visibility="Collapsed">
+                        <StackPanel x:Name="ExifEmptyPanel"
+                                    VerticalAlignment="Center"
+                                    HorizontalAlignment="Stretch"
+                                    Spacing="8">
+                            <FontIcon Glyph="&#xE9CE;"
+                                      FontSize="28"
+                                      HorizontalAlignment="Center"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="ExifUnavailableText"
+                                       x:Uid="ExifUnavailableText"
+                                       Text="No EXIF data"
+                                       TextAlignment="Center"
+                                       FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <ScrollViewer x:Name="ExifScrollViewer"
+                                      Visibility="Collapsed"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto"
+                                      AutomationProperties.Name="EXIF metadata">
+                            <StackPanel x:Name="ExifDetailsList" Spacing="12" />
+                        </ScrollViewer>
+                    </Grid>
+                    <StackPanel x:Name="MoreActionsPanel"
+                                Grid.Row="1"
+                                Visibility="Collapsed"
+                                Spacing="8">
+                        <Button x:Uid="CopyPreviewFileButton"
+                                Height="36"
+                                HorizontalAlignment="Stretch"
+                                Click="OnCopyPreviewFileClick"
+                                CornerRadius="6"
+                                Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                AutomationProperties.Name="Copy previewed file">
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                                <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                                <TextBlock x:Uid="CopyPreviewFileText" Text="Copy file" FontSize="12" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Uid="OpenPreviewFileButton"
+                                Height="36"
+                                HorizontalAlignment="Stretch"
+                                Click="OnOpenPreviewFileClick"
+                                CornerRadius="6"
+                                Background="Transparent"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                AutomationProperties.Name="Open previewed file">
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                                <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                                <TextBlock x:Uid="OpenPreviewFileText" Text="Open file" FontSize="12" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Uid="RevealPreviewFileButton"
+                                Height="36"
+                                HorizontalAlignment="Stretch"
+                                Click="OnOpenFileLocationClick"
+                                CornerRadius="6"
+                                Background="Transparent"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                AutomationProperties.Name="Reveal previewed file in File Explorer">
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                                <FontIcon Glyph="&#xE838;" FontSize="14" />
+                                <TextBlock x:Uid="RevealPreviewFileText" Text="Reveal in Explorer" FontSize="12" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <Button x:Name="InfoOpenFileLocationButton"
+                            x:Uid="OpenFileLocationButton"
                             Grid.Row="2"
                             Height="36"
                             HorizontalAlignment="Stretch"
@@ -379,14 +471,14 @@
                             <FontIcon Glyph="&#xE740;" FontSize="15" />
                         </Button>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
-                        <Button x:Uid="ZoomPreset50Button" Width="48" Height="34" Tag="0.5" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 50 percent">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+                        <Button x:Uid="ZoomPreset50Button" Tag="0.5" Click="OnImageZoomPresetClick" Style="{StaticResource PreviewZoomPresetButtonStyle}" AutomationProperties.Name="Set zoom to 50 percent">
                             <TextBlock x:Uid="ZoomPreset50Text" Text="50%" FontSize="12" />
                         </Button>
-                        <Button x:Uid="ZoomPreset100Button" Width="54" Height="38" Tag="1" Click="OnImageZoomPresetClick" CornerRadius="5" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="2" AutomationProperties.Name="Set zoom to 100 percent">
+                        <Button x:Uid="ZoomPreset100Button" Width="52" Tag="1" Click="OnImageZoomPresetClick" Style="{StaticResource PreviewZoomPresetButtonStyle}" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}" BorderThickness="1" AutomationProperties.Name="Set zoom to 100 percent">
                             <TextBlock x:Uid="ZoomPreset100Text" Text="100%" FontSize="12" />
                         </Button>
-                        <Button x:Uid="ZoomPreset200Button" Width="48" Height="34" Tag="2" Click="OnImageZoomPresetClick" CornerRadius="5" AutomationProperties.Name="Set zoom to 200 percent">
+                        <Button x:Uid="ZoomPreset200Button" Tag="2" Click="OnImageZoomPresetClick" Style="{StaticResource PreviewZoomPresetButtonStyle}" AutomationProperties.Name="Set zoom to 200 percent">
                             <TextBlock x:Uid="ZoomPreset200Text" Text="200%" FontSize="12" />
                         </Button>
                     </StackPanel>
@@ -398,6 +490,73 @@
                             <FontIcon Glyph="&#xE72C;" FontSize="15" />
                         </Button>
                     </StackPanel>
+                </Grid>
+            </Border>
+            <Border x:Name="ImageFilmstrip"
+                    x:Uid="ImageFilmstrip"
+                    Visibility="Collapsed"
+                    Height="70"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Bottom"
+                    Margin="14,0,260,78"
+                    Padding="10,0"
+                    Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    AutomationProperties.Name="Adjacent image thumbnails">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Uid="PreviousImageButton"
+                            Click="OnPreviousImageClick"
+                            Style="{StaticResource PreviewIconButtonStyle}"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Previous image">
+                        <FontIcon Glyph="&#xE76B;" FontSize="15" />
+                    </Button>
+                    <ListView x:Name="ImageFilmstripList"
+                              Grid.Column="1"
+                              Height="58"
+                              Padding="0"
+                              SelectionMode="Single"
+                              IsItemClickEnabled="True"
+                              ItemClick="OnImageFilmstripItemClick"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Center"
+                              AutomationProperties.Name="Adjacent images">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:ImageFilmstripItem">
+                                <Border Width="62"
+                                        Height="48"
+                                        Margin="3"
+                                        CornerRadius="6"
+                                        Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                        BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                        BorderThickness="1"
+                                        ToolTipService.ToolTip="{x:Bind Name}">
+                                    <Image Source="{x:Bind Thumbnail, Mode=OneWay}"
+                                           Stretch="UniformToFill" />
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <Button x:Uid="NextImageButton"
+                            Grid.Column="2"
+                            Click="OnNextImageClick"
+                            Style="{StaticResource PreviewIconButtonStyle}"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Next image">
+                        <FontIcon Glyph="&#xE76C;" FontSize="15" />
+                    </Button>
                 </Grid>
             </Border>
             <Border x:Name="ListingPanel"

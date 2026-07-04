@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.IO;
+using System.Collections.ObjectModel;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
@@ -12,6 +13,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
 using Windows.Storage;
+using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
@@ -27,7 +29,7 @@ public sealed partial class MainWindow : Window
     private const double MaxTextWindowWidth = 1100;
     private const double MaxTextWindowHeight = 860;
     private const double RasterInfoRailWidth = 246;
-    private const double RasterToolbarHeight = 82;
+    private const double RasterToolbarHeight = 162;
     private const int SwitchDebounceMs = 110;
 
     private readonly NativeBridge _native = new();
@@ -51,8 +53,16 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _previewOperationCts;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
+    private string[] _imageSiblingPaths = [];
+    private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
+        ".heic", ".heif", ".avif", ".jxl",
+    };
+    private enum PreviewInfoRailTab { Info, Exif, More }
 
     // Show the top status text (file name / errors) only while debugging; normal use is chromeless.
     private const bool ShowStatusBar = false;
@@ -86,6 +96,7 @@ public sealed partial class MainWindow : Window
             IsPreviewGenerationCurrent,
             OpenListingItem,
             LoadListingIconAsync);
+        ImageFilmstripList.ItemsSource = _imageFilmstripItems;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
@@ -473,6 +484,8 @@ public sealed partial class MainWindow : Window
 
         PreviewInfoRail.Visibility = showRasterTools ? Visibility.Visible : Visibility.Collapsed;
         ImagePreviewToolbar.Visibility = showRasterTools ? Visibility.Visible : Visibility.Collapsed;
+        if (!showRasterTools)
+            ImageFilmstrip.Visibility = Visibility.Collapsed;
         PreviewRoot.Margin = showRasterTools
             ? new Thickness(14, 0, RasterInfoRailWidth + 14, RasterToolbarHeight)
             : new Thickness(14, 0, 14, 14);
@@ -482,6 +495,8 @@ public sealed partial class MainWindow : Window
         PreviewTypeText.Text = PreviewTypeTextFor(ready, path);
         PreviewModifiedText.Text = ModifiedText(path);
         PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? UiStrings.EmptyValue : path;
+        if (showRasterTools)
+            SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
         _rasterPresenter?.UpdateZoomLabel();
     }
 
@@ -493,6 +508,7 @@ public sealed partial class MainWindow : Window
         PreviewKindPillText.Text = UiStrings.ReadyKind;
         PreviewInfoRail.Visibility = Visibility.Collapsed;
         ImagePreviewToolbar.Visibility = Visibility.Collapsed;
+        ImageFilmstrip.Visibility = Visibility.Collapsed;
         PreviewRoot.Margin = new Thickness(14, 0, 14, 14);
         PreviewDimensionsText.Text = UiStrings.EmptyValue;
         PreviewSizeText.Text = UiStrings.EmptyValue;
@@ -500,6 +516,8 @@ public sealed partial class MainWindow : Window
         PreviewModifiedText.Text = UiStrings.EmptyValue;
         PreviewPathText.Text = UiStrings.EmptyValue;
         ImageZoomText.Text = UiStrings.FitZoom;
+        ResetExifDetails();
+        SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
     }
 
     private static string BuildPreviewMetaLine(PreviewReady ready, string? path)
@@ -640,6 +658,7 @@ public sealed partial class MainWindow : Window
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
         RasterPreviewResult result = _rasterPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        StartImageSidecarLoads(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
         return result.Status;
@@ -799,6 +818,7 @@ public sealed partial class MainWindow : Window
         ListingPanel.Visibility = Visibility.Collapsed;
         PreviewInfoRail.Visibility = Visibility.Collapsed;
         ImagePreviewToolbar.Visibility = Visibility.Collapsed;
+        ImageFilmstrip.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         if (!_previewRevealPending)
         {
@@ -811,6 +831,7 @@ public sealed partial class MainWindow : Window
         OfficePagesPanel.Children.Clear();
         TextPreviewBlock.Blocks.Clear();
         ClearPreviewHeroImages();
+        ClearImageSidecars();
         _listingPresenter?.Reset();
         ResetPreviewChrome();
     }
@@ -955,6 +976,275 @@ public sealed partial class MainWindow : Window
         ListingHeroFrame.Visibility = Visibility.Collapsed;
     }
 
+    private void StartImageSidecarLoads(PreviewReady ready)
+    {
+        string? path = _currentPath;
+        if (string.IsNullOrWhiteSpace(path) || !IsImagePath(path))
+        {
+            ClearImageSidecars();
+            return;
+        }
+        string imagePath = path;
+
+        int generation = _previewGeneration;
+        CancellationToken token = CurrentPreviewToken;
+        ResetExifDetails();
+        _ = LoadImageMetadataAsync(imagePath, generation, token);
+        _ = LoadImageFilmstripAsync(imagePath, generation, token);
+    }
+
+    private void ClearImageSidecars()
+    {
+        _imageSiblingPaths = [];
+        _imageFilmstripItems.Clear();
+        ImageFilmstripList.SelectedItem = null;
+        ImageFilmstrip.Visibility = Visibility.Collapsed;
+        ResetExifDetails();
+    }
+
+    private void ResetExifDetails()
+    {
+        ExifDetailsList.Children.Clear();
+        ExifScrollViewer.Visibility = Visibility.Collapsed;
+        ExifEmptyPanel.Visibility = Visibility.Visible;
+        ExifUnavailableText.Text = UiStrings.NoExifData;
+    }
+
+    private async Task LoadImageMetadataAsync(string path, int generation, CancellationToken token)
+    {
+        try
+        {
+            StorageFile file = await StorageFile.GetFileFromPathAsync(path);
+            ImageProperties image = await file.Properties.GetImagePropertiesAsync();
+            var names = new[]
+            {
+                "System.Image.HorizontalSize",
+                "System.Image.VerticalSize",
+                "System.Image.BitDepth",
+                "System.Image.ColorSpace",
+                "System.Photo.LensModel",
+                "System.Photo.FocalLength",
+                "System.Photo.FNumber",
+                "System.Photo.ExposureTime",
+                "System.Photo.ISOSpeed",
+                "System.Photo.ExposureBias",
+                "System.Photo.Flash",
+            };
+            IDictionary<string, object> props = await file.Properties.RetrievePropertiesAsync(names);
+            token.ThrowIfCancellationRequested();
+
+            var rows = new List<(string Label, string Value)>();
+            AddIfValue(rows, "Dimensions", image.Width > 0 && image.Height > 0 ? $"{image.Width:N0} x {image.Height:N0}" : null);
+            AddIfValue(rows, "Date taken", image.DateTaken.Year > 1900 ? image.DateTaken.LocalDateTime.ToString("G") : null);
+            AddIfValue(rows, "Camera", JoinNonEmpty(image.CameraManufacturer, image.CameraModel));
+            AddIfValue(rows, "Lens", PropText(props, "System.Photo.LensModel"));
+            AddIfValue(rows, "Focal length", FormatNumberWithUnit(PropText(props, "System.Photo.FocalLength"), "mm"));
+            AddIfValue(rows, "Aperture", FormatAperture(PropText(props, "System.Photo.FNumber")));
+            AddIfValue(rows, "Shutter speed", FormatExposure(PropText(props, "System.Photo.ExposureTime")));
+            AddIfValue(rows, "ISO", PropText(props, "System.Photo.ISOSpeed"));
+            AddIfValue(rows, "Exposure bias", FormatNumberWithUnit(PropText(props, "System.Photo.ExposureBias"), "EV"));
+            AddIfValue(rows, "Flash", PropText(props, "System.Photo.Flash"));
+            AddIfValue(rows, "Orientation", image.Orientation.ToString());
+            AddIfValue(rows, "Bit depth", FormatNumberWithUnit(PropText(props, "System.Image.BitDepth"), "bit"));
+            AddIfValue(rows, "Color space", PropText(props, "System.Image.ColorSpace"));
+            AddIfValue(rows, "Location", FormatLocation(image.Latitude, image.Longitude));
+
+            if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                    return;
+                RenderExifRows(rows);
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image metadata load failed: " + ex.Message);
+        }
+    }
+
+    private async Task LoadImageFilmstripAsync(string path, int generation, CancellationToken token)
+    {
+        try
+        {
+            string? folder = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(folder))
+                return;
+
+            string[] siblings = await Task.Run(() =>
+                Directory.EnumerateFiles(folder)
+                    .Where(IsImagePath)
+                    .OrderBy(p => Path.GetFileName(p), StringComparer.CurrentCultureIgnoreCase)
+                    .Take(600)
+                    .ToArray(), token);
+            token.ThrowIfCancellationRequested();
+
+            if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                _imageSiblingPaths = siblings;
+                _imageFilmstripItems.Clear();
+                foreach (string sibling in siblings)
+                {
+                    _imageFilmstripItems.Add(new ImageFilmstripItem
+                    {
+                        Path = sibling,
+                        Name = Path.GetFileName(sibling),
+                    });
+                }
+                SelectCurrentFilmstripItem(path);
+                ImageFilmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
+            });
+
+            foreach (string sibling in PrioritizeSiblings(siblings, path))
+            {
+                token.ThrowIfCancellationRequested();
+                NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96), token);
+                if (raster is null)
+                    continue;
+                ImageSource? source = CreateBitmapSource(raster);
+                if (source is null)
+                    continue;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!IsPreviewGenerationCurrent(generation, token))
+                        return;
+                    ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
+                        string.Equals(i.Path, sibling, StringComparison.OrdinalIgnoreCase));
+                    if (item is not null)
+                        item.Thumbnail = source;
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image filmstrip load failed: " + ex.Message);
+        }
+    }
+
+    private static IEnumerable<string> PrioritizeSiblings(string[] siblings, string currentPath)
+    {
+        int current = Array.FindIndex(siblings, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
+        if (current < 0)
+            return siblings;
+        return siblings
+            .Select((path, index) => (path, distance: Math.Abs(index - current)))
+            .OrderBy(i => i.distance)
+            .Select(i => i.path);
+    }
+
+    private void RenderExifRows(IReadOnlyList<(string Label, string Value)> rows)
+    {
+        ExifDetailsList.Children.Clear();
+        if (rows.Count == 0)
+        {
+            ExifScrollViewer.Visibility = Visibility.Collapsed;
+            ExifEmptyPanel.Visibility = Visibility.Visible;
+            return;
+        }
+
+        foreach (var (label, value) in rows)
+            AddRailDetail(ExifDetailsList, label, value);
+
+        ExifEmptyPanel.Visibility = Visibility.Collapsed;
+        ExifScrollViewer.Visibility = Visibility.Visible;
+    }
+
+    private static void AddRailDetail(StackPanel panel, string label, string value)
+    {
+        var stack = new StackPanel { Spacing = 2 };
+        stack.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 11,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = value,
+            FontSize = 13,
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+        panel.Children.Add(stack);
+    }
+
+    private void SelectCurrentFilmstripItem(string path)
+    {
+        ImageFilmstripItem? current = _imageFilmstripItems.FirstOrDefault(i =>
+            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (current is null)
+            return;
+        ImageFilmstripList.SelectedItem = current;
+        ImageFilmstripList.ScrollIntoView(current);
+    }
+
+    private static void AddIfValue(List<(string Label, string Value)> rows, string label, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && value != "Unspecified")
+            rows.Add((label, value));
+    }
+
+    private static string? JoinNonEmpty(params string?[] values)
+    {
+        string[] parts = values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim()).ToArray();
+        return parts.Length == 0 ? null : string.Join(" ", parts);
+    }
+
+    private static string? PropText(IDictionary<string, object> props, string name)
+        => props.TryGetValue(name, out object? value) ? FormatPropertyValue(value) : null;
+
+    private static string? FormatPropertyValue(object? value)
+    {
+        if (value is null)
+            return null;
+        if (value is string s)
+            return string.IsNullOrWhiteSpace(s) ? null : s;
+        if (value is string[] strings)
+            return string.Join(", ", strings.Where(x => !string.IsNullOrWhiteSpace(x)));
+        if (value is DateTimeOffset dto)
+            return dto.LocalDateTime.ToString("G");
+        if (value is double d)
+            return d.ToString("0.##");
+        if (value is float f)
+            return f.ToString("0.##");
+        return value.ToString();
+    }
+
+    private static string? FormatNumberWithUnit(string? raw, string unit)
+        => string.IsNullOrWhiteSpace(raw) ? null : $"{raw} {unit}";
+
+    private static string? FormatAperture(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : $"f/{raw}";
+
+    private static string? FormatExposure(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!double.TryParse(raw, out double seconds) || seconds <= 0)
+            return raw + " sec";
+        return seconds < 1.0 ? $"1/{Math.Round(1.0 / seconds):0} sec" : $"{seconds:0.##} sec";
+    }
+
+    private static string? FormatLocation(double? latitude, double? longitude)
+        => latitude is { } lat && longitude is { } lon ? $"{lat:0.#####}, {lon:0.#####}" : null;
+
+    private static bool IsImagePath(string? path)
+        => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
+
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
         => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
 
@@ -1009,6 +1299,73 @@ public sealed partial class MainWindow : Window
             _rasterPresenter?.SetZoom(zoom);
     }
 
+    private async void OnPreviousImageClick(object sender, RoutedEventArgs e)
+        => await NavigateImageSiblingAsync(-1);
+
+    private async void OnNextImageClick(object sender, RoutedEventArgs e)
+        => await NavigateImageSiblingAsync(1);
+
+    private async void OnImageFilmstripItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is ImageFilmstripItem item)
+            await PreviewImagePathAsync(item.Path);
+    }
+
+    private async Task NavigateImageSiblingAsync(int delta)
+    {
+        if (_imageSiblingPaths.Length == 0 || string.IsNullOrWhiteSpace(_currentPath))
+            return;
+
+        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, _currentPath, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+            return;
+
+        int next = (index + delta + _imageSiblingPaths.Length) % _imageSiblingPaths.Length;
+        await PreviewImagePathAsync(_imageSiblingPaths[next]);
+    }
+
+    private async Task PreviewImagePathAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Switch, [path]));
+    }
+
+    private void OnPreviewInfoTabClick(object sender, RoutedEventArgs e)
+        => SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
+
+    private void OnPreviewExifTabClick(object sender, RoutedEventArgs e)
+        => SetPreviewInfoRailTab(PreviewInfoRailTab.Exif);
+
+    private void OnPreviewMoreTabClick(object sender, RoutedEventArgs e)
+        => SetPreviewInfoRailTab(PreviewInfoRailTab.More);
+
+    private void SetPreviewInfoRailTab(PreviewInfoRailTab tab)
+    {
+        if (InfoDetailsPanel is null)
+            return;
+
+        InfoDetailsPanel.Visibility = tab == PreviewInfoRailTab.Info ? Visibility.Visible : Visibility.Collapsed;
+        ExifDetailsPanel.Visibility = tab == PreviewInfoRailTab.Exif ? Visibility.Visible : Visibility.Collapsed;
+        MoreActionsPanel.Visibility = tab == PreviewInfoRailTab.More ? Visibility.Visible : Visibility.Collapsed;
+        InfoOpenFileLocationButton.Visibility = tab == PreviewInfoRailTab.Info ? Visibility.Visible : Visibility.Collapsed;
+
+        SetPreviewInfoTabVisual(InfoTabButton, InfoTabUnderline, tab == PreviewInfoRailTab.Info);
+        SetPreviewInfoTabVisual(ExifTabButton, ExifTabUnderline, tab == PreviewInfoRailTab.Exif);
+        SetPreviewInfoTabVisual(MoreTabButton, MoreTabUnderline, tab == PreviewInfoRailTab.More);
+    }
+
+    private static void SetPreviewInfoTabVisual(Button button, FrameworkElement underline, bool selected)
+    {
+        underline.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+        button.Opacity = selected ? 1.0 : 0.72;
+        button.BorderThickness = selected ? new Thickness(1) : new Thickness(0);
+    }
+
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         if (_rasterPresenter?.HasSurface != true || PreviewRoot.Visibility != Visibility.Visible)
@@ -1022,6 +1379,20 @@ public sealed partial class MainWindow : Window
             || (controlDown && e.Key is Windows.System.VirtualKey.Number0 or Windows.System.VirtualKey.NumberPad0))
         {
             _rasterPresenter.ResetView();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Left)
+        {
+            _ = NavigateImageSiblingAsync(-1);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Right)
+        {
+            _ = NavigateImageSiblingAsync(1);
             e.Handled = true;
         }
     }
