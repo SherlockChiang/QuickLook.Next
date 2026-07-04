@@ -100,7 +100,7 @@ internal sealed class TextPreviewPresenter
                 AddMarkdownList(block, ordered: true);
                 break;
             case "code":
-                AddMarkdownCodeBlock(block.Text, string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language);
+                _ = AddMarkdownCodeBlockAsync(block.Text, string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language);
                 break;
             case "thematicBreak":
                 AddMarkdownRule();
@@ -315,7 +315,7 @@ internal sealed class TextPreviewPresenter
             {
                 if (inCode)
                 {
-                    AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
+                    _ = AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
                     code = "";
                     codeLanguage = "text";
                     inCode = false;
@@ -386,7 +386,7 @@ internal sealed class TextPreviewPresenter
             // To preserve order properly we should await it, but RenderMarkdown is synchronous right now.
             // A quick fix is to fire-and-forget or keep markdown code highlighting synchronous if it's small,
             // but for full files, we use RenderCodeOrPlainTextAsync.
-            AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
+            _ = AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
         }
     }
 
