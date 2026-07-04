@@ -772,12 +772,15 @@ fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
 
 fn next_markdown_inline_token(text: &str) -> usize {
     let mut next = text.len();
-    for token in ["`", "**", "*", "["] {
-        if let Some(at) = text[1.min(text.len())..].find(token) {
-            next = next.min(at + 1);
+    let start = text.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+    if start > 0 {
+        for token in ["`", "**", "*", "["] {
+            if let Some(at) = text[start..].find(token) {
+                next = next.min(at + start);
+            }
         }
     }
-    next.max(1)
+    next.max(start)
 }
 
 fn render_delimited_table_json(
@@ -4588,6 +4591,17 @@ mod tests {
         assert_eq!(blocks[0].level, 1);
         assert!(blocks[0].inlines.iter().any(|i| i.kind == "strong"));
         assert!(blocks[0].inlines.iter().any(|i| i.kind == "code"));
+    }
+
+    #[test]
+    fn markdown_parser_does_not_panic_on_non_ascii() {
+        let (blocks, partial) = parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。");
+        assert!(!partial);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].kind, "heading");
+        assert_eq!(blocks[0].text, "中文标题");
+        assert_eq!(blocks[1].kind, "paragraph");
+        assert!(blocks[1].inlines.iter().any(|i| i.kind == "strong"));
     }
 
     #[test]
