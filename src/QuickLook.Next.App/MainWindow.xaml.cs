@@ -1243,7 +1243,7 @@ public sealed partial class MainWindow : Window
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ResolveAppIconPath,
             () => ShowPreviewWindow(activate: true),
-            ShowTrayContextMenu,
+            ExitApp,
             message => StatusText.Text = message);
         _trayIcon.Ensure();
     }
@@ -1266,39 +1266,6 @@ public sealed partial class MainWindow : Window
 
     private void ShowTrayBalloon(string title, string message)
         => _trayIcon?.ShowBalloon(title, message);
-
-    private void ShowTrayContextMenu(int screenX, int screenY)
-    {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            var flyout = new MenuFlyout();
-
-            var showItem = new MenuFlyoutItem { Text = UiStrings.TrayShowPreview };
-            showItem.Click += (_, _) => ShowPreviewWindow(activate: true);
-            flyout.Items.Add(showItem);
-
-            var autoStartItem = new ToggleMenuFlyoutItem
-            {
-                Text = UiStrings.TrayAutoStart,
-                IsChecked = AutoStart.IsEnabled(),
-            };
-            autoStartItem.Click += (_, _) => _trayIcon?.ToggleAutoStart();
-            flyout.Items.Add(autoStartItem);
-
-            var exitItem = new MenuFlyoutItem { Text = UiStrings.TrayExit };
-            exitItem.Click += (_, _) => ExitApp();
-            flyout.Items.Add(exitItem);
-
-            var options = new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions
-            {
-                Position = _windowController.ScreenToClientPoint(
-                    screenX,
-                    screenY,
-                    RootGrid.XamlRoot?.RasterizationScale ?? 1.0),
-            };
-            flyout.ShowAt(RootGrid, options);
-        });
-    }
 
     private void ExitApp()
     {

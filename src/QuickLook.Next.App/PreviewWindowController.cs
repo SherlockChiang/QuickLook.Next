@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
-using Windows.Foundation;
 
 namespace QuickLook.Next.App;
 
@@ -65,23 +64,6 @@ internal sealed class PreviewWindowController
     public void Hide()
         => ShowWindow(_hwndProvider(), SW_HIDE);
 
-    public Point ScreenToClientPoint(int screenX, int screenY, double rasterizationScale)
-    {
-        POINT point = new() { X = screenX, Y = screenY };
-        if (!ScreenToClient(_hwndProvider(), ref point))
-            return new Point(0, 0);
-
-        double scale = rasterizationScale > 0 ? rasterizationScale : 1.0;
-        return new Point(point.X / scale, point.Y / scale);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
-
     private const int GWL_EXSTYLE = -20;
     private const int SW_HIDE = 0;
     private const int SW_SHOWNOACTIVATE = 4;
@@ -105,6 +87,4 @@ internal sealed class PreviewWindowController
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool ScreenToClient(nint hWnd, ref POINT lpPoint);
 }

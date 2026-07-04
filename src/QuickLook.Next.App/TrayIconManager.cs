@@ -8,7 +8,7 @@ internal sealed class TrayIconManager
     private readonly nint _hwnd;
     private readonly Func<string> _resolveIconPath;
     private readonly Action _showPreview;
-    private readonly Action<int, int> _showTrayMenu;
+    private readonly Action _exitApp;
     private readonly Action<string> _setStatus;
 
     private bool _trayIconAdded;
@@ -22,13 +22,13 @@ internal sealed class TrayIconManager
         nint hwnd,
         Func<string> resolveIconPath,
         Action showPreview,
-        Action<int, int> showTrayMenu,
+        Action exitApp,
         Action<string> setStatus)
     {
         _hwnd = hwnd;
         _resolveIconPath = resolveIconPath;
         _showPreview = showPreview;
-        _showTrayMenu = showTrayMenu;
+        _exitApp = exitApp;
         _setStatus = setStatus;
     }
 
@@ -151,7 +151,45 @@ internal sealed class TrayIconManager
     private void ShowTrayMenu()
     {
         GetCursorPos(out POINT pt);
-        _showTrayMenu(pt.X, pt.Y);
+        nint menu = CreatePopupMenu();
+        if (menu == nint.Zero)
+            return;
+
+        try
+        {
+            AppendMenu(menu, MF_STRING, TrayCommandShowPreview, UiStrings.TrayShowPreview);
+            AppendMenu(menu, MF_STRING | (AutoStart.IsEnabled() ? MF_CHECKED : MF_UNCHECKED), TrayCommandAutoStart, UiStrings.TrayAutoStart);
+            AppendMenu(menu, MF_SEPARATOR, UIntPtr.Zero, string.Empty);
+            AppendMenu(menu, MF_STRING, TrayCommandExit, UiStrings.TrayExit);
+
+            SetForegroundWindow(_hwnd);
+            uint command = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                pt.X,
+                pt.Y,
+                0,
+                _hwnd,
+                nint.Zero);
+            PostMessage(_hwnd, WM_NULL, nint.Zero, nint.Zero);
+
+            switch (command)
+            {
+                case TrayCommandShowPreviewValue:
+                    _showPreview();
+                    break;
+                case TrayCommandAutoStartValue:
+                    ToggleAutoStart();
+                    break;
+                case TrayCommandExitValue:
+                    _exitApp();
+                    break;
+            }
+        }
+        finally
+        {
+            DestroyMenu(menu);
+        }
     }
 
     public void ToggleAutoStart()
@@ -206,8 +244,21 @@ internal sealed class TrayIconManager
     private const uint NIIF_WARNING = 0x00000002;
     private const uint WM_APP = 0x8000;
     private const uint WM_TRAYICON = WM_APP + 101;
+    private const uint WM_NULL = 0x0000;
     private const uint LR_LOADFROMFILE = 0x00000010;
     private const uint LR_DEFAULTSIZE = 0x00000040;
+    private const uint MF_STRING = 0x00000000;
+    private const uint MF_CHECKED = 0x00000008;
+    private const uint MF_UNCHECKED = 0x00000000;
+    private const uint MF_SEPARATOR = 0x00000800;
+    private const uint TPM_RIGHTBUTTON = 0x0002;
+    private const uint TPM_RETURNCMD = 0x0100;
+    private const uint TrayCommandShowPreviewValue = 1;
+    private const uint TrayCommandAutoStartValue = 2;
+    private const uint TrayCommandExitValue = 3;
+    private static readonly UIntPtr TrayCommandShowPreview = new(TrayCommandShowPreviewValue);
+    private static readonly UIntPtr TrayCommandAutoStart = new(TrayCommandAutoStartValue);
+    private static readonly UIntPtr TrayCommandExit = new(TrayCommandExitValue);
     private static readonly nint IDI_APPLICATION = new(32512);
     private static readonly nint WM_LBUTTONDBLCLK = new(0x0203);
     private static readonly nint WM_RBUTTONUP = new(0x0205);
@@ -231,4 +282,22 @@ internal sealed class TrayIconManager
     private static extern bool DestroyIcon(nint hIcon);
 
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern nint CreatePopupMenu();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool AppendMenu(nint hMenu, uint uFlags, UIntPtr uIDNewItem, string lpNewItem);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyMenu(nint hMenu);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint TrackPopupMenu(nint hMenu, uint uFlags, int x, int y, int nReserved, nint hWnd, nint prcRect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
 }

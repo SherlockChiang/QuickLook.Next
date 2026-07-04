@@ -11,8 +11,10 @@ left visible instead of hidden behind vague TODOs.
   native layer rather than the legacy .NET plugin pipeline.
 - RasterHost is lazy-started and scoped to surface-producing work: images, PDF
   page rasterization, shell thumbnails, and fallback media/image surfaces.
-- Win32 tray `TrackPopupMenu` was removed from the App hot path. The tray menu is
-  now a WinUI `MenuFlyout`.
+- Tray context menu handling is isolated in `TrayIconManager`. It uses a native
+  popup menu because the preview window is normally hidden/no-activate, so a
+  WinUI `MenuFlyout` anchored to the App XAML root is not reliable for tray
+  right-clicks.
 - WebView/WebView2 use is guarded out of the product path.
 - Legacy `.NET Plugin.*` projects are kept as reference source only. They are
   not in the default solution, default plugin discovery path, or release package
@@ -60,11 +62,13 @@ powershell -ExecutionPolicy Bypass -File tools\guard-architecture.ps1 -SkipDist
 Useful targeted checks:
 
 ```powershell
-rg -n "TrackPopupMenu|CreatePopupMenu|AppendMenuW|DestroyMenu|TPM_|MF_CHECKED|MF_STRING" src tools README.md docs
+rg -n "TrackPopupMenu|CreatePopupMenu|AppendMenu|DestroyMenu|TPM_|MF_CHECKED|MF_STRING" src\QuickLook.Next.App
 rg -n "WebView|WebView2" src native tools README.md docs
 rg -n "QuickLook.Next.Plugin." src tools README.md docs
 rg -n "read_to_end\(&mut bytes\)" native\quicklook_next_native\src\preview.rs
 ```
+
+The tray popup search should only hit `src/QuickLook.Next.App/TrayIconManager.cs`.
 
 The remaining `read_to_end` calls in `preview.rs` should be limited to:
 
