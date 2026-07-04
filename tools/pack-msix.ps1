@@ -22,6 +22,7 @@ $manifestContent = @"
 <Package 
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" 
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" 
+    xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
     
     <Identity Name="QuickLook.Next" Version="$version" Publisher="CN=QuickLookNextDev" ProcessorArchitecture="x64" />
@@ -53,6 +54,11 @@ $manifestContent = @"
                 Square44x44Logo="Assets\Square44x44Logo.png" 
                 Description="QuickLook Next App"
                 BackgroundColor="transparent" />
+            <Extensions>
+                <desktop:Extension Category="windows.startupTask" Executable="QuickLook.Next.App.exe" EntryPoint="Windows.FullTrustApplication">
+                    <desktop:StartupTask TaskId="QuickLookNextStartup" Enabled="false" DisplayName="QuickLook Next" />
+                </desktop:Extension>
+            </Extensions>
         </Application>
     </Applications>
 </Package>

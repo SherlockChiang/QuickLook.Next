@@ -1,32 +1,46 @@
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using QuickLook.Next.Core;
+using Windows.ApplicationModel;
 
 namespace QuickLook.Next.App;
 
-/// <summary>Run-at-login via HKCU Run, with the user's Startup folder as a fallback.</summary>
+/// <summary>
+/// Run-at-login management. Uses the <see cref="StartupTask"/> API for MSIX-packaged deployments
+/// (the only mechanism that works under MSIX registry/filesystem virtualisation). Falls back to
+/// HKCU Run + Startup-folder shortcuts for unpackaged (development) builds.
+/// </summary>
 internal static class AutoStart
 {
+    private const string StartupTaskId = "QuickLookNextStartup";
+
+    // ── Unpackaged constants ──
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "QuickLookNext";
     private const string ShortcutName = "QuickLook Next.lnk";
 
+    // ── Packaged detection (cached) ──
+    private static readonly bool _isPackaged = DetectPackaged();
+
+    // ───────────────────────────────────────────── public API ─────────────────────────────────────────────
+
     public static bool IsEnabled()
     {
+        if (_isPackaged)
+            return IsStartupTaskEnabled();
+
         string exe = CurrentExePath();
-        if (exe.Length == 0)
-            return false;
-
-        if (IsRunValueEnabled(exe))
-            return true;
-
-        return IsShortcutEnabled(exe);
+        if (exe.Length == 0) return false;
+        return IsRunValueEnabled(exe) || IsShortcutEnabled(exe);
     }
 
     public static bool SetEnabled(bool enabled)
     {
         try
         {
+            if (_isPackaged)
+                return SetStartupTaskEnabled(enabled);
+
             if (enabled)
             {
                 string exe = CurrentExePath();
@@ -65,6 +79,9 @@ internal static class AutoStart
     {
         try
         {
+            // Packaged apps manage their own state via the StartupTask API — no repair needed.
+            if (_isPackaged) return;
+
             if (!HasAnyEntry() || IsEnabled())
                 return;
 
@@ -76,6 +93,85 @@ internal static class AutoStart
             DiagLog.Write("App", "autostart repair failed: " + ex.Message);
         }
     }
+
+    // ──────────────────────────────── MSIX StartupTask implementation ────────────────────────────────
+
+    private static bool DetectPackaged()
+    {
+        try
+        {
+            // Accessing Package.Current throws InvalidOperationException when unpackaged.
+            _ = Package.Current.Id;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsStartupTaskEnabled()
+    {
+        try
+        {
+            var task = StartupTask.GetAsync(StartupTaskId).AsTask().GetAwaiter().GetResult();
+            return task.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "StartupTask query failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    private static bool SetStartupTaskEnabled(bool enabled)
+    {
+        try
+        {
+            var task = StartupTask.GetAsync(StartupTaskId).AsTask().GetAwaiter().GetResult();
+
+            if (enabled)
+            {
+                if (task.State is StartupTaskState.DisabledByPolicy or StartupTaskState.EnabledByPolicy)
+                {
+                    DiagLog.Write("App", $"StartupTask controlled by policy (state={task.State}); cannot change");
+                    return false;
+                }
+
+                if (task.State is StartupTaskState.Enabled)
+                {
+                    DiagLog.Write("App", "StartupTask already enabled");
+                    return true;
+                }
+
+                var result = task.RequestEnableAsync().AsTask().GetAwaiter().GetResult();
+                bool ok = result is StartupTaskState.Enabled;
+                DiagLog.Write("App", ok
+                    ? "autostart enabled via StartupTask API"
+                    : $"StartupTask enable request returned: {result}");
+                return ok;
+            }
+            else
+            {
+                if (task.State is StartupTaskState.DisabledByPolicy or StartupTaskState.EnabledByPolicy)
+                {
+                    DiagLog.Write("App", $"StartupTask controlled by policy (state={task.State}); cannot change");
+                    return false;
+                }
+
+                task.Disable();
+                DiagLog.Write("App", "autostart disabled via StartupTask API");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "StartupTask update failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    // ─────────────────────────────── Unpackaged implementation (HKCU Run + Shortcut) ───────────────────────────────
 
     private static string ShortcutPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.Startup),
