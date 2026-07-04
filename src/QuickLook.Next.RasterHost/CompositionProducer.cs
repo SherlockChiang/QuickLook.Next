@@ -82,12 +82,21 @@ internal sealed unsafe class CompositionProducer : IDisposable
         }
     }
 
-    /// <summary>Create (or recreate, on resize) the shared surface; returns the App-process handle value.</summary>
     public long CreateSurface(uint width, uint height)
     {
         var (surface, sc) = CreateSwapchain(width, height);
         lock (_sync)
         {
+            if (_swapchain != null)
+            {
+                _retired.Add(_swapchain);
+                _liveSwapchains.Remove(_swapchain);
+                while (_retired.Count > 3)
+                {
+                    ReleaseCom(_retired[0]);
+                    _retired.RemoveAt(0);
+                }
+            }
             _swapchain = sc;
             _liveSwapchains.Add(sc);
         }
