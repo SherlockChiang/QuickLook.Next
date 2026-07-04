@@ -9,6 +9,8 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
+// Office preview is intentionally an approximate native layout renderer. It draws the structured
+// PPT/XLSX model from Rust into WinUI controls; it is not expected to match the Office rendering engine.
 internal sealed class OfficePreviewPresenter
 {
     private static readonly SolidColorBrush OfficeWhiteBrush = new(Colors.White);

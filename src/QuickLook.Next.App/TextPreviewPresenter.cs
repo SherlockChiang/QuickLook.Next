@@ -47,7 +47,9 @@ internal sealed class TextPreviewPresenter
 
         try
         {
-            if (ready.TextFormat == "markdown")
+            if (ready.Markdown is not null)
+                RenderMarkdownDocument(ready.Markdown);
+            else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
                 RenderCodeOrPlainText(text, ready.TextLanguage ?? "text");
@@ -65,6 +67,188 @@ internal sealed class TextPreviewPresenter
         _textBlock.Focus(FocusState.Programmatic);
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         return new TextPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
+    }
+
+    private void RenderMarkdownDocument(PreviewMarkdown document)
+    {
+        foreach (PreviewMarkdownBlock block in document.Blocks)
+            AddMarkdownBlock(block);
+
+        if (document.IsPartial)
+        {
+            var partial = CreateParagraph(12, "Segoe UI", 12, 0);
+            partial.Foreground = UiGrayBrush;
+            partial.Inlines.Add(new Run { Text = "[Preview truncated]" });
+            _textBlock.Blocks.Add(partial);
+        }
+    }
+
+    private void AddMarkdownBlock(PreviewMarkdownBlock block)
+    {
+        switch (block.Kind)
+        {
+            case "heading":
+                AddMarkdownHeading(block);
+                break;
+            case "blockquote":
+                AddMarkdownQuote(block);
+                break;
+            case "unorderedList":
+                AddMarkdownList(block, ordered: false);
+                break;
+            case "orderedList":
+                AddMarkdownList(block, ordered: true);
+                break;
+            case "code":
+                AddMarkdownCodeBlock(block.Text, string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language);
+                break;
+            case "thematicBreak":
+                AddMarkdownRule();
+                break;
+            case "table":
+                AddMarkdownTable(block);
+                break;
+            default:
+                AddMarkdownParagraph(block);
+                break;
+        }
+    }
+
+    private void AddMarkdownHeading(PreviewMarkdownBlock block)
+    {
+        double size = block.Level switch
+        {
+            <= 1 => 28,
+            2 => 23,
+            3 => 19,
+            _ => 16,
+        };
+        var p = CreateParagraph(size, "Segoe UI", block.Level <= 2 ? 16 : 10, 8);
+        var bold = new Bold();
+        AddMarkdownInlines(bold.Inlines, block.Inlines, block.Text);
+        p.Inlines.Add(bold);
+        _textBlock.Blocks.Add(p);
+    }
+
+    private void AddMarkdownParagraph(PreviewMarkdownBlock block)
+    {
+        var p = CreateParagraph(14, "Segoe UI", 0, 9);
+        AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
+        _textBlock.Blocks.Add(p);
+    }
+
+    private void AddMarkdownQuote(PreviewMarkdownBlock block)
+    {
+        var p = CreateParagraph(14, "Segoe UI", 4, 10);
+        p.Foreground = UiGrayBrush;
+        p.Inlines.Add(new Run { Text = "| " });
+        AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
+        _textBlock.Blocks.Add(p);
+    }
+
+    private void AddMarkdownList(PreviewMarkdownBlock block, bool ordered)
+    {
+        int index = 1;
+        foreach (PreviewMarkdownBlock item in block.Children)
+        {
+            var p = CreateParagraph(14, "Segoe UI", 0, 5);
+            p.Margin = new Thickness(18, 0, 0, 5);
+            p.Inlines.Add(new Run { Text = ordered ? $"{index}. " : "- " });
+            AddMarkdownInlines(p.Inlines, item.Inlines, item.Text);
+            _textBlock.Blocks.Add(p);
+            index++;
+        }
+    }
+
+    private void AddMarkdownRule()
+    {
+        var p = CreateParagraph(12, "Segoe UI", 8, 10);
+        p.Foreground = UiGrayBrush;
+        p.Inlines.Add(new Run { Text = "----------------------------------------" });
+        _textBlock.Blocks.Add(p);
+    }
+
+    private void AddMarkdownTable(PreviewMarkdownBlock block)
+    {
+        string tableText = BuildMarkdownTableText(block);
+        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 4, 12);
+        p.Foreground = BrushFor(TokenKind.Default);
+        p.Inlines.Add(new Run { Text = tableText.Length == 0 ? " " : tableText });
+        _textBlock.Blocks.Add(p);
+    }
+
+    private static string BuildMarkdownTableText(PreviewMarkdownBlock block)
+    {
+        int columns = Math.Max(
+            block.TableHeaders.Length,
+            block.TableRows.Select(row => row.Length).DefaultIfEmpty(0).Max());
+        if (columns <= 0)
+            return "";
+
+        var widths = new int[columns];
+        for (int i = 0; i < columns; i++)
+            widths[i] = Math.Min(32, block.TableHeaders.ElementAtOrDefault(i)?.Length ?? 0);
+        foreach (string[] row in block.TableRows.Take(120))
+        {
+            for (int i = 0; i < columns; i++)
+                widths[i] = Math.Max(widths[i], Math.Min(32, row.ElementAtOrDefault(i)?.Length ?? 0));
+        }
+
+        string FormatRow(IReadOnlyList<string> cells)
+            => "| " + string.Join(" | ", Enumerable.Range(0, columns).Select(i =>
+                (cells.ElementAtOrDefault(i) ?? "").PadRight(Math.Max(3, widths[i])))) + " |";
+
+        var lines = new List<string> { FormatRow(block.TableHeaders) };
+        lines.Add("| " + string.Join(" | ", widths.Select(width => new string('-', Math.Max(3, width)))) + " |");
+        lines.AddRange(block.TableRows.Take(120).Select(FormatRow));
+        return string.Join("\n", lines);
+    }
+
+    private void AddMarkdownInlines(InlineCollection target, IReadOnlyList<PreviewMarkdownInline> inlines, string fallbackText)
+    {
+        if (inlines.Count == 0)
+        {
+            target.Add(new Run { Text = fallbackText });
+            return;
+        }
+
+        foreach (PreviewMarkdownInline inline in inlines)
+            AddMarkdownInline(target, inline);
+    }
+
+    private void AddMarkdownInline(InlineCollection target, PreviewMarkdownInline inline)
+    {
+        switch (inline.Kind)
+        {
+            case "code":
+                target.Add(new Run
+                {
+                    Text = inline.Text,
+                    FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
+                    Foreground = BrushFor(TokenKind.Keyword),
+                });
+                break;
+            case "strong":
+                var bold = new Bold();
+                AddMarkdownInlines(bold.Inlines, inline.Children, inline.Text);
+                target.Add(bold);
+                break;
+            case "emphasis":
+                var italic = new Italic();
+                AddMarkdownInlines(italic.Inlines, inline.Children, inline.Text);
+                target.Add(italic);
+                break;
+            case "link":
+                var link = new Span { Foreground = BrushFor(TokenKind.Keyword) };
+                AddMarkdownInlines(link.Inlines, inline.Children, inline.Text);
+                if (!string.IsNullOrWhiteSpace(inline.Url))
+                    link.Inlines.Add(new Run { Text = $" ({inline.Url})" });
+                target.Add(link);
+                break;
+            default:
+                target.Add(new Run { Text = inline.Text });
+                break;
+        }
     }
 
     private static (double Width, double Height) EstimateTextPreviewSize(

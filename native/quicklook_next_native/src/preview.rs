@@ -34,6 +34,8 @@ struct PreviewReadyDto {
     listing: Option<PreviewListingDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     table: Option<PreviewTableDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    markdown: Option<PreviewMarkdownDto>,
 }
 
 #[derive(Serialize)]
@@ -131,6 +133,35 @@ struct PreviewTableRowDto {
     cells: Vec<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewMarkdownDto {
+    blocks: Vec<PreviewMarkdownBlockDto>,
+    is_partial: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PreviewMarkdownBlockDto {
+    kind: String,
+    level: usize,
+    text: String,
+    language: String,
+    inlines: Vec<PreviewMarkdownInlineDto>,
+    children: Vec<PreviewMarkdownBlockDto>,
+    table_headers: Vec<String>,
+    table_rows: Vec<Vec<String>>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PreviewMarkdownInlineDto {
+    kind: String,
+    text: String,
+    url: String,
+    children: Vec<PreviewMarkdownInlineDto>,
+}
+
 #[derive(Debug, Clone)]
 enum BValue {
     Int(i64),
@@ -149,10 +180,16 @@ const MAX_TEXT_BYTES: usize = 512 * 1024;
 const MAX_TABLE_ROWS: usize = 500;
 const MAX_TABLE_COLUMNS: usize = 64;
 const MAX_TABLE_CELL_CHARS: usize = 240;
+const MAX_MARKDOWN_BLOCKS: usize = 500;
+const MAX_MARKDOWN_LIST_ITEMS: usize = 300;
+const MAX_MARKDOWN_TABLE_ROWS: usize = 120;
+const MAX_MARKDOWN_INLINE_CHARS: usize = 4096;
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
+const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
 
 fn file_size_modified(path: &str) -> (i64, i64) {
     let meta = fs::metadata(path).ok();
@@ -343,6 +380,9 @@ pub fn render_text(path: &str) -> String {
     };
 
     let mut text = text.into_owned();
+    if format == "markdown" {
+        return render_markdown_json(filename, &text, truncated);
+    }
     if language == "csv" || language == "tsv" {
         return render_delimited_table_json(
             filename,
@@ -374,7 +414,370 @@ pub fn render_text(path: &str) -> String {
         office_layout: None,
         listing: None,
         table: None,
+        markdown: None,
     })
+}
+
+fn render_markdown_json(filename: &str, text: &str, input_truncated: bool) -> String {
+    let (blocks, parse_partial) = parse_markdown_blocks(text);
+    to_json(&PreviewReadyDto {
+        kind: "markdown".to_string(),
+        title: filename.to_string(),
+        format: Some("markdown".to_string()),
+        language: Some("markdown".to_string()),
+        text: Some(if input_truncated {
+            format!("{text}\n\n[Preview truncated at {MAX_TEXT_BYTES} bytes]")
+        } else {
+            text.to_string()
+        }),
+        office_layout: None,
+        listing: None,
+        table: None,
+        markdown: Some(PreviewMarkdownDto {
+            blocks,
+            is_partial: input_truncated || parse_partial,
+        }),
+    })
+}
+
+fn parse_markdown_blocks(text: &str) -> (Vec<PreviewMarkdownBlockDto>, bool) {
+    let lines = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = lines.split('\n').collect();
+    let mut blocks = Vec::new();
+    let mut i = 0usize;
+    let mut partial = false;
+
+    while i < lines.len() {
+        if blocks.len() >= MAX_MARKDOWN_BLOCKS {
+            partial = true;
+            break;
+        }
+
+        let line = lines[i];
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        if let Some(language) = fenced_code_language(trimmed) {
+            i += 1;
+            let mut code = String::new();
+            while i < lines.len() {
+                if lines[i].trim_start().starts_with("```") {
+                    i += 1;
+                    break;
+                }
+                code.push_str(lines[i]);
+                code.push('\n');
+                i += 1;
+            }
+            blocks.push(markdown_block("code", 0, code.trim_end_matches('\n'), &language));
+            continue;
+        }
+
+        if is_markdown_rule(trimmed) {
+            blocks.push(markdown_block("thematicBreak", 0, "", ""));
+            i += 1;
+            continue;
+        }
+
+        if let Some((level, heading)) = parse_heading(trimmed) {
+            let mut block = markdown_block("heading", level, heading, "");
+            block.inlines = parse_markdown_inlines(heading);
+            blocks.push(block);
+            i += 1;
+            continue;
+        }
+
+        if is_markdown_table_start(&lines, i) {
+            let (block, next, table_partial) = parse_markdown_table(&lines, i);
+            blocks.push(block);
+            partial |= table_partial;
+            i = next;
+            continue;
+        }
+
+        if let Some((ordered, start_text)) = parse_list_item(trimmed) {
+            let (block, next, list_partial) = parse_markdown_list(&lines, i, ordered, start_text);
+            blocks.push(block);
+            partial |= list_partial;
+            i = next;
+            continue;
+        }
+
+        if trimmed.starts_with('>') {
+            let (block, next) = parse_markdown_quote(&lines, i);
+            blocks.push(block);
+            i = next;
+            continue;
+        }
+
+        let mut paragraph = String::new();
+        while i < lines.len() {
+            let candidate = lines[i].trim();
+            if candidate.is_empty()
+                || fenced_code_language(candidate).is_some()
+                || parse_heading(candidate).is_some()
+                || is_markdown_rule(candidate)
+                || is_markdown_table_start(&lines, i)
+                || parse_list_item(candidate).is_some()
+                || candidate.starts_with('>')
+            {
+                break;
+            }
+            if !paragraph.is_empty() {
+                paragraph.push(' ');
+            }
+            paragraph.push_str(candidate);
+            i += 1;
+        }
+
+        if !paragraph.is_empty() {
+            let mut block = markdown_block("paragraph", 0, &paragraph, "");
+            block.inlines = parse_markdown_inlines(&paragraph);
+            blocks.push(block);
+        } else {
+            i += 1;
+        }
+    }
+
+    (blocks, partial)
+}
+
+fn markdown_block(kind: &str, level: usize, text: &str, language: &str) -> PreviewMarkdownBlockDto {
+    PreviewMarkdownBlockDto {
+        kind: kind.to_string(),
+        level,
+        text: truncate_markdown_text(text),
+        language: language.to_string(),
+        inlines: Vec::new(),
+        children: Vec::new(),
+        table_headers: Vec::new(),
+        table_rows: Vec::new(),
+    }
+}
+
+fn markdown_inline(kind: &str, text: &str, url: &str, children: Vec<PreviewMarkdownInlineDto>) -> PreviewMarkdownInlineDto {
+    PreviewMarkdownInlineDto {
+        kind: kind.to_string(),
+        text: truncate_markdown_text(text),
+        url: url.to_string(),
+        children,
+    }
+}
+
+fn truncate_markdown_text(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars().take(MAX_MARKDOWN_INLINE_CHARS) {
+        out.push(ch);
+    }
+    out
+}
+
+fn fenced_code_language(trimmed: &str) -> Option<String> {
+    trimmed
+        .strip_prefix("```")
+        .map(|rest| rest.trim().trim_matches('`').to_string())
+}
+
+fn parse_heading(trimmed: &str) -> Option<(usize, &str)> {
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if level == 0 || level > 6 {
+        return None;
+    }
+    let rest = trimmed[level..].trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((level, rest.trim_end_matches('#').trim_end()))
+}
+
+fn is_markdown_rule(trimmed: &str) -> bool {
+    let chars: Vec<char> = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    chars.len() >= 3 && chars.iter().all(|c| *c == '-' || *c == '*' || *c == '_')
+}
+
+fn parse_list_item(trimmed: &str) -> Option<(bool, &str)> {
+    if let Some(text) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")).or_else(|| trimmed.strip_prefix("+ ")) {
+        return Some((false, text.trim()));
+    }
+    let dot = trimmed.find('.')?;
+    if dot == 0 || dot > 6 || !trimmed[..dot].chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let after = trimmed[dot + 1..].trim_start();
+    if after.is_empty() {
+        None
+    } else {
+        Some((true, after))
+    }
+}
+
+fn parse_markdown_list(
+    lines: &[&str],
+    start: usize,
+    ordered: bool,
+    first_text: &str,
+) -> (PreviewMarkdownBlockDto, usize, bool) {
+    let mut block = markdown_block(if ordered { "orderedList" } else { "unorderedList" }, 0, "", "");
+    let mut i = start;
+    let mut partial = false;
+    let mut next_text = Some(first_text.to_string());
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        let item_text = if let Some(text) = next_text.take() {
+            text
+        } else if let Some((item_ordered, text)) = parse_list_item(trimmed) {
+            if item_ordered != ordered {
+                break;
+            }
+            text.to_string()
+        } else {
+            break;
+        };
+
+        let mut item = markdown_block("listItem", 0, &item_text, "");
+        item.inlines = parse_markdown_inlines(&item_text);
+        if block.children.len() < MAX_MARKDOWN_LIST_ITEMS {
+            block.children.push(item);
+        } else {
+            partial = true;
+        }
+        i += 1;
+    }
+
+    (block, i, partial)
+}
+
+fn parse_markdown_quote(lines: &[&str], start: usize) -> (PreviewMarkdownBlockDto, usize) {
+    let mut text = String::new();
+    let mut i = start;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        let Some(rest) = trimmed.strip_prefix('>') else {
+            break;
+        };
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(rest.trim_start());
+        i += 1;
+    }
+    let mut block = markdown_block("blockquote", 0, &text, "");
+    block.inlines = parse_markdown_inlines(&text);
+    (block, i)
+}
+
+fn is_markdown_table_start(lines: &[&str], index: usize) -> bool {
+    if index + 1 >= lines.len() {
+        return false;
+    }
+    let header = lines[index].trim();
+    let separator = lines[index + 1].trim();
+    header.contains('|') && is_markdown_table_separator(separator)
+}
+
+fn is_markdown_table_separator(line: &str) -> bool {
+    let cells = split_markdown_table_row(line);
+    cells.len() >= 2
+        && cells
+            .iter()
+            .all(|cell| cell.trim().chars().all(|c| c == '-' || c == ':' || c.is_whitespace()) && cell.contains('-'))
+}
+
+fn parse_markdown_table(lines: &[&str], start: usize) -> (PreviewMarkdownBlockDto, usize, bool) {
+    let mut block = markdown_block("table", 0, "", "");
+    block.table_headers = split_markdown_table_row(lines[start])
+        .into_iter()
+        .map(|cell| cell.trim().to_string())
+        .collect();
+    let mut i = start + 2;
+    let mut partial = false;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.is_empty() || !trimmed.contains('|') {
+            break;
+        }
+        if block.table_rows.len() < MAX_MARKDOWN_TABLE_ROWS {
+            block.table_rows.push(
+                split_markdown_table_row(trimmed)
+                    .into_iter()
+                    .map(|cell| cell.trim().to_string())
+                    .collect(),
+            );
+        } else {
+            partial = true;
+        }
+        i += 1;
+    }
+    (block, i, partial)
+}
+
+fn split_markdown_table_row(row: &str) -> Vec<String> {
+    row.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < text.len() {
+        let rest = &text[i..];
+        if let Some(after) = rest.strip_prefix('`') {
+            if let Some(end) = after.find('`') {
+                out.push(markdown_inline("code", &after[..end], "", Vec::new()));
+                i += end + 2;
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix("**") {
+            if let Some(end) = after.find("**") {
+                let inner = &after[..end];
+                out.push(markdown_inline("strong", "", "", parse_markdown_inlines(inner)));
+                i += end + 4;
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix('*') {
+            if let Some(end) = after.find('*') {
+                let inner = &after[..end];
+                out.push(markdown_inline("emphasis", "", "", parse_markdown_inlines(inner)));
+                i += end + 2;
+                continue;
+            }
+        }
+        if rest.starts_with('[') {
+            if let Some(close) = rest.find("](") {
+                if let Some(end) = rest[close + 2..].find(')') {
+                    let label = &rest[1..close];
+                    let url = &rest[close + 2..close + 2 + end];
+                    out.push(markdown_inline("link", "", url, parse_markdown_inlines(label)));
+                    i += close + 3 + end;
+                    continue;
+                }
+            }
+        }
+
+        let next = next_markdown_inline_token(rest);
+        out.push(markdown_inline("text", &rest[..next], "", Vec::new()));
+        i += next;
+    }
+    out
+}
+
+fn next_markdown_inline_token(text: &str) -> usize {
+    let mut next = text.len();
+    for token in ["`", "**", "*", "["] {
+        if let Some(at) = text[1.min(text.len())..].find(token) {
+            next = next.min(at + 1);
+        }
+    }
+    next.max(1)
 }
 
 fn render_delimited_table_json(
@@ -437,6 +840,7 @@ fn render_delimited_table_json(
             total_columns: display_total_columns,
             is_partial,
         }),
+        markdown: None,
     })
 }
 
@@ -1947,6 +2351,7 @@ fn office_preview_json_with_layout(
         office_layout,
         listing: None,
         table: None,
+        markdown: None,
     })
 }
 
@@ -2047,6 +2452,26 @@ fn file_name(path: &str) -> &str {
 
 /// Produce JSON for an info-only preview: `{"kind":"...","title":"... - N bytes · date"}`.
 pub fn render_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
+    match kind {
+        "font" => return render_font_info(path, size, modified_unix),
+        "database" => return render_database_info(path, size, modified_unix),
+        "mail" => return render_mail_info(path, size, modified_unix),
+        "chm" => return render_chm_info(path, size, modified_unix),
+        "dump" => return render_dump_info(path, size, modified_unix),
+        "elf" => return render_elf_info(path, size, modified_unix),
+        "video" | "audio" | "media" => return render_media_info(path, kind, size, modified_unix),
+        _ => {}
+    }
+    generic_info_json(path, kind, size, modified_unix, None)
+}
+
+fn generic_info_json(
+    path: &str,
+    kind: &str,
+    size: i64,
+    modified_unix: i64,
+    body: Option<String>,
+) -> String {
     let filename = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -2061,15 +2486,422 @@ pub fn render_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> Str
         title: format!("{filename} — {summary}"),
         format: Some("plain".to_string()),
         language: Some("text".to_string()),
-        text: Some(format!(
+        text: Some(body.unwrap_or_else(|| format!(
             "Name: {filename}\nKind: {kind}\nSize: {}\nModified: {}",
             format_number(size),
             format_timestamp(modified_unix)
-        )),
+        ))),
         office_layout: None,
         listing: None,
         table: None,
+        markdown: None,
     })
+}
+
+fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
+    let mut text = base_info_text(filename, "font", size, modified_unix);
+    if let Some(summary) = parse_font_summary(&bytes) {
+        text.push_str(&format!("\nFormat: {}", summary.format));
+        if summary.faces > 0 {
+            text.push_str(&format!("\nFaces: {}", summary.faces));
+        }
+        if summary.tables > 0 {
+            text.push_str(&format!("\nTables: {}", summary.tables));
+        }
+        if !summary.family.is_empty() {
+            text.push_str(&format!("\nFamily: {}", summary.family));
+        }
+        if !summary.subfamily.is_empty() {
+            text.push_str(&format!("\nStyle: {}", summary.subfamily));
+        }
+        if !summary.full_name.is_empty() {
+            text.push_str(&format!("\nFull name: {}", summary.full_name));
+        }
+        if !summary.postscript_name.is_empty() {
+            text.push_str(&format!("\nPostScript: {}", summary.postscript_name));
+        }
+    }
+    generic_info_json(path, "font", size, modified_unix, Some(text))
+}
+
+fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
+    let mut text = base_info_text(filename, "database", size, modified_unix);
+    if bytes.starts_with(b"SQLite format 3\0") {
+        let page_size = read_u16_be(&bytes, 16)
+            .map(|value| if value == 1 { 65536 } else { value as u32 })
+            .unwrap_or(0);
+        text.push_str("\nFormat: SQLite 3");
+        text.push_str(&format!("\nPage size: {} bytes", page_size));
+        if let Some(pages) = read_u32_be(&bytes, 28) {
+            text.push_str(&format!("\nPages: {}", format_number(pages as i64)));
+            if page_size > 0 {
+                text.push_str(&format!(
+                    "\nDatabase size from header: {}",
+                    format_bytes(pages as i64 * page_size as i64)
+                ));
+            }
+        }
+        if let Some(encoding) = read_u32_be(&bytes, 56) {
+            text.push_str(&format!("\nText encoding: {}", sqlite_encoding_name(encoding)));
+        }
+        if let Some(user_version) = read_u32_be(&bytes, 60) {
+            text.push_str(&format!("\nUser version: {}", user_version));
+        }
+        if let Some(app_id) = read_u32_be(&bytes, 68) {
+            text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
+        }
+    } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        text.push_str("\nFormat: Microsoft Compound File database");
+    } else {
+        text.push_str("\nFormat: database file");
+    }
+    generic_info_json(path, "database", size, modified_unix, Some(text))
+}
+
+fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, MAX_MAIL_HEADER_BYTES).unwrap_or_default();
+    let mut text = base_info_text(filename, "mail", size, modified_unix);
+    if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        text.push_str("\nFormat: Outlook MSG / Compound File");
+    } else {
+        let content = String::from_utf8_lossy(&bytes);
+        let headers = parse_mail_headers(&content);
+        text.push_str("\nFormat: RFC 5322 message");
+        for key in ["From", "To", "Cc", "Subject", "Date", "Content-Type"] {
+            if let Some(value) = headers.iter().find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v)) {
+                text.push_str(&format!("\n{key}: {}", value.trim()));
+            }
+        }
+        if filename.to_ascii_lowercase().ends_with(".mbox") {
+            let count = content.lines().filter(|line| line.starts_with("From ")).count();
+            text.push_str(&format!("\nMailbox messages observed: {}", format_number(count as i64)));
+        }
+    }
+    generic_info_json(path, "mail", size, modified_unix, Some(text))
+}
+
+fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, 128).unwrap_or_default();
+    let mut text = base_info_text(filename, "chm", size, modified_unix);
+    if bytes.starts_with(b"ITSF") {
+        text.push_str("\nFormat: Microsoft Compiled HTML Help");
+        if let Some(version) = read_u32(&bytes, 4) {
+            text.push_str(&format!("\nITSF version: {}", version));
+        }
+        if let Some(header_len) = read_u32(&bytes, 8) {
+            text.push_str(&format!("\nHeader length: {} bytes", header_len));
+        }
+        if let Some(lang_id) = read_u32(&bytes, 20) {
+            text.push_str(&format!("\nLanguage ID: 0x{lang_id:08X}"));
+        }
+    } else {
+        text.push_str("\nFormat: CHM-like help file");
+    }
+    generic_info_json(path, "chm", size, modified_unix, Some(text))
+}
+
+fn render_dump_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, 512).unwrap_or_default();
+    let mut text = base_info_text(filename, "dump", size, modified_unix);
+    if bytes.starts_with(b"MDMP") {
+        text.push_str("\nFormat: Windows minidump");
+        if let Some(version) = read_u32(&bytes, 4) {
+            text.push_str(&format!("\nVersion: 0x{version:08X}"));
+        }
+        if let Some(streams) = read_u32(&bytes, 8) {
+            text.push_str(&format!("\nStreams: {}", streams));
+        }
+        if let Some(directory_rva) = read_u32(&bytes, 12) {
+            text.push_str(&format!("\nDirectory RVA: 0x{directory_rva:08X}"));
+        }
+        if let Some(timestamp) = read_u32(&bytes, 20) {
+            text.push_str(&format!("\nTimestamp: {}", format_timestamp(timestamp as i64)));
+        }
+        if let Some(flags) = read_u64(&bytes, 24) {
+            text.push_str(&format!("\nFlags: 0x{flags:016X}"));
+        }
+    } else if bytes.starts_with(&[0x7F, b'E', b'L', b'F']) {
+        text.push_str("\nFormat: ELF core/dump");
+        append_elf_summary(&mut text, &bytes);
+    } else {
+        text.push_str("\nFormat: memory dump");
+    }
+    generic_info_json(path, "dump", size, modified_unix, Some(text))
+}
+
+fn render_elf_info(path: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, 512).unwrap_or_default();
+    let mut text = base_info_text(filename, "elf", size, modified_unix);
+    append_elf_summary(&mut text, &bytes);
+    generic_info_json(path, "elf", size, modified_unix, Some(text))
+}
+
+fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, 64).unwrap_or_default();
+    let mut text = base_info_text(filename, kind, size, modified_unix);
+    text.push_str(&format!("\nContainer: {}", media_container_name(path, &bytes)));
+    generic_info_json(path, kind, size, modified_unix, Some(text))
+}
+
+fn base_info_text(filename: &str, kind: &str, size: i64, modified_unix: i64) -> String {
+    format!(
+        "Name: {filename}\nKind: {kind}\nSize: {}\nModified: {}",
+        format_number(size),
+        format_timestamp(modified_unix)
+    )
+}
+
+#[derive(Default)]
+struct FontSummary {
+    format: &'static str,
+    faces: u32,
+    tables: u16,
+    family: String,
+    subfamily: String,
+    full_name: String,
+    postscript_name: String,
+}
+
+fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
+    if bytes.starts_with(b"ttcf") {
+        return Some(FontSummary {
+            format: "TrueType Collection",
+            faces: read_u32_be(bytes, 8).unwrap_or(0),
+            ..Default::default()
+        });
+    }
+    if bytes.starts_with(b"wOFF") {
+        return Some(FontSummary {
+            format: "WOFF font",
+            tables: read_u16_be(bytes, 12).unwrap_or(0),
+            ..Default::default()
+        });
+    }
+    if bytes.starts_with(b"wOF2") {
+        return Some(FontSummary {
+            format: "WOFF2 font",
+            tables: read_u16_be(bytes, 12).unwrap_or(0),
+            ..Default::default()
+        });
+    }
+
+    let format = if bytes.starts_with(&[0, 1, 0, 0]) {
+        "TrueType font"
+    } else if bytes.starts_with(b"OTTO") {
+        "OpenType/CFF font"
+    } else {
+        return None;
+    };
+    let tables = read_u16_be(bytes, 4)?;
+    let mut summary = FontSummary {
+        format,
+        faces: 1,
+        tables,
+        ..Default::default()
+    };
+    if let Some((offset, length)) = find_sfnt_table(bytes, "name", tables) {
+        parse_font_name_table(bytes, offset, length, &mut summary);
+    }
+    Some(summary)
+}
+
+fn find_sfnt_table(bytes: &[u8], tag: &str, tables: u16) -> Option<(usize, usize)> {
+    let table_count = tables.min(256) as usize;
+    for index in 0..table_count {
+        let record = 12 + index * 16;
+        let record_end = record.checked_add(16)?;
+        let tag_bytes = bytes.get(record..record + 4)?;
+        if record_end > bytes.len() || tag_bytes != tag.as_bytes() {
+            continue;
+        }
+        let offset = read_u32_be(bytes, record + 8)? as usize;
+        let length = read_u32_be(bytes, record + 12)? as usize;
+        if offset.checked_add(length)? <= bytes.len() {
+            return Some((offset, length));
+        }
+    }
+    None
+}
+
+fn parse_font_name_table(bytes: &[u8], offset: usize, length: usize, summary: &mut FontSummary) {
+    let end = offset.saturating_add(length).min(bytes.len());
+    if offset + 6 > end {
+        return;
+    }
+    let count = read_u16_be(bytes, offset + 2).unwrap_or(0).min(256) as usize;
+    let storage = offset + read_u16_be(bytes, offset + 4).unwrap_or(0) as usize;
+    for index in 0..count {
+        let record = offset + 6 + index * 12;
+        if record + 12 > end {
+            break;
+        }
+        let platform = read_u16_be(bytes, record).unwrap_or(0);
+        let name_id = read_u16_be(bytes, record + 6).unwrap_or(0);
+        let len = read_u16_be(bytes, record + 8).unwrap_or(0) as usize;
+        let off = read_u16_be(bytes, record + 10).unwrap_or(0) as usize;
+        let value_start = storage.saturating_add(off);
+        let value_end = value_start.saturating_add(len);
+        let Some(raw) = bytes.get(value_start..value_end) else {
+            continue;
+        };
+        let value = decode_font_name(platform, raw);
+        if value.is_empty() {
+            continue;
+        }
+        match name_id {
+            1 if summary.family.is_empty() => summary.family = value,
+            2 if summary.subfamily.is_empty() => summary.subfamily = value,
+            4 if summary.full_name.is_empty() => summary.full_name = value,
+            6 if summary.postscript_name.is_empty() => summary.postscript_name = value,
+            _ => {}
+        }
+    }
+}
+
+fn decode_font_name(platform: u16, bytes: &[u8]) -> String {
+    if platform == 0 || platform == 3 {
+        let units = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units).trim_matches('\0').trim().to_string()
+    } else {
+        String::from_utf8_lossy(bytes).trim_matches('\0').trim().to_string()
+    }
+}
+
+fn sqlite_encoding_name(value: u32) -> &'static str {
+    match value {
+        1 => "UTF-8",
+        2 => "UTF-16le",
+        3 => "UTF-16be",
+        _ => "unknown",
+    }
+}
+
+fn parse_mail_headers(content: &str) -> Vec<(String, String)> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            break;
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some((_, value)) = headers.last_mut() {
+                value.push(' ');
+                value.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    headers
+}
+
+fn append_elf_summary(text: &mut String, bytes: &[u8]) {
+    if !bytes.starts_with(&[0x7F, b'E', b'L', b'F']) || bytes.len() < 20 {
+        text.push_str("\nFormat: ELF-like binary");
+        return;
+    }
+    let class = bytes.get(4).copied().unwrap_or(0);
+    let endian = bytes.get(5).copied().unwrap_or(1);
+    text.push_str(&format!(
+        "\nFormat: ELF{}",
+        match class {
+            1 => "32",
+            2 => "64",
+            _ => "",
+        }
+    ));
+    text.push_str(&format!(
+        "\nEndian: {}",
+        if endian == 2 { "big" } else { "little" }
+    ));
+    if let Some(kind) = read_u16_endian(bytes, 16, endian) {
+        text.push_str(&format!("\nType: {}", elf_type_name(kind)));
+    }
+    if let Some(machine) = read_u16_endian(bytes, 18, endian) {
+        text.push_str(&format!("\nMachine: {}", elf_machine_name(machine)));
+    }
+    let entry = if class == 2 {
+        read_u64_endian(bytes, 24, endian).map(|v| format!("0x{v:016X}"))
+    } else {
+        read_u32_endian(bytes, 24, endian).map(|v| format!("0x{v:08X}"))
+    };
+    if let Some(entry) = entry {
+        text.push_str(&format!("\nEntry: {entry}"));
+    }
+    let phnum_offset = if class == 2 { 56 } else { 44 };
+    let shnum_offset = if class == 2 { 60 } else { 48 };
+    if let Some(phnum) = read_u16_endian(bytes, phnum_offset, endian) {
+        text.push_str(&format!("\nProgram headers: {}", phnum));
+    }
+    if let Some(shnum) = read_u16_endian(bytes, shnum_offset, endian) {
+        text.push_str(&format!("\nSection headers: {}", shnum));
+    }
+}
+
+fn elf_type_name(value: u16) -> &'static str {
+    match value {
+        1 => "relocatable",
+        2 => "executable",
+        3 => "shared object",
+        4 => "core",
+        _ => "unknown",
+    }
+}
+
+fn elf_machine_name(value: u16) -> &'static str {
+    match value {
+        3 => "x86",
+        40 => "ARM",
+        62 => "x86-64",
+        183 => "AArch64",
+        243 => "RISC-V",
+        _ => "unknown",
+    }
+}
+
+fn media_container_name(path: &str, bytes: &[u8]) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if bytes.len() >= 12 && bytes.get(4..8) == Some(b"ftyp") {
+        return "ISO BMFF / MP4";
+    }
+    if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return "Matroska / WebM";
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"AVI ") {
+        return "AVI";
+    }
+    if bytes.starts_with(b"ID3") || ext == "mp3" {
+        return "MP3";
+    }
+    if bytes.starts_with(b"OggS") {
+        return "Ogg";
+    }
+    match ext.as_str() {
+        "flac" => "FLAC",
+        "wav" => "WAV",
+        "mkv" => "Matroska",
+        "webm" => "WebM",
+        "mov" => "QuickTime",
+        "wmv" => "Windows Media",
+        _ => "media",
+    }
 }
 
 // ── Executable preview ──────────────────────────────────────────────────────
@@ -2120,6 +2952,7 @@ pub fn render_executable(path: &str) -> String {
         office_layout: None,
         listing: None,
         table: None,
+        markdown: None,
     })
 }
 
@@ -2183,6 +3016,47 @@ fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let end = offset.checked_add(4)?;
     Some(u32::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    Some(u64::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    Some(u16::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    Some(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u16_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u16> {
+    if endian == 2 {
+        read_u16_be(bytes, offset)
+    } else {
+        read_u16(bytes, offset)
+    }
+}
+
+fn read_u32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u32> {
+    if endian == 2 {
+        read_u32_be(bytes, offset)
+    } else {
+        read_u32(bytes, offset)
+    }
+}
+
+fn read_u64_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let chunk: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(if endian == 2 {
+        u64::from_be_bytes(chunk)
+    } else {
+        u64::from_le_bytes(chunk)
+    })
 }
 
 fn machine_name(machine: u16) -> &'static str {
@@ -2458,6 +3332,7 @@ fn render_package(path: &str) -> String {
         office_layout: None,
         listing: None,
         table: None,
+        markdown: None,
     })
 }
 
@@ -2908,6 +3783,7 @@ pub fn render_torrent(path: &str) -> String {
             items,
         }),
         table: None,
+        markdown: None,
     })
 }
 
@@ -3319,6 +4195,7 @@ fn archive_listing_json(
             items,
         }),
         table: None,
+        markdown: None,
     })
 }
 
@@ -3580,6 +4457,7 @@ pub fn render_folder(path: &str) -> String {
             items,
         }),
         table: None,
+        markdown: None,
     })
 }
 
@@ -3698,5 +4576,78 @@ mod tests {
 
         assert!(truncated.starts_with(&"中".repeat(8)));
         assert!(truncated.contains("[Preview truncated at"));
+    }
+
+    #[test]
+    fn markdown_parser_emits_heading_and_inline_ast() {
+        let (blocks, partial) = parse_markdown_blocks("# Hello **QuickLook** and `Rust`");
+
+        assert!(!partial);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, "heading");
+        assert_eq!(blocks[0].level, 1);
+        assert!(blocks[0].inlines.iter().any(|i| i.kind == "strong"));
+        assert!(blocks[0].inlines.iter().any(|i| i.kind == "code"));
+    }
+
+    #[test]
+    fn markdown_parser_emits_lists_quotes_and_code() {
+        let (blocks, partial) = parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```");
+
+        assert!(!partial);
+        assert_eq!(blocks[0].kind, "blockquote");
+        assert_eq!(blocks[1].kind, "unorderedList");
+        assert_eq!(blocks[1].children.len(), 2);
+        assert_eq!(blocks[2].kind, "code");
+        assert_eq!(blocks[2].language, "rs");
+    }
+
+    #[test]
+    fn markdown_parser_emits_tables() {
+        let (blocks, partial) = parse_markdown_blocks("| A | B |\n|---|---|\n| 1 | 2 |");
+
+        assert!(!partial);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, "table");
+        assert_eq!(blocks[0].table_headers, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(blocks[0].table_rows[0], vec!["1".to_string(), "2".to_string()]);
+    }
+
+    #[test]
+    fn font_summary_detects_woff_tables() {
+        let mut bytes = vec![0u8; 44];
+        bytes[0..4].copy_from_slice(b"wOFF");
+        bytes[12..14].copy_from_slice(&3u16.to_be_bytes());
+
+        let summary = parse_font_summary(&bytes).expect("woff summary");
+
+        assert_eq!(summary.format, "WOFF font");
+        assert_eq!(summary.tables, 3);
+    }
+
+    #[test]
+    fn mail_header_parser_unfolds_continuations() {
+        let headers = parse_mail_headers("Subject: hello\r\n world\r\nFrom: a@example.test\r\n\r\nbody");
+
+        assert_eq!(headers[0], ("Subject".to_string(), "hello world".to_string()));
+        assert_eq!(headers[1], ("From".to_string(), "a@example.test".to_string()));
+    }
+
+    #[test]
+    fn elf_summary_detects_64_bit_little_endian() {
+        let mut bytes = vec![0u8; 64];
+        bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[16..18].copy_from_slice(&3u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&62u16.to_le_bytes());
+        bytes[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
+
+        let mut text = String::new();
+        append_elf_summary(&mut text, &bytes);
+
+        assert!(text.contains("ELF64"));
+        assert!(text.contains("x86-64"));
+        assert!(text.contains("0x0000000000401000"));
     }
 }

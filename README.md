@@ -42,6 +42,11 @@ New preview business logic should land in `native/quicklook_next_native/src/prev
 Rust C ABI returning structured JSON/BGRA for the WinUI shell and RasterHost to render. Do not
 reintroduce WebView/HTML output for Office previews.
 
+Office previews intentionally use acceptable approximate rendering instead of a full Office engine.
+For PPT/XLSX, prioritize layout reconstruction: slide/sheet dimensions, text boxes, cell positions,
+row/column sizing, relationships, and embedded images. Perfect style parity, macros, animations,
+formula recalculation, and full Office compatibility are outside the default preview boundary.
+
 ## The two boundaries
 - **App ⇄ native (Rust):** in-process FFI. `quicklook_next_native` installs the WH_KEYBOARD_LL hook and
   reads the Explorer selection, then calls back with high-level intent lines decoded into `NativeIntent`.
@@ -80,6 +85,11 @@ RasterHost is lazy-started: text, Office metadata/layout, archive/folder listing
 certificates, executables, and other lightweight Rust previews do not start the surface host. It is
 started only when a preview needs a D3D surface, PDF page rasterization, or shell thumbnail fallback.
 
+Professional/specialized formats are prioritized by likely real-user frequency and cost:
+fonts and SQLite/database files first; media keeps playback while showing lightweight container info
+in the preview chrome; ELF/minidump headers follow for developer diagnostics; Mail/CHM receive safe
+header-level previews without WebView or full container extraction.
+
 The WinUI shell is split into focused presenters/controllers for text, listing, Office layout,
 raster/image surfaces, PDF page virtualization/cache, media playback, and topmost/no-activate window
 behavior. MainWindow remains the application coordinator: native intents, request cancellation,
@@ -92,7 +102,7 @@ RasterHost plugin registry/loader, and no legacy .NET preview plugins in release
 ## Remaining work
 1. Split preview panel visibility/reset choreography out of `MainWindow`.
 2. Move the remaining dynamic/accessibility labels into resource-backed strings as the UI copy stabilizes.
-3. Keep improving Rust-native document fidelity, especially Office layout reconstruction.
+3. Keep improving Rust-native document fidelity, especially PPT/XLSX approximate layout reconstruction.
 4. Add broader real-world smoke assets for Office, PDF, package, certificate, image, archive, folder, and text previews.
 5. Push cancellation deeper into native decode/listing loops after the current App-side generation guard.
 

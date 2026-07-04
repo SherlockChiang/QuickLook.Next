@@ -50,6 +50,7 @@ public sealed record PreviewReady(
     public string? MediaPath { get; init; }
     public PreviewListing? Listing { get; init; }
     public PreviewTable? Table { get; init; }
+    public PreviewMarkdown? Markdown { get; init; }
     public OfficeLayout? OfficeLayout { get; init; }
 }
 

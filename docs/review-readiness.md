@@ -46,6 +46,10 @@ left visible instead of hidden behind vague TODOs.
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a
   fallback, and repairs stale QuickLookNext entries that point at an old exe.
+- Specialized/professional formats are covered in frequency order with bounded
+  native metadata previews: fonts, SQLite/database headers, media container
+  info in the playback chrome, ELF/minidump diagnostics, and safe Mail/CHM
+  header previews.
 
 ## Verification Commands
 
@@ -78,9 +82,12 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 
 ## Known Remaining Work
 
-- Continue improving Office fidelity. The native renderer extracts text, tables,
-  relationships, and representative layout/images, but it is not a full Office
-  rendering engine.
+- Continue improving Office approximate layout fidelity. This is intentionally
+  not a full Office rendering engine: PPT/XLSX should prioritize slide/sheet
+  layout, text positions, table/cell geometry, relationships, and embedded
+  images. Full style parity, macros, animations, formula recalculation, and
+  complete Office compatibility remain out of scope for the default preview
+  boundary.
 - Expand real-world smoke assets for larger PDFs, malformed archives, unusual
   APK/MSIX manifests, mixed-encoding text files, and complex Office files.
   Current smoke coverage includes UTF-16 text and corrupt ZIP fail-closed checks,
@@ -90,6 +97,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   once entered.
 - Continue Shell icon coverage for virtual archive entries if a stable file type
   icon can be resolved without pretending the virtual item is a real path.
+- Deep professional parsers remain intentionally staged: full MediaInfo tracks,
+  CHM topic extraction, Outlook MSG property streams, and database schema
+  browsing should only be added with bounded parsers and no WebView fallback.
 
 ## Why Legacy Plugin Source Remains
 

@@ -562,6 +562,15 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     const DISK_IMAGE_EXTS: &[&str] = &[".img", ".iso", ".vhd", ".vhdx", ".vmdk", ".dmg"];
     const EXECUTABLE_EXTS: &[&str] = &[".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx"];
     const CERTIFICATE_EXTS: &[&str] = &[".cer", ".crt", ".der", ".pem", ".p7b", ".p7c"];
+    const FONT_EXTS: &[&str] = &[".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"];
+    const DATABASE_EXTS: &[&str] = &[
+        ".sqlite", ".sqlite3", ".db", ".db3", ".s3db", ".sqlite-shm", ".sqlite-wal", ".mdb",
+        ".accdb",
+    ];
+    const MAIL_EXTS: &[&str] = &[".eml", ".msg", ".mbox", ".emlx"];
+    const CHM_EXTS: &[&str] = &[".chm"];
+    const DUMP_EXTS: &[&str] = &[".dmp", ".mdmp", ".dump", ".core"];
+    const ELF_EXTS: &[&str] = &[".elf", ".so", ".o"];
     if OFFICE_EXTS.contains(&ext) {
         return "office";
     }
@@ -570,6 +579,24 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     }
     if EXECUTABLE_EXTS.contains(&ext) || magic.starts_with(b"MZ") {
         return "executable";
+    }
+    if FONT_EXTS.contains(&ext) {
+        return "font";
+    }
+    if DATABASE_EXTS.contains(&ext) {
+        return "database";
+    }
+    if MAIL_EXTS.contains(&ext) {
+        return "mail";
+    }
+    if CHM_EXTS.contains(&ext) {
+        return "chm";
+    }
+    if DUMP_EXTS.contains(&ext) {
+        return "dump";
+    }
+    if ELF_EXTS.contains(&ext) {
+        return "elf";
     }
     if ext == ".torrent" {
         return "torrent";
@@ -606,6 +633,26 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     }
     if m.starts_with(b"%PDF") {
         return "pdf";
+    }
+    if m.starts_with(&[0x00, 0x01, 0x00, 0x00])
+        || m.starts_with(b"OTTO")
+        || m.starts_with(b"ttcf")
+        || m.starts_with(b"wOFF")
+        || m.starts_with(b"wOF2")
+    {
+        return "font";
+    }
+    if m.starts_with(b"SQLite format 3\0") {
+        return "database";
+    }
+    if m.starts_with(b"ITSF") {
+        return "chm";
+    }
+    if m.starts_with(b"MDMP") {
+        return "dump";
+    }
+    if m.starts_with(&[0x7F, b'E', b'L', b'F']) {
+        return "elf";
     }
     if m.starts_with(&[0x50, 0x4B, 0x03, 0x04])             // ZIP / OOXML
         || m.starts_with(&[0x1F, 0x8B])

@@ -39,6 +39,7 @@ public sealed partial class MainWindow : Window
     private ListingPreviewPresenter? _listingPresenter;
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
+    private AnimatedImagePreviewPresenter? _animatedImagePresenter;
     private PdfPreviewPresenter? _pdfPresenter;
     private MediaPreviewPresenter? _mediaPresenter;
     private Compositor? _compositor;
@@ -76,6 +77,7 @@ public sealed partial class MainWindow : Window
         _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
+        _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
         _pdfPresenter = new PdfPreviewPresenter(
             PdfScrollViewer,
             PdfPagesPanel,
@@ -104,6 +106,12 @@ public sealed partial class MainWindow : Window
         Title = UiStrings.AppName;
         TrySetBackdrop();
         PreviewRoot.SizeChanged += OnRootSizeChanged;
+        AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
+        AnimatedImagePreviewRoot.PointerWheelChanged += OnAnimatedImageRootPointerWheelChanged;
+        AnimatedImagePreviewRoot.PointerPressed += OnAnimatedImageRootPointerPressed;
+        AnimatedImagePreviewRoot.PointerMoved += OnAnimatedImageRootPointerMoved;
+        AnimatedImagePreviewRoot.PointerReleased += OnAnimatedImageRootPointerReleased;
+        AnimatedImagePreviewRoot.DoubleTapped += OnAnimatedImageRootDoubleTapped;
         PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
         PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
         PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
@@ -282,6 +290,8 @@ public sealed partial class MainWindow : Window
         {
             if (_rasterPresenter?.HasSurface == true && PreviewRoot.Visibility == Visibility.Visible)
                 _rasterPresenter.ZoomBy(intent.Intent == PreviewIntent.ZoomIn ? 1.15 : 1.0 / 1.15);
+            else if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+                _animatedImagePresenter.ZoomBy(intent.Intent == PreviewIntent.ZoomIn ? 1.15 : 1.0 / 1.15);
             return;
         }
 
@@ -339,6 +349,8 @@ public sealed partial class MainWindow : Window
 
                 if (MediaPreviewPresenter.IsMediaProbe(probe))
                 {
+                    PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe), previewToken);
+                    if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                     var mediaReady = new PreviewReady(
                         $"media-{generation}",
                         "media",
@@ -347,6 +359,9 @@ public sealed partial class MainWindow : Window
                         probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase) ? 140 : 450)
                     {
                         MediaPath = path,
+                        TextContent = mediaInfo?.TextContent,
+                        TextFormat = mediaInfo?.TextFormat,
+                        TextLanguage = mediaInfo?.TextLanguage,
                     };
                     _currentPath = path;
                     _currentRequestId = null;
@@ -366,10 +381,26 @@ public sealed partial class MainWindow : Window
                         PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
                         PreviewReady r when r.Table is not null => ShowTablePreview(r),
                         PreviewReady r when r.Listing is not null => ShowListingPreview(r),
+                        PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
                         PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                         _ => $"{nativeReady.Kind}: {nativeReady.Title}",
                     };
                     RevealPreviewWindow(ShouldActivatePreview(nativeReady));
+                    return;
+                }
+
+                if (IsAnimatedGifPath(path) && AnimatedImagePreviewPresenter.TryReadGifSize(path) is { } gifSize)
+                {
+                    var gifReady = new PreviewReady(
+                        $"gif-{generation}",
+                        "image",
+                        System.IO.Path.GetFileName(path),
+                        gifSize.Width,
+                        gifSize.Height);
+                    _currentPath = path;
+                    _currentRequestId = null;
+                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
+                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
                     return;
                 }
 
@@ -387,6 +418,7 @@ public sealed partial class MainWindow : Window
                     PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
                     PreviewReady r when r.Table is not null => ShowTablePreview(r),
                     PreviewReady r when r.Listing is not null => ShowListingPreview(r),
+                    PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                     PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
                     PreviewReady r => ShowRasterPreview(r),
@@ -470,7 +502,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static bool ShouldActivatePreview(PreviewReady ready)
-        => ready.TextContent is not null || ready.Listing is not null || ready.Table is not null || ready.OfficeLayout is not null;
+        => ready.TextContent is not null || ready.Listing is not null || ready.Table is not null || ready.Markdown is not null || ready.OfficeLayout is not null;
 
     private void UpdatePreviewChrome(PreviewReady ready, bool showRasterTools = false)
     {
@@ -493,6 +525,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Margin = showRasterTools
             ? new Thickness(14, 0, RasterInfoRailWidth + 14, RasterToolbarHeight)
             : new Thickness(14, 0, 14, 14);
+        AnimatedImagePreviewRoot.Margin = PreviewRoot.Margin;
 
         PreviewDimensionsText.Text = BuildDimensionsText(ready);
         PreviewSizeText.Text = FileSizeText(path);
@@ -533,11 +566,28 @@ public sealed partial class MainWindow : Window
         string size = FileSizeText(path);
         if (size != UiStrings.EmptyValue)
             parts.Add(size);
+        string container = ExtractPreviewInfoLine(ready.TextContent, "Container");
+        if (!string.IsNullOrWhiteSpace(container))
+            parts.Add(container);
         parts.Add(PreviewTypeTextFor(ready, path));
         string modified = ModifiedText(path);
         if (modified != UiStrings.EmptyValue)
             parts.Add("Modified: " + modified);
         return string.Join("  |  ", parts);
+    }
+
+    private static string ExtractPreviewInfoLine(string? text, string label)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+
+        string prefix = label + ":";
+        foreach (string line in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return line[prefix.Length..].Trim();
+        }
+        return "";
     }
 
     private static string BuildDimensionsText(PreviewReady ready)
@@ -593,6 +643,7 @@ public sealed partial class MainWindow : Window
     private string ShowErrorPreview(string message)
     {
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -655,10 +706,14 @@ public sealed partial class MainWindow : Window
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
         => _rasterPresenter?.UpdateLayout();
 
+    private void OnAnimatedImageRootSizeChanged(object sender, SizeChangedEventArgs e)
+        => _animatedImagePresenter?.UpdateLayout();
+
     private string ShowRasterPreview(PreviewReady ready)
     {
         UpdatePreviewChrome(ready, showRasterTools: true);
         PreviewRoot.Visibility = Visibility.Visible;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -672,10 +727,31 @@ public sealed partial class MainWindow : Window
         return result.Status;
     }
 
+    private string ShowAnimatedImagePreview(PreviewReady ready, string path)
+    {
+        UpdatePreviewChrome(ready, showRasterTools: true);
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Visible;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        _rasterPresenter?.Clear();
+
+        AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        StartImageSidecarLoads(ready);
+        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        DispatcherQueue.TryEnqueue(_animatedImagePresenter.UpdateLayout);
+        return result.Status;
+    }
+
     private string ShowPdfDocument(string requestId, PreviewReady ready)
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -692,6 +768,7 @@ public sealed partial class MainWindow : Window
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Visible;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -710,6 +787,7 @@ public sealed partial class MainWindow : Window
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Visible;
@@ -727,6 +805,7 @@ public sealed partial class MainWindow : Window
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -744,6 +823,7 @@ public sealed partial class MainWindow : Window
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -761,6 +841,7 @@ public sealed partial class MainWindow : Window
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -840,7 +921,9 @@ public sealed partial class MainWindow : Window
     private void ResetPreview()
     {
         _rasterPresenter?.Clear();
+        _animatedImagePresenter?.Clear();
         PreviewRoot.Visibility = Visibility.Visible;
+        AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
@@ -1277,6 +1360,9 @@ public sealed partial class MainWindow : Window
     private static bool IsImagePath(string? path)
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
 
+    private static bool IsAnimatedGifPath(string? path)
+        => string.Equals(Path.GetExtension(path), ".gif", StringComparison.OrdinalIgnoreCase);
+
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
         => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
 
@@ -1317,18 +1403,38 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnImageZoomOutClick(object sender, RoutedEventArgs e)
-        => _rasterPresenter?.ZoomBy(1.0 / 1.15);
+    {
+        if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+            _animatedImagePresenter.ZoomBy(1.0 / 1.15);
+        else
+            _rasterPresenter?.ZoomBy(1.0 / 1.15);
+    }
 
     private void OnImageZoomInClick(object sender, RoutedEventArgs e)
-        => _rasterPresenter?.ZoomBy(1.15);
+    {
+        if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+            _animatedImagePresenter.ZoomBy(1.15);
+        else
+            _rasterPresenter?.ZoomBy(1.15);
+    }
 
     private void OnImageZoomFitClick(object sender, RoutedEventArgs e)
-        => _rasterPresenter?.ResetView();
+    {
+        if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+            _animatedImagePresenter.ResetView();
+        else
+            _rasterPresenter?.ResetView();
+    }
 
     private void OnImageZoomPresetClick(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string raw } && double.TryParse(raw, out double zoom))
-            _rasterPresenter?.SetZoom(zoom);
+        {
+            if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+                _animatedImagePresenter.SetZoom(zoom);
+            else
+                _rasterPresenter?.SetZoom(zoom);
+        }
     }
 
     private async void OnPreviousImageClick(object sender, RoutedEventArgs e)
@@ -1523,6 +1629,21 @@ public sealed partial class MainWindow : Window
 
     private void OnPreviewRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         => _rasterPresenter?.OnDoubleTapped(e);
+
+    private void OnAnimatedImageRootPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _animatedImagePresenter?.OnPointerPressed(e);
+
+    private void OnAnimatedImageRootPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _animatedImagePresenter?.OnPointerMoved(e);
+
+    private void OnAnimatedImageRootPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _animatedImagePresenter?.OnPointerReleased(e);
+
+    private void OnAnimatedImageRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _animatedImagePresenter?.OnPointerWheelChanged(e);
+
+    private void OnAnimatedImageRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
+        => _animatedImagePresenter?.OnDoubleTapped(e);
 
     internal static string FormatBytes(long bytes)
     {

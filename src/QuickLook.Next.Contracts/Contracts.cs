@@ -48,7 +48,13 @@ public sealed record PreviewResult(string Kind, string Title)
     /// <summary>Structured delimited table preview produced by the Rust native parser.</summary>
     public PreviewTable? Table { get; init; }
 
-    /// <summary>Approximate Office document layout produced by the Rust native parser.</summary>
+    /// <summary>Structured Markdown AST produced by the Rust native parser and rendered by WinUI.</summary>
+    public PreviewMarkdown? Markdown { get; init; }
+
+    /// <summary>
+    /// Approximate Office document layout produced by the Rust native parser. This is a preview model,
+    /// not a full Office rendering engine; PPT/XLSX favor usable layout reconstruction over perfect parity.
+    /// </summary>
     public OfficeLayout? OfficeLayout { get; init; }
 }
 
@@ -115,6 +121,30 @@ public sealed record PreviewTable(string Format)
 }
 
 public sealed record PreviewTableRow(string[] Cells);
+
+public sealed record PreviewMarkdown
+{
+    public PreviewMarkdownBlock[] Blocks { get; init; } = [];
+    public bool IsPartial { get; init; }
+}
+
+public sealed record PreviewMarkdownBlock(string Kind)
+{
+    public int Level { get; init; }
+    public string Text { get; init; } = "";
+    public string Language { get; init; } = "";
+    public PreviewMarkdownInline[] Inlines { get; init; } = [];
+    public PreviewMarkdownBlock[] Children { get; init; } = [];
+    public string[] TableHeaders { get; init; } = [];
+    public string[][] TableRows { get; init; } = [];
+}
+
+public sealed record PreviewMarkdownInline(string Kind)
+{
+    public string Text { get; init; } = "";
+    public string Url { get; init; } = "";
+    public PreviewMarkdownInline[] Children { get; init; } = [];
+}
 
 /// <summary>
 /// Host-provided surface a provider uses while opening: report status/errors, and (in the full host)

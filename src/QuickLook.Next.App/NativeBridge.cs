@@ -297,7 +297,7 @@ internal sealed class NativeBridge
     }
 
     private static bool ShouldUseNativeInfo(FileProbe probe)
-        => probe.Kind is "binary" or "unknown" or "disk-image";
+        => probe.Kind is "binary" or "unknown" or "disk-image" or "font" or "database" or "mail" or "chm" or "dump" or "elf" or "video" or "audio" or "media";
 
     private static PreviewReady TryPreviewCertificate(string requestId, string path, FileProbe probe)
     {
@@ -417,6 +417,10 @@ internal sealed class NativeBridge
             if (root.TryGetProperty("officeLayout", out var layout))
                 officeLayout = JsonSerializer.Deserialize<OfficeLayout>(layout.GetRawText(), ProtocolJson.Options);
 
+            PreviewMarkdown? markdown = null;
+            if (root.TryGetProperty("markdown", out var markdownElement))
+                markdown = JsonSerializer.Deserialize<PreviewMarkdown>(markdownElement.GetRawText(), ProtocolJson.Options);
+
             if (root.TryGetProperty("text", out var text))
             {
                 return ready with
@@ -425,8 +429,12 @@ internal sealed class NativeBridge
                     TextFormat = root.TryGetProperty("format", out var format) ? format.GetString() : "plain",
                     TextLanguage = root.TryGetProperty("language", out var language) ? language.GetString() : "text",
                     OfficeLayout = officeLayout,
+                    Markdown = markdown,
                 };
             }
+
+            if (markdown is not null)
+                return ready with { Markdown = markdown };
 
             if (officeLayout is not null)
                 return ready with { OfficeLayout = officeLayout };

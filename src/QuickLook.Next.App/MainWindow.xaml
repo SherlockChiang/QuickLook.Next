@@ -133,6 +133,20 @@
                     Margin="14,0,14,14"
                     Background="Transparent"
                     AutomationProperties.Name="Image preview surface" />
+            <Border x:Name="AnimatedImagePreviewRoot"
+                    x:Uid="AnimatedImagePreviewRoot"
+                    Visibility="Collapsed"
+                    Margin="14,0,14,14"
+                    Background="Transparent"
+                    AutomationProperties.Name="Animated image preview">
+                <Grid>
+                    <Image x:Name="AnimatedImagePreviewImage"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Top"
+                           Stretch="Fill"
+                           AutomationProperties.Name="Animated image content" />
+                </Grid>
+            </Border>
             <ScrollViewer x:Name="PdfScrollViewer"
                           x:Uid="PdfScrollViewer"
                           Visibility="Collapsed"
