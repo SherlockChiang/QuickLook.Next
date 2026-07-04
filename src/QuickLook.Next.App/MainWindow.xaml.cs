@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
+using Windows.Storage;
 using Windows.Storage.Streams;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
@@ -1031,7 +1032,7 @@ public sealed partial class MainWindow : Window
     private void OnOpenPreviewFileClick(object sender, RoutedEventArgs e)
         => OpenCurrentPreviewPath(revealInExplorer: false);
 
-    private void OnCopyPreviewPathClick(object sender, RoutedEventArgs e)
+    private async void OnCopyPreviewFileClick(object sender, RoutedEventArgs e)
     {
         string? path = _currentPath;
         if (string.IsNullOrWhiteSpace(path))
@@ -1040,14 +1041,24 @@ public sealed partial class MainWindow : Window
         try
         {
             var package = new DataPackage();
-            package.SetText(path);
+            if (System.IO.File.Exists(path))
+            {
+                StorageFile file = await StorageFile.GetFileFromPathAsync(path);
+                package.RequestedOperation = DataPackageOperation.Copy;
+                package.SetStorageItems([file]);
+                StatusText.Text = UiStrings.FileCopied;
+            }
+            else
+            {
+                package.SetText(path);
+                StatusText.Text = UiStrings.PathCopied;
+            }
             Clipboard.SetContent(package);
-            StatusText.Text = UiStrings.PathCopied;
             StatusBar.Visibility = Visibility.Visible;
         }
         catch (Exception ex)
         {
-            DiagLog.Write("App", "copy preview path failed: " + ex.Message);
+            DiagLog.Write("App", "copy preview file failed: " + ex.Message);
         }
     }
 

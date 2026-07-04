@@ -45,6 +45,9 @@
   <data name="PathCopied" xml:space="preserve">
     <value>Path copied</value>
   </data>
+  <data name="FileCopied" xml:space="preserve">
+    <value>File copied</value>
+  </data>
   <data name="TrayShowPreview" xml:space="preserve">
     <value>显示预览</value>
   </data>
@@ -77,15 +80,6 @@
   </data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
-  </data>
-  <data name="CopyPreviewPathText.Text" xml:space="preserve">
-    <value>Copy</value>
-  </data>
-  <data name="OpenPreviewFileText.Text" xml:space="preserve">
-    <value>Open</value>
-  </data>
-  <data name="RevealPreviewFileText.Text" xml:space="preserve">
-    <value>Reveal</value>
   </data>
   <data name="DimensionsLabel.Text" xml:space="preserve">
     <value>Dimensions</value>
