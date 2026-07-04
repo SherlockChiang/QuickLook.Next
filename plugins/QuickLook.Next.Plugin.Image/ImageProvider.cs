@@ -53,8 +53,7 @@ public sealed class ImageProvider : IPreviewProvider
             ExifOrientationMode.RespectExifOrientation,
             ColorManagementMode.ColorManageToSRgb);
 
-        var detachedBuffer = pixelData.DetachPixelData();
-        byte[] bgra = detachedBuffer.ToArray();
+        byte[] bgra = pixelData.DetachPixelData();
 
         string title = targetWidth == origWidth && targetHeight == origHeight
             ? Path.GetFileName(path)
