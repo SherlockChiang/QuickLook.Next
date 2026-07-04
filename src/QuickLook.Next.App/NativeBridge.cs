@@ -393,10 +393,18 @@ internal sealed class NativeBridge
             var root = doc.RootElement;
             string kind = root.GetProperty("kind").GetString() ?? "unknown";
             string title = root.GetProperty("title").GetString() ?? kind;
-            double width = kind is "archive" or "folder" or "package" ? 760 : 720;
-            double height = kind is "archive" or "folder" or "package" ? 560 : 500;
+            double width = kind is "archive" or "folder" or "package" or "table" ? 760 : 720;
+            double height = kind is "archive" or "folder" or "package" or "table" ? 560 : 500;
 
             var ready = new PreviewReady(requestId, kind, title, width, height);
+            if (root.TryGetProperty("table", out var table))
+            {
+                return ready with
+                {
+                    Table = JsonSerializer.Deserialize<PreviewTable>(table.GetRawText(), ProtocolJson.Options),
+                };
+            }
+
             if (root.TryGetProperty("listing", out var listing))
             {
                 return ready with

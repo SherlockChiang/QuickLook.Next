@@ -35,6 +35,7 @@ public sealed partial class MainWindow : Window
     private readonly NativeBridge _native = new();
     private readonly PreviewWindowController _windowController;
     private TextPreviewPresenter? _textPresenter;
+    private TablePreviewPresenter? _tablePresenter;
     private ListingPreviewPresenter? _listingPresenter;
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
@@ -72,6 +73,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
         _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, () => RootGrid.ActualTheme);
+        _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _pdfPresenter = new PdfPreviewPresenter(
@@ -362,6 +364,7 @@ public sealed partial class MainWindow : Window
                     StatusText.Text = nativeReady switch
                     {
                         PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
+                        PreviewReady r when r.Table is not null => ShowTablePreview(r),
                         PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                         PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                         _ => $"{nativeReady.Kind}: {nativeReady.Title}",
@@ -382,6 +385,7 @@ public sealed partial class MainWindow : Window
                 {
                     PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
                     PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
+                    PreviewReady r when r.Table is not null => ShowTablePreview(r),
                     PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                     PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
@@ -466,7 +470,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static bool ShouldActivatePreview(PreviewReady ready)
-        => ready.TextContent is not null || ready.Listing is not null || ready.OfficeLayout is not null;
+        => ready.TextContent is not null || ready.Listing is not null || ready.Table is not null || ready.OfficeLayout is not null;
 
     private void UpdatePreviewChrome(PreviewReady ready, bool showRasterTools = false)
     {
@@ -546,6 +550,8 @@ public sealed partial class MainWindow : Window
             return $"{layout.Pages.Length:N0} pages";
         if (ready.Listing is { } listing)
             return listing.Summary;
+        if (ready.Table is { } table)
+            return $"{table.TotalRows:N0} rows x {table.TotalColumns:N0} columns";
         return UiStrings.EmptyValue;
     }
 
@@ -589,6 +595,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -654,6 +661,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -670,6 +678,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -685,6 +694,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Visible;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -696,12 +706,30 @@ public sealed partial class MainWindow : Window
         return result.Status;
     }
 
+    private string ShowTablePreview(PreviewReady ready)
+    {
+        UpdatePreviewChrome(ready);
+        PreviewRoot.Visibility = Visibility.Collapsed;
+        PdfScrollViewer.Visibility = Visibility.Collapsed;
+        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Visible;
+        OfficeScrollViewer.Visibility = Visibility.Collapsed;
+        MediaPreviewElement.Visibility = Visibility.Collapsed;
+        ListingPanel.Visibility = Visibility.Collapsed;
+        _rasterPresenter?.Clear();
+
+        TablePreviewResult result = _tablePresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
+        ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
+        return result.Status;
+    }
+
     private string ShowOfficeLayoutPreview(PreviewReady ready)
     {
         UpdatePreviewChrome(ready);
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Visible;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -718,6 +746,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Visible;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -734,6 +763,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Visible;
@@ -813,6 +843,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
+        TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
         ListingPanel.Visibility = Visibility.Collapsed;
@@ -830,6 +861,7 @@ public sealed partial class MainWindow : Window
         _pdfPresenter?.Clear();
         OfficePagesPanel.Children.Clear();
         TextPreviewBlock.Blocks.Clear();
+        _tablePresenter?.Clear();
         ClearPreviewHeroImages();
         ClearImageSidecars();
         _listingPresenter?.Reset();

@@ -45,6 +45,9 @@ public sealed record PreviewResult(string Kind, string Title)
     /// <summary>Structured file/folder listing for archive and directory previews.</summary>
     public PreviewListing? Listing { get; init; }
 
+    /// <summary>Structured delimited table preview produced by the Rust native parser.</summary>
+    public PreviewTable? Table { get; init; }
+
     /// <summary>Approximate Office document layout produced by the Rust native parser.</summary>
     public OfficeLayout? OfficeLayout { get; init; }
 }
@@ -100,6 +103,18 @@ public sealed record PreviewListingItem(string Name, string Path, string ParentP
     public string Type { get; init; } = "";
     public string? NativePath { get; init; }
 }
+
+public sealed record PreviewTable(string Format)
+{
+    public string Delimiter { get; init; } = ",";
+    public string[] Headers { get; init; } = [];
+    public PreviewTableRow[] Rows { get; init; } = [];
+    public int TotalRows { get; init; }
+    public int TotalColumns { get; init; }
+    public bool IsPartial { get; init; }
+}
+
+public sealed record PreviewTableRow(string[] Cells);
 
 /// <summary>
 /// Host-provided surface a provider uses while opening: report status/errors, and (in the full host)

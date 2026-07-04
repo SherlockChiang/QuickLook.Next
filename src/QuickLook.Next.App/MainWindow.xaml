@@ -206,6 +206,60 @@
                                    AutomationProperties.Name="Text preview content" />
                 </StackPanel>
             </ScrollViewer>
+            <ScrollViewer x:Name="TableScrollViewer"
+                          x:Uid="TableScrollViewer"
+                          Visibility="Collapsed"
+                          Margin="14,0,14,14"
+                          Padding="20"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{ThemeResource PreviewSurfaceBrush}"
+                          BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                          BorderThickness="1"
+                          CornerRadius="8"
+                          AutomationProperties.Name="Delimited table preview">
+                <StackPanel Spacing="14">
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="48"
+                                Height="48"
+                                CornerRadius="8"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                Background="{ThemeResource PreviewHeroSurfaceBrush}">
+                            <FontIcon Glyph="&#xE80A;"
+                                      FontSize="22"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    Spacing="3">
+                            <TextBlock x:Name="TableTitleText"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                            <TextBlock x:Name="TableSummaryText"
+                                       FontSize="12"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Grid>
+                    <Border Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                            BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            HorizontalAlignment="Left">
+                        <Grid x:Name="TableGrid"
+                              AutomationProperties.Name="Delimited table cells" />
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
             <ScrollViewer x:Name="OfficeScrollViewer"
                           x:Uid="OfficeScrollViewer"
                           Visibility="Collapsed"
@@ -534,7 +588,7 @@
                             </ItemsPanelTemplate>
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="local:ImageFilmstripItem">
+                            <DataTemplate>
                                 <Border Width="62"
                                         Height="48"
                                         Margin="3"
@@ -542,8 +596,8 @@
                                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
                                         BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                         BorderThickness="1"
-                                        ToolTipService.ToolTip="{x:Bind Name}">
-                                    <Image Source="{x:Bind Thumbnail, Mode=OneWay}"
+                                        ToolTipService.ToolTip="{Binding Name}">
+                                    <Image Source="{Binding Thumbnail, Mode=OneWay}"
                                            Stretch="UniformToFill" />
                                 </Border>
                             </DataTemplate>
@@ -667,7 +721,7 @@
                             </Style>
                         </ListView.ItemContainerStyle>
                         <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="local:ListingRow">
+                            <DataTemplate>
                                 <Grid MinHeight="34" Padding="8,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="28" />
@@ -680,7 +734,7 @@
                                           Width="22"
                                           Height="22"
                                           VerticalAlignment="Center">
-                                        <TextBlock Text="{x:Bind Glyph}"
+                                        <TextBlock Text="{Binding Glyph}"
                                                    HorizontalAlignment="Center"
                                                    VerticalAlignment="Center"
                                                    FontFamily="Segoe MDL2 Assets"
@@ -689,27 +743,27 @@
                                                Height="18"
                                                HorizontalAlignment="Center"
                                                VerticalAlignment="Center"
-                                               Source="{x:Bind IconSource, Mode=OneWay}" />
+                                               Source="{Binding IconSource, Mode=OneWay}" />
                                     </Grid>
                                     <TextBlock Grid.Column="1"
-                                               Text="{x:Bind Name}"
+                                               Text="{Binding Name}"
                                                VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                                     <TextBlock Grid.Column="2"
-                                               Text="{x:Bind ModifiedDisplay}"
+                                               Text="{Binding ModifiedDisplay}"
                                                VerticalAlignment="Center"
                                                FontSize="12"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     <TextBlock Grid.Column="3"
-                                               Text="{x:Bind TypeDisplay}"
+                                               Text="{Binding TypeDisplay}"
                                                VerticalAlignment="Center"
                                                FontSize="12"
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     <TextBlock Grid.Column="4"
-                                               Text="{x:Bind SizeDisplay}"
+                                               Text="{Binding SizeDisplay}"
                                                VerticalAlignment="Center"
                                                HorizontalAlignment="Right"
                                                FontSize="12"

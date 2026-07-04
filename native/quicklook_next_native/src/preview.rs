@@ -32,6 +32,8 @@ struct PreviewReadyDto {
     office_layout: Option<OfficeLayoutDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     listing: Option<PreviewListingDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table: Option<PreviewTableDto>,
 }
 
 #[derive(Serialize)]
@@ -111,6 +113,24 @@ struct PreviewListingItemDto {
     native_path: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewTableDto {
+    format: String,
+    delimiter: String,
+    headers: Vec<String>,
+    rows: Vec<PreviewTableRowDto>,
+    total_rows: usize,
+    total_columns: usize,
+    is_partial: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewTableRowDto {
+    cells: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 enum BValue {
     Int(i64),
@@ -126,6 +146,9 @@ fn to_json<T: Serialize>(value: &T) -> String {
 // ── Text preview ─────────────────────────────────────────────────────────────
 
 const MAX_TEXT_BYTES: usize = 512 * 1024;
+const MAX_TABLE_ROWS: usize = 500;
+const MAX_TABLE_COLUMNS: usize = 64;
+const MAX_TABLE_CELL_CHARS: usize = 240;
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
@@ -320,6 +343,16 @@ pub fn render_text(path: &str) -> String {
     };
 
     let mut text = text.into_owned();
+    if language == "csv" || language == "tsv" {
+        return render_delimited_table_json(
+            filename,
+            &text,
+            if language == "tsv" { '\t' } else { ',' },
+            language,
+            truncated,
+        );
+    }
+
     if truncated {
         text.push_str(&format!(
             "\n\n[Preview truncated at {} bytes]",
@@ -340,7 +373,207 @@ pub fn render_text(path: &str) -> String {
         text: Some(text),
         office_layout: None,
         listing: None,
+        table: None,
     })
+}
+
+fn render_delimited_table_json(
+    filename: &str,
+    text: &str,
+    delimiter: char,
+    format: &str,
+    input_truncated: bool,
+) -> String {
+    let (mut records, total_records, total_columns, parse_partial) =
+        parse_delimited_records(text, delimiter);
+    if records.is_empty() {
+        records.push(vec![String::new()]);
+    }
+
+    let first_record = records.first().cloned().unwrap_or_default();
+    let has_header = looks_like_header_row(&first_record);
+    let display_total_columns = total_columns.max(1);
+    let column_count = display_total_columns.clamp(1, MAX_TABLE_COLUMNS);
+    let headers = if has_header {
+        normalize_table_headers(first_record, column_count)
+    } else {
+        (0..column_count)
+            .map(|i| format!("Column {}", i + 1))
+            .collect()
+    };
+
+    let data_records = if has_header {
+        records.into_iter().skip(1).collect::<Vec<_>>()
+    } else {
+        records
+    };
+    let total_rows = total_records.saturating_sub(usize::from(has_header));
+    let rows = data_records
+        .into_iter()
+        .take(MAX_TABLE_ROWS)
+        .map(|record| PreviewTableRowDto {
+            cells: normalize_table_cells(record, headers.len()),
+        })
+        .collect::<Vec<_>>();
+    let is_partial = input_truncated
+        || parse_partial
+        || total_rows > MAX_TABLE_ROWS
+        || display_total_columns > MAX_TABLE_COLUMNS;
+
+    to_json(&PreviewReadyDto {
+        kind: "table".to_string(),
+        title: format!("{filename} - Table"),
+        format: Some(format.to_string()),
+        language: Some(format.to_string()),
+        text: None,
+        office_layout: None,
+        listing: None,
+        table: Some(PreviewTableDto {
+            format: format.to_string(),
+            delimiter: delimiter.to_string(),
+            headers,
+            rows,
+            total_rows,
+            total_columns: display_total_columns,
+            is_partial,
+        }),
+    })
+}
+
+fn parse_delimited_records(text: &str, delimiter: char) -> (Vec<Vec<String>>, usize, usize, bool) {
+    let mut records = Vec::new();
+    let mut row = Vec::new();
+    let mut cell = String::new();
+    let mut total_records = 0usize;
+    let mut total_columns = 0usize;
+    let mut is_partial = false;
+    let mut in_quotes = false;
+    let mut saw_any = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        saw_any = true;
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    push_table_char(&mut cell, '"');
+                    if cell.chars().count() >= MAX_TABLE_CELL_CHARS {
+                        is_partial = true;
+                    }
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                if cell.chars().count() < MAX_TABLE_CELL_CHARS {
+                    cell.push(ch);
+                } else if !ch.is_control() {
+                    is_partial = true;
+                }
+            }
+            continue;
+        }
+
+        if ch == '"' && cell.is_empty() {
+            in_quotes = true;
+        } else if ch == delimiter {
+            finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
+        } else if ch == '\n' || ch == '\r' {
+            if ch == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
+            finish_table_row(
+                &mut records,
+                &mut row,
+                &mut total_records,
+                &mut is_partial,
+            );
+        } else if cell.chars().count() < MAX_TABLE_CELL_CHARS {
+            cell.push(ch);
+        } else {
+            is_partial = true;
+        }
+    }
+
+    if saw_any && (!cell.is_empty() || !row.is_empty()) {
+        finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
+        finish_table_row(
+            &mut records,
+            &mut row,
+            &mut total_records,
+            &mut is_partial,
+        );
+    }
+
+    (records, total_records, total_columns, is_partial)
+}
+
+fn push_table_char(cell: &mut String, ch: char) {
+    if cell.chars().count() < MAX_TABLE_CELL_CHARS {
+        cell.push(ch);
+    }
+}
+
+fn finish_table_cell(
+    row: &mut Vec<String>,
+    cell: &mut String,
+    total_columns: &mut usize,
+    is_partial: &mut bool,
+) {
+    *total_columns = (*total_columns).max(row.len() + 1);
+    if row.len() < MAX_TABLE_COLUMNS {
+        row.push(cell.to_string());
+    } else {
+        *is_partial = true;
+    }
+    cell.clear();
+}
+
+fn finish_table_row(
+    records: &mut Vec<Vec<String>>,
+    row: &mut Vec<String>,
+    total_records: &mut usize,
+    is_partial: &mut bool,
+) {
+    *total_records += 1;
+    if records.len() < MAX_TABLE_ROWS + 1 {
+        records.push(std::mem::take(row));
+    } else {
+        row.clear();
+        *is_partial = true;
+    }
+}
+
+fn looks_like_header_row(row: &[String]) -> bool {
+    row.iter().any(|cell| cell.chars().any(|ch| ch.is_alphabetic()))
+}
+
+fn normalize_table_headers(mut headers: Vec<String>, column_count: usize) -> Vec<String> {
+    headers.truncate(column_count);
+    while headers.len() < column_count {
+        headers.push(String::new());
+    }
+    headers
+        .into_iter()
+        .enumerate()
+        .map(|(index, header)| {
+            let header = header.trim();
+            if header.is_empty() {
+                format!("Column {}", index + 1)
+            } else {
+                header.to_string()
+            }
+        })
+        .collect()
+}
+
+fn normalize_table_cells(mut cells: Vec<String>, column_count: usize) -> Vec<String> {
+    cells.truncate(column_count);
+    while cells.len() < column_count {
+        cells.push(String::new());
+    }
+    cells
 }
 
 /// Check if a file is text-like (extension known or a small UTF-8 printable header).
@@ -1713,6 +1946,7 @@ fn office_preview_json_with_layout(
         text: Some(text),
         office_layout,
         listing: None,
+        table: None,
     })
 }
 
@@ -1834,6 +2068,7 @@ pub fn render_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> Str
         )),
         office_layout: None,
         listing: None,
+        table: None,
     })
 }
 
@@ -1884,6 +2119,7 @@ pub fn render_executable(path: &str) -> String {
         text: Some(text),
         office_layout: None,
         listing: None,
+        table: None,
     })
 }
 
@@ -2221,6 +2457,7 @@ fn render_package(path: &str) -> String {
         text: Some(text),
         office_layout: None,
         listing: None,
+        table: None,
     })
 }
 
@@ -2670,6 +2907,7 @@ pub fn render_torrent(path: &str) -> String {
             is_partial: partial,
             items,
         }),
+        table: None,
     })
 }
 
@@ -3080,6 +3318,7 @@ fn archive_listing_json(
             is_partial: partial,
             items,
         }),
+        table: None,
     })
 }
 
@@ -3340,6 +3579,7 @@ pub fn render_folder(path: &str) -> String {
             is_partial: partial,
             items,
         }),
+        table: None,
     })
 }
 
