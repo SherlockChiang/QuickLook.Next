@@ -406,16 +406,17 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(n as usize);
     for k in 0..n {
         let item = items.GetItemAt(k)?;
-        let pw: PWSTR = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-        out.push(pwstr_to_string_and_free(pw)?);
+        let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
+        out.push(pw.0.to_string().map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?);
     }
     Ok(out)
 }
 
-unsafe fn pwstr_to_string_and_free(pw: PWSTR) -> Result<String> {
-    let result = pw.to_string();
-    CoTaskMemFree(Some(pw.0 as *const _));
-    result.map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))
+struct PwstrGuard(PWSTR);
+impl Drop for PwstrGuard {
+    fn drop(&mut self) {
+        unsafe { CoTaskMemFree(Some(self.0.0 as *const _)); }
+    }
 }
 
 // ── File probe + cache ───────────────────────────────────────────────────────────────────────
