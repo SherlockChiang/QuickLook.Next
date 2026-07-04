@@ -73,9 +73,11 @@ while (true)
                     pdf.Dispose();
                 foreach (var key in pdfPageRenderCts.Keys.Where(k => k.RequestId == close.RequestId).ToArray())
                 {
-                    pdfPageRenderCts[key].Cancel();
-                    pdfPageRenderCts[key].Dispose();
-                    pdfPageRenderCts.Remove(key);
+                    if (pdfPageRenderCts.TryGetValue(key, out var cts))
+                    {
+                        try { cts.Cancel(); } catch (ObjectDisposedException) { }
+                        pdfPageRenderCts.Remove(key);
+                    }
                 }
                 producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                 break;
@@ -248,7 +250,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     var key = (page.RequestId, page.PageIndex);
     if (pdfPageRenderCts.Remove(key, out var previousCts))
     {
-        previousCts.Cancel();
+        try { previousCts.Cancel(); } catch (ObjectDisposedException) { }
         previousCts.Dispose();
     }
     var pageCts = new CancellationTokenSource();
