@@ -120,7 +120,7 @@ internal sealed class TextPreviewPresenter
         {
             var partial = CreateParagraph(12, "Segoe UI", 12, 0);
             partial.Foreground = UiGrayBrush;
-            partial.Inlines.Add(new Run { Text = "[Preview truncated]" });
+            partial.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
             _textBlock.Blocks.Add(partial);
         }
     }
@@ -721,7 +721,7 @@ internal sealed class TextPreviewPresenter
                 Children =
                 {
                     new FontIcon { Glyph = "\uE8C8", FontSize = 12 },
-                    new TextBlock { Text = "Copy", FontSize = 11 }
+                    new TextBlock { Text = UiStrings.CopyAction, FontSize = 11 }
                 }
             },
             Padding = new Thickness(8, 4, 8, 4),
@@ -739,10 +739,10 @@ internal sealed class TextPreviewPresenter
             
             var sp = (StackPanel)copyBtn.Content;
             ((FontIcon)sp.Children[0]).Glyph = "\uE73E"; // Checkmark
-            ((TextBlock)sp.Children[1]).Text = "Copied!";
-            await Task.Delay(1500);
+            ((TextBlock)sp.Children[1]).Text = UiStrings.CopiedAction;
+            await Task.Delay(2000);
             ((FontIcon)sp.Children[0]).Glyph = "\uE8C8";
-            ((TextBlock)sp.Children[1]).Text = "Copy";
+            ((TextBlock)sp.Children[1]).Text = UiStrings.CopyAction;
         };
 
         Grid.SetColumn(copyBtn, 2);

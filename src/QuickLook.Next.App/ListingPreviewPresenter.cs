@@ -305,7 +305,7 @@ internal sealed class ListingPreviewPresenter
         try
         {
             CancellationToken token = _getCancellationToken();
-            _summary.Text = "正在读取文件夹...";
+            _summary.Text = UiStrings.ListingReading;
             var childListing = await Task.Run(() => _loadFolderListing(row.NativePath), token);
             if (token.IsCancellationRequested || !_isGenerationCurrent(generation) || _currentListing is null)
                 return;
@@ -335,7 +335,7 @@ internal sealed class ListingPreviewPresenter
         catch (Exception ex)
         {
             DiagLog.Write("App", "folder navigation failed: " + ex);
-            _summary.Text = "无法读取此文件夹";
+            _summary.Text = UiStrings.ListingError;
         }
     }
 

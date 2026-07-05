@@ -195,7 +195,7 @@ public sealed partial class MainWindow : Window
                 ExitApp();
                 return;
             }
-            StatusText.Text = "startup error: " + ex.Message;
+            StatusText.Text = UiStrings.StartupErrorPrefix + ex.Message;
             ShowPreviewWindow(activate: true);
         }
     }
@@ -646,7 +646,7 @@ public sealed partial class MainWindow : Window
         ErrorText.Text = string.IsNullOrWhiteSpace(message) ? UiStrings.PreviewUnavailableMessage : message;
         PreviewTitleText.Text = UiStrings.PreviewUnavailableTitle;
         PreviewMetaText.Text = ErrorText.Text;
-        PreviewKindPillText.Text = "ERROR";
+        PreviewKindPillText.Text = UiStrings.ErrorKind;
         ResizeWindowForContent(520, 260, MaxTextWindowWidth, MaxTextWindowHeight);
         return "error: " + ErrorText.Text;
     }
@@ -1558,7 +1558,7 @@ public sealed partial class MainWindow : Window
             FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
             RemoveCachedImageThumbnail(path);
             RemoveFilmstripItem(path);
-            StatusText.Text = "Moved to Recycle Bin";
+            StatusText.Text = UiStrings.MovedToRecycleBin;
             StatusBar.Visibility = Visibility.Visible;
 
             if (!string.IsNullOrWhiteSpace(nextPath) && System.IO.File.Exists(nextPath))
@@ -1963,7 +1963,7 @@ public sealed partial class MainWindow : Window
         {
             Title = "Search (Coming Soon)",
             Content = "Search functionality is currently being refined.",
-            CloseButtonText = "OK",
+            CloseButtonText = UiStrings.DialogOk,
             XamlRoot = this.Content.XamlRoot
         };
         _ = dialog.ShowAsync();

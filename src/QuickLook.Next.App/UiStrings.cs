@@ -25,6 +25,16 @@ internal static class UiStrings
     public static string AutoStartEnableFailed => Get(nameof(AutoStartEnableFailed), "开机自启开启失败");
     public static string AutoStartDisableFailed => Get(nameof(AutoStartDisableFailed), "开机自启关闭失败");
 
+    public static string ListingReading => Get(nameof(ListingReading), "正在读取文件夹...");
+    public static string ListingError => Get(nameof(ListingError), "无法读取此文件夹");
+    public static string StartupErrorPrefix => Get(nameof(StartupErrorPrefix), "startup error: ");
+    public static string MovedToRecycleBin => Get(nameof(MovedToRecycleBin), "Moved to Recycle Bin");
+    public static string TextPreviewTruncated => Get(nameof(TextPreviewTruncated), "[Preview truncated]");
+    public static string CopyAction => Get(nameof(CopyAction), "Copy");
+    public static string CopiedAction => Get(nameof(CopiedAction), "Copied!");
+    public static string DialogOk => Get(nameof(DialogOk), "OK");
+    public static string ErrorKind => Get(nameof(ErrorKind), "ERROR");
+
     public static string FolderTypeDisplay => Get(nameof(FolderTypeDisplay), "文件夹");
     public static string CertificateHeroSubtitle => Get(nameof(CertificateHeroSubtitle), "Certificate");
     public static string PackageHeroSubtitle => Get(nameof(PackageHeroSubtitle), "App package icon");
