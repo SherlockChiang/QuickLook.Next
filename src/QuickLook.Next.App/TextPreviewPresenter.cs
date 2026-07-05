@@ -47,7 +47,7 @@ internal sealed class TextPreviewPresenter
         _getTheme = getTheme;
         _defaultScrollMargin = scrollViewer.Margin;
         _outlineList.ItemsSource = _outlineItems;
-        _outlineList.SelectionChanged += OnOutlineSelectionChanged;
+        _outlineList.ItemClick += OnOutlineItemClick;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
     }
 
@@ -330,15 +330,22 @@ internal sealed class TextPreviewPresenter
             : _defaultScrollMargin;
     }
 
-    private void OnOutlineSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void OnOutlineItemClick(object sender, ItemClickEventArgs e)
     {
-        if (_updatingOutline || _outlineList.SelectedItem is not MarkdownOutlineItem item)
+        if (e.ClickedItem is not MarkdownOutlineItem item)
             return;
 
         _scrollViewer.UpdateLayout();
         _textBlock.UpdateLayout();
+        
+        // Disable outline sync temporarily while we animate to the target
+        _updatingOutline = true;
+        
         double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
         _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
+        
+        // Re-enable outline sync after a short delay (approx animation time)
+        _ = Task.Delay(300).ContinueWith(_ => _updatingOutline = false, TaskScheduler.Default);
     }
 
     private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
