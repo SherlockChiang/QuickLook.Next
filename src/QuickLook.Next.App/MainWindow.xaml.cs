@@ -73,7 +73,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, TextListView, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
+        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, TextListView, TextPreviewContainer, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
         _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);

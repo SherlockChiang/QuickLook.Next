@@ -24,6 +24,7 @@ internal sealed class TextPreviewPresenter
     private readonly Border _outlinePanel;
     private readonly ListView _outlineList;
     private readonly ListView _textListView;
+    private readonly FrameworkElement _textPreviewContainer;
     private readonly Func<ElementTheme> _getTheme;
     private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
     private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = [];
@@ -35,6 +36,7 @@ internal sealed class TextPreviewPresenter
         RichTextBlock textBlock,
         ScrollViewer scrollViewer,
         ListView textListView,
+        FrameworkElement textPreviewContainer,
         Border outlinePanel,
         ListView outlineList,
         Func<ElementTheme> getTheme)
@@ -42,10 +44,11 @@ internal sealed class TextPreviewPresenter
         _textBlock = textBlock;
         _scrollViewer = scrollViewer;
         _textListView = textListView;
+        _textPreviewContainer = textPreviewContainer;
         _outlinePanel = outlinePanel;
         _outlineList = outlineList;
         _getTheme = getTheme;
-        _defaultScrollMargin = scrollViewer.Margin;
+        _defaultScrollMargin = textPreviewContainer.Margin;
         _outlineList.ItemsSource = _outlineItems;
         _outlineList.ItemClick += OnOutlineItemClick;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
@@ -325,7 +328,7 @@ internal sealed class TextPreviewPresenter
     {
         bool visible = _outlineItems.Count > 0;
         _outlinePanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        _scrollViewer.Margin = visible
+        _textPreviewContainer.Margin = visible
             ? new Thickness(_defaultScrollMargin.Left + OutlineWidth + OutlineGap, _defaultScrollMargin.Top, _defaultScrollMargin.Right, _defaultScrollMargin.Bottom)
             : _defaultScrollMargin;
     }
