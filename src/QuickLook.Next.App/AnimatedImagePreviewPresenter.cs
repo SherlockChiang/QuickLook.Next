@@ -81,17 +81,25 @@ internal sealed class AnimatedImagePreviewPresenter
         _panX = Math.Clamp(_panX, -maxPanX, maxPanX);
         _panY = Math.Clamp(_panY, -maxPanY, maxPanY);
 
-        _image.Width = scaledWidth;
-        _image.Height = scaledHeight;
-        _transform.ScaleX = 1;
-        _transform.ScaleY = 1;
+        _image.Width = _sourceWidth;
+        _image.Height = _sourceHeight;
+        _transform.ScaleX = scale;
+        _transform.ScaleY = scale;
         _transform.TranslateX = Math.Round((availableWidth - scaledWidth) / 2 + _panX);
         _transform.TranslateY = Math.Round((availableHeight - scaledHeight) / 2 + _panY);
         UpdateZoomLabel();
     }
 
     public void UpdateZoomLabel()
-        => _zoomText.Text = Math.Abs(_zoom - 1.0) < 0.01 ? UiStrings.FitZoom : $"{_zoom * 100:0}%";
+    {
+        if (Math.Abs(_zoom - 1.0) < 0.01)
+        {
+            _zoomText.Text = UiStrings.FitZoom;
+            return;
+        }
+
+        _zoomText.Text = $"{ActualScale() * 100:0}%";
+    }
 
     public void ResetView()
     {
@@ -114,11 +122,15 @@ internal sealed class AnimatedImagePreviewPresenter
     {
         if (_image.Source is null)
             return;
-        _zoom = Math.Clamp(zoom, MinZoom, MaxZoom);
+        double fitScale = FitScale();
+        _zoom = Math.Clamp(zoom / Math.Max(0.001, fitScale), MinZoom, MaxZoom);
         _panX = 0;
         _panY = 0;
         UpdateLayout();
     }
+
+    public void SetActualSize()
+        => SetZoom(1.0);
 
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
@@ -173,7 +185,15 @@ internal sealed class AnimatedImagePreviewPresenter
         e.Handled = true;
     }
 
-    public static (int Width, int Height)? TryReadGifSize(string path)
+    public static (int Width, int Height)? TryReadAnimatedSize(string path)
+        => Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".gif" => TryReadGifSize(path),
+            ".webp" => TryReadAnimatedWebPSize(path),
+            _ => null,
+        };
+
+    private static (int Width, int Height)? TryReadGifSize(string path)
     {
         try
         {
@@ -193,6 +213,124 @@ internal sealed class AnimatedImagePreviewPresenter
             return null;
         }
     }
+
+    private static (int Width, int Height)? TryReadAnimatedWebPSize(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> header = stackalloc byte[12];
+            if (stream.Read(header) != header.Length
+                || !header[..4].SequenceEqual("RIFF"u8)
+                || !header[8..12].SequenceEqual("WEBP"u8))
+            {
+                return null;
+            }
+
+            Span<byte> chunkHeader = stackalloc byte[8];
+            while (stream.Position + chunkHeader.Length <= stream.Length)
+            {
+                if (stream.Read(chunkHeader) != chunkHeader.Length)
+                    return null;
+
+                string chunk = System.Text.Encoding.ASCII.GetString(chunkHeader[..4]);
+                uint size = BitConverter.ToUInt32(chunkHeader[4..8]);
+                long payloadStart = stream.Position;
+                long nextChunk = payloadStart + size + (size % 2);
+                if (nextChunk < payloadStart || nextChunk > stream.Length + 1)
+                    return null;
+
+                if (chunk == "VP8X")
+                {
+                    Span<byte> data = stackalloc byte[10];
+                    if (size < data.Length || stream.Read(data) != data.Length)
+                        return null;
+
+                    bool animated = (data[0] & 0x02) != 0;
+                    int width = Read24(data[4], data[5], data[6]) + 1;
+                    int height = Read24(data[7], data[8], data[9]) + 1;
+                    return animated && width > 0 && height > 0 ? (width, height) : null;
+                }
+
+                if (chunk == "ANIM" || chunk == "ANMF")
+                    return TryReadWebPStaticSize(path);
+
+                stream.Position = nextChunk;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static (int Width, int Height)? TryReadWebPStaticSize(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            stream.Position = 12;
+            Span<byte> chunkHeader = stackalloc byte[8];
+            while (stream.Position + chunkHeader.Length <= stream.Length)
+            {
+                if (stream.Read(chunkHeader) != chunkHeader.Length)
+                    return null;
+
+                string chunk = System.Text.Encoding.ASCII.GetString(chunkHeader[..4]);
+                uint size = BitConverter.ToUInt32(chunkHeader[4..8]);
+                long payloadStart = stream.Position;
+                long nextChunk = payloadStart + size + (size % 2);
+                if (nextChunk < payloadStart || nextChunk > stream.Length + 1)
+                    return null;
+
+                if (chunk == "VP8 " && size >= 10)
+                {
+                    byte[] data = new byte[10];
+                    if (stream.Read(data, 0, data.Length) != data.Length)
+                        return null;
+                    if (data[3] == 0x9D && data[4] == 0x01 && data[5] == 0x2A)
+                    {
+                        int width = BitConverter.ToUInt16(data, 6) & 0x3FFF;
+                        int height = BitConverter.ToUInt16(data, 8) & 0x3FFF;
+                        return width > 0 && height > 0 ? (width, height) : null;
+                    }
+                }
+                else if (chunk == "VP8L" && size >= 5)
+                {
+                    byte[] data = new byte[5];
+                    if (stream.Read(data, 0, data.Length) != data.Length || data[0] != 0x2F)
+                        return null;
+                    int width = 1 + data[1] + ((data[2] & 0x3F) << 8);
+                    int height = 1 + ((data[2] & 0xC0) >> 6) + (data[3] << 2) + ((data[4] & 0x0F) << 10);
+                    return width > 0 && height > 0 ? (width, height) : null;
+                }
+
+                stream.Position = nextChunk;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static int Read24(byte b0, byte b1, byte b2)
+        => b0 | (b1 << 8) | (b2 << 16);
+
+    private double FitScale()
+    {
+        if (_sourceWidth <= 0 || _sourceHeight <= 0)
+            return 1.0;
+
+        double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
+        double availableHeight = Math.Max(1, _previewRoot.ActualHeight);
+        return Math.Min(1.0, Math.Min(availableWidth / _sourceWidth, availableHeight / _sourceHeight));
+    }
+
+    private double ActualScale()
+        => FitScale() * _zoom;
 }
 
 internal readonly record struct AnimatedImagePreviewResult(string Status, double Width, double Height);

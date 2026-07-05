@@ -2,6 +2,7 @@ using System.Numerics;
 using System.IO;
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices.WindowsRuntime;
+using Microsoft.VisualBasic.FileIO;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
@@ -31,6 +32,7 @@ public sealed partial class MainWindow : Window
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 162;
     private const int SwitchDebounceMs = 110;
+    private const int MaxImageThumbnailCacheItems = 256;
 
     private readonly NativeBridge _native = new();
     private readonly PreviewWindowController _windowController;
@@ -45,18 +47,16 @@ public sealed partial class MainWindow : Window
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
-    private string? _currentRequestId;
-    private string? _currentPath;
+    private readonly PreviewSession _previewSession = new();
     private bool _isStarted;
     private bool _previewVisible;
-    private int _previewGeneration;
     private bool? _backgroundEfficiencyEnabled;
     private CancellationTokenSource? _switchDebounceCts;
-    private CancellationTokenSource? _previewOperationCts;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
     private string[] _imageSiblingPaths = [];
     private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
+    private readonly Dictionary<string, ImageSource> _imageThumbnailCache = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -99,7 +99,7 @@ public sealed partial class MainWindow : Window
             ListingTypeHeader,
             ListingSizeHeader,
             path => _native.TryPreviewFolderListing(path),
-            () => _previewGeneration,
+            () => _previewSession.Generation,
             () => CurrentPreviewToken,
             IsPreviewGenerationCurrent,
             PreviewListingItemAsync,
@@ -263,15 +263,15 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Close the in-flight preview. Clears <see cref="_currentRequestId"/> <i>before</i> awaiting the send
+    /// Close the in-flight preview. Clears the session request id <i>before</i> awaiting the send
     /// (atomic on the UI dispatcher — no yield in between), so any late surface for it is dropped by the
     /// guard, and a second concurrent caller sees null and skips (de-dupes the close).
     /// </summary>
     private async Task CloseCurrentAsync()
     {
-        var id = _currentRequestId;
+        var id = _previewSession.CurrentRequestId;
         if (id is null) return;
-        _currentRequestId = null;
+        _previewSession.SetRequestId(null);
         await _supervisor!.CloseAsync(id);
     }
 
@@ -301,172 +301,158 @@ public sealed partial class MainWindow : Window
 
         if (intent.Intent == PreviewIntent.Close)
         {
-            int generation = BeginPreviewGeneration();
-            CancellationToken previewToken = CurrentPreviewToken;
+            PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
             ResetPreview();
             await CloseCurrentAsync();
-            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            _currentPath = null;
+            if (!_previewSession.IsCurrent(closeSession)) return;
+            _previewSession.Clear();
             HidePreviewWindow();
             return;
         }
 
         if (intent.Intent is PreviewIntent.Open or PreviewIntent.Switch && intent.PrimaryPath is { } path)
         {
-            if (intent.Intent == PreviewIntent.Switch && !_previewVisible)
+            bool isExplorerSwitch = intent.Intent == PreviewIntent.Switch;
+            if (isExplorerSwitch && !_previewSession.ShouldAcceptExplorerSwitch(path, _previewVisible))
                 return;
-            if (intent.Intent == PreviewIntent.Switch
-                && _currentPath is not null
-                && string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
 
             if (intent.Intent == PreviewIntent.Open
                 && _previewVisible
-                && _currentPath is not null
-                && string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                && _previewSession.IsCurrentPath(path))
             {
-                int closeGeneration = BeginPreviewGeneration();
-                CancellationToken closeToken = CurrentPreviewToken;
+                PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
                 ResetPreview();
                 await CloseCurrentAsync();
-                if (!IsPreviewGenerationCurrent(closeGeneration, closeToken)) return;
-                _currentPath = null;
+                if (!_previewSession.IsCurrent(closeSession)) return;
+                _previewSession.Clear();
                 HidePreviewWindow();
                 return;
             }
 
-            int generation = BeginPreviewGeneration();
-            CancellationToken previewToken = CurrentPreviewToken;
-            BeginPreviewTransition();
-            ResetPreview();
-            Title = System.IO.Path.GetFileName(path);
-            PreviewTitleText.Text = Title;
-            StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
-            try
+            PreviewNavigationSource source = intent.Intent == PreviewIntent.Open
+                ? PreviewNavigationSource.ExplorerOpen
+                : PreviewNavigationSource.ExplorerSwitch;
+            await PreviewPathAsync(path, source);
+        }
+    }
+
+    private Task PreviewWindowPathAsync(string path)
+        => PreviewPathAsync(path, PreviewNavigationSource.WindowNavigation);
+
+    private async Task PreviewPathAsync(string path, PreviewNavigationSource source)
+    {
+        PreviewSessionSnapshot session = _previewSession.Begin(path, source);
+        int generation = session.Generation;
+        CancellationToken previewToken = session.Token;
+        BeginPreviewTransition();
+        ResetPreview();
+        Title = System.IO.Path.GetFileName(path);
+        PreviewTitleText.Text = Title;
+        StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
+        try
+        {
+            await CloseCurrentAsync();
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+
+            if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
-                await CloseCurrentAsync();
+                PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe), previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
-                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-
-                if (MediaPreviewPresenter.IsMediaProbe(probe))
+                var mediaReady = new PreviewReady(
+                    $"media-{generation}",
+                    "media",
+                    System.IO.Path.GetFileName(path),
+                    800,
+                    probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase) ? 140 : 450)
                 {
-                    PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe), previewToken);
-                    if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                    var mediaReady = new PreviewReady(
-                        $"media-{generation}",
-                        "media",
-                        System.IO.Path.GetFileName(path),
-                        800,
-                        probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase) ? 140 : 450)
-                    {
-                        MediaPath = path,
-                        TextContent = mediaInfo?.TextContent,
-                        TextFormat = mediaInfo?.TextFormat,
-                        TextLanguage = mediaInfo?.TextLanguage,
-                    };
-                    _currentPath = path;
-                    _currentRequestId = null;
-                    StatusText.Text = ShowMediaPreview(mediaReady);
-                    RevealPreviewWindow(ShouldActivatePreview(mediaReady));
-                    return;
-                }
+                    MediaPath = path,
+                    TextContent = mediaInfo?.TextContent,
+                    TextFormat = mediaInfo?.TextFormat,
+                    TextLanguage = mediaInfo?.TextLanguage,
+                };
+                _previewSession.CommitPath(path);
+                _previewSession.SetRequestId(null);
+                StatusText.Text = ShowMediaPreview(mediaReady);
+                RevealPreviewWindow(ShouldActivatePreview(mediaReady));
+                return;
+            }
 
-                if (IsAnimatedGifPath(path) && AnimatedImagePreviewPresenter.TryReadGifSize(path) is { } gifSize)
-                {
-                    var gifReady = new PreviewReady(
-                        $"gif-{generation}",
-                        "image",
-                        System.IO.Path.GetFileName(path),
-                        gifSize.Width,
-                        gifSize.Height);
-                    _currentPath = path;
-                    _currentRequestId = null;
-                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
-                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
-                    return;
-                }
+            if (AnimatedImagePreviewPresenter.TryReadAnimatedSize(path) is { } animatedSize)
+            {
+                var gifReady = new PreviewReady(
+                    $"gif-{generation}",
+                    "image",
+                    System.IO.Path.GetFileName(path),
+                    animatedSize.Width,
+                    animatedSize.Height);
+                _previewSession.CommitPath(path);
+                _previewSession.SetRequestId(null);
+                StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
+                RevealPreviewWindow(ShouldActivatePreview(gifReady));
+                return;
+            }
 
-                PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
-                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                if (nativeReady is not null)
+            PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            if (nativeReady is not null)
+            {
+                _previewSession.CommitPath(path);
+                _previewSession.SetRequestId(null);
+                StatusText.Text = nativeReady switch
                 {
-                    _currentPath = path;
-                    _currentRequestId = null;
-                    StatusText.Text = nativeReady switch
-                    {
-                        PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
-                        PreviewReady r when r.Table is not null => ShowTablePreview(r),
-                        PreviewReady r when r.Listing is not null => ShowListingPreview(r),
-                        PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
-                        PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
-                        _ => $"{nativeReady.Kind}: {nativeReady.Title}",
-                    };
-                    RevealPreviewWindow(ShouldActivatePreview(nativeReady));
-                    return;
-                }
-
-                await EnsureRasterHostStartedAsync();
-                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
-                _currentRequestId = requestId;
-                _currentPath = path;
-                ControlMessage result = await completion.WaitAsync(previewToken);
-                if (!IsPreviewGenerationCurrent(generation, previewToken) || _currentRequestId != requestId)
-                    return;
-                StatusText.Text = result switch
-                {
-                    PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
                     PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
                     PreviewReady r when r.Table is not null => ShowTablePreview(r),
                     PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                     PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
-                    PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
-                    PreviewReady r => ShowRasterPreview(r),
-                    PreviewError er => ShowErrorPreview(er.Message),
-                    _ => "?",
+                    _ => $"{nativeReady.Kind}: {nativeReady.Title}",
                 };
-                RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
+                RevealPreviewWindow(ShouldActivatePreview(nativeReady));
+                return;
             }
-            catch (TimeoutException)
+
+            await EnsureRasterHostStartedAsync();
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
+            _previewSession.SetRequestId(requestId);
+            _previewSession.CommitPath(path);
+            ControlMessage result = await completion.WaitAsync(previewToken);
+            if (!IsPreviewGenerationCurrent(generation, previewToken) || !_previewSession.IsCurrentRequest(requestId))
+                return;
+            StatusText.Text = result switch
             {
-                StatusText.Text = ShowErrorPreview(UiStrings.PreviewTimedOut);
-                RevealPreviewWindow(activate: false);
-            }
-            catch (OperationCanceledException)
-            {
-                DiagLog.Write("App", $"preview canceled: path={path}");
-            }
+                PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
+                PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
+                PreviewReady r when r.Table is not null => ShowTablePreview(r),
+                PreviewReady r when r.Listing is not null => ShowListingPreview(r),
+                PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
+                PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
+                PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
+                PreviewReady r => ShowRasterPreview(r),
+                PreviewError er => ShowErrorPreview(er.Message),
+                _ => "?",
+            };
+            RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
+        }
+        catch (TimeoutException)
+        {
+            StatusText.Text = ShowErrorPreview(UiStrings.PreviewTimedOut);
+            RevealPreviewWindow(activate: false);
+        }
+        catch (OperationCanceledException)
+        {
+            DiagLog.Write("App", $"preview canceled: path={path}");
         }
     }
 
-    private int BeginPreviewGeneration()
-    {
-        CancelPreviewOperation();
-        _previewOperationCts = new CancellationTokenSource();
-        return ++_previewGeneration;
-    }
-
-    private CancellationToken CurrentPreviewToken => _previewOperationCts?.Token ?? CancellationToken.None;
+    private CancellationToken CurrentPreviewToken => _previewSession.Token;
 
     private bool IsPreviewGenerationCurrent(int generation) => IsPreviewGenerationCurrent(generation, CurrentPreviewToken);
 
     private bool IsPreviewGenerationCurrent(int generation, CancellationToken cancellationToken)
-        => generation == _previewGeneration && !cancellationToken.IsCancellationRequested;
-
-    private void CancelPreviewOperation()
-    {
-        if (_previewOperationCts is null)
-            return;
-
-        try { _previewOperationCts.Cancel(); }
-        catch { }
-        _previewOperationCts.Dispose();
-        _previewOperationCts = null;
-    }
+        => _previewSession.IsCurrent(generation, cancellationToken);
 
     private void BeginPreviewTransition()
     {
@@ -510,7 +496,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdatePreviewChrome(PreviewReady ready, bool showRasterTools = false)
     {
-        string? path = _currentPath ?? ready.MediaPath;
+        string? path = _previewSession.CurrentPath ?? ready.MediaPath;
         string title = !string.IsNullOrWhiteSpace(path)
             ? System.IO.Path.GetFileName(path)
             : ready.Title;
@@ -688,10 +674,10 @@ public sealed partial class MainWindow : Window
     {
         EnsureCompositor();
         if (_compositor is null) return;
-        // Only accept surfaces for the exact current request. While switching/closing _currentRequestId is
+        // Only accept surfaces for the exact current request. While switching/closing the session request id is
         // null, so late surfaces for a just-closed request are dropped — never build a composition surface
         // from a handle whose swapchain the host may already be retiring.
-        if (surface.RequestId != _currentRequestId) return;
+        if (!_previewSession.IsCurrentRequest(surface.RequestId)) return;
 
         if (surface.PageIndex >= 0)
         {
@@ -901,7 +887,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Switch, [path]));
+        await PreviewWindowPathAsync(path);
     }
 
     private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)
@@ -972,14 +958,14 @@ public sealed partial class MainWindow : Window
 
     private void StartPreviewHeroLoad(PreviewReady ready)
     {
-        string? path = _currentPath;
+        string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path) || !ShouldLoadPreviewHero(ready, path))
         {
             ClearPreviewHeroImages();
             return;
         }
 
-        int generation = _previewGeneration;
+        int generation = _previewSession.Generation;
         Task.Run(() => LoadPreviewHeroRaster(ready, path)).ContinueWith(task =>
         {
             if (task.IsFaulted || task.IsCanceled || task.Result is null)
@@ -987,7 +973,7 @@ public sealed partial class MainWindow : Window
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (!IsPreviewGenerationCurrent(generation) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                if (!IsPreviewGenerationCurrent(generation) || !_previewSession.IsCurrentPath(path))
                     return;
 
                 var source = CreateBitmapSource(task.Result);
@@ -1112,7 +1098,7 @@ public sealed partial class MainWindow : Window
 
     private void StartImageSidecarLoads(PreviewReady ready)
     {
-        string? path = _currentPath;
+        string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path) || !IsImagePath(path))
         {
             ClearImageSidecars();
@@ -1120,7 +1106,7 @@ public sealed partial class MainWindow : Window
         }
         string imagePath = path;
 
-        int generation = _previewGeneration;
+        int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
         ResetExifDetails();
         _ = LoadImageMetadataAsync(imagePath, generation, token);
@@ -1183,12 +1169,12 @@ public sealed partial class MainWindow : Window
             AddIfValue(rows, "Color space", PropText(props, "System.Image.ColorSpace"));
             AddIfValue(rows, "Location", FormatLocation(image.Latitude, image.Longitude));
 
-            if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
                 RenderExifRows(rows);
             });
@@ -1218,12 +1204,12 @@ public sealed partial class MainWindow : Window
                     .ToArray(), token);
             token.ThrowIfCancellationRequested();
 
-            if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (!IsPreviewGenerationCurrent(generation, token) || !string.Equals(_currentPath, path, StringComparison.OrdinalIgnoreCase))
+                if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
 
                 _imageSiblingPaths = siblings;
@@ -1243,22 +1229,21 @@ public sealed partial class MainWindow : Window
             foreach (string sibling in PrioritizeSiblings(siblings, path))
             {
                 token.ThrowIfCancellationRequested();
+                if (TryGetCachedImageThumbnail(sibling, out ImageSource? cachedSource) && cachedSource is not null)
+                {
+                    SetFilmstripThumbnail(generation, token, sibling, cachedSource);
+                    continue;
+                }
+
                 NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96), token);
                 if (raster is null)
                     continue;
                 ImageSource? source = CreateBitmapSource(raster);
                 if (source is null)
                     continue;
+                AddCachedImageThumbnail(sibling, source);
 
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (!IsPreviewGenerationCurrent(generation, token))
-                        return;
-                    ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
-                        string.Equals(i.Path, sibling, StringComparison.OrdinalIgnoreCase));
-                    if (item is not null)
-                        item.Thumbnail = source;
-                });
+                SetFilmstripThumbnail(generation, token, sibling, source);
             }
         }
         catch (OperationCanceledException)
@@ -1268,6 +1253,32 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", "image filmstrip load failed: " + ex.Message);
         }
+    }
+
+    private bool TryGetCachedImageThumbnail(string path, out ImageSource? source)
+        => _imageThumbnailCache.TryGetValue(path, out source);
+
+    private void AddCachedImageThumbnail(string path, ImageSource source)
+    {
+        if (_imageThumbnailCache.Count >= MaxImageThumbnailCacheItems)
+            _imageThumbnailCache.Remove(_imageThumbnailCache.Keys.First());
+        _imageThumbnailCache[path] = source;
+    }
+
+    private void RemoveCachedImageThumbnail(string path)
+        => _imageThumbnailCache.Remove(path);
+
+    private void SetFilmstripThumbnail(int generation, CancellationToken token, string path, ImageSource source)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!IsPreviewGenerationCurrent(generation, token))
+                return;
+            ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
+                string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (item is not null)
+                item.Thumbnail = source;
+        });
     }
 
     private static IEnumerable<string> PrioritizeSiblings(string[] siblings, string currentPath)
@@ -1379,9 +1390,6 @@ public sealed partial class MainWindow : Window
     private static bool IsImagePath(string? path)
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
 
-    private static bool IsAnimatedGifPath(string? path)
-        => string.Equals(Path.GetExtension(path), ".gif", StringComparison.OrdinalIgnoreCase);
-
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
         => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
 
@@ -1445,6 +1453,14 @@ public sealed partial class MainWindow : Window
             _rasterPresenter?.ResetView();
     }
 
+    private void OnImageActualSizeClick(object sender, RoutedEventArgs e)
+    {
+        if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+            _animatedImagePresenter.SetActualSize();
+        else
+            _rasterPresenter?.SetActualSize();
+    }
+
     private void OnImageZoomPresetClick(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string raw } && double.TryParse(raw, out double zoom))
@@ -1470,10 +1486,11 @@ public sealed partial class MainWindow : Window
 
     private async Task NavigateImageSiblingAsync(int delta)
     {
-        if (_imageSiblingPaths.Length == 0 || string.IsNullOrWhiteSpace(_currentPath))
+        string? currentPath = _previewSession.CurrentPath;
+        if (_imageSiblingPaths.Length == 0 || string.IsNullOrWhiteSpace(currentPath))
             return;
 
-        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, _currentPath, StringComparison.OrdinalIgnoreCase));
+        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
             return;
 
@@ -1484,13 +1501,13 @@ public sealed partial class MainWindow : Window
     private async Task PreviewImagePathAsync(string path)
     {
         if (string.IsNullOrWhiteSpace(path)
-            || string.Equals(path, _currentPath, StringComparison.OrdinalIgnoreCase))
+            || _previewSession.IsCurrentPath(path))
         {
             return;
         }
 
         SelectCurrentFilmstripItem(path);
-        await HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Switch, [path]));
+        await PreviewWindowPathAsync(path);
     }
 
     private void OnPreviewInfoTabClick(object sender, RoutedEventArgs e)
@@ -1563,7 +1580,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnCopyPreviewFileClick(object sender, RoutedEventArgs e)
     {
-        string? path = _currentPath;
+        string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
 
@@ -1591,9 +1608,83 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnDeletePreviewFileClick(object sender, RoutedEventArgs e)
+    {
+        string? path = _previewSession.CurrentPath;
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+            return;
+
+        string? nextPath = NextImagePathAfterDelete(path);
+        try
+        {
+            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+            RemoveCachedImageThumbnail(path);
+            RemoveFilmstripItem(path);
+            StatusText.Text = "Moved to Recycle Bin";
+            StatusBar.Visibility = Visibility.Visible;
+
+            if (!string.IsNullOrWhiteSpace(nextPath) && System.IO.File.Exists(nextPath))
+            {
+                await PreviewWindowPathAsync(nextPath);
+                return;
+            }
+
+            PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
+            ResetPreview();
+            await CloseCurrentAsync();
+            if (!_previewSession.IsCurrent(closeSession)) return;
+            _previewSession.Clear();
+            HidePreviewWindow();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "delete preview file failed: " + ex.Message);
+            StatusText.Text = ex.Message;
+            StatusBar.Visibility = Visibility.Visible;
+        }
+    }
+
+    private string? NextImagePathAfterDelete(string currentPath)
+    {
+        if (_imageSiblingPaths.Length == 0)
+            return null;
+
+        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+            return null;
+
+        for (int i = index + 1; i < _imageSiblingPaths.Length; i++)
+        {
+            if (System.IO.File.Exists(_imageSiblingPaths[i]))
+                return _imageSiblingPaths[i];
+        }
+
+        for (int i = index - 1; i >= 0; i--)
+        {
+            if (System.IO.File.Exists(_imageSiblingPaths[i]))
+                return _imageSiblingPaths[i];
+        }
+
+        return null;
+    }
+
+    private void RemoveFilmstripItem(string path)
+    {
+        _imageSiblingPaths = _imageSiblingPaths
+            .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
+            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (item is not null)
+            _imageFilmstripItems.Remove(item);
+
+        ImageFilmstrip.Visibility = _imageSiblingPaths.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void OpenCurrentPreviewPath(bool revealInExplorer)
     {
-        string? path = _currentPath;
+        string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
 

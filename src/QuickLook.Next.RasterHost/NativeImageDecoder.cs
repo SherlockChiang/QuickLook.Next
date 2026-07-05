@@ -28,15 +28,24 @@ internal static class NativeImageDecoder
             return null;
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (ShouldPreferSystemDecoder(path))
+        {
+            NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+            if (systemImage is not null)
+                return systemImage;
+        }
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task<NativeDecodedImage?> decodeTask = DecodeOnGateAsync(path, cancellationToken);
         Task delayTask = Task.Delay(timeout, timeoutCts.Token);
         Task completed = await Task.WhenAny(decodeTask, delayTask);
         if (completed != decodeTask)
-            return null;
+            return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
 
         timeoutCts.Cancel();
-        return await decodeTask;
+        NativeDecodedImage? nativeImage = await decodeTask;
+        return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
     }
 
     private static async Task<NativeDecodedImage?> DecodeOnGateAsync(string path, CancellationToken cancellationToken)
@@ -125,5 +134,15 @@ internal static class NativeImageDecoder
         {
             return false;
         }
+    }
+
+    private static bool ShouldPreferSystemDecoder(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is ".jpg" or ".jpeg" or ".jpe"
+            or ".tif" or ".tiff"
+            or ".heic" or ".heif"
+            or ".avif"
+            or ".webp";
     }
 }

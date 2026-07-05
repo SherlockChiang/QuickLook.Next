@@ -143,7 +143,7 @@
                     <Image x:Name="AnimatedImagePreviewImage"
                            HorizontalAlignment="Left"
                            VerticalAlignment="Top"
-                           Stretch="Fill"
+                           Stretch="None"
                            AutomationProperties.Name="Animated image content" />
                 </Grid>
             </Border>
@@ -539,6 +539,20 @@
                                 <TextBlock x:Uid="RevealPreviewFileText" Text="Reveal in Explorer" FontSize="12" />
                             </StackPanel>
                         </Button>
+                        <Button x:Uid="DeletePreviewFileButton"
+                                Height="36"
+                                HorizontalAlignment="Stretch"
+                                Click="OnDeletePreviewFileClick"
+                                CornerRadius="6"
+                                Background="Transparent"
+                                BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                BorderThickness="1"
+                                AutomationProperties.Name="Move previewed file to Recycle Bin">
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                <TextBlock x:Uid="DeletePreviewFileText" Text="Delete file" FontSize="12" />
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                     <Button x:Name="InfoOpenFileLocationButton"
                             x:Uid="OpenFileLocationButton"
@@ -620,6 +634,12 @@
                         </Button>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button x:Uid="ActualSizeButton"
+                                Click="OnImageActualSizeClick"
+                                Style="{StaticResource PreviewIconButtonStyle}"
+                                AutomationProperties.Name="Show image at actual size">
+                            <FontIcon Glyph="&#xE8A9;" FontSize="15" />
+                        </Button>
                         <Button x:Uid="ResetViewButton"
                                 Click="OnImageZoomFitClick"
                                 Style="{StaticResource PreviewIconButtonStyle}"

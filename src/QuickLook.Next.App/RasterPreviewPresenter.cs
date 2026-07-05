@@ -119,7 +119,15 @@ internal sealed class RasterPreviewPresenter
     }
 
     public void UpdateZoomLabel()
-        => _zoomText.Text = Math.Abs(_zoom - 1.0) < 0.01 ? UiStrings.FitZoom : $"{_zoom * 100:0}%";
+    {
+        if (Math.Abs(_zoom - 1.0) < 0.01)
+        {
+            _zoomText.Text = UiStrings.FitZoom;
+            return;
+        }
+
+        _zoomText.Text = $"{ActualScale() * 100:0}%";
+    }
 
     public void ResetView()
     {
@@ -140,11 +148,15 @@ internal sealed class RasterPreviewPresenter
     public void SetZoom(double zoom)
     {
         if (_sprite is null) return;
-        _zoom = Math.Clamp(zoom, MinImageZoom, MaxImageZoom);
+        double fitScale = FitScale();
+        _zoom = Math.Clamp(zoom / Math.Max(0.001, fitScale), MinImageZoom, MaxImageZoom);
         _panX = 0;
         _panY = 0;
         UpdateLayout();
     }
+
+    public void SetActualSize()
+        => SetZoom(1.0);
 
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
@@ -203,6 +215,19 @@ internal sealed class RasterPreviewPresenter
         try { _sprite.Dispose(); } catch { }
         _sprite = null;
     }
+
+    private double FitScale()
+    {
+        if (_surfaceWidth == 0 || _surfaceHeight == 0)
+            return 1.0;
+
+        double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
+        double availableHeight = Math.Max(1, _previewRoot.ActualHeight);
+        return Math.Min(availableWidth / _surfaceWidth, availableHeight / _surfaceHeight);
+    }
+
+    private double ActualScale()
+        => FitScale() * _zoom;
 }
 
 internal readonly record struct RasterPreviewResult(string Status, double Width, double Height);
