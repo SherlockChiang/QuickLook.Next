@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Shapes;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -20,6 +21,7 @@ internal sealed class OfficePreviewPresenter
     private static readonly SolidColorBrush OfficeCellBorderBrush = new(ColorHelper.FromArgb(255, 225, 225, 225));
     private static readonly SolidColorBrush OfficeHeaderBrush = new(ColorHelper.FromArgb(255, 246, 247, 249));
     private static readonly SolidColorBrush OfficeHeaderTextBrush = new(ColorHelper.FromArgb(255, 86, 92, 104));
+    private static readonly SolidColorBrush OfficeFreezeBrush = new(ColorHelper.FromArgb(255, 0, 120, 212));
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
@@ -75,11 +77,12 @@ internal sealed class OfficePreviewPresenter
             Margin = new Thickness(2, 0, 0, 0),
         });
 
+        SolidColorBrush pageBrush = BrushFromHex(page.BackgroundColor) ?? OfficeWhiteBrush;
         var canvas = new Canvas
         {
             Width = viewWidth,
             Height = viewHeight,
-            Background = OfficeWhiteBrush,
+            Background = pageBrush,
         };
 
         if (isWorkbook)
@@ -87,6 +90,7 @@ internal sealed class OfficePreviewPresenter
             AddWorkbookHeaders(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
             foreach (OfficeCell cell in page.Cells)
                 AddCell(canvas, cell, scale, rowHeaderWidth, columnHeaderHeight);
+            AddFreezePaneIndicators(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
         }
 
         foreach (OfficeLayoutItem item in page.Items)
@@ -96,7 +100,7 @@ internal sealed class OfficePreviewPresenter
         {
             Width = viewWidth,
             Height = viewHeight,
-            Background = OfficeWhiteBrush,
+            Background = pageBrush,
             BorderBrush = OfficeBorderBrush,
             BorderThickness = new Thickness(1),
             Child = canvas,
@@ -215,13 +219,15 @@ internal sealed class OfficePreviewPresenter
     {
         double width = Math.Max(12, cell.Width * scale);
         double height = Math.Max(12, cell.Height * scale);
+        bool merged = cell.RowSpan > 1 || cell.ColumnSpan > 1;
         var border = new Border
         {
             Width = width,
             Height = height,
             BorderBrush = OfficeCellBorderBrush,
-            BorderThickness = new Thickness(0, 0, 1, 1),
+            BorderThickness = merged ? new Thickness(1.2) : new Thickness(0, 0, 1, 1),
             Padding = new Thickness(5, 2, 5, 2),
+            Background = merged ? new SolidColorBrush(ColorHelper.FromArgb(255, 252, 253, 255)) : null,
             Child = new TextBlock
             {
                 Text = cell.Text,
@@ -237,6 +243,42 @@ internal sealed class OfficePreviewPresenter
         Canvas.SetLeft(border, offsetX + cell.X * scale);
         Canvas.SetTop(border, offsetY + cell.Y * scale);
         canvas.Children.Add(border);
+    }
+
+    private static void AddFreezePaneIndicators(
+        Canvas canvas,
+        OfficePage page,
+        double scale,
+        double offsetX,
+        double offsetY,
+        double contentWidth,
+        double contentHeight)
+    {
+        if (page.FreezeColumns > 0)
+        {
+            double boundary = page.Cells
+                .Where(cell => cell.Column >= page.FreezeColumns)
+                .Select(cell => cell.X)
+                .DefaultIfEmpty(page.Cells.Where(cell => cell.Column < page.FreezeColumns).Select(cell => cell.X + cell.Width).DefaultIfEmpty(0).Max())
+                .Min();
+            var line = new Border { Width = 2, Height = contentHeight, Background = OfficeFreezeBrush, Opacity = 0.72 };
+            Canvas.SetLeft(line, offsetX + boundary * scale);
+            Canvas.SetTop(line, offsetY);
+            canvas.Children.Add(line);
+        }
+
+        if (page.FreezeRows > 0)
+        {
+            double boundary = page.Cells
+                .Where(cell => cell.Row >= page.FreezeRows)
+                .Select(cell => cell.Y)
+                .DefaultIfEmpty(page.Cells.Where(cell => cell.Row < page.FreezeRows).Select(cell => cell.Y + cell.Height).DefaultIfEmpty(0).Max())
+                .Min();
+            var line = new Border { Width = contentWidth, Height = 2, Background = OfficeFreezeBrush, Opacity = 0.72 };
+            Canvas.SetLeft(line, offsetX);
+            Canvas.SetTop(line, offsetY + boundary * scale);
+            canvas.Children.Add(line);
+        }
     }
 
     private static void AddLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind, double offsetX, double offsetY)
@@ -263,8 +305,16 @@ internal sealed class OfficePreviewPresenter
             return;
         }
 
+        if (item.Kind.Equals("shape", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.Text))
+        {
+            AddShape(canvas, item, x, y, width, height);
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(item.Text))
         {
+            Brush? fill = BrushFromHex(item.FillColor);
+            Brush? stroke = BrushFromHex(item.StrokeColor);
             var textBox = new Border
             {
                 Width = width,
@@ -272,6 +322,9 @@ internal sealed class OfficePreviewPresenter
                 Padding = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase)
                     ? new Thickness(6 * scale, 3 * scale, 6 * scale, 3 * scale)
                     : new Thickness(0),
+                Background = fill,
+                BorderBrush = stroke,
+                BorderThickness = stroke is null ? new Thickness(0) : new Thickness(1),
                 Child = new TextBlock
                 {
                     Text = item.Text,
@@ -289,6 +342,46 @@ internal sealed class OfficePreviewPresenter
         }
     }
 
+    private static void AddShape(Canvas canvas, OfficeLayoutItem item, double x, double y, double width, double height)
+    {
+        Brush fill = BrushFromHex(item.FillColor) ?? new SolidColorBrush(ColorHelper.FromArgb(28, 0, 0, 0));
+        Brush stroke = BrushFromHex(item.StrokeColor) ?? OfficeBorderBrush;
+        string shape = item.Shape?.ToLowerInvariant() ?? "rect";
+
+        FrameworkElement element = shape switch
+        {
+            "ellipse" or "oval" => new Ellipse
+            {
+                Width = width,
+                Height = height,
+                Fill = fill,
+                Stroke = stroke,
+                StrokeThickness = 1,
+            },
+            "line" => new Line
+            {
+                X1 = 0,
+                Y1 = 0,
+                X2 = width,
+                Y2 = height,
+                Stroke = stroke,
+                StrokeThickness = 1.5,
+            },
+            _ => new Border
+            {
+                Width = width,
+                Height = height,
+                Background = fill,
+                BorderBrush = stroke,
+                BorderThickness = new Thickness(1),
+            },
+        };
+
+        Canvas.SetLeft(element, x);
+        Canvas.SetTop(element, y);
+        canvas.Children.Add(element);
+    }
+
     private static ImageSource? CreateImageSourceFromBase64(string base64)
     {
         try
@@ -303,6 +396,26 @@ internal sealed class OfficePreviewPresenter
         {
             return null;
         }
+    }
+
+    private static SolidColorBrush? BrushFromHex(string? value)
+        => TryColorFromHex(value, out Windows.UI.Color color) ? new SolidColorBrush(color) : null;
+
+    private static bool TryColorFromHex(string? value, out Windows.UI.Color color)
+    {
+        color = Colors.Transparent;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        string hex = value.Trim().TrimStart('#');
+        if (hex.Length != 6 || hex.Any(ch => !Uri.IsHexDigit(ch)))
+            return false;
+
+        byte r = Convert.ToByte(hex[..2], 16);
+        byte g = Convert.ToByte(hex.Substring(2, 2), 16);
+        byte b = Convert.ToByte(hex.Substring(4, 2), 16);
+        color = ColorHelper.FromArgb(255, r, g, b);
+        return true;
     }
 }
 

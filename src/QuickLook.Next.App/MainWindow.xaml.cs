@@ -1543,6 +1543,13 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
+        if (e.Key == Windows.System.VirtualKey.Space && _previewVisible)
+        {
+            e.Handled = true;
+            _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
+            return;
+        }
+
         if (_rasterPresenter?.HasSurface != true || PreviewRoot.Visibility != Visibility.Visible)
             return;
 

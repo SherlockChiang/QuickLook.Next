@@ -70,6 +70,9 @@ public sealed record OfficePage(string Title)
     public int Index { get; init; }
     public double Width { get; init; }
     public double Height { get; init; }
+    public string? BackgroundColor { get; init; }
+    public int FreezeRows { get; init; }
+    public int FreezeColumns { get; init; }
     public OfficeCell[] Cells { get; init; } = [];
     public OfficeLayoutItem[] Items { get; init; } = [];
 }
@@ -80,6 +83,9 @@ public sealed record OfficeCell(int Row, int Column, string Text)
     public double Y { get; init; }
     public double Width { get; init; }
     public double Height { get; init; }
+    public int RowSpan { get; init; } = 1;
+    public int ColumnSpan { get; init; } = 1;
+    public string? NumberFormat { get; init; }
 }
 
 public sealed record OfficeLayoutItem(string Kind)
@@ -89,6 +95,9 @@ public sealed record OfficeLayoutItem(string Kind)
     public double Width { get; init; }
     public double Height { get; init; }
     public string? Text { get; init; }
+    public string? Shape { get; init; }
+    public string? FillColor { get; init; }
+    public string? StrokeColor { get; init; }
     public string? ImageName { get; init; }
     public string? MimeType { get; init; }
     public string? ImageBase64 { get; init; }

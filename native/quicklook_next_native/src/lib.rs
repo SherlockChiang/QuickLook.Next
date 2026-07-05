@@ -200,10 +200,15 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         let is_down = m == WM_KEYDOWN || m == WM_SYSKEYDOWN;
         let is_up = m == WM_KEYUP || m == WM_SYSKEYUP;
         let bare_key = !modifier_key_down();
-        let text_input_active = explorer_text_input_active();
+        let explorer_foreground = foreground_is_explorer_window();
+        let text_input_active = explorer_foreground && explorer_text_input_active();
 
         if kb.vkCode == VK_SPACE_U32 {
-            if is_down && bare_key && !text_input_active && !SPACE_HELD.swap(true, Ordering::SeqCst)
+            if is_down
+                && explorer_foreground
+                && bare_key
+                && !text_input_active
+                && !SPACE_HELD.swap(true, Ordering::SeqCst)
             {
                 let message = if PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                     WM_QL_CLOSE
@@ -218,11 +223,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             kb.vkCode,
             VK_LEFT_U32 | VK_UP_U32 | VK_RIGHT_U32 | VK_DOWN_U32
         ) {
-            if is_down && bare_key && !text_input_active {
+            if is_down && explorer_foreground && bare_key && !text_input_active {
                 let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
-            if is_down && !text_input_active {
+            if is_down && (explorer_foreground || PREVIEW_VISIBLE.load(Ordering::SeqCst)) && !text_input_active {
                 let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
@@ -236,6 +241,14 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+unsafe fn foreground_is_explorer_window() -> bool {
+    let foreground = GetForegroundWindow();
+    if foreground.0.is_null() {
+        return false;
+    }
+    root_window_is_explorer(foreground)
 }
 
 unsafe fn modifier_key_down() -> bool {
@@ -298,6 +311,10 @@ fn is_text_input_class_name(name: &str) -> bool {
     )
 }
 
+fn is_explorer_window_class_name(name: &str) -> bool {
+    matches!(name, "CabinetWClass" | "ExploreWClass")
+}
+
 /// Test-only ABI used by smoke-native.ps1 to lock the Explorer rename guard's class filter.
 #[no_mangle]
 pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: usize) -> i32 {
@@ -305,6 +322,18 @@ pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: 
         return 0;
     };
     if is_text_input_class_name(class_name) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ql_test_is_explorer_window_class(class_utf8: *const u8, class_len: usize) -> i32 {
+    let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+        return 0;
+    };
+    if is_explorer_window_class_name(class_name) {
         1
     } else {
         0
@@ -333,6 +362,10 @@ unsafe fn mouse_up_target_is_explorer(lparam: LPARAM) -> bool {
         return false;
     }
     let root = GetAncestor(hwnd, GA_ROOT);
+    root_window_is_explorer(root)
+}
+
+unsafe fn root_window_is_explorer(root: HWND) -> bool {
     if root.0.is_null() {
         return false;
     }
@@ -343,7 +376,7 @@ unsafe fn mouse_up_target_is_explorer(lparam: LPARAM) -> bool {
         return false;
     }
     let name = String::from_utf16_lossy(&class_name[..len as usize]);
-    matches!(name.as_str(), "CabinetWClass" | "ExploreWClass")
+    is_explorer_window_class_name(&name)
 }
 
 /// Read the current Explorer selection on a fresh STA thread (avoids apartment conflicts with the

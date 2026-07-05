@@ -242,21 +242,19 @@
                     CornerRadius="8"
                     AutomationProperties.Name="Text preview">
                 <Grid>
-                    <ScrollViewer x:Name="TextScrollViewer"
-                                  x:Uid="TextScrollViewer"
-                                  Visibility="Visible"
-                                  Padding="24"
-                                  HorizontalScrollBarVisibility="Auto"
-                                  VerticalScrollBarVisibility="Auto">
-                        <StackPanel Spacing="14">
-                            <Grid x:Name="TextHeroPanel"
-                                  Visibility="Collapsed"
-                                  ColumnSpacing="14"
-                                  Margin="0,0,0,2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid x:Name="TextHeroPanel"
+                          Grid.Row="0"
+                          Visibility="Collapsed"
+                          ColumnSpacing="14"
+                          Margin="24,24,24,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
                         <Border x:Name="TextHeroFrame"
                                 Width="64"
                                 Height="64"
@@ -282,45 +280,56 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </Grid>
-                    <RichTextBlock x:Name="TextPreviewBlock"
-                                   x:Uid="TextPreviewBlock"
-                                   IsTextSelectionEnabled="True"
-                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                   FontSize="14"
-                                   FontFamily="Segoe UI"
-                                   TextWrapping="Wrap"
-                                   MaxWidth="980"
-                                   AutomationProperties.Name="Text preview content" />
-                </StackPanel>
-            </ScrollViewer>
-            <ListView x:Name="TextListView"
-                      x:Uid="TextListView"
-                      Visibility="Collapsed"
-                      Padding="24"
-                      SelectionMode="Extended"
-                      IsItemClickEnabled="False"
-                      ShowsScrollingPlaceholders="False">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="local:TextLineItem">
-                        <Grid Margin="0,0,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{Binding LineNumber}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       FontSize="13"
-                                       FontFamily="Cascadia Mono, Consolas"
-                                       HorizontalAlignment="Right"
-                                       Margin="0,0,16,0"
-                                       VerticalAlignment="Top" />
-                            <ContentControl Content="{Binding Content}" Grid.Column="1" VerticalAlignment="Top" />
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
+                    <ScrollViewer x:Name="TextScrollViewer"
+                                  x:Uid="TextScrollViewer"
+                                  Grid.Row="1"
+                                  Visibility="Visible"
+                                  Padding="24"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto">
+                        <StackPanel Spacing="14">
+                            <RichTextBlock x:Name="TextPreviewBlock"
+                                           x:Uid="TextPreviewBlock"
+                                           IsTextSelectionEnabled="True"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                           FontSize="14"
+                                           FontFamily="Segoe UI"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="980"
+                                           AutomationProperties.Name="Text preview content" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <ListView x:Name="TextListView"
+                              x:Uid="TextListView"
+                              Grid.Row="1"
+                              Visibility="Collapsed"
+                              Padding="24"
+                              SelectionMode="Extended"
+                              IsItemClickEnabled="False"
+                              ShowsScrollingPlaceholders="False">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:TextLineItem">
+                                <Grid Margin="0,0,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="60" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding LineNumber}"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                               FontSize="13"
+                                               FontFamily="Cascadia Mono, Consolas"
+                                               HorizontalAlignment="Right"
+                                               Margin="0,0,16,0"
+                                               VerticalAlignment="Top" />
+                                    <ContentControl Content="{Binding Content}" Grid.Column="1" VerticalAlignment="Top" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
 
             <Border Margin="0,12,24,0" 
+                    Visibility="Collapsed"
+                    IsHitTestVisible="False"
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"

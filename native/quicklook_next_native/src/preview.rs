@@ -56,6 +56,12 @@ struct OfficePageDto {
     index: usize,
     width: f64,
     height: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    freeze_rows: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    freeze_columns: Option<usize>,
     cells: Vec<OfficeCellDto>,
     items: Vec<OfficeLayoutItemDto>,
 }
@@ -70,6 +76,10 @@ struct OfficeCellDto {
     y: f64,
     width: f64,
     height: f64,
+    row_span: usize,
+    column_span: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    number_format: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -82,6 +92,12 @@ struct OfficeLayoutItemDto {
     height: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shape: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fill_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stroke_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1062,6 +1078,7 @@ fn render_docx(path: &str) -> String {
         None => return office_error_json(path, "DOCX", "word/document.xml not found"),
     };
     let body = extract_wordprocessing_text(&xml);
+    let layout = build_docx_layout(&mut zip, &body, &media_entries);
     let mut text = format!("Name: {filename}\nKind: Word document\n");
     append_office_media_summary(&mut text, &media_entries);
     let text = if body.trim().is_empty() {
@@ -1072,7 +1089,7 @@ fn render_docx(path: &str) -> String {
         text.push_str(&truncate_preview_text(&body));
         text
     };
-    office_text_json(path, "DOCX", text)
+    office_preview_json_with_layout(path, "DOCX", text, "plain", "text", layout)
 }
 
 fn render_pptx(path: &str) -> String {
@@ -1308,12 +1325,16 @@ fn build_pptx_layout(zip: &mut ZipArchive<fs::File>) -> Option<OfficeLayoutDto> 
         let rels = read_zip_text(zip, &rels_name, 2 * 1024 * 1024)
             .map(|xml| parse_relationships(&xml))
             .unwrap_or_default();
+        let background_color = parse_ppt_slide_background(&slide_xml);
         let items = parse_ppt_slide_items(zip, "ppt/slides/", &slide_xml, &rels, &mut image_budget);
         pages.push(OfficePageDto {
             title: format!("Slide {slide_idx}"),
             index: slide_idx,
             width: slide_width,
             height: slide_height,
+            background_color,
+            freeze_rows: None,
+            freeze_columns: None,
             cells: Vec::new(),
             items,
         });
@@ -1347,7 +1368,10 @@ fn build_xlsx_layout(
         };
 
         let metrics = parse_xlsx_sheet_metrics(&sheet_xml);
-        let mut cells = parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics);
+        let merge_regions = parse_xlsx_merge_regions(&sheet_xml);
+        let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(&sheet_xml);
+        let mut cells =
+            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions);
         let mut items =
             parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
         let (width, height) = xlsx_page_size(&cells, &items);
@@ -1361,6 +1385,9 @@ fn build_xlsx_layout(
             index: sheet_idx,
             width,
             height,
+            background_color: None,
+            freeze_rows,
+            freeze_columns,
             cells,
             items,
         });
@@ -1380,6 +1407,120 @@ fn build_xlsx_layout(
     })
 }
 
+fn build_docx_layout(
+    zip: &mut ZipArchive<fs::File>,
+    body: &str,
+    media_entries: &[String],
+) -> Option<OfficeLayoutDto> {
+    let page_width = 760.0;
+    let page_height = 980.0;
+    let margin = 58.0;
+    let mut pages = Vec::new();
+    let mut items = Vec::new();
+    let mut page_index = 1usize;
+    let mut y = margin;
+
+    for paragraph in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let clipped = paragraph.chars().take(420).collect::<String>();
+        let line_count = (clipped.chars().count() as f64 / 72.0).ceil().clamp(1.0, 5.0);
+        let height = 24.0 * line_count + 10.0;
+        if y + height > page_height - margin {
+            push_docx_page(&mut pages, page_index, page_width, page_height, items);
+            page_index += 1;
+            items = Vec::new();
+            y = margin;
+        }
+
+        items.push(OfficeLayoutItemDto {
+            kind: "text".to_string(),
+            x: margin,
+            y,
+            width: page_width - margin * 2.0,
+            height,
+            text: Some(clipped),
+            shape: None,
+            fill_color: None,
+            stroke_color: None,
+            image_name: None,
+            mime_type: None,
+            image_base64: None,
+        });
+        y += height + 6.0;
+
+        if pages.len() >= 8 {
+            break;
+        }
+    }
+
+    let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES.min(6);
+    for entry in media_entries.iter().take(6) {
+        if image_budget == 0 {
+            break;
+        }
+        if y + 180.0 > page_height - margin {
+            push_docx_page(&mut pages, page_index, page_width, page_height, items);
+            page_index += 1;
+            items = Vec::new();
+            y = margin;
+        }
+        let lower = entry.to_ascii_lowercase();
+        let Some(bytes) = read_zip_bytes(zip, entry, MAX_OFFICE_INLINE_IMAGE_BYTES) else {
+            continue;
+        };
+        image_budget = image_budget.saturating_sub(1);
+        items.push(OfficeLayoutItemDto {
+            kind: "image".to_string(),
+            x: margin,
+            y,
+            width: 260.0,
+            height: 170.0,
+            text: None,
+            shape: None,
+            fill_color: None,
+            stroke_color: None,
+            image_name: Some(entry.rsplit('/').next().unwrap_or(entry.as_str()).to_string()),
+            mime_type: image_mime_type(&lower).map(str::to_string),
+            image_base64: Some(base64_encode(&bytes)),
+        });
+        y += 188.0;
+    }
+
+    if !items.is_empty() || pages.is_empty() {
+        push_docx_page(&mut pages, page_index, page_width, page_height, items);
+    }
+
+    if pages.iter().all(|page| page.items.is_empty()) {
+        return None;
+    }
+
+    Some(OfficeLayoutDto {
+        layout_kind: "document".to_string(),
+        width: page_width,
+        height: page_height,
+        pages,
+    })
+}
+
+fn push_docx_page(
+    pages: &mut Vec<OfficePageDto>,
+    page_index: usize,
+    width: f64,
+    height: f64,
+    items: Vec<OfficeLayoutItemDto>,
+) {
+    pages.push(OfficePageDto {
+        title: format!("Page {page_index}"),
+        index: page_index,
+        width,
+        height,
+        background_color: Some("#FFFFFF".to_string()),
+        freeze_rows: None,
+        freeze_columns: None,
+        cells: Vec::new(),
+        items,
+    });
+}
+
 fn parse_ppt_slide_size(xml: &str) -> Option<(f64, f64)> {
     let mut reader = Reader::from_str(xml);
     loop {
@@ -1392,6 +1533,49 @@ fn parse_ppt_slide_size(xml: &str) -> Option<(f64, f64)> {
                         (cx / OFFICE_EMUS_PER_DIP).max(320.0),
                         (cy / OFFICE_EMUS_PER_DIP).max(180.0),
                     ));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_ppt_slide_background(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut in_background = false;
+    let mut depth = 0usize;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if !in_background && (local == "bg" || local == "bgpr") {
+                    in_background = true;
+                    depth = 1;
+                } else if in_background {
+                    depth += 1;
+                    if (local == "srgbclr" || local == "schemeclr")
+                        && office_color_from_element(&e).is_some()
+                    {
+                        return office_color_from_element(&e);
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) if in_background => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "srgbclr" || local == "schemeclr" {
+                    if let Some(color) = office_color_from_element(&e) {
+                        return Some(color);
+                    }
+                }
+            }
+            Ok(Event::End(_)) if in_background => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    in_background = false;
                 }
             }
             Ok(Event::Eof) => break,
@@ -1421,6 +1605,10 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut rel_id = String::new();
     let mut text = String::new();
     let mut in_text = false;
+    let mut preset_shape: Option<String> = None;
+    let mut fill_color: Option<String> = None;
+    let mut stroke_color: Option<String> = None;
+    let mut color_target = "";
 
     loop {
         match reader.read_event() {
@@ -1437,6 +1625,10 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     rel_id.clear();
                     text.clear();
                     in_text = false;
+                    preset_shape = None;
+                    fill_color = None;
+                    stroke_color = None;
+                    color_target = "";
                     continue;
                 }
                 if in_shape {
@@ -1445,6 +1637,10 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         in_text = true;
                     } else if local == "blip" {
                         rel_id = attr_value(&e, "embed").unwrap_or_default();
+                    } else if local == "solidfill" {
+                        color_target = "fill";
+                    } else if local == "ln" {
+                        color_target = "stroke";
                     }
                 }
             }
@@ -1458,6 +1654,15 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     height = attr_f64(&e, "cy").unwrap_or(0.0) / OFFICE_EMUS_PER_DIP;
                 } else if local == "blip" {
                     rel_id = attr_value(&e, "embed").unwrap_or_default();
+                } else if local == "prstgeom" {
+                    preset_shape = attr_value(&e, "prst");
+                } else if local == "srgbclr" || local == "schemeclr" {
+                    let color = office_color_from_element(&e);
+                    if color_target == "stroke" {
+                        stroke_color = color.or(stroke_color);
+                    } else {
+                        fill_color = color.or(fill_color);
+                    }
                 } else if local == "br" && shape_kind == "text" {
                     text.push('\n');
                 }
@@ -1466,19 +1671,34 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
                     in_text = false;
+                } else if local == "solidfill" || local == "ln" {
+                    color_target = "";
                 }
                 shape_depth = shape_depth.saturating_sub(1);
                 if shape_depth == 0 {
                     if shape_kind == "text" {
                         let normalized = normalize_preview_lines(&text);
-                        if !normalized.is_empty() && width > 2.0 && height > 2.0 {
+                        if width > 2.0
+                            && height > 2.0
+                            && (!normalized.is_empty()
+                                || preset_shape.is_some()
+                                || fill_color.is_some()
+                                || stroke_color.is_some())
+                        {
                             items.push(OfficeLayoutItemDto {
-                                kind: "text".to_string(),
+                                kind: if normalized.is_empty() {
+                                    "shape".to_string()
+                                } else {
+                                    "text".to_string()
+                                },
                                 x,
                                 y,
                                 width,
                                 height,
-                                text: Some(normalized),
+                                text: (!normalized.is_empty()).then_some(normalized),
+                                shape: preset_shape.clone(),
+                                fill_color: fill_color.clone(),
+                                stroke_color: stroke_color.clone(),
                                 image_name: None,
                                 mime_type: None,
                                 image_base64: None,
@@ -1518,6 +1738,7 @@ fn parse_worksheet_layout_cells(
     xml: &str,
     shared_strings: &[String],
     metrics: &XlsxSheetMetrics,
+    merge_regions: &BTreeMap<(usize, usize), XlsxMergeRegion>,
 ) -> Vec<OfficeCellDto> {
     let mut reader = Reader::from_str(xml);
     let mut cells = Vec::new();
@@ -1568,16 +1789,36 @@ fn parse_worksheet_layout_cells(
                     "t" => in_inline_text = false,
                     "c" if in_cell => {
                         let value = resolve_cell_value(&cell_value, &cell_type, shared_strings);
+                        let merge = merge_regions.get(&(row_index, cell_col));
+                        if merge.is_none()
+                            && is_inside_non_origin_merge(merge_regions, row_index, cell_col)
+                        {
+                            in_cell = false;
+                            continue;
+                        }
                         if !value.trim().is_empty() && row_index < MAX_OFFICE_ROWS && cell_col < 32
                         {
+                            let row_span = merge.map(|m| m.row_span).unwrap_or(1);
+                            let column_span = merge.map(|m| m.column_span).unwrap_or(1);
                             cells.push(OfficeCellDto {
                                 row: row_index,
                                 column: cell_col,
                                 text: clean_table_cell(&value),
                                 x: xlsx_col_x(metrics, cell_col),
                                 y: xlsx_row_y(metrics, row_index),
-                                width: xlsx_col_width(metrics, cell_col),
-                                height: xlsx_row_height(metrics, row_index),
+                                width: xlsx_col_span_width(
+                                    metrics,
+                                    cell_col,
+                                    cell_col + column_span,
+                                ),
+                                height: xlsx_row_span_height(
+                                    metrics,
+                                    row_index,
+                                    row_index + row_span,
+                                ),
+                                row_span,
+                                column_span,
+                                number_format: None,
                             });
                         }
                         in_cell = false;
@@ -1800,6 +2041,9 @@ fn image_item_from_relationship<R: Read + Seek>(
         width,
         height,
         text: None,
+        shape: None,
+        fill_color: None,
+        stroke_color: None,
         image_name: Some(path.rsplit('/').next().unwrap_or(path.as_str()).to_string()),
         mime_type: image_mime_type(&lower).map(str::to_string),
         image_base64: Some(base64_encode(&bytes)),
@@ -1841,10 +2085,48 @@ fn attr_f64(e: &BytesStart<'_>, name: &str) -> Option<f64> {
     attr_value(e, name).and_then(|v| v.parse::<f64>().ok())
 }
 
+fn office_color_from_element(e: &BytesStart<'_>) -> Option<String> {
+    if local_xml_name(e.name().as_ref()) == "srgbclr" {
+        return attr_value(e, "val").and_then(|value| normalize_hex_color(&value));
+    }
+    if local_xml_name(e.name().as_ref()) == "schemeclr" {
+        return attr_value(e, "val").and_then(|value| match value.as_str() {
+            "bg1" | "lt1" => Some("#FFFFFF".to_string()),
+            "tx1" | "dk1" => Some("#000000".to_string()),
+            "accent1" => Some("#4472C4".to_string()),
+            "accent2" => Some("#ED7D31".to_string()),
+            "accent3" => Some("#A5A5A5".to_string()),
+            "accent4" => Some("#FFC000".to_string()),
+            "accent5" => Some("#5B9BD5".to_string()),
+            "accent6" => Some("#70AD47".to_string()),
+            _ => None,
+        });
+    }
+    None
+}
+
+fn normalize_hex_color(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_start_matches('#');
+    if trimmed.len() != 6 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("#{}", trimmed.to_ascii_uppercase()))
+}
+
 #[derive(Default)]
 struct XlsxSheetMetrics {
     col_widths: BTreeMap<usize, f64>,
     row_heights: BTreeMap<usize, f64>,
+}
+
+#[derive(Clone, Copy)]
+struct XlsxMergeRegion {
+    first_row: usize,
+    first_col: usize,
+    last_row: usize,
+    last_col: usize,
+    row_span: usize,
+    column_span: usize,
 }
 
 fn parse_xlsx_sheet_metrics(xml: &str) -> XlsxSheetMetrics {
@@ -1888,6 +2170,87 @@ fn parse_xlsx_sheet_metrics(xml: &str) -> XlsxSheetMetrics {
     }
 
     metrics
+}
+
+fn parse_xlsx_freeze_pane(xml: &str) -> (Option<usize>, Option<usize>) {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                if local_xml_name(e.name().as_ref()) == "pane" {
+                    let state = attr_value(&e, "state").unwrap_or_default();
+                    if state != "frozen" && state != "frozenSplit" {
+                        return (None, None);
+                    }
+                    let rows = attr_f64(&e, "ysplit").map(|value| value.max(0.0) as usize);
+                    let columns = attr_f64(&e, "xsplit").map(|value| value.max(0.0) as usize);
+                    return (rows.filter(|value| *value > 0), columns.filter(|value| *value > 0));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    (None, None)
+}
+
+fn parse_xlsx_merge_regions(xml: &str) -> BTreeMap<(usize, usize), XlsxMergeRegion> {
+    let mut reader = Reader::from_str(xml);
+    let mut regions = BTreeMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                if local_xml_name(e.name().as_ref()) == "mergecell" {
+                    let Some(reference) = attr_value(&e, "ref") else {
+                        continue;
+                    };
+                    let Some(region) = parse_xlsx_merge_reference(&reference) else {
+                        continue;
+                    };
+                    if region.first_row < MAX_OFFICE_ROWS && region.first_col < 32 {
+                        regions.insert((region.first_row, region.first_col), region);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    regions
+}
+
+fn parse_xlsx_merge_reference(reference: &str) -> Option<XlsxMergeRegion> {
+    let (start, end) = reference.split_once(':')?;
+    let (first_row, first_col) = cell_reference_position(start)?;
+    let (last_row, last_col) = cell_reference_position(end)?;
+    let (first_row, last_row) = (first_row.min(last_row), first_row.max(last_row));
+    let (first_col, last_col) = (first_col.min(last_col), first_col.max(last_col));
+    Some(XlsxMergeRegion {
+        first_row,
+        first_col,
+        last_row,
+        last_col,
+        row_span: last_row.saturating_sub(first_row) + 1,
+        column_span: last_col.saturating_sub(first_col) + 1,
+    })
+}
+
+fn is_inside_non_origin_merge(
+    regions: &BTreeMap<(usize, usize), XlsxMergeRegion>,
+    row: usize,
+    col: usize,
+) -> bool {
+    regions.values().any(|region| {
+        (row != region.first_row || col != region.first_col)
+            && row >= region.first_row
+            && row <= region.last_row
+            && col >= region.first_col
+            && col <= region.last_col
+    })
 }
 
 fn xlsx_column_width_to_dip(width: f64) -> f64 {
@@ -2261,6 +2624,30 @@ fn cell_reference_column(reference: &str) -> Option<usize> {
         col = col * 26 + (ch.to_ascii_uppercase() as usize - 'A' as usize + 1);
     }
     saw_letter.then_some(col.saturating_sub(1))
+}
+
+fn cell_reference_position(reference: &str) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    let mut row = 0usize;
+    let mut saw_letter = false;
+    let mut saw_digit = false;
+    for ch in reference.chars() {
+        if ch.is_ascii_alphabetic() {
+            if saw_digit {
+                return None;
+            }
+            saw_letter = true;
+            col = col * 26 + (ch.to_ascii_uppercase() as usize - 'A' as usize + 1);
+        } else if ch.is_ascii_digit() {
+            saw_digit = true;
+            row = row * 10 + (ch as usize - '0' as usize);
+        } else if ch == '$' {
+            continue;
+        } else {
+            break;
+        }
+    }
+    (saw_letter && saw_digit && row > 0 && col > 0).then_some((row - 1, col - 1))
 }
 
 fn format_table_rows(rows: &[Vec<String>]) -> Vec<String> {
@@ -4021,6 +4408,7 @@ struct AppxManifestSummary {
     publisher: Option<String>,
     display_name: Option<String>,
     executable: Option<String>,
+    icon_paths: Vec<String>,
 }
 
 fn parse_appx_manifest_summary(xml: &str) -> Option<AppxManifestSummary> {
@@ -4051,6 +4439,16 @@ fn parse_appx_manifest_summary(xml: &str) -> Option<AppxManifestSummary> {
                         ("application", "executable") => summary.executable = Some(value),
                         ("uap:visualelements", "displayname")
                         | ("visualelements", "displayname") => summary.display_name = Some(value),
+                        ("uap:visualelements", "square150x150logo")
+                        | ("visualelements", "square150x150logo")
+                        | ("uap:visualelements", "square44x44logo")
+                        | ("visualelements", "square44x44logo")
+                        | ("uap:visualelements", "logo")
+                        | ("visualelements", "logo")
+                        | ("uap:defaulttile", "square310x310logo")
+                        | ("defaulttile", "square310x310logo")
+                        | ("uap:defaulttile", "wide310x150logo")
+                        | ("defaulttile", "wide310x150logo") => summary.icon_paths.push(value),
                         _ => {}
                     }
                 }
@@ -4161,12 +4559,18 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     let file = fs::File::open(path).ok()?;
     let mut zip = ZipArchive::new(file).ok()?;
     let mut candidates = Vec::new();
+    let manifest_icons = read_zip_text(&mut zip, "AppxManifest.xml", MAX_APPX_MANIFEST_BYTES)
+        .as_deref()
+        .and_then(parse_appx_manifest_summary)
+        .map(|summary| expand_appx_icon_candidates(&summary.icon_paths))
+        .unwrap_or_default();
 
     for i in 0..zip.len() {
         let entry = zip.by_index_raw(i).ok()?;
         let raw_name = entry.name().to_string();
         let normalized_name = raw_name.replace('\\', "/");
-        let score = package_icon_candidate_score(&normalized_name);
+        let score =
+            package_icon_candidate_score(&normalized_name) + manifest_icon_candidate_score(&normalized_name, &manifest_icons);
         if score > 0 && entry.size() <= MAX_PACKAGE_ICON_BYTES {
             candidates.push((score, raw_name));
         }
@@ -4196,6 +4600,62 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     }
 
     best.map(|(_, width, height, bgra)| (width, height, bgra))
+}
+
+fn expand_appx_icon_candidates(paths: &[String]) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for path in paths {
+        let normalized = path.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        candidates.push(normalized.clone());
+        let Some((stem, ext)) = normalized.rsplit_once('.') else {
+            continue;
+        };
+        for qualifier in [
+            ".scale-400",
+            ".scale-200",
+            ".scale-150",
+            ".scale-125",
+            ".scale-100",
+            ".targetsize-256",
+            ".targetsize-128",
+            ".targetsize-96",
+            ".targetsize-64",
+            ".targetsize-48",
+            ".targetsize-32",
+            ".targetsize-24",
+            ".targetsize-16",
+            ".altform-unplated_targetsize-256",
+            ".altform-unplated_targetsize-48",
+        ] {
+            candidates.push(format!("{stem}{qualifier}.{ext}"));
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn manifest_icon_candidate_score(name: &str, manifest_icons: &[String]) -> i32 {
+    if manifest_icons.is_empty() {
+        return 0;
+    }
+    let lower = name.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase();
+    if manifest_icons.iter().any(|candidate| candidate == &lower) {
+        return 320;
+    }
+
+    let Some((stem, _)) = lower.rsplit_once('.') else {
+        return 0;
+    };
+    manifest_icons
+        .iter()
+        .filter_map(|candidate| candidate.rsplit_once('.').map(|(candidate_stem, _)| candidate_stem))
+        .any(|candidate_stem| stem.starts_with(candidate_stem))
+        .then_some(260)
+        .unwrap_or(0)
 }
 
 fn package_icon_candidate_score(name: &str) -> i32 {
@@ -5261,6 +5721,29 @@ mod tests {
 
         assert!(truncated.starts_with(&"中".repeat(8)));
         assert!(truncated.contains("[Preview truncated at"));
+    }
+
+    #[test]
+    fn xlsx_merge_regions_preserve_spans() {
+        let regions = parse_xlsx_merge_regions(
+            r#"<worksheet><mergeCells><mergeCell ref="B2:D4"/></mergeCells></worksheet>"#,
+        );
+
+        let region = regions.get(&(1, 1)).expect("merged region");
+        assert_eq!(region.row_span, 3);
+        assert_eq!(region.column_span, 3);
+        assert!(is_inside_non_origin_merge(&regions, 2, 2));
+        assert!(!is_inside_non_origin_merge(&regions, 1, 1));
+    }
+
+    #[test]
+    fn xlsx_freeze_pane_reads_split_counts() {
+        let (rows, columns) = parse_xlsx_freeze_pane(
+            r#"<worksheet><sheetViews><sheetView><pane xSplit="2" ySplit="1" state="frozen"/></sheetView></sheetViews></worksheet>"#,
+        );
+
+        assert_eq!(rows, Some(1));
+        assert_eq!(columns, Some(2));
     }
 
     #[test]

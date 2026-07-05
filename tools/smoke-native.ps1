@@ -71,6 +71,9 @@ public static class QuickLookNativeSmoke {
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_test_is_text_input_class(byte[] classUtf8, UIntPtr classLen);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_test_is_explorer_window_class(byte[] classUtf8, UIntPtr classLen);
 }
 "@
 
@@ -204,10 +207,18 @@ function Test-TextInputClass([string]$className) {
     [QuickLookNativeSmoke]::ql_test_is_text_input_class($bytes, (New-UIntPtr $bytes.Length))
 }
 
+function Test-ExplorerWindowClass([string]$className) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($className)
+    [QuickLookNativeSmoke]::ql_test_is_explorer_window_class($bytes, (New-UIntPtr $bytes.Length))
+}
+
 Assert-True ((Test-TextInputClass "Edit") -eq 1) "Expected Explorer rename Edit class to suppress preview hotkeys"
 Assert-True ((Test-TextInputClass "RichEdit20W") -eq 1) "Expected RichEdit20W class to suppress preview hotkeys"
 Assert-True ((Test-TextInputClass "RichEdit50W") -eq 1) "Expected RichEdit50W class to suppress preview hotkeys"
 Assert-True ((Test-TextInputClass "DirectUIHWND") -eq 0) "Expected normal Explorer view class to allow preview hotkeys"
+Assert-True ((Test-ExplorerWindowClass "CabinetWClass") -eq 1) "Expected Explorer window class to allow preview hotkeys"
+Assert-True ((Test-ExplorerWindowClass "ExploreWClass") -eq 1) "Expected legacy Explorer window class to allow preview hotkeys"
+Assert-True ((Test-ExplorerWindowClass "Notepad") -eq 0) "Expected non-Explorer foreground window class to suppress preview hotkeys"
 
 $testRoot = Resolve-Path -LiteralPath $TestFiles
 $txt = Join-Path $testRoot "test.txt"
@@ -242,6 +253,20 @@ try {
     Copy-Item -LiteralPath $txt -Destination (Join-Path $payload "test.txt")
     Copy-Item -LiteralPath $bat -Destination (Join-Path $payload "script.bat")
     Copy-Item -LiteralPath $png -Destination (Join-Path $payload "Assets\Square150x150Logo.png")
+    Copy-Item -LiteralPath $png -Destination (Join-Path $payload "Assets\BrandMark.scale-200.png")
+    Set-Content -LiteralPath (Join-Path $payload "AppxManifest.xml") -Encoding UTF8 -Value @'
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10">
+  <Identity Name="QuickLook.NativeSmoke" Publisher="CN=QuickLook" Version="1.0.0.0" />
+  <Applications>
+    <Application Id="App" Executable="QuickLook.NativeSmoke.exe">
+      <uap:VisualElements DisplayName="Native Smoke"
+                          Square150x150Logo="Assets\BrandMark.png"
+                          Square44x44Logo="Assets\BrandMark.png" />
+    </Application>
+  </Applications>
+</Package>
+'@
 
     $zip = Join-Path $tmp "sample.zip"
     Compress-Archive -Path (Join-Path $payload "*") -DestinationPath $zip -Force

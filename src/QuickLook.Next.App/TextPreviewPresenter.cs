@@ -3,7 +3,9 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.ApplicationModel.DataTransfer;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -31,6 +33,7 @@ internal sealed class TextPreviewPresenter
     private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
+    private int _renderVersion;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -52,11 +55,13 @@ internal sealed class TextPreviewPresenter
         _outlineList.ItemsSource = _outlineItems;
         _outlineList.ItemClick += OnOutlineItemClick;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
+        _textListView.KeyDown += OnTextListViewKeyDown;
     }
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
         string text = TrimForDisplay(ready.TextContent ?? "");
+        int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
 
         _textBlock.Blocks.Clear();
@@ -79,14 +84,14 @@ internal sealed class TextPreviewPresenter
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
-                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text");
+                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
         }
         catch (Exception ex)
         {
             DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
             _scrollViewer.Visibility = Visibility.Collapsed;
             _textListView.Visibility = Visibility.Visible;
-            _ = RenderCodeOrPlainTextAsync(text, "text");
+            _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
         }
 
         ApplyOutlineVisibility();
@@ -99,6 +104,7 @@ internal sealed class TextPreviewPresenter
 
     public void Clear()
     {
+        _renderVersion++;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
         ClearOutline();
@@ -136,7 +142,7 @@ internal sealed class TextPreviewPresenter
                 AddMarkdownList(block, ordered: true);
                 break;
             case "code":
-                _ = AddMarkdownCodeBlockAsync(block.Text, string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language);
+                AddMarkdownCodeBlock(block.Text, string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language);
                 break;
             case "thematicBreak":
                 AddMarkdownRule();
@@ -333,7 +339,7 @@ internal sealed class TextPreviewPresenter
             : _defaultScrollMargin;
     }
 
-    private void OnOutlineItemClick(object sender, ItemClickEventArgs e)
+    private async void OnOutlineItemClick(object sender, ItemClickEventArgs e)
     {
         if (e.ClickedItem is not MarkdownOutlineItem item)
             return;
@@ -346,9 +352,15 @@ internal sealed class TextPreviewPresenter
         
         double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
         _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
-        
-        // Re-enable outline sync after a short delay (approx animation time)
-        _ = Task.Delay(300).ContinueWith(_ => _updatingOutline = false, TaskScheduler.Default);
+
+        try
+        {
+            await Task.Delay(300);
+        }
+        finally
+        {
+            _updatingOutline = false;
+        }
     }
 
     private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
@@ -501,7 +513,7 @@ internal sealed class TextPreviewPresenter
             {
                 if (inCode)
                 {
-                    _ = AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
+                    AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
                     code = "";
                     codeLanguage = "text";
                     inCode = false;
@@ -575,16 +587,14 @@ internal sealed class TextPreviewPresenter
             // To preserve order properly we should await it, but RenderMarkdown is synchronous right now.
             // A quick fix is to fire-and-forget or keep markdown code highlighting synchronous if it's small,
             // but for full files, we use RenderCodeOrPlainTextAsync.
-            _ = AddMarkdownCodeBlockAsync(code.TrimEnd('\n'), codeLanguage);
+            AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
         }
     }
 
-    private async Task AddMarkdownCodeBlockAsync(string code, string language)
-    {
-        await AddHighlightedCodeAsync(code, language);
-    }
+    private void AddMarkdownCodeBlock(string code, string language)
+        => AddHighlightedCode(code, language);
 
-    private async Task RenderCodeOrPlainTextAsync(string text, string language)
+    private async Task RenderCodeOrPlainTextAsync(string text, string language, int renderVersion)
     {
         var items = new ObservableCollection<TextLineItem>();
         _textListView.ItemsSource = items;
@@ -608,13 +618,15 @@ internal sealed class TextPreviewPresenter
                     Foreground = BrushFor(TokenKind.Default),
                     IsTextSelectionEnabled = true
                 };
-                items.Add(new TextLineItem { LineNumber = i + 1, Content = tb });
+                items.Add(new TextLineItem { LineNumber = i + 1, Text = lines[i].TrimEnd('\r'), Content = tb });
             }
         }
         else
         {
             var spans = await Task.Run(() => SyntaxHighlighter.Highlight(code, language).ToList());
-            
+            if (renderVersion != _renderVersion)
+                return;
+
             int lineNumber = 1;
             TextBlock currentTb = new TextBlock
             {
@@ -645,7 +657,7 @@ internal sealed class TextPreviewPresenter
                         if (piece.Length > 0 && piece.EndsWith("\r")) piece = piece[..^1];
                         currentTb.Inlines.Add(new Run { Text = piece, Foreground = BrushFor(kind) });
                         
-                        items.Add(new TextLineItem { LineNumber = lineNumber++, Content = currentTb });
+                        items.Add(new TextLineItem { LineNumber = lineNumber++, Text = TextFrom(currentTb), Content = currentTb });
                         
                         currentTb = new TextBlock
                         {
@@ -658,11 +670,11 @@ internal sealed class TextPreviewPresenter
                     }
                 }
             }
-            items.Add(new TextLineItem { LineNumber = lineNumber, Content = currentTb });
+            items.Add(new TextLineItem { LineNumber = lineNumber, Text = TextFrom(currentTb), Content = currentTb });
         }
     }
 
-    private async Task AddHighlightedCodeAsync(string code, string language)
+    private void AddHighlightedCode(string code, string language)
     {
         var container = new Border
         {
@@ -776,7 +788,7 @@ internal sealed class TextPreviewPresenter
         }
         else
         {
-            var spans = await Task.Run(() => SyntaxHighlighter.Highlight(code, language).ToList());
+            var spans = SyntaxHighlighter.Highlight(code, language).ToList();
             int runs = 0;
             foreach (var (txt, kind) in spans)
             {
@@ -802,7 +814,38 @@ internal sealed class TextPreviewPresenter
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });
         _textBlock.Blocks.Add(p);
-    }      private SolidColorBrush BrushFor(TokenKind kind)
+    }
+
+    private void OnTextListViewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
+        if (!controlDown || e.Key != Windows.System.VirtualKey.C)
+            return;
+
+        var selected = _textListView.SelectedItems
+            .OfType<TextLineItem>()
+            .OrderBy(item => item.LineNumber)
+            .Select(item => item.Text)
+            .ToArray();
+        if (selected.Length == 0)
+            return;
+
+        var package = new DataPackage();
+        package.SetText(string.Join(Environment.NewLine, selected));
+        Clipboard.SetContent(package);
+        e.Handled = true;
+    }
+
+    private static string TextFrom(TextBlock textBlock)
+    {
+        if (textBlock.Text.Length > 0)
+            return textBlock.Text;
+        return string.Concat(textBlock.Inlines.OfType<Run>().Select(run => run.Text));
+    }
+
+    private SolidColorBrush BrushFor(TokenKind kind)
     {
         bool dark = _getTheme() != ElementTheme.Light;
         if (_brushThemeDark != dark) { _tokenBrushes.Clear(); _brushThemeDark = dark; }
@@ -921,14 +964,12 @@ internal sealed class TextPreviewPresenter
 
     private static Windows.UI.Color ThemeTextColor()
     {
-        try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorPrimary"]; }
-        catch { return Colors.Gainsboro; }
+        return ThemeResourceColor("TextFillColorPrimaryBrush", Colors.Gainsboro);
     }
 
     private static Windows.UI.Color ThemeTextColorSecondary()
     {
-        try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorSecondary"]; }
-        catch { return Colors.Gray; }
+        return ThemeResourceColor("TextFillColorSecondaryBrush", Colors.Gray);
     }
 
     private static Windows.UI.Color ThemeSurfaceBorderColor()
@@ -948,11 +989,30 @@ internal sealed class TextPreviewPresenter
         try { return (Windows.UI.Color)Application.Current.Resources["ControlFillColorSecondary"]; }
         catch { return Colors.Transparent; }
     }
+
+    private static Windows.UI.Color ThemeResourceColor(string key, Windows.UI.Color fallback)
+    {
+        try
+        {
+            object value = Application.Current.Resources[key];
+            return value switch
+            {
+                Windows.UI.Color color => color,
+                SolidColorBrush brush => brush.Color,
+                _ => fallback,
+            };
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
 }
 
 public sealed class TextLineItem
 {
     public int LineNumber { get; set; }
+    public string Text { get; set; } = "";
     public object? Content { get; set; }
 }
 
