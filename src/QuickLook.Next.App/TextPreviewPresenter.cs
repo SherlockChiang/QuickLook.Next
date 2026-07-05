@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -12,24 +13,38 @@ internal sealed class TextPreviewPresenter
 {
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
+    private const double OutlineWidth = 188;
+    private const double OutlineGap = 10;
 
     private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
     private static readonly Dictionary<string, FontFamily> FontFamilyCache = new(StringComparer.Ordinal);
 
     private readonly RichTextBlock _textBlock;
     private readonly ScrollViewer _scrollViewer;
+    private readonly Border _outlinePanel;
+    private readonly ListView _outlineList;
     private readonly Func<ElementTheme> _getTheme;
     private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = new();
+    private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
+    private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
+    private bool _updatingOutline;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
         ScrollViewer scrollViewer,
+        Border outlinePanel,
+        ListView outlineList,
         Func<ElementTheme> getTheme)
     {
         _textBlock = textBlock;
         _scrollViewer = scrollViewer;
+        _outlinePanel = outlinePanel;
+        _outlineList = outlineList;
         _getTheme = getTheme;
+        _defaultScrollMargin = scrollViewer.Margin;
+        _outlineList.ItemsSource = _outlineItems;
+        _outlineList.SelectionChanged += OnOutlineSelectionChanged;
     }
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -39,6 +54,7 @@ internal sealed class TextPreviewPresenter
 
         _textBlock.Blocks.Clear();
         _textBlock.IsTextSelectionEnabled = true;
+        ClearOutline();
 
         bool wrap = ready.TextFormat is "markdown" or "plain";
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
@@ -61,12 +77,23 @@ internal sealed class TextPreviewPresenter
             _textBlock.FontFamily = FontFamilyFor("Cascadia Mono, Consolas");
             _textBlock.TextWrapping = TextWrapping.NoWrap;
             _scrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            ClearOutline();
             AddCodeBlock(text);
         }
 
+        ApplyOutlineVisibility();
         _textBlock.Focus(FocusState.Programmatic);
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
+        if (_outlineItems.Count > 0)
+            size = (Math.Min(maxContent.Width, size.Width + OutlineWidth + OutlineGap), size.Height);
         return new TextPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
+    }
+
+    public void Clear()
+    {
+        _textBlock.Blocks.Clear();
+        ClearOutline();
+        ApplyOutlineVisibility();
     }
 
     private void RenderMarkdownDocument(PreviewMarkdown document)
@@ -124,10 +151,13 @@ internal sealed class TextPreviewPresenter
             _ => 16,
         };
         var p = CreateParagraph(size, "Segoe UI", block.Level <= 2 ? 16 : 10, 8);
+        FrameworkElement anchor = CreateHeadingAnchor();
+        p.Inlines.Add(new InlineUIContainer { Child = anchor });
         var bold = new Bold();
         AddMarkdownInlines(bold.Inlines, block.Inlines, block.Text);
         p.Inlines.Add(bold);
         _textBlock.Blocks.Add(p);
+        AddOutlineItem(block, anchor);
     }
 
     private void AddMarkdownParagraph(PreviewMarkdownBlock block)
@@ -202,6 +232,54 @@ internal sealed class TextPreviewPresenter
         lines.Add("| " + string.Join(" | ", widths.Select(width => new string('-', Math.Max(3, width)))) + " |");
         lines.AddRange(block.TableRows.Take(120).Select(FormatRow));
         return string.Join("\n", lines);
+    }
+
+    private void AddOutlineItem(PreviewMarkdownBlock block, FrameworkElement anchor)
+    {
+        string title = string.IsNullOrWhiteSpace(block.Text)
+            ? string.Concat(block.Inlines.Select(i => i.Text)).Trim()
+            : block.Text.Trim();
+        if (title.Length == 0)
+            return;
+
+        int level = Math.Clamp(block.Level <= 0 ? 1 : block.Level, 1, 6);
+        _outlineItems.Add(new MarkdownOutlineItem(title, level, anchor));
+    }
+
+    private void AddOutlineItem(string title, int level, FrameworkElement anchor)
+    {
+        title = title.Trim();
+        if (title.Length == 0)
+            return;
+        _outlineItems.Add(new MarkdownOutlineItem(title, Math.Clamp(level, 1, 6), anchor));
+    }
+
+    private void ClearOutline()
+    {
+        _updatingOutline = true;
+        _outlineList.SelectedItem = null;
+        _outlineItems.Clear();
+        _updatingOutline = false;
+    }
+
+    private void ApplyOutlineVisibility()
+    {
+        bool visible = _outlineItems.Count > 0;
+        _outlinePanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        _scrollViewer.Margin = visible
+            ? new Thickness(_defaultScrollMargin.Left + OutlineWidth + OutlineGap, _defaultScrollMargin.Top, _defaultScrollMargin.Right, _defaultScrollMargin.Bottom)
+            : _defaultScrollMargin;
+    }
+
+    private void OnOutlineSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingOutline || _outlineList.SelectedItem is not MarkdownOutlineItem item)
+            return;
+
+        _scrollViewer.UpdateLayout();
+        _textBlock.UpdateLayout();
+        double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
+        _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
     }
 
     private void AddMarkdownInlines(InlineCollection target, IReadOnlyList<PreviewMarkdownInline> inlines, string fallbackText)
@@ -350,8 +428,11 @@ internal sealed class TextPreviewPresenter
                 int level = Math.Min(6, trimmed.TakeWhile(c => c == '#').Count());
                 string title = trimmed[level..].Trim();
                 var p = CreateParagraph(level <= 1 ? 26 : level == 2 ? 22 : 18, "Segoe UI", 14, 8);
+                FrameworkElement anchor = CreateHeadingAnchor();
+                p.Inlines.Add(new InlineUIContainer { Child = anchor });
                 p.Inlines.Add(new Bold { Inlines = { new Run { Text = title } } });
                 _textBlock.Blocks.Add(p);
+                AddOutlineItem(title, level, anchor);
                 continue;
             }
 
@@ -495,6 +576,14 @@ internal sealed class TextPreviewPresenter
             Margin = new Thickness(0, top, 0, bottom),
         };
 
+    private static FrameworkElement CreateHeadingAnchor()
+        => new Border
+        {
+            Width = 0,
+            Height = 0,
+            IsHitTestVisible = false,
+        };
+
     private static FontFamily FontFamilyFor(string fontFamily)
     {
         if (!FontFamilyCache.TryGetValue(fontFamily, out var cached))
@@ -573,6 +662,28 @@ internal sealed class TextPreviewPresenter
         try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorPrimary"]; }
         catch { return Colors.Gainsboro; }
     }
+}
+
+public sealed class MarkdownOutlineItem
+{
+    public MarkdownOutlineItem(string title, int level, FrameworkElement anchor)
+    {
+        Title = title;
+        Level = level;
+        Anchor = anchor;
+    }
+
+    public string Title { get; }
+
+    public int Level { get; }
+
+    public FrameworkElement Anchor { get; }
+
+    public Thickness Margin => new(Math.Max(0, (Level - 1) * 12), 2, 0, 2);
+
+    public double FontSize => Level <= 1 ? 13 : 12;
+
+    public Windows.UI.Text.FontWeight FontWeight => new() { Weight = Level <= 2 ? (ushort)600 : (ushort)400 };
 }
 
 internal readonly record struct TextPreviewResult(string Status, double Width, double Height);

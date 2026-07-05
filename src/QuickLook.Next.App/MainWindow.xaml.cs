@@ -73,7 +73,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, () => RootGrid.ActualTheme);
+        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
         _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
@@ -81,6 +81,10 @@ public sealed partial class MainWindow : Window
         _pdfPresenter = new PdfPreviewPresenter(
             PdfScrollViewer,
             PdfPagesPanel,
+            PdfPagerBar,
+            PreviousPdfPageButton,
+            NextPdfPageButton,
+            PdfPageIndicatorText,
             DispatcherQueue,
             () => _compositor,
             () => _supervisor);
@@ -98,7 +102,7 @@ public sealed partial class MainWindow : Window
             () => _previewGeneration,
             () => CurrentPreviewToken,
             IsPreviewGenerationCurrent,
-            OpenListingItem,
+            PreviewListingItemAsync,
             LoadListingIconAsync);
         ImageFilmstripList.ItemsSource = _imageFilmstripItems;
         ExtendsContentIntoTitleBar = true;
@@ -152,7 +156,7 @@ public sealed partial class MainWindow : Window
         AutoStart.RepairIfConfigured();
         ApplyWindowIcon();
         EnsureTrayIcon();
-        _windowController.ApplyNoActivateStyle();
+        _windowController.SetNoActivateStyle(enabled: false);
 
         try
         {
@@ -370,6 +374,21 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
+                if (IsAnimatedGifPath(path) && AnimatedImagePreviewPresenter.TryReadGifSize(path) is { } gifSize)
+                {
+                    var gifReady = new PreviewReady(
+                        $"gif-{generation}",
+                        "image",
+                        System.IO.Path.GetFileName(path),
+                        gifSize.Width,
+                        gifSize.Height);
+                    _currentPath = path;
+                    _currentRequestId = null;
+                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
+                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
+                    return;
+                }
+
                 PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 if (nativeReady is not null)
@@ -386,21 +405,6 @@ public sealed partial class MainWindow : Window
                         _ => $"{nativeReady.Kind}: {nativeReady.Title}",
                     };
                     RevealPreviewWindow(ShouldActivatePreview(nativeReady));
-                    return;
-                }
-
-                if (IsAnimatedGifPath(path) && AnimatedImagePreviewPresenter.TryReadGifSize(path) is { } gifSize)
-                {
-                    var gifReady = new PreviewReady(
-                        $"gif-{generation}",
-                        "image",
-                        System.IO.Path.GetFileName(path),
-                        gifSize.Width,
-                        gifSize.Height);
-                    _currentPath = path;
-                    _currentRequestId = null;
-                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
-                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
                     return;
                 }
 
@@ -493,7 +497,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                _windowController.ApplyNoActivateStyle();
+                _windowController.SetNoActivateStyle(enabled: false);
             }
             _windowController.Raise(activate);
             EnsureCompositor();
@@ -645,6 +649,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -709,12 +714,19 @@ public sealed partial class MainWindow : Window
     private void OnAnimatedImageRootSizeChanged(object sender, SizeChangedEventArgs e)
         => _animatedImagePresenter?.UpdateLayout();
 
+    private void OnPreviousPdfPageClick(object sender, RoutedEventArgs e)
+        => _pdfPresenter?.GoToPreviousPage();
+
+    private void OnNextPdfPageClick(object sender, RoutedEventArgs e)
+        => _pdfPresenter?.GoToNextPage();
+
     private string ShowRasterPreview(PreviewReady ready)
     {
         UpdatePreviewChrome(ready, showRasterTools: true);
         PreviewRoot.Visibility = Visibility.Visible;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -733,6 +745,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -753,6 +766,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
+        PdfPagerBar.Visibility = Visibility.Visible;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -770,6 +784,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Visible;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -789,6 +804,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Visible;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -807,6 +823,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Visible;
@@ -825,6 +842,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -843,6 +861,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Collapsed;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -859,8 +878,8 @@ public sealed partial class MainWindow : Window
     private void OnListingSortClick(object sender, RoutedEventArgs e)
         => _listingPresenter?.OnSortClick(sender);
 
-    private void OnListingItemClick(object sender, ItemClickEventArgs e)
-        => _listingPresenter?.OnItemClick(e);
+    private async void OnListingItemClick(object sender, ItemClickEventArgs e)
+        => await (_listingPresenter?.OnItemClickAsync(e) ?? Task.CompletedTask);
 
     private async void OnListingListViewDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         => await (_listingPresenter?.OnDoubleTappedAsync() ?? Task.CompletedTask);
@@ -868,22 +887,21 @@ public sealed partial class MainWindow : Window
     private async void OnListingListViewKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
         => await (_listingPresenter?.OnKeyDownAsync(e) ?? Task.CompletedTask);
 
-    private void OpenListingItem(ListingRow row)
+    private async Task PreviewListingItemAsync(PreviewListing? listing, ListingRow row)
     {
-        if (string.IsNullOrWhiteSpace(row.NativePath))
+        string? path = row.NativePath;
+        if (string.IsNullOrWhiteSpace(path)
+            && listing is not null
+            && listing.ListingKind.Equals("archive", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(listing.RootPath))
+        {
+            path = await Task.Run(() => _native.TryExtractArchiveEntry(listing.RootPath, row.Path), CurrentPreviewToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
             return;
 
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(row.NativePath)
-            {
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "open listing item failed: " + ex);
-        }
+        await HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Switch, [path]));
     }
 
     private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)
@@ -925,6 +943,7 @@ public sealed partial class MainWindow : Window
         PreviewRoot.Visibility = Visibility.Visible;
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
+        PdfPagerBar.Visibility = Visibility.Collapsed;
         TextScrollViewer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
@@ -943,7 +962,7 @@ public sealed partial class MainWindow : Window
         _mediaPresenter?.Clear();
         _pdfPresenter?.Clear();
         OfficePagesPanel.Children.Clear();
-        TextPreviewBlock.Blocks.Clear();
+        _textPresenter?.Clear();
         _tablePresenter?.Clear();
         ClearPreviewHeroImages();
         ClearImageSidecars();
@@ -1470,6 +1489,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        SelectCurrentFilmstripItem(path);
         await HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Switch, [path]));
     }
 
@@ -1718,7 +1738,7 @@ public sealed partial class MainWindow : Window
         if (activate)
             _windowController.SetNoActivateStyle(enabled: false);
         else
-            _windowController.ApplyNoActivateStyle();
+            _windowController.SetNoActivateStyle(enabled: false);
         var appWindow = GetAppWindow();
         if (!_previewVisible && resizeToDefault)
             ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);

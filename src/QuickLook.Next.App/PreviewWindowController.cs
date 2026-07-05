@@ -21,8 +21,8 @@ internal sealed class PreviewWindowController
         if (!activate)
             flags |= SWP_NOACTIVATE;
 
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        SetNoActivateStyle(enabled: false);
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
         if (activate)
             _window.Activate();
     }
@@ -39,9 +39,6 @@ internal sealed class PreviewWindowController
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    public void ApplyNoActivateStyle()
-        => SetNoActivateStyle(enabled: true);
-
     public void SetNoActivateStyle(bool enabled)
     {
         nint hwnd = _hwndProvider();
@@ -54,10 +51,9 @@ internal sealed class PreviewWindowController
     public void ShowNoActivate()
     {
         nint hwnd = _hwndProvider();
+        SetNoActivateStyle(enabled: false);
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
@@ -71,8 +67,8 @@ internal sealed class PreviewWindowController
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
-    private static readonly nint HWND_TOPMOST = new(-1);
     private static readonly nint HWND_NOTOPMOST = new(-2);
+    private static readonly nint HWND_TOP = new(0);
     private static readonly nint WS_EX_NOACTIVATE = new(0x08000000);
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]

@@ -163,6 +163,75 @@
                             Padding="0,16,0,16"
                             Spacing="16" />
             </ScrollViewer>
+            <Border x:Name="PdfPagerBar"
+                    x:Uid="PdfPagerBar"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="26,12,0,0"
+                    Padding="6"
+                    Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    AutomationProperties.Name="PDF page navigation">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="PreviousPdfPageButton"
+                            x:Uid="PreviousPdfPageButton"
+                            Click="OnPreviousPdfPageClick"
+                            Style="{StaticResource PreviewIconButtonStyle}"
+                            AutomationProperties.Name="Previous PDF page">
+                        <FontIcon Glyph="&#xE76B;" FontSize="14" />
+                    </Button>
+                    <TextBlock x:Name="PdfPageIndicatorText"
+                               MinWidth="62"
+                               VerticalAlignment="Center"
+                               TextAlignment="Center"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Text="1 / 1"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               AutomationProperties.Name="Current PDF page" />
+                    <Button x:Name="NextPdfPageButton"
+                            x:Uid="NextPdfPageButton"
+                            Click="OnNextPdfPageClick"
+                            Style="{StaticResource PreviewIconButtonStyle}"
+                            AutomationProperties.Name="Next PDF page">
+                        <FontIcon Glyph="&#xE76C;" FontSize="14" />
+                    </Button>
+                </StackPanel>
+            </Border>
+            <Border x:Name="MarkdownOutlinePanel"
+                    x:Uid="MarkdownOutlinePanel"
+                    Visibility="Collapsed"
+                    Width="188"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Stretch"
+                    Margin="14,0,0,14"
+                    Padding="8"
+                    Background="{ThemeResource PreviewSurfaceBrush}"
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    AutomationProperties.Name="Markdown headings">
+                <ListView x:Name="MarkdownOutlineList"
+                          SelectionMode="Single"
+                          IsItemClickEnabled="True"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          AutomationProperties.Name="Markdown heading navigation">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Title}"
+                                       Margin="{Binding Margin}"
+                                       FontSize="{Binding FontSize}"
+                                       FontWeight="{Binding FontWeight}"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Border>
             <ScrollViewer x:Name="TextScrollViewer"
                           x:Uid="TextScrollViewer"
                           Visibility="Collapsed"
@@ -563,7 +632,7 @@
             <Border x:Name="ImageFilmstrip"
                     x:Uid="ImageFilmstrip"
                     Visibility="Collapsed"
-                    Height="70"
+                    Height="76"
                     HorizontalAlignment="Stretch"
                     VerticalAlignment="Bottom"
                     Margin="14,0,260,78"
@@ -588,7 +657,7 @@
                     </Button>
                     <ListView x:Name="ImageFilmstripList"
                               Grid.Column="1"
-                              Height="58"
+                              Height="64"
                               Padding="0"
                               SelectionMode="Single"
                               IsItemClickEnabled="True"
@@ -603,16 +672,17 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Border Width="62"
-                                        Height="48"
-                                        Margin="3"
+                                <Border Width="70"
+                                        Height="54"
+                                        Margin="4"
                                         CornerRadius="6"
                                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
                                         BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                         BorderThickness="1"
                                         ToolTipService.ToolTip="{Binding Name}">
                                     <Image Source="{Binding Thumbnail, Mode=OneWay}"
-                                           Stretch="UniformToFill" />
+                                           Margin="3"
+                                           Stretch="Uniform" />
                                 </Border>
                             </DataTemplate>
                         </ListView.ItemTemplate>

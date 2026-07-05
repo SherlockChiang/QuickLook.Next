@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Foundation;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
@@ -39,12 +40,12 @@ internal sealed class AnimatedImagePreviewPresenter
 
     public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
     {
-        ResetView();
         _sourceWidth = Math.Max(1, ready.PreferredWidth);
         _sourceHeight = Math.Max(1, ready.PreferredHeight);
         _image.Width = _sourceWidth;
         _image.Height = _sourceHeight;
         _image.Source = new BitmapImage(new Uri(path));
+        ResetView();
 
         double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
         double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
@@ -69,7 +70,8 @@ internal sealed class AnimatedImagePreviewPresenter
 
         double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
         double availableHeight = Math.Max(1, _previewRoot.ActualHeight);
-        double fitScale = Math.Min(availableWidth / _sourceWidth, availableHeight / _sourceHeight);
+        _previewRoot.Clip = new RectangleGeometry { Rect = new Rect(0, 0, availableWidth, availableHeight) };
+        double fitScale = Math.Min(1.0, Math.Min(availableWidth / _sourceWidth, availableHeight / _sourceHeight));
         double scale = fitScale * _zoom;
         double scaledWidth = _sourceWidth * scale;
         double scaledHeight = _sourceHeight * scale;
@@ -79,8 +81,10 @@ internal sealed class AnimatedImagePreviewPresenter
         _panX = Math.Clamp(_panX, -maxPanX, maxPanX);
         _panY = Math.Clamp(_panY, -maxPanY, maxPanY);
 
-        _transform.ScaleX = scale;
-        _transform.ScaleY = scale;
+        _image.Width = scaledWidth;
+        _image.Height = scaledHeight;
+        _transform.ScaleX = 1;
+        _transform.ScaleY = 1;
         _transform.TranslateX = Math.Round((availableWidth - scaledWidth) / 2 + _panX);
         _transform.TranslateY = Math.Round((availableHeight - scaledHeight) / 2 + _panY);
         UpdateZoomLabel();

@@ -13,12 +13,17 @@ namespace QuickLook.Next.App;
 internal sealed class PdfPreviewPresenter
 {
     private const double PageTargetWidth = 860;
+    private const double PageSpacing = 16;
     private const int OffscreenSurfaceCachePages = 5;
 
     private static readonly SolidColorBrush PageBackground = new(Microsoft.UI.Colors.White);
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
+    private readonly Border _pagerBar;
+    private readonly Button _previousButton;
+    private readonly Button _nextButton;
+    private readonly TextBlock _pageIndicator;
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<Compositor?> _compositorProvider;
     private readonly Func<RasterHostSupervisor?> _supervisorProvider;
@@ -30,19 +35,29 @@ internal sealed class PdfPreviewPresenter
     private string? _requestId;
     private double _scale = 1.0;
     private long _touchTick;
+    private int _currentPageIndex;
 
     public PdfPreviewPresenter(
         ScrollViewer scrollViewer,
         StackPanel pagesPanel,
+        Border pagerBar,
+        Button previousButton,
+        Button nextButton,
+        TextBlock pageIndicator,
         DispatcherQueue dispatcherQueue,
         Func<Compositor?> compositorProvider,
         Func<RasterHostSupervisor?> supervisorProvider)
     {
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
+        _pagerBar = pagerBar;
+        _previousButton = previousButton;
+        _nextButton = nextButton;
+        _pageIndicator = pageIndicator;
         _dispatcherQueue = dispatcherQueue;
         _compositorProvider = compositorProvider;
         _supervisorProvider = supervisorProvider;
+        _pagesPanel.Spacing = PageSpacing;
         _scrollViewer.ViewChanged += (_, _) => RequestVisiblePages();
     }
 
@@ -50,6 +65,7 @@ internal sealed class PdfPreviewPresenter
     {
         Clear();
         _requestId = requestId;
+        _currentPageIndex = 0;
 
         double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
         double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
@@ -75,6 +91,9 @@ internal sealed class PdfPreviewPresenter
             _pagesPanel.Children.Add(pageHost);
         }
 
+        _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
+        _pagerBar.Visibility = pageCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+        UpdatePager();
         Task.Delay(100).ContinueWith(_ => _dispatcherQueue.TryEnqueue(RequestVisiblePages));
         return new PdfPreviewResult(
             $"pdf: {ready.Title}",
@@ -127,8 +146,11 @@ internal sealed class PdfPreviewPresenter
 
         double viewportHeight = Math.Max(1, _scrollViewer.ViewportHeight);
         double scrollOffset = _scrollViewer.VerticalOffset;
-        int firstVisible = (int)Math.Floor(scrollOffset / pageHeight);
-        int lastVisible = (int)Math.Ceiling((scrollOffset + viewportHeight) / pageHeight);
+        double pageExtent = pageHeight + PageSpacing;
+        int firstVisible = (int)Math.Floor(scrollOffset / pageExtent);
+        int lastVisible = (int)Math.Ceiling((scrollOffset + viewportHeight) / pageExtent);
+        int centered = (int)Math.Floor((scrollOffset + viewportHeight * 0.45) / pageExtent);
+        SetCurrentPage(Math.Clamp(centered, 0, pageCount - 1));
 
         int renderFirst = Math.Max(0, firstVisible - 1);
         int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
@@ -149,6 +171,12 @@ internal sealed class PdfPreviewPresenter
         TrimSurfaceCache(renderFirst, renderLast);
     }
 
+    public void GoToPreviousPage()
+        => ScrollToPage(_currentPageIndex - 1);
+
+    public void GoToNextPage()
+        => ScrollToPage(_currentPageIndex + 1);
+
     public void Clear()
     {
         foreach (Border host in _pageHosts.Values)
@@ -159,7 +187,54 @@ internal sealed class PdfPreviewPresenter
         _requestedPages.Clear();
         _pageLastTouched.Clear();
         _touchTick = 0;
+        _currentPageIndex = 0;
         _requestId = null;
+        _pagerBar.Visibility = Visibility.Collapsed;
+        UpdatePager();
+    }
+
+    private void ScrollToPage(int pageIndex)
+    {
+        if (_pageHosts.Count == 0)
+            return;
+
+        pageIndex = Math.Clamp(pageIndex, 0, _pageHosts.Count - 1);
+        double pageHeight = _pageHosts.TryGetValue(0, out Border? firstPage)
+            ? Math.Max(1, firstPage.ActualHeight > 0 ? firstPage.ActualHeight : firstPage.Height)
+            : 1;
+        double targetOffset = pageIndex * (pageHeight + PageSpacing);
+        SetCurrentPage(pageIndex);
+        _scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
+        RequestVisiblePages();
+    }
+
+    private void SetCurrentPage(int pageIndex)
+    {
+        if (_pageHosts.Count == 0)
+        {
+            _currentPageIndex = 0;
+            UpdatePager();
+            return;
+        }
+
+        pageIndex = Math.Clamp(pageIndex, 0, _pageHosts.Count - 1);
+        if (_currentPageIndex == pageIndex)
+        {
+            UpdatePager();
+            return;
+        }
+
+        _currentPageIndex = pageIndex;
+        UpdatePager();
+    }
+
+    private void UpdatePager()
+    {
+        int pageCount = _pageHosts.Count;
+        int displayPage = pageCount == 0 ? 0 : _currentPageIndex + 1;
+        _pageIndicator.Text = pageCount == 0 ? "0 / 0" : $"{displayPage:N0} / {pageCount:N0}";
+        _previousButton.IsEnabled = pageCount > 1 && _currentPageIndex > 0;
+        _nextButton.IsEnabled = pageCount > 1 && _currentPageIndex < pageCount - 1;
     }
 
     private void TouchPage(int pageIndex)
