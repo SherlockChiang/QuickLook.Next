@@ -1197,11 +1197,18 @@ public sealed partial class MainWindow : Window
                 return;
 
             string[] siblings = await Task.Run(() =>
-                Directory.EnumerateFiles(folder)
-                    .Where(IsImagePath)
-                    .OrderBy(p => Path.GetFileName(p), StringComparer.CurrentCultureIgnoreCase)
+            {
+                var listing = _native.TryPreviewFolderListing(folder);
+                if (listing == null)
+                    return Array.Empty<string>();
+
+                return listing.Items
+                    .Where(i => !i.IsFolder && IsImagePath(i.Path))
+                    .OrderBy(i => Path.GetFileName(i.Path), StringComparer.CurrentCultureIgnoreCase)
+                    .Select(i => i.NativePath ?? i.Path)
                     .Take(600)
-                    .ToArray(), token);
+                    .ToArray();
+            }, token);
             token.ThrowIfCancellationRequested();
 
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))

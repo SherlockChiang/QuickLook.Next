@@ -118,6 +118,8 @@ $apiRules = @(
         Pattern = '(?<![A-Za-z0-9_])(?:System\.IO\.)?File\.OpenRead'
         Allowed = @(
             "src/QuickLook.Next.App/MainWindow.xaml.cs",
+            "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs",
+            "src/QuickLook.Next.RasterHost/SystemImageDecoder.cs",
             "plugins/QuickLook.Next.Plugin.Text/TextProvider.cs",
             "plugins/QuickLook.Next.Plugin.Image/ImageProvider.cs"
         )
