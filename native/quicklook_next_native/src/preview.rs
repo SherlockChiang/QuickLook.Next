@@ -4,7 +4,9 @@
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
 use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -190,6 +192,10 @@ const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
 const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
+const MAX_EBOOK_XML_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_EBOOK_CHAPTER_BYTES: u64 = 768 * 1024;
+const MAX_EBOOK_CHAPTERS: usize = 10;
+const MAX_EBOOK_TEXT_CHARS: usize = 140 * 1024;
 
 fn file_size_modified(path: &str) -> (i64, i64) {
     let meta = fs::metadata(path).ok();
@@ -3092,9 +3098,592 @@ fn subsystem_name(subsystem: u16) -> &'static str {
     }
 }
 
+// ── Ebook preview ───────────────────────────────────────────────────────────
+
+pub fn render_ebook(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".epub") {
+        return render_epub(path);
+    }
+    if lower.ends_with(".fb2") {
+        return render_fb2(path);
+    }
+    render_binary_ebook_info(path)
+}
+
+#[derive(Default)]
+struct EpubOpf {
+    title: String,
+    creator: String,
+    language: String,
+    publisher: String,
+    identifier: String,
+    date: String,
+    description: String,
+    manifest: BTreeMap<String, EpubManifestItem>,
+    spine: Vec<String>,
+}
+
+#[derive(Clone)]
+struct EpubManifestItem {
+    href: String,
+    media_type: String,
+}
+
+fn render_epub(path: &str) -> String {
+    let filename = file_name(path);
+    let mut zip = match open_zip(path) {
+        Some(zip) => zip,
+        None => return String::new(),
+    };
+
+    let container = read_zip_text(
+        &mut zip,
+        "META-INF/container.xml",
+        MAX_EBOOK_XML_BYTES,
+    );
+    let rootfile = container
+        .as_deref()
+        .and_then(parse_epub_rootfile)
+        .or_else(|| find_epub_opf_path(&mut zip))
+        .unwrap_or_else(|| "content.opf".to_string());
+
+    let Some(opf_xml) = read_zip_text(&mut zip, &rootfile, MAX_EBOOK_XML_BYTES) else {
+        return render_archive(path);
+    };
+    let opf = parse_epub_opf(&opf_xml);
+    let title = first_non_empty_owned([opf.title.as_str(), filename]).to_string();
+    let base_dir = rootfile
+        .rsplit_once('/')
+        .map(|(dir, _)| format!("{dir}/"))
+        .unwrap_or_default();
+
+    let mut markdown = String::new();
+    markdown.push_str("# ");
+    markdown.push_str(&markdown_escape_line(&title));
+    markdown.push_str("\n\n");
+    append_metadata_line(&mut markdown, "Author", &opf.creator);
+    append_metadata_line(&mut markdown, "Language", &opf.language);
+    append_metadata_line(&mut markdown, "Publisher", &opf.publisher);
+    append_metadata_line(&mut markdown, "Identifier", &opf.identifier);
+    append_metadata_line(&mut markdown, "Date", &opf.date);
+    if !opf.description.trim().is_empty() {
+        markdown.push_str("\n> ");
+        markdown.push_str(&collapse_ws(&opf.description));
+        markdown.push('\n');
+    }
+
+    if !opf.spine.is_empty() {
+        markdown.push_str("\n## Contents\n\n");
+        for idref in opf.spine.iter().take(40) {
+            if let Some(item) = opf.manifest.get(idref) {
+                markdown.push_str("- ");
+                markdown.push_str(&markdown_escape_line(&ebook_item_label(&item.href)));
+                markdown.push('\n');
+            }
+        }
+    }
+
+    let mut extracted = 0usize;
+    for idref in &opf.spine {
+        if extracted >= MAX_EBOOK_CHAPTERS || markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
+            break;
+        }
+        let Some(item) = opf.manifest.get(idref) else {
+            continue;
+        };
+        if !is_epub_document_item(item) {
+            continue;
+        }
+        let chapter_path = normalize_zip_target(&base_dir, &item.href);
+        let Some(chapter_xml) = read_zip_text(&mut zip, &chapter_path, MAX_EBOOK_CHAPTER_BYTES) else {
+            continue;
+        };
+        let chapter = extract_xhtml_markdown(&chapter_xml, &ebook_item_label(&item.href));
+        if chapter.trim().is_empty() {
+            continue;
+        }
+        markdown.push_str("\n\n");
+        push_markdown_limited(&mut markdown, &chapter, MAX_EBOOK_TEXT_CHARS);
+        extracted += 1;
+    }
+
+    if extracted == 0 {
+        markdown.push_str("\n\n_No readable spine chapters were found. The archive listing is still available by opening the EPUB as a ZIP-compatible file._\n");
+    }
+
+    ebook_markdown_json("epub", &title, markdown)
+}
+
+fn parse_epub_rootfile(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut first = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                if local_xml_name(e.name().as_ref()) != "rootfile" {
+                    continue;
+                }
+                let full_path = attr_value(&e, "full-path")?;
+                if first.is_none() {
+                    first = Some(full_path.clone());
+                }
+                let media_type = attr_value(&e, "media-type").unwrap_or_default();
+                if media_type.contains("oebps-package") || full_path.ends_with(".opf") {
+                    return Some(full_path);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    first
+}
+
+fn find_epub_opf_path(zip: &mut ZipArchive<fs::File>) -> Option<String> {
+    for i in 0..zip.len().min(512) {
+        let entry = zip.by_index_raw(i).ok()?;
+        let name = entry.name().replace('\\', "/");
+        if name.to_ascii_lowercase().ends_with(".opf") {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn parse_epub_opf(xml: &str) -> EpubOpf {
+    let mut reader = Reader::from_str(xml);
+    let mut opf = EpubOpf::default();
+    let mut in_metadata = false;
+    let mut current_meta = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                match name.as_str() {
+                    "metadata" => in_metadata = true,
+                    "item" => add_epub_manifest_item(&mut opf, &e),
+                    "itemref" => {
+                        if let Some(idref) = attr_value(&e, "idref") {
+                            opf.spine.push(idref);
+                        }
+                    }
+                    _ if in_metadata => current_meta = name,
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                match name.as_str() {
+                    "item" => add_epub_manifest_item(&mut opf, &e),
+                    "itemref" => {
+                        if let Some(idref) = attr_value(&e, "idref") {
+                            opf.spine.push(idref);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) if in_metadata && !current_meta.is_empty() => {
+                set_epub_metadata(&mut opf, &current_meta, &xml_unescape_bytes(e.as_ref()));
+            }
+            Ok(Event::CData(e)) if in_metadata && !current_meta.is_empty() => {
+                set_epub_metadata(&mut opf, &current_meta, &String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::End(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                if name == "metadata" {
+                    in_metadata = false;
+                }
+                if name == current_meta {
+                    current_meta.clear();
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    opf
+}
+
+fn add_epub_manifest_item(opf: &mut EpubOpf, e: &BytesStart<'_>) {
+    let Some(id) = attr_value(e, "id") else {
+        return;
+    };
+    let Some(href) = attr_value(e, "href") else {
+        return;
+    };
+    let media_type = attr_value(e, "media-type").unwrap_or_default();
+    opf.manifest.insert(id, EpubManifestItem { href, media_type });
+}
+
+fn set_epub_metadata(opf: &mut EpubOpf, name: &str, value: &str) {
+    let value = collapse_ws(value);
+    if value.is_empty() {
+        return;
+    }
+    match name {
+        "title" if opf.title.is_empty() => opf.title = value,
+        "creator" if opf.creator.is_empty() => opf.creator = value,
+        "language" if opf.language.is_empty() => opf.language = value,
+        "publisher" if opf.publisher.is_empty() => opf.publisher = value,
+        "identifier" if opf.identifier.is_empty() => opf.identifier = value,
+        "date" if opf.date.is_empty() => opf.date = value,
+        "description" if opf.description.is_empty() => opf.description = value,
+        _ => {}
+    }
+}
+
+fn is_epub_document_item(item: &EpubManifestItem) -> bool {
+    let href = item.href.to_ascii_lowercase();
+    item.media_type.contains("html")
+        || href.ends_with(".xhtml")
+        || href.ends_with(".html")
+        || href.ends_with(".htm")
+}
+
+fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
+    let mut reader = Reader::from_str(xml);
+    let mut out = String::new();
+    let mut in_body = false;
+    let mut ignored_depth = 0usize;
+    let mut list_depth = 0usize;
+    let mut current_block = String::new();
+    let mut heading_level = 0usize;
+    let mut saw_heading = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                if name == "body" {
+                    in_body = true;
+                    continue;
+                }
+                if !in_body {
+                    continue;
+                }
+                if matches!(name.as_str(), "script" | "style" | "svg" | "head") {
+                    ignored_depth += 1;
+                    continue;
+                }
+                if ignored_depth > 0 {
+                    continue;
+                }
+                match name.as_str() {
+                    "h1" => {
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        heading_level = 2;
+                    }
+                    "h2" => {
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        heading_level = 3;
+                    }
+                    "h3" | "h4" | "h5" | "h6" => {
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        heading_level = 4;
+                    }
+                    "p" | "div" | "section" | "blockquote" => {
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                    }
+                    "br" => current_block.push('\n'),
+                    "ul" | "ol" => list_depth += 1,
+                    "li" => {
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                        current_block.push_str("- ");
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if !in_body || ignored_depth > 0 {
+                    continue;
+                }
+                let name = local_xml_name(e.name().as_ref());
+                if name == "br" {
+                    current_block.push('\n');
+                }
+            }
+            Ok(Event::Text(e)) if in_body && ignored_depth == 0 => {
+                append_text_word(&mut current_block, &xml_unescape_bytes(e.as_ref()));
+            }
+            Ok(Event::CData(e)) if in_body && ignored_depth == 0 => {
+                append_text_word(&mut current_block, &String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::End(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                if name == "body" {
+                    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                    break;
+                }
+                if ignored_depth > 0 {
+                    if matches!(name.as_str(), "script" | "style" | "svg" | "head") {
+                        ignored_depth = ignored_depth.saturating_sub(1);
+                    }
+                    continue;
+                }
+                match name.as_str() {
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                        flush_ebook_block(
+                            &mut out,
+                            &mut current_block,
+                            heading_level,
+                            &mut saw_heading,
+                        );
+                        heading_level = 0;
+                    }
+                    "p" | "div" | "section" | "blockquote" | "li" => {
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                    }
+                    "ul" | "ol" => list_depth = list_depth.saturating_sub(1),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        if out.chars().count() > MAX_EBOOK_TEXT_CHARS {
+            break;
+        }
+        let _ = list_depth;
+    }
+
+    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+    if !saw_heading && !out.trim().is_empty() {
+        format!("## {}\n\n{}", markdown_escape_line(fallback_title), out.trim())
+    } else {
+        out.trim().to_string()
+    }
+}
+
+fn flush_ebook_block(
+    out: &mut String,
+    current: &mut String,
+    heading_level: usize,
+    saw_heading: &mut bool,
+) {
+    let text = collapse_ws(current);
+    current.clear();
+    if text.is_empty() {
+        return;
+    }
+    if !out.ends_with("\n\n") && !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    if heading_level > 0 {
+        *saw_heading = true;
+        out.push_str(&"#".repeat(heading_level));
+        out.push(' ');
+        out.push_str(&markdown_escape_line(&text));
+    } else {
+        out.push_str(&text);
+    }
+    out.push_str("\n\n");
+}
+
+fn render_fb2(path: &str) -> String {
+    let filename = file_name(path);
+    let Some(bytes) = read_file_prefix(path, MAX_EBOOK_XML_BYTES as usize) else {
+        return String::new();
+    };
+    let xml = String::from_utf8_lossy(&bytes);
+    let mut reader = Reader::from_str(&xml);
+    let mut title = String::new();
+    let mut lang = String::new();
+    let mut author_parts = Vec::<String>::new();
+    let mut current_meta = String::new();
+    let mut in_title_info = false;
+    let mut in_body = false;
+    let mut current_block = String::new();
+    let mut markdown = String::new();
+    let mut saw_body_heading = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                match name.as_str() {
+                    "title-info" => in_title_info = true,
+                    "body" => in_body = true,
+                    "section" if in_body => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
+                    }
+                    "title" if in_body => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading);
+                        current_meta = "body-title".to_string();
+                    }
+                    "p" if in_body => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
+                    }
+                    _ if in_title_info => current_meta = name,
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) => {
+                let value = xml_unescape_bytes(e.as_ref());
+                if in_body {
+                    append_text_word(&mut current_block, &value);
+                } else if in_title_info && !current_meta.is_empty() {
+                    match current_meta.as_str() {
+                        "book-title" if title.is_empty() => title = collapse_ws(&value),
+                        "lang" if lang.is_empty() => lang = collapse_ws(&value),
+                        "first-name" | "middle-name" | "last-name" | "nickname" => {
+                            let part = collapse_ws(&value);
+                            if !part.is_empty() {
+                                author_parts.push(part);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::CData(e)) if in_body => {
+                append_text_word(&mut current_block, &String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::End(e)) => {
+                let name = local_xml_name(e.name().as_ref());
+                match name.as_str() {
+                    "title-info" => in_title_info = false,
+                    "body" => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading);
+                        in_body = false;
+                    }
+                    "title" if current_meta == "body-title" => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 2, &mut saw_body_heading);
+                        current_meta.clear();
+                    }
+                    "p" if in_body => {
+                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
+                    }
+                    _ if name == current_meta => current_meta.clear(),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        if markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
+            break;
+        }
+    }
+
+    let title = first_non_empty_owned([title.as_str(), filename]).to_string();
+    let author = author_parts.join(" ");
+    let mut out = String::new();
+    out.push_str("# ");
+    out.push_str(&markdown_escape_line(&title));
+    out.push_str("\n\n");
+    append_metadata_line(&mut out, "Author", &author);
+    append_metadata_line(&mut out, "Language", &lang);
+    out.push('\n');
+    push_markdown_limited(&mut out, markdown.trim(), MAX_EBOOK_TEXT_CHARS);
+    ebook_markdown_json("fb2", &title, out)
+}
+
+fn render_binary_ebook_info(path: &str) -> String {
+    let filename = file_name(path);
+    let (size, modified_unix) = file_size_modified(path);
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    let mut text = base_info_text(filename, "ebook", size, modified_unix);
+    text.push_str(&format!("\nFormat: {ext} ebook"));
+    text.push_str("\nContent preview: metadata only for this binary ebook container");
+    to_json(&PreviewReadyDto {
+        kind: "ebook".to_string(),
+        title: format!("{filename} - ebook"),
+        format: Some("plain".to_string()),
+        language: Some("text".to_string()),
+        text: Some(text),
+        office_layout: None,
+        listing: None,
+        table: None,
+        markdown: None,
+    })
+}
+
+fn ebook_markdown_json(format: &str, title: &str, markdown: String) -> String {
+    to_json(&PreviewReadyDto {
+        kind: "ebook".to_string(),
+        title: format!("{title} - {format}"),
+        format: Some("markdown".to_string()),
+        language: Some("markdown".to_string()),
+        text: Some(markdown),
+        office_layout: None,
+        listing: None,
+        table: None,
+        markdown: None,
+    })
+}
+
+fn append_metadata_line(markdown: &mut String, label: &str, value: &str) {
+    let value = collapse_ws(value);
+    if !value.is_empty() {
+        markdown.push_str(&format!("**{label}:** {value}\n\n"));
+    }
+}
+
+fn append_text_word(out: &mut String, value: &str) {
+    let value = collapse_ws(value);
+    if value.is_empty() {
+        return;
+    }
+    if !out.is_empty() && !out.ends_with([' ', '\n']) {
+        out.push(' ');
+    }
+    out.push_str(&value);
+}
+
+fn collapse_ws(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn markdown_escape_line(value: &str) -> String {
+    value.replace('\n', " ").trim().to_string()
+}
+
+fn ebook_item_label(href: &str) -> String {
+    let filename = href.rsplit('/').next().unwrap_or(href);
+    let stem = filename
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(filename);
+    collapse_ws(&stem.replace(['_', '-'], " "))
+}
+
+fn push_markdown_limited(out: &mut String, value: &str, max_chars: usize) {
+    let current = out.chars().count();
+    if current >= max_chars {
+        return;
+    }
+    let remaining = max_chars - current;
+    let value_chars = value.chars().count();
+    if value_chars <= remaining {
+        out.push_str(value);
+        return;
+    }
+    out.extend(value.chars().take(remaining));
+    out.push_str("\n\n_Preview truncated._");
+}
+
+fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
+    values
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or("")
+}
+
 // ── Archive preview ──────────────────────────────────────────────────────────
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
+const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
 
 const ZIP_EXTS: &[&str] = &[
     ".zip",
@@ -3106,7 +3695,6 @@ const ZIP_EXTS: &[&str] = &[
     ".msixbundle",
     ".appx",
     ".appxbundle",
-    ".epub",
     ".nupkg",
     ".vsix",
     ".whl",
@@ -3149,6 +3737,93 @@ pub fn render_archive(path: &str) -> String {
         return render_gzip_member(path);
     }
     render_zip_archive(path)
+}
+
+pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Option<String> {
+    let lower = archive_path.to_ascii_lowercase();
+    if TAR_EXTS.iter().any(|e| lower.ends_with(e))
+        || TAR_GZ_EXTS.iter().any(|e| lower.ends_with(e))
+        || (GZ_EXTS.iter().any(|e| lower.ends_with(e)) && !lower.ends_with(".tar.gz"))
+    {
+        return None;
+    }
+
+    let normalized = normalize_archive_entry_path(entry_path)?;
+    let file = fs::File::open(archive_path).ok()?;
+    let mut zip = ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name(&normalized).ok()?;
+    if entry.is_dir() || entry.size() > MAX_ARCHIVE_EXTRACT_BYTES {
+        return None;
+    }
+
+    let target = archive_extract_target_path(archive_path, &normalized)?;
+    if target.exists() {
+        if let Ok(meta) = fs::metadata(&target) {
+            if meta.len() == entry.size() {
+                return target.to_str().map(|s| s.to_string());
+            }
+        }
+    }
+
+    let bytes = read_limited_to_end(&mut entry, MAX_ARCHIVE_EXTRACT_BYTES)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+    fs::write(&target, bytes).ok()?;
+    target.to_str().map(|s| s.to_string())
+}
+
+fn normalize_archive_entry_path(path: &str) -> Option<String> {
+    let path = path.replace('\\', "/").trim_start_matches('/').to_string();
+    if path.is_empty() || path.ends_with('/') {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        if part.is_empty() || part == "." || part == ".." || part.contains(':') {
+            return None;
+        }
+        parts.push(part);
+    }
+    Some(parts.join("/"))
+}
+
+fn archive_extract_target_path(archive_path: &str, entry_path: &str) -> Option<std::path::PathBuf> {
+    let mut hasher = DefaultHasher::new();
+    archive_path.hash(&mut hasher);
+    if let Ok(meta) = fs::metadata(archive_path) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+                duration.as_secs().hash(&mut hasher);
+            }
+        }
+    }
+    let archive_hash = hasher.finish();
+    let mut path = std::env::temp_dir();
+    path.push("QuickLookNext");
+    path.push("archive-preview");
+    path.push(format!("{archive_hash:016x}"));
+    for part in entry_path.split('/') {
+        path.push(sanitize_temp_path_component(part));
+    }
+    Some(path)
+}
+
+fn sanitize_temp_path_component(part: &str) -> String {
+    let sanitized = part
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0' => '_',
+            _ if ch.is_control() => '_',
+            _ => ch,
+        })
+        .collect::<String>();
+    if sanitized.trim().is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn is_package_path(lower_path: &str) -> bool {
@@ -3963,6 +4638,7 @@ fn render_zip_archive(path: &str) -> String {
 
     archive_listing_json(
         filename,
+        path,
         "archive",
         entries,
         file_count,
@@ -4072,6 +4748,7 @@ fn render_tar_entries<R: Read>(path: &str, kind: &str, reader: R) -> String {
 
     archive_listing_json(
         filename,
+        path,
         kind,
         entries,
         file_count,
@@ -4113,6 +4790,7 @@ fn render_gzip_member(path: &str) -> String {
     );
     archive_listing_json(
         filename,
+        path,
         "archive",
         entries,
         1,
@@ -4135,6 +4813,7 @@ fn gzip_uncompressed_size(path: &str) -> Option<i64> {
 
 fn archive_listing_json(
     filename: &str,
+    root_path: &str,
     kind: &str,
     entries: BTreeMap<String, (String, String, bool, i64, i64, i64)>,
     file_count: u64,
@@ -4191,7 +4870,7 @@ fn archive_listing_json(
         office_layout: None,
         listing: Some(PreviewListingDto {
             root_name: filename.to_string(),
-            root_path: String::new(),
+            root_path: root_path.to_string(),
             listing_kind: "archive".to_string(),
             summary,
             is_partial: partial,
@@ -4275,7 +4954,10 @@ fn type_for_ext(name: &str) -> &'static str {
         "appxbundle" => "APPX Bundle",
         "torrent" => "Torrent File",
         "img" => "Disk Image",
-        "epub" => "EPUB File",
+        "epub" => "EPUB Book",
+        "fb2" => "FB2 Book",
+        "mobi" => "MOBI Book",
+        "azw" | "azw3" => "Kindle Book",
         "nupkg" => "NuGet Package",
         "vsix" => "VSIX Package",
         "whl" => "Python Wheel",
@@ -4625,6 +5307,57 @@ mod tests {
         assert_eq!(blocks[0].kind, "table");
         assert_eq!(blocks[0].table_headers, vec!["A".to_string(), "B".to_string()]);
         assert_eq!(blocks[0].table_rows[0], vec!["1".to_string(), "2".to_string()]);
+    }
+
+    #[test]
+    fn epub_container_and_opf_metadata_parse() {
+        let container = r#"
+            <container>
+              <rootfiles>
+                <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml" />
+              </rootfiles>
+            </container>"#;
+        assert_eq!(
+            parse_epub_rootfile(container).as_deref(),
+            Some("OEBPS/content.opf")
+        );
+
+        let opf = parse_epub_opf(
+            r#"<package>
+                <metadata>
+                  <dc:title>示例书</dc:title>
+                  <dc:creator>作者</dc:creator>
+                  <dc:language>zh-CN</dc:language>
+                </metadata>
+                <manifest>
+                  <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml" />
+                </manifest>
+                <spine><itemref idref="c1" /></spine>
+              </package>"#,
+        );
+
+        assert_eq!(opf.title, "示例书");
+        assert_eq!(opf.creator, "作者");
+        assert_eq!(opf.language, "zh-CN");
+        assert_eq!(opf.spine, vec!["c1".to_string()]);
+        assert!(opf.manifest.contains_key("c1"));
+    }
+
+    #[test]
+    fn xhtml_extractor_emits_markdown_headings() {
+        let markdown = extract_xhtml_markdown(
+            r#"<html><body><h1>第一章</h1><p>你好，&amp; QuickLook。</p><ul><li>项目</li></ul></body></html>"#,
+            "chapter",
+        );
+
+        assert!(markdown.contains("## 第一章"));
+        assert!(markdown.contains("你好，& QuickLook。"));
+        assert!(markdown.contains("- 项目"));
+    }
+
+    #[test]
+    fn ebook_label_normalizes_file_names() {
+        assert_eq!(ebook_item_label("Text/chapter-01_intro.xhtml"), "chapter 01 intro");
     }
 
     #[test]

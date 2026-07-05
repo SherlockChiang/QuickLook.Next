@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
@@ -49,8 +49,6 @@ static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static SPACE_HELD: AtomicBool = AtomicBool::new(false);
 static PREVIEW_VISIBLE: AtomicBool = AtomicBool::new(false);
-static LAST_EXPLORER_HWND: AtomicIsize = AtomicIsize::new(0);
-
 const WM_QL_PREVIEW: u32 = WM_APP + 1;
 const WM_QL_CLOSE: u32 = WM_APP + 3;
 const WM_QL_ZOOM_IN: u32 = WM_APP + 4;
@@ -124,8 +122,8 @@ pub extern "C" fn ql_set_callback(cb: Option<Callback>) {
     }
 }
 
-/// Let the App tell native when the preview window is open. While visible, Space closes the preview
-/// and selection reads may fall back to the last Explorer window because QuickLook itself can be foreground.
+/// Let the App tell native when the preview window is open. While visible, Space closes the preview.
+/// Selection changes are still accepted only when Explorer is the foreground window.
 #[no_mangle]
 pub extern "C" fn ql_set_preview_visible(visible: i32) {
     PREVIEW_VISIBLE.store(visible != 0, Ordering::SeqCst);
@@ -317,11 +315,35 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code == HC_ACTION as i32
         && PREVIEW_VISIBLE.load(Ordering::SeqCst)
         && wparam.0 as u32 == WM_LBUTTONUP
+        && mouse_up_target_is_explorer(lparam)
     {
         let tid = HOOK_TID.load(Ordering::SeqCst);
         let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+unsafe fn mouse_up_target_is_explorer(lparam: LPARAM) -> bool {
+    if lparam.0 == 0 {
+        return false;
+    }
+    let mouse = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+    let hwnd = WindowFromPoint(mouse.pt);
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let root = GetAncestor(hwnd, GA_ROOT);
+    if root.0.is_null() {
+        return false;
+    }
+
+    let mut class_name = [0u16; 128];
+    let len = GetClassNameW(root, &mut class_name);
+    if len <= 0 {
+        return false;
+    }
+    let name = String::from_utf16_lossy(&class_name[..len as usize]);
+    matches!(name.as_str(), "CabinetWClass" | "ExploreWClass")
 }
 
 /// Read the current Explorer selection on a fresh STA thread (avoids apartment conflicts with the
@@ -350,15 +372,13 @@ fn do_selection_and_emit(tag: &str) {
 unsafe fn get_explorer_selection() -> Result<Vec<String>> {
     let foreground = GetForegroundWindow();
     let preview_visible = PREVIEW_VISIBLE.load(Ordering::SeqCst);
-    let last_explorer = LAST_EXPLORER_HWND.load(Ordering::SeqCst);
     let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
     let count = shell_windows.Count()?;
     emit(&format!(
-        "DBG windows={count} fg=0x{:X} last=0x{:X} visible={preview_visible}",
-        foreground.0 as isize, last_explorer
+        "DBG windows={count} fg=0x{:X} visible={preview_visible}",
+        foreground.0 as isize
     ));
 
-    let mut fallback_paths: Option<(isize, Vec<String>)> = None;
     for i in 0..count {
         let idx = VARIANT::from(i);
         let disp = match shell_windows.Item(&idx) {
@@ -371,7 +391,6 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
         };
         let hwnd = HWND(wb.HWND().unwrap_or(SHANDLE_PTR(0)).0 as *mut _);
         if hwnd == foreground {
-            LAST_EXPLORER_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
             let paths = read_window_selection(&wb).unwrap_or_default();
             emit(&format!(
                 "DBG win=0x{:X} sel={} (foreground)",
@@ -380,17 +399,6 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
             ));
             return Ok(paths);
         }
-        if preview_visible && last_explorer != 0 && hwnd.0 as isize == last_explorer {
-            let paths = read_window_selection(&wb).unwrap_or_default();
-            fallback_paths = Some((hwnd.0 as isize, paths));
-        }
-    }
-    if let Some((hwnd, paths)) = fallback_paths {
-        emit(&format!(
-            "DBG win=0x{hwnd:X} sel={} (last explorer)",
-            paths.len()
-        ));
-        return Ok(paths);
     }
     emit("DBG foreground is not Explorer — ignoring space");
     Ok(Vec::new())
@@ -545,8 +553,9 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
         ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid",
     ];
     const ARCHIVE_EXTS: &[&str] = &[
-        ".zip", ".jar", ".epub", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz",
+        ".zip", ".jar", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz",
     ];
+    const EBOOK_EXTS: &[&str] = &[".epub", ".fb2", ".mobi", ".azw", ".azw3"];
     const IMAGE_EXTS: &[&str] = &[
         ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
         ".heic", ".heif", ".avif", ".jxl",
@@ -574,6 +583,9 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     const ELF_EXTS: &[&str] = &[".elf", ".so", ".o"];
     if OFFICE_EXTS.contains(&ext) {
         return "office";
+    }
+    if EBOOK_EXTS.contains(&ext) {
+        return "ebook";
     }
     if CERTIFICATE_EXTS.contains(&ext) {
         return "certificate";
@@ -1131,6 +1143,52 @@ pub extern "C" fn ql_preview_archive(
         None => return 0,
     };
     let json = preview::render_archive(path);
+    write_json_out(&json, out_buf, out_cap)
+}
+
+/// Extract a previewable archive entry into a bounded temp cache. Returns UTF-8 path length, 0 on failure.
+#[no_mangle]
+pub extern "C" fn ql_extract_archive_entry(
+    archive_path_utf8: *const u8,
+    archive_path_len: usize,
+    entry_path_utf8: *const u8,
+    entry_path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+        return 0;
+    }
+    let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path) else {
+        return 0;
+    };
+    write_json_out(&path, out_buf, out_cap)
+}
+
+/// Render an ebook preview. Returns JSON length, 0 on failure.
+#[no_mangle]
+pub extern "C" fn ql_preview_ebook(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+        return 0;
+    }
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let json = preview::render_ebook(path);
     write_json_out(&json, out_buf, out_cap)
 }
 
