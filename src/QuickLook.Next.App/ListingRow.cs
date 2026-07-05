@@ -61,6 +61,7 @@ public sealed class ListingRow : INotifyPropertyChanged
             ".mp3" or ".wav" or ".flac" or ".aac" or ".m4a" or ".ogg" => "\uE8D6",
             ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" => "\uF012",
             ".pdf" => "\uEA90",
+            ".epub" or ".fb2" or ".mobi" or ".azw" or ".azw3" => "\uE8A5",
             ".doc" or ".docx" or ".xls" or ".xlsx" or ".ppt" or ".pptx" or ".odt" or ".ods" or ".odp" => "\uE8A5",
             ".txt" or ".md" or ".log" or ".csv" or ".json" or ".xml" or ".yaml" or ".yml" => "\uE8A5",
             ".cs" or ".rs" or ".js" or ".ts" or ".py" or ".java" or ".cpp" or ".h" or ".ps1" or ".bat" or ".cmd" or ".sh" => "\uE943",

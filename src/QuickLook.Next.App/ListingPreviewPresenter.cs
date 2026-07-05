@@ -23,7 +23,7 @@ internal sealed class ListingPreviewPresenter
     private readonly Func<int> _getGeneration;
     private readonly Func<CancellationToken> _getCancellationToken;
     private readonly Func<int, bool> _isGenerationCurrent;
-    private readonly Action<ListingRow> _openItem;
+    private readonly Func<PreviewListing?, ListingRow, Task> _previewItem;
     private readonly Func<ListingRow, int, Task<ImageSource?>> _loadIconAsync;
 
     private PreviewListing? _currentListing;
@@ -44,7 +44,7 @@ internal sealed class ListingPreviewPresenter
         Func<int> getGeneration,
         Func<CancellationToken> getCancellationToken,
         Func<int, bool> isGenerationCurrent,
-        Action<ListingRow> openItem,
+        Func<PreviewListing?, ListingRow, Task> previewItem,
         Func<ListingRow, int, Task<ImageSource?>> loadIconAsync)
     {
         _title = title;
@@ -59,7 +59,7 @@ internal sealed class ListingPreviewPresenter
         _getGeneration = getGeneration;
         _getCancellationToken = getCancellationToken;
         _isGenerationCurrent = isGenerationCurrent;
-        _openItem = openItem;
+        _previewItem = previewItem;
         _loadIconAsync = loadIconAsync;
     }
 
@@ -103,10 +103,13 @@ internal sealed class ListingPreviewPresenter
         RenderListing();
     }
 
-    public void OnItemClick(ItemClickEventArgs e)
+    public async Task OnItemClickAsync(ItemClickEventArgs e)
     {
-        if (e.ClickedItem is ListingRow row)
-            _listView.SelectedItem = row;
+        if (e.ClickedItem is not ListingRow row)
+            return;
+
+        _listView.SelectedItem = row;
+        await PreviewOrNavigateAsync(row);
     }
 
     public async Task OnDoubleTappedAsync()
@@ -114,10 +117,7 @@ internal sealed class ListingPreviewPresenter
         if (_listView.SelectedItem is not ListingRow row)
             return;
 
-        if (row.IsFolder)
-            await NavigateIntoFolderAsync(row);
-        else
-            _openItem(row);
+        await PreviewOrNavigateAsync(row);
     }
 
     public async Task OnKeyDownAsync(Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
@@ -131,12 +131,27 @@ internal sealed class ListingPreviewPresenter
 
         if (e.Key == Windows.System.VirtualKey.Enter && _listView.SelectedItem is ListingRow row)
         {
-            if (row.IsFolder)
-                await NavigateIntoFolderAsync(row);
-            else
-                _openItem(row);
+            await PreviewOrNavigateAsync(row);
             e.Handled = true;
         }
+    }
+
+    private async Task PreviewOrNavigateAsync(ListingRow row)
+    {
+        if (!string.IsNullOrWhiteSpace(row.NativePath))
+        {
+            await _previewItem(_currentListing, row);
+            return;
+        }
+
+        if (!row.IsFolder && _currentListing is not null)
+        {
+            await _previewItem(_currentListing, row);
+            return;
+        }
+
+        if (row.IsFolder)
+            await NavigateIntoFolderAsync(row);
     }
 
     private void RenderListing()

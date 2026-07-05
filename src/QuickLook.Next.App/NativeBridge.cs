@@ -36,6 +36,16 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_archive_entry(
+        byte[] archivePathUtf8,
+        nuint archivePathLen,
+        byte[] entryPathUtf8,
+        nuint entryPathLen,
+        byte[] outBuf,
+        nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -128,6 +138,7 @@ internal sealed class NativeBridge
         NativePreviewCall? call = probe.Kind.ToLowerInvariant() switch
         {
             "text" => ql_preview_text,
+            "ebook" => ql_preview_ebook,
             "archive" => ql_preview_archive,
             "package" => ql_preview_archive,
             "office" => ql_preview_office,
@@ -167,6 +178,35 @@ internal sealed class NativeBridge
 
     public NativeRasterImage? TryExtractOfficeImage(string path)
         => CallRaster(ql_extract_office_image, path);
+
+    public string? TryExtractArchiveEntry(string archivePath, string entryPath)
+    {
+        try
+        {
+            byte[] archiveBytes = Encoding.UTF8.GetBytes(archivePath);
+            byte[] entryBytes = Encoding.UTF8.GetBytes(entryPath);
+            byte[] outBuf = ArrayPool<byte>.Shared.Rent(32 * 1024);
+            try
+            {
+                int n = ql_extract_archive_entry(
+                    archiveBytes,
+                    (nuint)archiveBytes.Length,
+                    entryBytes,
+                    (nuint)entryBytes.Length,
+                    outBuf,
+                    (nuint)outBuf.Length);
+                return n > 0 ? Encoding.UTF8.GetString(outBuf, 0, n) : null;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(outBuf);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     public NativeRasterImage? TryGetThumbnail(string path, int size)
     {
