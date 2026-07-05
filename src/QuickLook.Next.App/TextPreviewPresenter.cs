@@ -23,9 +23,10 @@ internal sealed class TextPreviewPresenter
     private readonly ScrollViewer _scrollViewer;
     private readonly Border _outlinePanel;
     private readonly ListView _outlineList;
+    private readonly ListView _textListView;
     private readonly Func<ElementTheme> _getTheme;
-    private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = new();
     private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
+    private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = [];
     private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
@@ -33,18 +34,21 @@ internal sealed class TextPreviewPresenter
     public TextPreviewPresenter(
         RichTextBlock textBlock,
         ScrollViewer scrollViewer,
+        ListView textListView,
         Border outlinePanel,
         ListView outlineList,
         Func<ElementTheme> getTheme)
     {
         _textBlock = textBlock;
         _scrollViewer = scrollViewer;
+        _textListView = textListView;
         _outlinePanel = outlinePanel;
         _outlineList = outlineList;
         _getTheme = getTheme;
         _defaultScrollMargin = scrollViewer.Margin;
         _outlineList.ItemsSource = _outlineItems;
         _outlineList.SelectionChanged += OnOutlineSelectionChanged;
+        _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
     }
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -56,7 +60,11 @@ internal sealed class TextPreviewPresenter
         _textBlock.IsTextSelectionEnabled = true;
         ClearOutline();
 
+        bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
         bool wrap = ready.TextFormat is "markdown" or "plain";
+        _scrollViewer.Visibility = isMarkdown ? Visibility.Visible : Visibility.Collapsed;
+        _textListView.Visibility = isMarkdown ? Visibility.Collapsed : Visibility.Visible;
+        
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
         _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
@@ -73,12 +81,9 @@ internal sealed class TextPreviewPresenter
         catch (Exception ex)
         {
             DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
-            _textBlock.Blocks.Clear();
-            _textBlock.FontFamily = FontFamilyFor("Cascadia Mono, Consolas");
-            _textBlock.TextWrapping = TextWrapping.NoWrap;
-            _scrollViewer.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-            ClearOutline();
-            AddCodeBlock(text);
+            _scrollViewer.Visibility = Visibility.Collapsed;
+            _textListView.Visibility = Visibility.Visible;
+            _ = RenderCodeOrPlainTextAsync(text, "text");
         }
 
         ApplyOutlineVisibility();
@@ -92,6 +97,7 @@ internal sealed class TextPreviewPresenter
     public void Clear()
     {
         _textBlock.Blocks.Clear();
+        _textListView.ItemsSource = null;
         ClearOutline();
         ApplyOutlineVisibility();
     }
@@ -200,38 +206,91 @@ internal sealed class TextPreviewPresenter
 
     private void AddMarkdownTable(PreviewMarkdownBlock block)
     {
-        string tableText = BuildMarkdownTableText(block);
-        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 4, 12);
-        p.Foreground = BrushFor(TokenKind.Default);
-        p.Inlines.Add(new Run { Text = tableText.Length == 0 ? " " : tableText });
-        _textBlock.Blocks.Add(p);
-    }
-
-    private static string BuildMarkdownTableText(PreviewMarkdownBlock block)
-    {
         int columns = Math.Max(
             block.TableHeaders.Length,
             block.TableRows.Select(row => row.Length).DefaultIfEmpty(0).Max());
-        if (columns <= 0)
-            return "";
+        if (columns <= 0) return;
 
-        var widths = new int[columns];
-        for (int i = 0; i < columns; i++)
-            widths[i] = Math.Min(32, block.TableHeaders.ElementAtOrDefault(i)?.Length ?? 0);
-        foreach (string[] row in block.TableRows.Take(120))
+        var container = new Border
         {
-            for (int i = 0; i < columns; i++)
-                widths[i] = Math.Max(widths[i], Math.Min(32, row.ElementAtOrDefault(i)?.Length ?? 0));
+            Margin = new Thickness(0, 12, 0, 12),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+            Background = new SolidColorBrush(ThemeCodeBackground()),
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+
+        var grid = new Grid();
+        for (int i = 0; i < columns; i++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        int currentRow = 0;
+        int maxRows = Math.Min(block.TableRows.Count(), 120);
+
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (int c = 0; c < columns; c++)
+        {
+            var cellBorder = new Border
+            {
+                Padding = new Thickness(12, 8, 12, 8),
+                BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+                BorderThickness = new Thickness(0, 0, c < columns - 1 ? 1 : 0, maxRows > 0 ? 1 : 0),
+                Background = new SolidColorBrush(ThemeHeaderBackground())
+            };
+            var textBlock = new TextBlock
+            {
+                Text = block.TableHeaders.ElementAtOrDefault(c) ?? "",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 400,
+                IsTextSelectionEnabled = true
+            };
+            cellBorder.Child = textBlock;
+            Grid.SetRow(cellBorder, currentRow);
+            Grid.SetColumn(cellBorder, c);
+            grid.Children.Add(cellBorder);
+        }
+        currentRow++;
+
+        foreach (var row in block.TableRows.Take(120))
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (int c = 0; c < columns; c++)
+            {
+                var cellBorder = new Border
+                {
+                    Padding = new Thickness(12, 8, 12, 8),
+                    BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+                    BorderThickness = new Thickness(0, 0, c < columns - 1 ? 1 : 0, currentRow < maxRows ? 1 : 0)
+                };
+                var textBlock = new TextBlock
+                {
+                    Text = row.ElementAtOrDefault(c) ?? "",
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = 400,
+                    IsTextSelectionEnabled = true
+                };
+                cellBorder.Child = textBlock;
+                Grid.SetRow(cellBorder, currentRow);
+                Grid.SetColumn(cellBorder, c);
+                grid.Children.Add(cellBorder);
+            }
+            currentRow++;
         }
 
-        string FormatRow(IReadOnlyList<string> cells)
-            => "| " + string.Join(" | ", Enumerable.Range(0, columns).Select(i =>
-                (cells.ElementAtOrDefault(i) ?? "").PadRight(Math.Max(3, widths[i])))) + " |";
+        var scroller = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            MaxWidth = 980
+        };
+        scroller.Content = grid;
+        container.Child = scroller;
 
-        var lines = new List<string> { FormatRow(block.TableHeaders) };
-        lines.Add("| " + string.Join(" | ", widths.Select(width => new string('-', Math.Max(3, width)))) + " |");
-        lines.AddRange(block.TableRows.Take(120).Select(FormatRow));
-        return string.Join("\n", lines);
+        var p = new Paragraph();
+        p.Inlines.Add(new InlineUIContainer { Child = container });
+        _textBlock.Blocks.Add(p);
     }
 
     private void AddOutlineItem(PreviewMarkdownBlock block, FrameworkElement anchor)
@@ -280,6 +339,45 @@ internal sealed class TextPreviewPresenter
         _textBlock.UpdateLayout();
         double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
         _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
+    }
+
+    private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (_updatingOutline || _outlineItems.Count == 0 || e.IsIntermediate)
+            return;
+
+        try
+        {
+            MarkdownOutlineItem? closest = null;
+            double closestY = double.MinValue;
+            foreach (var item in _outlineItems)
+            {
+                var point = item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
+                if (point.Y <= 24 && point.Y > closestY)
+                {
+                    closest = item;
+                    closestY = point.Y;
+                }
+            }
+
+            if (closest == null && _outlineItems.Count > 0)
+            {
+                var first = _outlineItems[0];
+                if (first.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y > 0)
+                    closest = first;
+            }
+
+            if (closest != null && _outlineList.SelectedItem != closest)
+            {
+                _updatingOutline = true;
+                _outlineList.SelectedItem = closest;
+                _outlineList.ScrollIntoView(closest);
+                _updatingOutline = false;
+            }
+        }
+        catch
+        {
+        }
     }
 
     private void AddMarkdownInlines(InlineCollection target, IReadOnlyList<PreviewMarkdownInline> inlines, string fallbackText)
@@ -473,41 +571,198 @@ internal sealed class TextPreviewPresenter
 
     private async Task AddMarkdownCodeBlockAsync(string code, string language)
     {
-        if (language is "text" or "log")
-            AddCodeBlock(code);
-        else
-            await AddHighlightedCodeAsync(code, language);
+        await AddHighlightedCodeAsync(code, language);
     }
 
     private async Task RenderCodeOrPlainTextAsync(string text, string language)
     {
-        var header = CreateParagraph(12, "Segoe UI", 0, 10);
-        header.Foreground = UiGrayBrush;
-        header.Inlines.Add(new Run { Text = language });
-        _textBlock.Blocks.Add(header);
+        var items = new ObservableCollection<TextLineItem>();
+        _textListView.ItemsSource = items;
+        
+        if (text.Length == 0) return;
 
         string code = text.TrimEnd('\r', '\n');
-        if (language is "text" or "log")
-            AddCodeBlock(code);
+        bool noHighlight = language is "text" or "log" || code.Length > MaxHighlightedChars;
+        
+        if (noHighlight)
+        {
+            var lines = code.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var tb = new TextBlock
+                {
+                    Text = lines[i].TrimEnd('\r'),
+                    FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
+                    FontSize = 13,
+                    TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
+                    Foreground = BrushFor(TokenKind.Default),
+                    IsTextSelectionEnabled = true
+                };
+                items.Add(new TextLineItem { LineNumber = i + 1, Content = tb });
+            }
+        }
         else
-            await AddHighlightedCodeAsync(code, language);
+        {
+            var spans = await Task.Run(() => SyntaxHighlighter.Highlight(code, language).ToList());
+            
+            int lineNumber = 1;
+            TextBlock currentTb = new TextBlock
+            {
+                FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
+                FontSize = 13,
+                TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
+                IsTextSelectionEnabled = true
+            };
+            
+            foreach (var (txt, kind) in spans)
+            {
+                if (txt.Length == 0) continue;
+                
+                int start = 0;
+                while (start < txt.Length)
+                {
+                    int idx = txt.IndexOf('\n', start);
+                    if (idx == -1)
+                    {
+                        string piece = txt[start..];
+                        if (piece.Length > 0 && piece.EndsWith("\r")) piece = piece[..^1];
+                        currentTb.Inlines.Add(new Run { Text = piece, Foreground = BrushFor(kind) });
+                        break;
+                    }
+                    else
+                    {
+                        string piece = txt[start..idx];
+                        if (piece.Length > 0 && piece.EndsWith("\r")) piece = piece[..^1];
+                        currentTb.Inlines.Add(new Run { Text = piece, Foreground = BrushFor(kind) });
+                        
+                        items.Add(new TextLineItem { LineNumber = lineNumber++, Content = currentTb });
+                        
+                        currentTb = new TextBlock
+                        {
+                            FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
+                            FontSize = 13,
+                            TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
+                            IsTextSelectionEnabled = true
+                        };
+                        start = idx + 1;
+                    }
+                }
+            }
+            items.Add(new TextLineItem { LineNumber = lineNumber, Content = currentTb });
+        }
     }
 
     private async Task AddHighlightedCodeAsync(string code, string language)
     {
-        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 2, 10);
+        var container = new Border
+        {
+            Margin = new Thickness(0, 12, 0, 12),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+            Background = new SolidColorBrush(ThemeCodeBackground()),
+            MaxWidth = 980,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var header = new Grid
+        {
+            Padding = new Thickness(12, 6, 8, 6),
+            Background = new SolidColorBrush(ThemeHeaderBackground()),
+            CornerRadius = new CornerRadius(8, 8, 0, 0)
+        };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var langText = new TextBlock
+        {
+            Text = language.ToUpperInvariant(),
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(ThemeTextColorSecondary()),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(langText, 0);
+        header.Children.Add(langText);
+
+        var copyBtn = new Button
+        {
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    new FontIcon { Glyph = "\uE8C8", FontSize = 12 },
+                    new TextBlock { Text = "Copy", FontSize = 11 }
+                }
+            },
+            Padding = new Thickness(8, 4, 8, 4),
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            CornerRadius = new CornerRadius(4)
+        };
+        
+        copyBtn.Click += async (s, e) =>
+        {
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(code);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            
+            var sp = (StackPanel)copyBtn.Content;
+            ((FontIcon)sp.Children[0]).Glyph = "\uE73E"; // Checkmark
+            ((TextBlock)sp.Children[1]).Text = "Copied!";
+            await Task.Delay(1500);
+            ((FontIcon)sp.Children[0]).Glyph = "\uE8C8";
+            ((TextBlock)sp.Children[1]).Text = "Copy";
+        };
+
+        Grid.SetColumn(copyBtn, 2);
+        header.Children.Add(copyBtn);
+        
+        Grid.SetRow(header, 0);
+        grid.Children.Add(header);
+
+        var bodyScroller = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Padding = new Thickness(16)
+        };
+        
+        var bodyText = new TextBlock
+        {
+            FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
+            FontSize = 13,
+            IsTextSelectionEnabled = true,
+            TextWrapping = TextWrapping.NoWrap
+        };
+        
         if (code.Length == 0)
         {
-            p.Inlines.Add(new Run { Text = " " });
+            bodyText.Inlines.Add(new Run { Text = " " });
         }
-        else if (code.Length > MaxHighlightedChars)
+        else if (code.Length > MaxHighlightedChars || language is "text" or "log")
         {
-            p.Foreground = BrushFor(TokenKind.Default);
-            p.Inlines.Add(new Run
+            bodyText.Foreground = BrushFor(TokenKind.Default);
+            if (code.Length > MaxHighlightedChars)
             {
-                Text = code[..MaxHighlightedChars]
-                    + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
-            });
+                bodyText.Inlines.Add(new Run
+                {
+                    Text = code[..MaxHighlightedChars]
+                        + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
+                });
+            }
+            else
+            {
+                bodyText.Inlines.Add(new Run { Text = code });
+            }
         }
         else
         {
@@ -519,19 +774,25 @@ internal sealed class TextPreviewPresenter
                 if (++runs > MaxHighlightedRuns)
                 {
                     DiagLog.Write("App", $"highlight run limit hit: language={language}; chars={code.Length}; runs>{MaxHighlightedRuns}");
-                    p.Inlines.Clear();
-                    p.Foreground = BrushFor(TokenKind.Default);
-                    p.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+                    bodyText.Inlines.Clear();
+                    bodyText.Foreground = BrushFor(TokenKind.Default);
+                    bodyText.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
                     break;
                 }
-
-                p.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
+                bodyText.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
             }
         }
-        _textBlock.Blocks.Add(p);
-    }
+        
+        bodyScroller.Content = bodyText;
+        Grid.SetRow(bodyScroller, 1);
+        grid.Children.Add(bodyScroller);
+        
+        container.Child = grid;
 
-    private SolidColorBrush BrushFor(TokenKind kind)
+        var p = new Paragraph();
+        p.Inlines.Add(new InlineUIContainer { Child = container });
+        _textBlock.Blocks.Add(p);
+    }      private SolidColorBrush BrushFor(TokenKind kind)
     {
         bool dark = _getTheme() != ElementTheme.Light;
         if (_brushThemeDark != dark) { _tokenBrushes.Clear(); _brushThemeDark = dark; }
@@ -552,15 +813,6 @@ internal sealed class TextPreviewPresenter
         brush = new SolidColorBrush(c);
         _tokenBrushes[kind] = brush;
         return brush;
-    }
-
-    private void AddCodeBlock(string code)
-    {
-        code = TrimForDisplay(code);
-        var p = CreateParagraph(13, "Cascadia Mono, Consolas", 2, 10);
-        p.Foreground = BrushFor(TokenKind.Default);
-        p.Inlines.Add(new Run { Text = code.Length == 0 ? " " : code });
-        _textBlock.Blocks.Add(p);
     }
 
     private static string TrimForDisplay(string text)
@@ -662,6 +914,36 @@ internal sealed class TextPreviewPresenter
         try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorPrimary"]; }
         catch { return Colors.Gainsboro; }
     }
+
+    private static Windows.UI.Color ThemeTextColorSecondary()
+    {
+        try { return (Windows.UI.Color)Application.Current.Resources["TextFillColorSecondary"]; }
+        catch { return Colors.Gray; }
+    }
+
+    private static Windows.UI.Color ThemeSurfaceBorderColor()
+    {
+        try { return (Windows.UI.Color)Application.Current.Resources["CardStrokeColorDefault"]; }
+        catch { return Colors.LightGray; }
+    }
+
+    private static Windows.UI.Color ThemeCodeBackground()
+    {
+        try { return (Windows.UI.Color)Application.Current.Resources["ControlFillColorDefault"]; }
+        catch { return Colors.Transparent; }
+    }
+
+    private static Windows.UI.Color ThemeHeaderBackground()
+    {
+        try { return (Windows.UI.Color)Application.Current.Resources["ControlFillColorSecondary"]; }
+        catch { return Colors.Transparent; }
+    }
+}
+
+public sealed class TextLineItem
+{
+    public int LineNumber { get; set; }
+    public object? Content { get; set; }
 }
 
 public sealed class MarkdownOutlineItem

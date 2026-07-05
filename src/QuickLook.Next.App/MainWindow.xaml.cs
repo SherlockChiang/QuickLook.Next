@@ -73,7 +73,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
+        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, TextListView, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
         _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
@@ -636,7 +636,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -713,7 +713,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -732,7 +732,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Visible;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -753,7 +753,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Visible;
         PdfPagerBar.Visibility = Visibility.Visible;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -771,7 +771,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Visible;
+        TextPreviewContainer.Visibility = Visibility.Visible;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -791,7 +791,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Visible;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -810,7 +810,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Visible;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -829,7 +829,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Visible;
@@ -848,7 +848,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -930,7 +930,7 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Visibility = Visibility.Collapsed;
         PdfScrollViewer.Visibility = Visibility.Collapsed;
         PdfPagerBar.Visibility = Visibility.Collapsed;
-        TextScrollViewer.Visibility = Visibility.Collapsed;
+        TextPreviewContainer.Visibility = Visibility.Collapsed;
         TableScrollViewer.Visibility = Visibility.Collapsed;
         OfficeScrollViewer.Visibility = Visibility.Collapsed;
         MediaPreviewElement.Visibility = Visibility.Collapsed;
@@ -985,7 +985,7 @@ public sealed partial class MainWindow : Window
                     ListingHeroImage.Source = source;
                     ListingHeroFrame.Visibility = Visibility.Visible;
                 }
-                else if (TextScrollViewer.Visibility == Visibility.Visible)
+                else if (TextPreviewContainer.Visibility == Visibility.Visible)
                 {
                     TextHeroImage.Source = source;
                     TextHeroTitle.Text = ready.Title;
@@ -1966,5 +1966,68 @@ public sealed partial class MainWindow : Window
         return System.IO.File.Exists(themedPath)
             ? themedPath
             : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
+    }
+    private void TextWordWrapButton_Click(object sender, RoutedEventArgs e)
+    {
+        bool wrap = TextWordWrapButton.IsChecked == true;
+        TextScrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        TextPreviewBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        
+        // Also update TextListView items if they support wrap
+        if (TextListView.ItemsSource is ObservableCollection<TextLineItem> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Content is TextBlock tb)
+                {
+                    tb.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+                }
+            }
+        }
+    }
+
+    private void TextLineNumbersButton_Click(object sender, RoutedEventArgs e)
+    {
+        bool showLineNumbers = TextLineNumbersButton.IsChecked == true;
+        // Since modifying DataTemplate properties runtime is tricky, we can find the TextBlocks
+        // in the visual tree, or simply ignore it for now as a toggle is visually sufficient for a demo, 
+        // or just toggle a global resource.
+        // For now, toggle a static property or resource if needed, but a quick way is to just 
+        // set the ListView ItemTemplate to a different one, or walk the visual tree.
+        WalkVisualTreeToToggleLineNumbers(TextListView, showLineNumbers);
+    }
+    
+    private void WalkVisualTreeToToggleLineNumbers(DependencyObject root, bool show)
+    {
+        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is TextBlock tb && tb.Foreground is SolidColorBrush brush && 
+                brush.Color == ((SolidColorBrush)Application.Current.Resources["TextFillColorSecondaryBrush"]).Color &&
+                tb.Margin.Right == 16)
+            {
+                tb.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(tb) is Grid g && g.ColumnDefinitions.Count > 0)
+                {
+                    g.ColumnDefinitions[0].Width = show ? new GridLength(60) : new GridLength(0);
+                }
+            }
+            WalkVisualTreeToToggleLineNumbers(child, show);
+        }
+    }
+
+    private void TextSearchButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Placeholder for search logic
+        // In a real app, this would open a find bar, but for now we can just show a flyout or focus.
+        var dialog = new ContentDialog
+        {
+            Title = "Search (Coming Soon)",
+            Content = "Search functionality is currently being refined.",
+            CloseButtonText = "OK",
+            XamlRoot = this.Content.XamlRoot
+        };
+        _ = dialog.ShowAsync();
     }
 }
