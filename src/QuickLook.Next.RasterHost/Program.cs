@@ -64,7 +64,7 @@ while (true)
             break;
 
         case PreviewPageClose pageClose:
-            producer.ReleasePage(pageClose.PageIndex);
+            _ = Task.Delay(250).ContinueWith(_ => producer.ReleasePage(pageClose.PageIndex), TaskContinuationOptions.OnlyOnRanToCompletion);
             break;
 
             case PreviewClose close:
@@ -150,7 +150,7 @@ void CancelOpen(string requestId)
 async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken)
 {
     DiagLog.Write("RasterHost", $"open path={open.Path} ext={open.Probe.Extension} kind={open.Probe.Kind} size={open.Probe.Size}");
-    producer.ReleaseRetired(); // free the previous preview's surfaces — the App has switched away by now
+    _ = Task.Delay(250, cancellationToken).ContinueWith(_ => producer.ReleaseRetired(), TaskContinuationOptions.OnlyOnRanToCompletion);
     try
     {
         cancellationToken.ThrowIfCancellationRequested();
