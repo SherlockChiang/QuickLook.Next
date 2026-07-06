@@ -1665,8 +1665,8 @@ public sealed partial class MainWindow : Window
             Height = 34,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             CornerRadius = new CornerRadius(6),
-            Background = (Brush)Application.Current.Resources["PreviewHeroSurfaceBrush"],
-            BorderBrush = (Brush)Application.Current.Resources["PreviewSurfaceBorderBrush"],
+            Background = (Brush)RootGrid.Resources["PreviewHeroSurfaceBrush"],
+            BorderBrush = (Brush)RootGrid.Resources["PreviewSurfaceBorderBrush"],
             BorderThickness = new Thickness(1),
             Padding = new Thickness(10, 0, 10, 0),
         };
@@ -1682,7 +1682,7 @@ public sealed partial class MainWindow : Window
         {
             Glyph = "\uE707",
             FontSize = 14,
-            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+            Foreground = (Brush)RootGrid.Resources["AccentTextFillColorPrimaryBrush"],
         });
         content.Children.Add(new TextBlock
         {
