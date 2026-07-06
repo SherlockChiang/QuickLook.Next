@@ -32,8 +32,15 @@ internal static class CompositionInterop
                 try { return (MarshalInterface<ICompositionSurface>.FromAbi(surfaceAbi), 0); }
                 finally { Marshal.Release(surfaceAbi); }
             }
-            finally { Marshal.Release(interop); }
+            finally
+            {
+                Marshal.Release(interop);
+                CloseHandle(sharedHandle);
+            }
         }
         finally { MarshalInspectable<Compositor>.DisposeAbi(compositorAbi); }
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(nint hObject);
 }

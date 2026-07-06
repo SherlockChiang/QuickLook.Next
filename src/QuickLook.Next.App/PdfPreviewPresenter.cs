@@ -179,9 +179,11 @@ internal sealed class PdfPreviewPresenter
 
     public void Clear()
     {
-        foreach (Border host in _pageHosts.Values)
+        foreach (var host in _pageHosts.Values)
+        {
+            ElementCompositionPreview.SetElementChildVisual(host, null);
             DisposePageVisual(host);
-
+        }
         _pagesPanel.Children.Clear();
         _pageHosts.Clear();
         _requestedPages.Clear();
@@ -283,8 +285,8 @@ internal sealed class PdfPreviewPresenter
         _pageLastTouched.Remove(pageIndex);
         if (_pageHosts.TryGetValue(pageIndex, out var host))
         {
-            DisposePageVisual(host);
             ElementCompositionPreview.SetElementChildVisual(host, null);
+            DisposePageVisual(host);
         }
 
         if (_requestId is not null)

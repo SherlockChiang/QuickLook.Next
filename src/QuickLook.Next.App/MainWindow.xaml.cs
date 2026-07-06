@@ -848,25 +848,31 @@ public sealed partial class MainWindow : Window
             $"surface received request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}",
             50);
         EnsureCompositor();
-        if (_compositor is null) return;
         // Only accept surfaces for the exact current request. While switching/closing the session request id is
         // null, so late surfaces for a just-closed request are dropped — never build a composition surface
         // from a handle whose swapchain the host may already be retiring.
-        if (!_previewSession.IsCurrentRequest(surface.RequestId)) return;
-
-        if (surface.PageIndex >= 0)
+        try
         {
-            if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
-                StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
-            return;
-        }
+            if (!_previewSession.IsCurrentRequest(surface.RequestId)) return;
 
-        if (!_rasterPresenter!.AttachSurface(_compositor, surface, out string? error))
-        {
-            StatusText.Text = error ?? UiStrings.SurfaceFailed;
-            return;
+            if (surface.PageIndex >= 0)
+            {
+                if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
+                    StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
+                return;
+            }
+
+            if (!_rasterPresenter!.AttachSurface(_compositor, surface, out string? error))
+            {
+                StatusText.Text = error ?? UiStrings.SurfaceFailed;
+                return;
+            }
+            DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
         }
-        DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", $"FATAL ERROR in OnSurfaceReceived: {ex}");
+        }
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)

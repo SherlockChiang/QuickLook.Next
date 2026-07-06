@@ -69,8 +69,9 @@ internal sealed class RasterPreviewPresenter
             return false;
         }
 
+        ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
         DisposeSprite();
-
+        
         var brush = compositor.CreateSurfaceBrush(compSurface);
         brush.Stretch = CompositionStretch.Fill;
         var sprite = compositor.CreateSpriteVisual();
@@ -85,8 +86,8 @@ internal sealed class RasterPreviewPresenter
 
     public void Clear()
     {
-        DisposeSprite();
         ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
+        DisposeSprite();
         _surfaceWidth = 0;
         _surfaceHeight = 0;
         ResetView();
