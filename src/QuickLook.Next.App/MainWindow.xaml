@@ -561,7 +561,25 @@
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto"
                                       AutomationProperties.Name="EXIF metadata">
-                            <StackPanel x:Name="ExifDetailsList" Spacing="12" />
+                            <StackPanel Spacing="12">
+                                <StackPanel x:Name="ExifDetailsList" Spacing="12" />
+                                <Button x:Name="ExifGoogleMapsButton"
+                                        Visibility="Collapsed"
+                                        Height="34"
+                                        HorizontalAlignment="Stretch"
+                                        CornerRadius="6"
+                                        Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                                        BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                        BorderThickness="1"
+                                        Padding="10,0"
+                                        Click="OnOpenExifLocationInMapsClick"
+                                        AutomationProperties.Name="Open image location in Google Maps">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                                        <FontIcon Glyph="&#xE707;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                        <TextBlock x:Uid="ExifGoogleMapsText" Text="Open in Google Maps" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
                         </ScrollViewer>
                     </Grid>
                     <StackPanel x:Name="MoreActionsPanel"

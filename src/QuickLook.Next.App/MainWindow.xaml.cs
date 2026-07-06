@@ -1625,8 +1625,8 @@ public sealed partial class MainWindow : Window
 
         foreach (var (label, value) in rows)
             AddRailDetail(ExifDetailsList, label, value);
-        if (HasExifLocation)
-            AddGoogleMapsButton(ExifDetailsList);
+            
+        ExifGoogleMapsButton.Visibility = HasExifLocation ? Visibility.Visible : Visibility.Collapsed;
 
         ExifEmptyPanel.Visibility = Visibility.Collapsed;
         ExifScrollViewer.Visibility = Visibility.Visible;
@@ -1658,42 +1658,6 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(stack);
     }
 
-    private void AddGoogleMapsButton(StackPanel panel)
-    {
-        var button = new Button
-        {
-            Height = 34,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            CornerRadius = new CornerRadius(6),
-            Background = (Brush)RootGrid.Resources["PreviewHeroSurfaceBrush"],
-            BorderBrush = (Brush)RootGrid.Resources["PreviewSurfaceBorderBrush"],
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 0, 10, 0),
-        };
-        AutomationProperties.SetName(button, "Open image location in Google Maps");
-
-        var content = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        content.Children.Add(new FontIcon
-        {
-            Glyph = "\uE707",
-            FontSize = 14,
-            Foreground = (Brush)RootGrid.Resources["AccentTextFillColorPrimaryBrush"],
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = "Open in Google Maps",
-            FontSize = 12,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        });
-        button.Content = content;
-        button.Click += OnOpenExifLocationInMapsClick;
-        panel.Children.Add(button);
-    }
 
     private void SelectCurrentFilmstripItem(string path)
     {
