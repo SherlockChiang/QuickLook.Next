@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
+    private PreviewKeyboardHook? _previewKeyboardHook;
     private readonly PreviewSession _previewSession = new();
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
@@ -125,6 +126,10 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
         TrySetBackdrop();
+        _previewKeyboardHook = new PreviewKeyboardHook(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            () => _previewVisible,
+            ClosePreviewFromKeyboard);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
         AnimatedImagePreviewRoot.PointerWheelChanged += OnAnimatedImageRootPointerWheelChanged;
@@ -147,6 +152,7 @@ public sealed partial class MainWindow : Window
         };
         Closed += (_, _) =>
         {
+            _previewKeyboardHook?.Dispose();
             RemoveTrayIcon();
             _supervisor?.Stop();
         };
@@ -697,7 +703,7 @@ public sealed partial class MainWindow : Window
         => _rasterPresenter?.UpdateLayout();
 
     private void OnAnimatedImageRootSizeChanged(object sender, SizeChangedEventArgs e)
-        => _animatedImagePresenter?.UpdateLayout();
+        => _animatedImagePresenter?.ScheduleLayoutUpdate();
 
     private void OnPreviousPdfPageClick(object sender, RoutedEventArgs e)
         => _pdfPresenter?.GoToPreviousPage();
@@ -725,9 +731,12 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         StartImageSidecarLoads(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        DispatcherQueue.TryEnqueue(_animatedImagePresenter.UpdateLayout);
+        ScheduleAnimatedImageLayoutUpdate();
         return result.Status;
     }
+
+    private void ScheduleAnimatedImageLayoutUpdate()
+        => _animatedImagePresenter?.ScheduleLayoutUpdate();
 
     private string ShowPdfDocument(string requestId, PreviewReady ready)
     {
@@ -1477,7 +1486,7 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Space && _previewVisible)
         {
             e.Handled = true;
-            _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
+            ClosePreviewFromKeyboard();
             return;
         }
 
@@ -1508,6 +1517,14 @@ public sealed partial class MainWindow : Window
             _ = NavigateImageSiblingAsync(1);
             e.Handled = true;
         }
+    }
+
+    private void ClosePreviewFromKeyboard()
+    {
+        if (!_previewVisible)
+            return;
+
+        _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
     }
 
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)

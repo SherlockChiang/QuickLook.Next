@@ -33,7 +33,14 @@ internal sealed class AnimatedImagePreviewPresenter
         _previewRoot = previewRoot;
         _image = image;
         _zoomText = zoomText;
+        _image.Stretch = Stretch.Fill;
         _image.RenderTransform = _transform;
+        _previewRoot.Loaded += (_, _) => ScheduleLayoutUpdate();
+        _image.ImageOpened += (_, _) =>
+        {
+            SyncDecodedImageSize();
+            ScheduleLayoutUpdate();
+        };
     }
 
     public bool HasImage => _image.Source is not null;
@@ -46,6 +53,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _image.Height = _sourceHeight;
         _image.Source = new BitmapImage(new Uri(path));
         ResetView();
+        ScheduleLayoutUpdate();
 
         double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
         double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
@@ -68,8 +76,11 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_image.Source is null || _sourceWidth <= 0 || _sourceHeight <= 0)
             return;
 
-        double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
-        double availableHeight = Math.Max(1, _previewRoot.ActualHeight);
+        double availableWidth = _previewRoot.ActualWidth;
+        double availableHeight = _previewRoot.ActualHeight;
+        if (availableWidth <= 1 || availableHeight <= 1)
+            return;
+
         _previewRoot.Clip = new RectangleGeometry { Rect = new Rect(0, 0, availableWidth, availableHeight) };
         double fitScale = Math.Min(1.0, Math.Min(availableWidth / _sourceWidth, availableHeight / _sourceHeight));
         double scale = fitScale * _zoom;
@@ -81,13 +92,35 @@ internal sealed class AnimatedImagePreviewPresenter
         _panX = Math.Clamp(_panX, -maxPanX, maxPanX);
         _panY = Math.Clamp(_panY, -maxPanY, maxPanY);
 
-        _image.Width = _sourceWidth;
-        _image.Height = _sourceHeight;
-        _transform.ScaleX = scale;
-        _transform.ScaleY = scale;
-        _transform.TranslateX = Math.Round((availableWidth - scaledWidth) / 2 + _panX);
-        _transform.TranslateY = Math.Round((availableHeight - scaledHeight) / 2 + _panY);
+        _image.Width = scaledWidth;
+        _image.Height = scaledHeight;
+        _image.Stretch = Stretch.Fill;
+        _transform.ScaleX = 1;
+        _transform.ScaleY = 1;
+        _transform.TranslateX = Math.Round(_panX);
+        _transform.TranslateY = Math.Round(_panY);
         UpdateZoomLabel();
+    }
+
+    public void ScheduleLayoutUpdate()
+    {
+        if (_image.Source is null)
+            return;
+
+        _previewRoot.DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateLayout();
+            QueueDelayedLayoutUpdate(50);
+            QueueDelayedLayoutUpdate(150);
+        });
+    }
+
+    private void QueueDelayedLayoutUpdate(int delayMs)
+    {
+        _ = Task.Delay(delayMs).ContinueWith(_ =>
+        {
+            _previewRoot.DispatcherQueue.TryEnqueue(UpdateLayout);
+        }, TaskScheduler.Default);
     }
 
     public void UpdateZoomLabel()
@@ -318,6 +351,26 @@ internal sealed class AnimatedImagePreviewPresenter
 
     private static int Read24(byte b0, byte b1, byte b2)
         => b0 | (b1 << 8) | (b2 << 16);
+
+    private void SyncDecodedImageSize()
+    {
+        if (_image.Source is not BitmapSource bitmap)
+            return;
+
+        if (bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0)
+            return;
+
+        if (Math.Abs(_sourceWidth - bitmap.PixelWidth) < 0.1
+            && Math.Abs(_sourceHeight - bitmap.PixelHeight) < 0.1)
+        {
+            return;
+        }
+
+        _sourceWidth = bitmap.PixelWidth;
+        _sourceHeight = bitmap.PixelHeight;
+        _image.Width = _sourceWidth;
+        _image.Height = _sourceHeight;
+    }
 
     private double FitScale()
     {

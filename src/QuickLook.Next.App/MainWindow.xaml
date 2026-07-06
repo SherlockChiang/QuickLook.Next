@@ -141,9 +141,9 @@
                     AutomationProperties.Name="Animated image preview">
                 <Grid>
                     <Image x:Name="AnimatedImagePreviewImage"
-                           HorizontalAlignment="Left"
-                           VerticalAlignment="Top"
-                           Stretch="None"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Stretch="Fill"
                            AutomationProperties.Name="Animated image content" />
                 </Grid>
             </Border>
