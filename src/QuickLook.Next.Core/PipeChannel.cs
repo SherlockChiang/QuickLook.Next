@@ -84,8 +84,15 @@ public sealed class PipeChannel : IDisposable
 
     public void Dispose()
     {
-        _reader.Dispose();
-        _writer.Dispose();
+        SafeDispose(_reader);
+        SafeDispose(_writer);
         _writeLock.Dispose();
+    }
+
+    private static void SafeDispose(IDisposable disposable)
+    {
+        try { disposable.Dispose(); }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
     }
 }
