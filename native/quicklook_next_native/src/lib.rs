@@ -791,7 +791,7 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
 // Decode common image formats in Rust and return a constrained BGRA raster for the .NET raster host.
 // Output layout: [w:u32 LE][h:u32 LE][orig_w:u32 LE][orig_h:u32 LE][premultiplied BGRA bytes].
 
-const MAX_IMAGE_RASTER_DIMENSION: u32 = 4096;
+const MAX_IMAGE_RASTER_DIMENSION: u32 = 2560;
 
 #[no_mangle]
 pub extern "C" fn ql_decode_image(

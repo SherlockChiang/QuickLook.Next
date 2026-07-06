@@ -24,7 +24,7 @@ internal sealed class PreviewWindowController
             flags |= SWP_NOACTIVATE;
 
         SetNoActivateStyle(enabled: false);
-        PulseTopmost(hwnd, flags);
+        RaiseTopmost(hwnd, flags);
         if (activate)
             _window.Activate();
     }
@@ -61,7 +61,7 @@ internal sealed class PreviewWindowController
         SetNoActivateStyle(enabled: false);
         bool shown = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         DiagLog.Write("App", $"window ShowWindow(SW_SHOWNOACTIVATE) result={shown}; lastError={Marshal.GetLastWin32Error()}");
-        PulseTopmost(hwnd, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        RaiseTopmost(hwnd, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     public void Hide()
@@ -70,15 +70,13 @@ internal sealed class PreviewWindowController
         DiagLog.Write("App", $"window ShowWindow(SW_HIDE) result={hidden}; lastError={Marshal.GetLastWin32Error()}");
     }
 
-    private static void PulseTopmost(nint hwnd, uint flags)
+    private static void RaiseTopmost(nint hwnd, uint flags)
     {
         bool topmost = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
         int topmostError = Marshal.GetLastWin32Error();
-        bool notTopmost = SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
-        int notTopmostError = Marshal.GetLastWin32Error();
         DiagLog.Write(
             "App",
-            $"window topmost pulse flags=0x{flags:X}; topmost={topmost}/{topmostError}; notTopmost={notTopmost}/{notTopmostError}");
+            $"window raise topmost flags=0x{flags:X}; topmost={topmost}/{topmostError}");
     }
 
     private const int GWL_EXSTYLE = -20;

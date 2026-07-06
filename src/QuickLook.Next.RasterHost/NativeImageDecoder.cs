@@ -15,7 +15,8 @@ internal static class NativeImageDecoder
 {
     private const string Dll = "quicklook_next_native";
     private const int HeaderBytes = 16;
-    private const int MaxDecodedImageBytes = HeaderBytes + (4096 * 4096 * 4);
+    private const int MaxPreviewRasterDimension = 2560;
+    private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
 

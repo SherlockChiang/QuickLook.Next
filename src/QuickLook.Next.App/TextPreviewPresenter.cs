@@ -70,8 +70,8 @@ internal sealed class TextPreviewPresenter
 
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
         bool wrap = ready.TextFormat is "markdown" or "plain";
-        _scrollViewer.Visibility = isMarkdown ? Visibility.Visible : Visibility.Collapsed;
-        _textListView.Visibility = isMarkdown ? Visibility.Collapsed : Visibility.Visible;
+        _scrollViewer.Visibility = Visibility.Visible;
+        _textListView.Visibility = Visibility.Collapsed;
         
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
@@ -89,8 +89,8 @@ internal sealed class TextPreviewPresenter
         catch (Exception ex)
         {
             DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
-            _scrollViewer.Visibility = Visibility.Collapsed;
-            _textListView.Visibility = Visibility.Visible;
+            _scrollViewer.Visibility = Visibility.Visible;
+            _textListView.Visibility = Visibility.Collapsed;
             _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
         }
 
@@ -596,29 +596,28 @@ internal sealed class TextPreviewPresenter
 
     private async Task RenderCodeOrPlainTextAsync(string text, string language, int renderVersion)
     {
-        var items = new ObservableCollection<TextLineItem>();
-        _textListView.ItemsSource = items;
+        _textListView.ItemsSource = null;
         
         if (text.Length == 0) return;
 
         string code = text.TrimEnd('\r', '\n');
         bool noHighlight = language is "text" or "log" || code.Length > MaxHighlightedChars;
+        var paragraph = CreateParagraph(13, "Cascadia Mono, Consolas", 0, 0);
         
         if (noHighlight)
         {
-            var lines = code.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            paragraph.Foreground = BrushFor(TokenKind.Default);
+            if (code.Length > MaxHighlightedChars)
             {
-                var tb = new TextBlock
+                paragraph.Inlines.Add(new Run
                 {
-                    Text = lines[i].TrimEnd('\r'),
-                    FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
-                    FontSize = 13,
-                    TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
-                    Foreground = BrushFor(TokenKind.Default),
-                    IsTextSelectionEnabled = true
-                };
-                items.Add(new TextLineItem { LineNumber = i + 1, Text = lines[i].TrimEnd('\r'), Content = tb });
+                    Text = code[..MaxHighlightedChars]
+                        + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
+                });
+            }
+            else
+            {
+                paragraph.Inlines.Add(new Run { Text = code });
             }
         }
         else
@@ -627,51 +626,25 @@ internal sealed class TextPreviewPresenter
             if (renderVersion != _renderVersion)
                 return;
 
-            int lineNumber = 1;
-            TextBlock currentTb = new TextBlock
-            {
-                FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
-                FontSize = 13,
-                TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
-                IsTextSelectionEnabled = true
-            };
-            
+            int runs = 0;
             foreach (var (txt, kind) in spans)
             {
                 if (txt.Length == 0) continue;
-                
-                int start = 0;
-                while (start < txt.Length)
+                if (++runs > MaxHighlightedRuns)
                 {
-                    int idx = txt.IndexOf('\n', start);
-                    if (idx == -1)
-                    {
-                        string piece = txt[start..];
-                        if (piece.Length > 0 && piece.EndsWith("\r")) piece = piece[..^1];
-                        currentTb.Inlines.Add(new Run { Text = piece, Foreground = BrushFor(kind) });
-                        break;
-                    }
-                    else
-                    {
-                        string piece = txt[start..idx];
-                        if (piece.Length > 0 && piece.EndsWith("\r")) piece = piece[..^1];
-                        currentTb.Inlines.Add(new Run { Text = piece, Foreground = BrushFor(kind) });
-                        
-                        items.Add(new TextLineItem { LineNumber = lineNumber++, Text = TextFrom(currentTb), Content = currentTb });
-                        
-                        currentTb = new TextBlock
-                        {
-                            FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
-                            FontSize = 13,
-                            TextWrapping = _scrollViewer.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled ? TextWrapping.Wrap : TextWrapping.NoWrap,
-                            IsTextSelectionEnabled = true
-                        };
-                        start = idx + 1;
-                    }
+                    DiagLog.Write("App", $"highlight run limit hit: language={language}; chars={code.Length}; runs>{MaxHighlightedRuns}");
+                    paragraph.Inlines.Clear();
+                    paragraph.Foreground = BrushFor(TokenKind.Default);
+                    paragraph.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+                    break;
                 }
+                paragraph.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
             }
-            items.Add(new TextLineItem { LineNumber = lineNumber, Text = TextFrom(currentTb), Content = currentTb });
         }
+
+        if (renderVersion != _renderVersion)
+            return;
+        _textBlock.Blocks.Add(paragraph);
     }
 
     private void AddHighlightedCode(string code, string language)

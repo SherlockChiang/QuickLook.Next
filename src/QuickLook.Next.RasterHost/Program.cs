@@ -181,6 +181,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
+                DiagLog.Write("RasterHost", $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}");
                 long imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
                 cancellationToken.ThrowIfCancellationRequested();
                 await channel.SendAsync(new PreviewSurface(

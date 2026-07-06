@@ -37,7 +37,11 @@ public sealed partial class MainWindow : Window
     private const int MaxImageThumbnailCacheItems = 256;
     private const int MaxImageFilmstripItems = 600;
     private const int MaxInitialFilmstripThumbnailLoads = 160;
+    private const int ImmediateFilmstripThumbnailRadius = 20;
     private const int FilmstripThumbnailBatchSize = 12;
+    private const int DelayedFilmstripThumbnailStartMs = 350;
+    private const int AdjacentImagePrefetchRadius = 2;
+    private const int DuplicateOpenCloseGuardMs = 750;
 
     private readonly NativeBridge _native = new();
     private readonly PreviewWindowController _windowController;
@@ -63,6 +67,8 @@ public sealed partial class MainWindow : Window
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
     private bool _keyboardCloseQueued;
+    private long _lastPreviewRevealTick;
+    private string? _lastPreviewRevealPath;
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
     private bool _imageFilmstripSuppressClick;
@@ -73,12 +79,102 @@ public sealed partial class MainWindow : Window
     private string[] _imageSiblingPaths = [];
     private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
     private readonly Dictionary<string, ImageSource> _imageThumbnailCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly LinkedList<string> _imageThumbnailLru = new();
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
         ".heic", ".heif", ".avif", ".jxl",
+    };
+    private static readonly IReadOnlyDictionary<int, string> ExposureProgramNames = new Dictionary<int, string>
+    {
+        [0] = "Not defined",
+        [1] = "Manual",
+        [2] = "Normal program",
+        [3] = "Aperture priority",
+        [4] = "Shutter priority",
+        [5] = "Creative program",
+        [6] = "Action program",
+        [7] = "Portrait mode",
+        [8] = "Landscape mode",
+    };
+    private static readonly IReadOnlyDictionary<int, string> ExposureModeNames = new Dictionary<int, string>
+    {
+        [0] = "Auto exposure",
+        [1] = "Manual exposure",
+        [2] = "Auto bracket",
+    };
+    private static readonly IReadOnlyDictionary<int, string> MeteringModeNames = new Dictionary<int, string>
+    {
+        [0] = "Unknown",
+        [1] = "Average",
+        [2] = "Center-weighted average",
+        [3] = "Spot",
+        [4] = "Multi-spot",
+        [5] = "Pattern",
+        [6] = "Partial",
+        [255] = "Other",
+    };
+    private static readonly IReadOnlyDictionary<int, string> WhiteBalanceNames = new Dictionary<int, string>
+    {
+        [0] = "Auto",
+        [1] = "Manual",
+    };
+    private static readonly IReadOnlyDictionary<int, string> LightSourceNames = new Dictionary<int, string>
+    {
+        [0] = "Unknown",
+        [1] = "Daylight",
+        [2] = "Fluorescent",
+        [3] = "Tungsten",
+        [4] = "Flash",
+        [9] = "Fine weather",
+        [10] = "Cloudy",
+        [11] = "Shade",
+        [12] = "Daylight fluorescent",
+        [13] = "Day white fluorescent",
+        [14] = "Cool white fluorescent",
+        [15] = "White fluorescent",
+        [17] = "Standard light A",
+        [18] = "Standard light B",
+        [19] = "Standard light C",
+        [20] = "D55",
+        [21] = "D65",
+        [22] = "D75",
+        [23] = "D50",
+        [24] = "ISO studio tungsten",
+        [255] = "Other",
+    };
+    private static readonly IReadOnlyDictionary<int, string> ColorSpaceNames = new Dictionary<int, string>
+    {
+        [1] = "sRGB",
+        [65535] = "Uncalibrated",
+    };
+    private static readonly IReadOnlyDictionary<int, string> CompressionNames = new Dictionary<int, string>
+    {
+        [1] = "Uncompressed",
+        [2] = "CCITT 1D",
+        [3] = "T4/Group 3 fax",
+        [4] = "T6/Group 4 fax",
+        [5] = "LZW",
+        [6] = "JPEG",
+        [7] = "JPEG",
+        [8] = "Deflate",
+        [32773] = "PackBits",
+    };
+    private static readonly IReadOnlyDictionary<int, string> NormalHardSoftNames = new Dictionary<int, string>
+    {
+        [0] = "Normal",
+        [1] = "Soft",
+        [2] = "Hard",
+    };
+    private static readonly IReadOnlyDictionary<int, string> GainControlNames = new Dictionary<int, string>
+    {
+        [0] = "None",
+        [1] = "Low gain up",
+        [2] = "High gain up",
+        [3] = "Low gain down",
+        [4] = "High gain down",
     };
     private enum PreviewInfoRailTab { Info, Exif, More }
 
@@ -233,6 +329,7 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            DiagLog.Write("App", $"native intent={intent.Intent}; path={intent.PrimaryPath ?? "<none>"}; visible={_previewVisible}");
             if (intent.Intent == PreviewIntent.Switch)
                 DebounceSwitchIntent(intent);
             else
@@ -384,6 +481,12 @@ public sealed partial class MainWindow : Window
                 && _previewVisible
                 && _previewSession.IsCurrentPath(path))
             {
+                if (ShouldIgnoreDuplicateOpenClose(path))
+                {
+                    DiagLog.Write("App", $"duplicate open ignored after reveal; path={path}");
+                    return;
+                }
+
                 PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
                 ResetPreview();
                 await CloseCurrentAsync();
@@ -462,6 +565,7 @@ public sealed partial class MainWindow : Window
                 RevealPreviewWindow(ShouldActivatePreview(gifReady));
                 return;
             }
+
 
             PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
@@ -564,6 +668,15 @@ public sealed partial class MainWindow : Window
             EnsureCompositor();
         }
         FadeInPreviewContent();
+    }
+
+    private bool ShouldIgnoreDuplicateOpenClose(string path)
+    {
+        if (!string.Equals(_lastPreviewRevealPath, path, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        long elapsed = Environment.TickCount64 - _lastPreviewRevealTick;
+        return elapsed >= 0 && elapsed < DuplicateOpenCloseGuardMs;
     }
 
     private static bool ShouldActivatePreview(PreviewReady ready)
@@ -1191,23 +1304,23 @@ public sealed partial class MainWindow : Window
             AddIfValue(rows, "Shutter speed", FormatExposure(PropText(props, "System.Photo.ExposureTime")));
             AddIfValue(rows, "ISO", PropText(props, "System.Photo.ISOSpeed"));
             AddIfValue(rows, "Exposure bias", FormatNumberWithUnit(PropText(props, "System.Photo.ExposureBias"), "EV"));
-            AddIfValue(rows, "Exposure program", PropText(props, "System.Photo.ExposureProgram"));
-            AddIfValue(rows, "Exposure mode", PropText(props, "System.Photo.ExposureMode"));
-            AddIfValue(rows, "Metering", PropText(props, "System.Photo.MeteringMode"));
-            AddIfValue(rows, "White balance", PropText(props, "System.Photo.WhiteBalance"));
-            AddIfValue(rows, "Light source", PropText(props, "System.Photo.LightSource"));
+            AddIfValue(rows, "Exposure program", FormatExposureProgram(PropText(props, "System.Photo.ExposureProgram")));
+            AddIfValue(rows, "Exposure mode", FormatExposureMode(PropText(props, "System.Photo.ExposureMode")));
+            AddIfValue(rows, "Metering", FormatMeteringMode(PropText(props, "System.Photo.MeteringMode")));
+            AddIfValue(rows, "White balance", FormatWhiteBalance(PropText(props, "System.Photo.WhiteBalance")));
+            AddIfValue(rows, "Light source", FormatLightSource(PropText(props, "System.Photo.LightSource")));
             AddIfValue(rows, "Flash", FormatFlash(PropText(props, "System.Photo.Flash")));
             AddIfValue(rows, "Digital zoom", FormatNumberWithUnit(PropText(props, "System.Photo.DigitalZoom"), "x"));
             AddIfValue(rows, "Subject distance", FormatNumberWithUnit(PropText(props, "System.Photo.SubjectDistance"), "m"));
             AddIfValue(rows, "Orientation", image.Orientation.ToString());
             AddIfValue(rows, "Bit depth", FormatNumberWithUnit(PropText(props, "System.Image.BitDepth"), "bit"));
-            AddIfValue(rows, "Color space", PropText(props, "System.Image.ColorSpace"));
-            AddIfValue(rows, "Compression", PropText(props, "System.Image.Compression"));
+            AddIfValue(rows, "Color space", FormatColorSpace(PropText(props, "System.Image.ColorSpace")));
+            AddIfValue(rows, "Compression", FormatCompression(PropText(props, "System.Image.Compression")));
             AddIfValue(rows, "Photometric", PropText(props, "System.Photo.PhotometricInterpretation"));
-            AddIfValue(rows, "Contrast", PropText(props, "System.Photo.Contrast"));
-            AddIfValue(rows, "Saturation", PropText(props, "System.Photo.Saturation"));
-            AddIfValue(rows, "Sharpness", PropText(props, "System.Photo.Sharpness"));
-            AddIfValue(rows, "Gain control", PropText(props, "System.Photo.GainControl"));
+            AddIfValue(rows, "Contrast", FormatNormalHardSoft(PropText(props, "System.Photo.Contrast")));
+            AddIfValue(rows, "Saturation", FormatNormalHardSoft(PropText(props, "System.Photo.Saturation")));
+            AddIfValue(rows, "Sharpness", FormatNormalHardSoft(PropText(props, "System.Photo.Sharpness")));
+            AddIfValue(rows, "Gain control", FormatGainControl(PropText(props, "System.Photo.GainControl")));
             AddIfValue(rows, "Location", FormatLocation(image.Latitude, image.Longitude));
             AddIfValue(rows, "Altitude", FormatNumberWithUnit(PropText(props, "System.GPS.Altitude"), "m"));
             AddIfValue(rows, "Direction", FormatNumberWithUnit(PropText(props, "System.GPS.ImgDirection"), "deg"));
@@ -1279,12 +1392,21 @@ public sealed partial class MainWindow : Window
                 SelectCurrentFilmstripItem(path);
                 ImageFilmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
             });
+            _ = PrefetchAdjacentImagesAsync(path, siblings, generation, token);
 
             var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
             int thumbnailAttempts = 0;
-            foreach (string sibling in PrioritizeSiblings(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
+            bool delayedFarThumbnails = false;
+            foreach ((string sibling, int distance) in PrioritizeSiblingsWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
             {
                 token.ThrowIfCancellationRequested();
+                if (distance > ImmediateFilmstripThumbnailRadius && !delayedFarThumbnails)
+                {
+                    FlushFilmstripThumbnailBatch(generation, token, thumbnailBatch);
+                    delayedFarThumbnails = true;
+                    await Task.Delay(DelayedFilmstripThumbnailStartMs, token);
+                }
+
                 thumbnailAttempts++;
                 if (TryGetCachedImageThumbnail(sibling, out ImageSource? cachedSource) && cachedSource is not null)
                 {
@@ -1317,17 +1439,58 @@ public sealed partial class MainWindow : Window
     }
 
     private bool TryGetCachedImageThumbnail(string path, out ImageSource? source)
-        => _imageThumbnailCache.TryGetValue(path, out source);
+    {
+        if (_imageThumbnailCache.TryGetValue(path, out source))
+        {
+            TouchImageThumbnailCache(path);
+            return true;
+        }
+
+        source = null;
+        return false;
+    }
 
     private void AddCachedImageThumbnail(string path, ImageSource source)
     {
-        if (_imageThumbnailCache.Count >= MaxImageThumbnailCacheItems)
-            _imageThumbnailCache.Remove(_imageThumbnailCache.Keys.First());
+        if (_imageThumbnailCache.ContainsKey(path))
+        {
+            _imageThumbnailCache[path] = source;
+            TouchImageThumbnailCache(path);
+            return;
+        }
+
+        while (_imageThumbnailCache.Count >= MaxImageThumbnailCacheItems && _imageThumbnailLru.First is { } first)
+        {
+            _imageThumbnailCache.Remove(first.Value);
+            _imageThumbnailLru.RemoveFirst();
+        }
+
         _imageThumbnailCache[path] = source;
+        _imageThumbnailLru.AddLast(path);
     }
 
     private void RemoveCachedImageThumbnail(string path)
-        => _imageThumbnailCache.Remove(path);
+    {
+        _imageThumbnailCache.Remove(path);
+        RemoveImageThumbnailLruEntry(path);
+    }
+
+    private void TouchImageThumbnailCache(string path)
+    {
+        RemoveImageThumbnailLruEntry(path);
+        _imageThumbnailLru.AddLast(path);
+    }
+
+    private void RemoveImageThumbnailLruEntry(string path)
+    {
+        for (LinkedListNode<string>? node = _imageThumbnailLru.First; node is not null; node = node.Next)
+        {
+            if (!string.Equals(node.Value, path, StringComparison.OrdinalIgnoreCase))
+                continue;
+            _imageThumbnailLru.Remove(node);
+            return;
+        }
+    }
 
     private void FlushFilmstripThumbnailBatchIfNeeded(
         int generation,
@@ -1362,15 +1525,84 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private static IEnumerable<string> PrioritizeSiblings(string[] siblings, string currentPath)
+    private async Task PrefetchAdjacentImagesAsync(string currentPath, string[] siblings, int generation, CancellationToken token)
+    {
+        try
+        {
+            string[] targets = AdjacentImagePaths(siblings, currentPath, AdjacentImagePrefetchRadius)
+                .Where(path => !_imageThumbnailCache.ContainsKey(path))
+                .ToArray();
+            if (targets.Length == 0)
+                return;
+
+            DiagLog.Write("App", $"image adjacent prefetch gen={generation}; count={targets.Length}");
+            foreach (string target in targets)
+            {
+                token.ThrowIfCancellationRequested();
+                NativeRasterImage? raster = await Task.Run(() =>
+                {
+                    if (token.IsCancellationRequested)
+                        return null;
+                    _ = _native.ProbeFile(target);
+                    return _native.TryGetThumbnail(target, 128);
+                }, token);
+                if (raster is null)
+                    continue;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!IsPreviewGenerationCurrent(generation, token))
+                        return;
+                    ImageSource? source = CreateBitmapSource(raster);
+                    if (source is null)
+                        return;
+                    AddCachedImageThumbnail(target, source);
+                    ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
+                        string.Equals(i.Path, target, StringComparison.OrdinalIgnoreCase));
+                    if (item is not null && item.Thumbnail is null)
+                        item.Thumbnail = source;
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image adjacent prefetch failed: " + ex.Message);
+        }
+    }
+
+    private static IEnumerable<string> AdjacentImagePaths(string[] siblings, string currentPath, int radius)
     {
         int current = Array.FindIndex(siblings, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
         if (current < 0)
-            return siblings;
+            yield break;
+
+        for (int distance = 1; distance <= radius; distance++)
+        {
+            int next = current + distance;
+            if (next < siblings.Length)
+                yield return siblings[next];
+
+            int previous = current - distance;
+            if (previous >= 0)
+                yield return siblings[previous];
+        }
+    }
+
+    private static IEnumerable<(string Path, int Distance)> PrioritizeSiblingsWithDistance(string[] siblings, string currentPath)
+    {
+        int current = Array.FindIndex(siblings, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
+        if (current < 0)
+        {
+            return siblings.Select((path, index) => (Path: path, Distance: index));
+        }
+
         return siblings
-            .Select((path, index) => (path, distance: Math.Abs(index - current)))
-            .OrderBy(i => i.distance)
-            .Select(i => i.path);
+            .Select((path, index) => (Path: path, Distance: Math.Abs(index - current)))
+            .OrderBy(i => i.Distance)
+            .ThenBy(i => i.Path, StringComparer.CurrentCultureIgnoreCase);
     }
 
     private void RenderExifRows(IReadOnlyList<(string Label, string Value)> rows, double? latitude, double? longitude)
@@ -1554,6 +1786,43 @@ public sealed partial class MainWindow : Window
         return seconds < 1.0 ? $"1/{Math.Round(1.0 / seconds):0} sec" : $"{seconds:0.##} sec";
     }
 
+    private static string? FormatExposureProgram(string? raw)
+        => FormatExifEnum(raw, ExposureProgramNames);
+
+    private static string? FormatExposureMode(string? raw)
+        => FormatExifEnum(raw, ExposureModeNames);
+
+    private static string? FormatMeteringMode(string? raw)
+        => FormatExifEnum(raw, MeteringModeNames);
+
+    private static string? FormatWhiteBalance(string? raw)
+        => FormatExifEnum(raw, WhiteBalanceNames);
+
+    private static string? FormatLightSource(string? raw)
+        => FormatExifEnum(raw, LightSourceNames);
+
+    private static string? FormatColorSpace(string? raw)
+        => FormatExifEnum(raw, ColorSpaceNames);
+
+    private static string? FormatCompression(string? raw)
+        => FormatExifEnum(raw, CompressionNames);
+
+    private static string? FormatNormalHardSoft(string? raw)
+        => FormatExifEnum(raw, NormalHardSoftNames);
+
+    private static string? FormatGainControl(string? raw)
+        => FormatExifEnum(raw, GainControlNames);
+
+    private static string? FormatExifEnum(string? raw, IReadOnlyDictionary<int, string> names)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        string trimmed = raw.Trim();
+        if (!int.TryParse(trimmed, out int value))
+            return trimmed;
+        return names.TryGetValue(value, out string? name) ? name : trimmed;
+    }
+
     private static string? FormatFlash(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -1595,6 +1864,29 @@ public sealed partial class MainWindow : Window
 
     private static bool IsImagePath(string? path)
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
+
+    private static async Task<(int Width, int Height)?> TryReadImageDisplaySizeAsync(string path, CancellationToken token)
+    {
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            StorageFile file = await StorageFile.GetFileFromPathAsync(path);
+            ImageProperties image = await file.Properties.GetImagePropertiesAsync();
+            token.ThrowIfCancellationRequested();
+            if (image.Width > 0 && image.Height > 0)
+                return (checked((int)image.Width), checked((int)image.Height));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image size probe failed: " + ex.Message);
+        }
+
+        return null;
+    }
 
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
         => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
@@ -1863,7 +2155,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_rasterPresenter?.HasSurface != true || PreviewRoot.Visibility != Visibility.Visible)
+        bool imagePreviewVisible =
+            (_rasterPresenter?.HasSurface == true && PreviewRoot.Visibility == Visibility.Visible)
+            || (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible);
+        if (!imagePreviewVisible)
             return;
 
         bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
@@ -1873,7 +2168,10 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Home
             || (controlDown && e.Key is Windows.System.VirtualKey.Number0 or Windows.System.VirtualKey.NumberPad0))
         {
-            _rasterPresenter.ResetView();
+            if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+                _animatedImagePresenter.ResetView();
+            else
+                _rasterPresenter?.ResetView();
             e.Handled = true;
             return;
         }
@@ -1933,6 +2231,7 @@ public sealed partial class MainWindow : Window
             }
             Clipboard.SetContent(package);
             StatusBar.Visibility = Visibility.Visible;
+            RefreshCurrentImageFilmstrip();
         }
         catch (Exception ex)
         {
@@ -2014,6 +2313,17 @@ public sealed partial class MainWindow : Window
         ImageFilmstrip.Visibility = _imageSiblingPaths.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private void RefreshCurrentImageFilmstrip()
+    {
+        string? path = _previewSession.CurrentPath;
+        if (string.IsNullOrWhiteSpace(path) || !IsImagePath(path) || !System.IO.File.Exists(path))
+            return;
+
+        int generation = _previewSession.Generation;
+        CancellationToken token = CurrentPreviewToken;
+        _ = LoadImageFilmstripAsync(path, generation, token);
+    }
+
     private void OpenCurrentPreviewPath(bool revealInExplorer)
     {
         string? path = _previewSession.CurrentPath;
@@ -2030,6 +2340,7 @@ public sealed partial class MainWindow : Window
                     Arguments = "/select,\"" + path + "\"",
                     UseShellExecute = true,
                 });
+                RefreshCurrentImageFilmstrip();
                 return;
             }
 
@@ -2040,6 +2351,7 @@ public sealed partial class MainWindow : Window
                     FileName = path,
                     UseShellExecute = true,
                 });
+                RefreshCurrentImageFilmstrip();
                 return;
             }
 
@@ -2050,6 +2362,7 @@ public sealed partial class MainWindow : Window
                     FileName = path,
                     UseShellExecute = true,
                 });
+                RefreshCurrentImageFilmstrip();
             }
         }
         catch (Exception ex)
@@ -2177,6 +2490,8 @@ public sealed partial class MainWindow : Window
         _windowController.Raise(activate);
         EnsureCompositor();
         _previewVisible = true;
+        _lastPreviewRevealTick = Environment.TickCount64;
+        _lastPreviewRevealPath = _previewSession.CurrentPath;
         SetBackgroundEfficiency(enabled: false);
         _native.SetPreviewVisible(true);
         PreviewContentHost.Opacity = 1;
