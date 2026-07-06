@@ -1,12 +1,14 @@
 using System.Numerics;
 using System.IO;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.VisualBasic.FileIO;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
@@ -56,6 +58,13 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _switchDebounceCts;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
+    private ScrollViewer? _imageFilmstripScrollViewer;
+    private bool _imageFilmstripDragging;
+    private bool _imageFilmstripSuppressClick;
+    private Windows.Foundation.Point _imageFilmstripDragStart;
+    private double _imageFilmstripDragStartOffset;
+    private double? _currentExifLatitude;
+    private double? _currentExifLongitude;
     private string[] _imageSiblingPaths = [];
     private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
     private readonly Dictionary<string, ImageSource> _imageThumbnailCache = new(StringComparer.OrdinalIgnoreCase);
@@ -150,6 +159,13 @@ public sealed partial class MainWindow : Window
             args.Cancel = true;
             HidePreviewWindow();
         };
+        ImageFilmstripList.Loaded += OnImageFilmstripListLoaded;
+        ImageFilmstripList.PointerPressed += OnImageFilmstripPointerPressed;
+        ImageFilmstripList.PointerMoved += OnImageFilmstripPointerMoved;
+        ImageFilmstripList.PointerReleased += OnImageFilmstripPointerReleased;
+        ImageFilmstripList.PointerCanceled += OnImageFilmstripPointerCanceled;
+        ImageFilmstripList.PointerCaptureLost += OnImageFilmstripPointerCaptureLost;
+        ImageFilmstripList.PointerWheelChanged += OnImageFilmstripPointerWheelChanged;
         Closed += (_, _) =>
         {
             _previewKeyboardHook?.Dispose();
@@ -1057,6 +1073,8 @@ public sealed partial class MainWindow : Window
 
     private void ResetExifDetails()
     {
+        _currentExifLatitude = null;
+        _currentExifLongitude = null;
         ExifDetailsList.Children.Clear();
         ExifScrollViewer.Visibility = Visibility.Collapsed;
         ExifEmptyPanel.Visibility = Visibility.Visible;
@@ -1073,34 +1091,85 @@ public sealed partial class MainWindow : Window
             {
                 "System.Image.HorizontalSize",
                 "System.Image.VerticalSize",
+                "System.Image.HorizontalResolution",
+                "System.Image.VerticalResolution",
                 "System.Image.BitDepth",
                 "System.Image.ColorSpace",
+                "System.Image.Compression",
+                "System.Photo.CameraManufacturer",
+                "System.Photo.CameraModel",
+                "System.Photo.LensManufacturer",
                 "System.Photo.LensModel",
                 "System.Photo.FocalLength",
+                "System.Photo.FocalLengthInFilm",
                 "System.Photo.FNumber",
+                "System.Photo.MaxAperture",
                 "System.Photo.ExposureTime",
                 "System.Photo.ISOSpeed",
                 "System.Photo.ExposureBias",
+                "System.Photo.ExposureProgram",
+                "System.Photo.ExposureMode",
                 "System.Photo.Flash",
+                "System.Photo.MeteringMode",
+                "System.Photo.WhiteBalance",
+                "System.Photo.LightSource",
+                "System.Photo.DigitalZoom",
+                "System.Photo.SubjectDistance",
+                "System.Photo.Contrast",
+                "System.Photo.Saturation",
+                "System.Photo.Sharpness",
+                "System.Photo.GainControl",
+                "System.Photo.PhotometricInterpretation",
+                "System.Photo.EXIFVersion",
+                "System.ApplicationName",
+                "System.SoftwareUsed",
+                "System.GPS.Altitude",
+                "System.GPS.ImgDirection",
             };
-            IDictionary<string, object> props = await file.Properties.RetrievePropertiesAsync(names);
+            IDictionary<string, object> props = await RetrieveImagePropertiesAsync(file, names);
             token.ThrowIfCancellationRequested();
 
             var rows = new List<(string Label, string Value)>();
             AddIfValue(rows, "Dimensions", image.Width > 0 && image.Height > 0 ? $"{image.Width:N0} x {image.Height:N0}" : null);
+            AddIfValue(rows, "Resolution", FormatResolution(
+                PropText(props, "System.Image.HorizontalResolution"),
+                PropText(props, "System.Image.VerticalResolution")));
             AddIfValue(rows, "Date taken", image.DateTaken.Year > 1900 ? image.DateTaken.LocalDateTime.ToString("G") : null);
-            AddIfValue(rows, "Camera", JoinNonEmpty(image.CameraManufacturer, image.CameraModel));
-            AddIfValue(rows, "Lens", PropText(props, "System.Photo.LensModel"));
+            AddIfValue(rows, "Camera", JoinNonEmpty(
+                image.CameraManufacturer,
+                image.CameraModel,
+                PropText(props, "System.Photo.CameraManufacturer"),
+                PropText(props, "System.Photo.CameraModel")));
+            AddIfValue(rows, "Lens", JoinNonEmpty(PropText(props, "System.Photo.LensManufacturer"), PropText(props, "System.Photo.LensModel")));
             AddIfValue(rows, "Focal length", FormatNumberWithUnit(PropText(props, "System.Photo.FocalLength"), "mm"));
+            AddIfValue(rows, "35mm equivalent", FormatNumberWithUnit(PropText(props, "System.Photo.FocalLengthInFilm"), "mm"));
             AddIfValue(rows, "Aperture", FormatAperture(PropText(props, "System.Photo.FNumber")));
+            AddIfValue(rows, "Max aperture", FormatAperture(PropText(props, "System.Photo.MaxAperture")));
             AddIfValue(rows, "Shutter speed", FormatExposure(PropText(props, "System.Photo.ExposureTime")));
             AddIfValue(rows, "ISO", PropText(props, "System.Photo.ISOSpeed"));
             AddIfValue(rows, "Exposure bias", FormatNumberWithUnit(PropText(props, "System.Photo.ExposureBias"), "EV"));
-            AddIfValue(rows, "Flash", PropText(props, "System.Photo.Flash"));
+            AddIfValue(rows, "Exposure program", PropText(props, "System.Photo.ExposureProgram"));
+            AddIfValue(rows, "Exposure mode", PropText(props, "System.Photo.ExposureMode"));
+            AddIfValue(rows, "Metering", PropText(props, "System.Photo.MeteringMode"));
+            AddIfValue(rows, "White balance", PropText(props, "System.Photo.WhiteBalance"));
+            AddIfValue(rows, "Light source", PropText(props, "System.Photo.LightSource"));
+            AddIfValue(rows, "Flash", FormatFlash(PropText(props, "System.Photo.Flash")));
+            AddIfValue(rows, "Digital zoom", FormatNumberWithUnit(PropText(props, "System.Photo.DigitalZoom"), "x"));
+            AddIfValue(rows, "Subject distance", FormatNumberWithUnit(PropText(props, "System.Photo.SubjectDistance"), "m"));
             AddIfValue(rows, "Orientation", image.Orientation.ToString());
             AddIfValue(rows, "Bit depth", FormatNumberWithUnit(PropText(props, "System.Image.BitDepth"), "bit"));
             AddIfValue(rows, "Color space", PropText(props, "System.Image.ColorSpace"));
+            AddIfValue(rows, "Compression", PropText(props, "System.Image.Compression"));
+            AddIfValue(rows, "Photometric", PropText(props, "System.Photo.PhotometricInterpretation"));
+            AddIfValue(rows, "Contrast", PropText(props, "System.Photo.Contrast"));
+            AddIfValue(rows, "Saturation", PropText(props, "System.Photo.Saturation"));
+            AddIfValue(rows, "Sharpness", PropText(props, "System.Photo.Sharpness"));
+            AddIfValue(rows, "Gain control", PropText(props, "System.Photo.GainControl"));
             AddIfValue(rows, "Location", FormatLocation(image.Latitude, image.Longitude));
+            AddIfValue(rows, "Altitude", FormatNumberWithUnit(PropText(props, "System.GPS.Altitude"), "m"));
+            AddIfValue(rows, "Direction", FormatNumberWithUnit(PropText(props, "System.GPS.ImgDirection"), "deg"));
+            AddIfValue(rows, "Software", JoinNonEmpty(PropText(props, "System.ApplicationName"), PropText(props, "System.SoftwareUsed")));
+            AddIfValue(rows, "EXIF version", PropText(props, "System.Photo.EXIFVersion"));
 
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
@@ -1109,7 +1178,7 @@ public sealed partial class MainWindow : Window
             {
                 if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
-                RenderExifRows(rows);
+                RenderExifRows(rows, image.Latitude, image.Longitude);
             });
         }
         catch (OperationCanceledException)
@@ -1232,9 +1301,11 @@ public sealed partial class MainWindow : Window
             .Select(i => i.path);
     }
 
-    private void RenderExifRows(IReadOnlyList<(string Label, string Value)> rows)
+    private void RenderExifRows(IReadOnlyList<(string Label, string Value)> rows, double? latitude, double? longitude)
     {
         ExifDetailsList.Children.Clear();
+        _currentExifLatitude = latitude;
+        _currentExifLongitude = longitude;
         if (rows.Count == 0)
         {
             ExifScrollViewer.Visibility = Visibility.Collapsed;
@@ -1244,10 +1315,20 @@ public sealed partial class MainWindow : Window
 
         foreach (var (label, value) in rows)
             AddRailDetail(ExifDetailsList, label, value);
+        if (HasExifLocation)
+            AddGoogleMapsButton(ExifDetailsList);
 
         ExifEmptyPanel.Visibility = Visibility.Collapsed;
         ExifScrollViewer.Visibility = Visibility.Visible;
     }
+
+    private bool HasExifLocation
+        => _currentExifLatitude is { } latitude
+            && _currentExifLongitude is { } longitude
+            && latitude >= -90
+            && latitude <= 90
+            && longitude >= -180
+            && longitude <= 180;
 
     private static void AddRailDetail(StackPanel panel, string label, string value)
     {
@@ -1265,6 +1346,43 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.WrapWholeWords,
         });
         panel.Children.Add(stack);
+    }
+
+    private void AddGoogleMapsButton(StackPanel panel)
+    {
+        var button = new Button
+        {
+            Height = 34,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            CornerRadius = new CornerRadius(6),
+            Background = (Brush)Application.Current.Resources["PreviewHeroSurfaceBrush"],
+            BorderBrush = (Brush)Application.Current.Resources["PreviewSurfaceBorderBrush"],
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 0, 10, 0),
+        };
+        AutomationProperties.SetName(button, "Open image location in Google Maps");
+
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        content.Children.Add(new FontIcon
+        {
+            Glyph = "\uE707",
+            FontSize = 14,
+            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "Open in Google Maps",
+            FontSize = 12,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        button.Content = content;
+        button.Click += OnOpenExifLocationInMapsClick;
+        panel.Children.Add(button);
     }
 
     private void SelectCurrentFilmstripItem(string path)
@@ -1285,12 +1403,43 @@ public sealed partial class MainWindow : Window
 
     private static string? JoinNonEmpty(params string?[] values)
     {
-        string[] parts = values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim()).ToArray();
+        string[] parts = values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
         return parts.Length == 0 ? null : string.Join(" ", parts);
     }
 
     private static string? PropText(IDictionary<string, object> props, string name)
         => props.TryGetValue(name, out object? value) ? FormatPropertyValue(value) : null;
+
+    private static async Task<IDictionary<string, object>> RetrieveImagePropertiesAsync(StorageFile file, IReadOnlyList<string> names)
+    {
+        try
+        {
+            return await file.Properties.RetrievePropertiesAsync(names);
+        }
+        catch
+        {
+            var result = new Dictionary<string, object>();
+            foreach (string name in names)
+            {
+                try
+                {
+                    IDictionary<string, object> one = await file.Properties.RetrievePropertiesAsync([name]);
+                    if (one.TryGetValue(name, out object? value) && value is not null)
+                        result[name] = value;
+                }
+                catch
+                {
+                    // Some Windows builds/codecs do not expose every canonical property.
+                }
+            }
+
+            return result;
+        }
+    }
 
     private static string? FormatPropertyValue(object? value)
     {
@@ -1312,6 +1461,15 @@ public sealed partial class MainWindow : Window
     private static string? FormatNumberWithUnit(string? raw, string unit)
         => string.IsNullOrWhiteSpace(raw) ? null : $"{raw} {unit}";
 
+    private static string? FormatResolution(string? horizontal, string? vertical)
+    {
+        if (string.IsNullOrWhiteSpace(horizontal) && string.IsNullOrWhiteSpace(vertical))
+            return null;
+        if (string.Equals(horizontal, vertical, StringComparison.OrdinalIgnoreCase))
+            return $"{horizontal} dpi";
+        return JoinNonEmpty(horizontal, vertical) is { } joined ? $"{joined} dpi" : null;
+    }
+
     private static string? FormatAperture(string? raw)
         => string.IsNullOrWhiteSpace(raw) ? null : $"f/{raw}";
 
@@ -1324,8 +1482,44 @@ public sealed partial class MainWindow : Window
         return seconds < 1.0 ? $"1/{Math.Round(1.0 / seconds):0} sec" : $"{seconds:0.##} sec";
     }
 
+    private static string? FormatFlash(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!int.TryParse(raw, out int flags))
+            return raw;
+
+        var parts = new List<string>();
+        parts.Add((flags & 0x1) != 0 ? "Fired" : "Did not fire");
+        if ((flags & 0x18) == 0x18)
+            parts.Add("Auto");
+        if ((flags & 0x40) != 0)
+            parts.Add("Red-eye reduction");
+        if ((flags & 0x6) == 0x4)
+            parts.Add("Return detected");
+        else if ((flags & 0x6) == 0x6)
+            parts.Add("Return not detected");
+        return string.Join(", ", parts);
+    }
+
     private static string? FormatLocation(double? latitude, double? longitude)
         => latitude is { } lat && longitude is { } lon ? $"{lat:0.#####}, {lon:0.#####}" : null;
+
+    private static T? FindDescendant<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+            if (child is T typed)
+                return typed;
+            if (FindDescendant<T>(child) is { } descendant)
+                return descendant;
+        }
+
+        return null;
+    }
 
     private static bool IsImagePath(string? path)
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
@@ -1412,6 +1606,79 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void OnImageFilmstripListLoaded(object sender, RoutedEventArgs e)
+        => _imageFilmstripScrollViewer = FindDescendant<ScrollViewer>(ImageFilmstripList);
+
+    private void OnImageFilmstripPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
+        if (_imageFilmstripScrollViewer is null)
+            return;
+
+        var point = e.GetCurrentPoint(ImageFilmstripList);
+        if (!point.Properties.IsLeftButtonPressed)
+            return;
+
+        _imageFilmstripDragging = true;
+        _imageFilmstripSuppressClick = false;
+        _imageFilmstripDragStart = point.Position;
+        _imageFilmstripDragStartOffset = _imageFilmstripScrollViewer.HorizontalOffset;
+        ImageFilmstripList.CapturePointer(e.Pointer);
+    }
+
+    private void OnImageFilmstripPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_imageFilmstripDragging || _imageFilmstripScrollViewer is null)
+            return;
+
+        Windows.Foundation.Point point = e.GetCurrentPoint(ImageFilmstripList).Position;
+        double delta = point.X - _imageFilmstripDragStart.X;
+        if (Math.Abs(delta) > 5)
+            _imageFilmstripSuppressClick = true;
+
+        _imageFilmstripScrollViewer.ChangeView(_imageFilmstripDragStartOffset - delta, null, null, disableAnimation: true);
+        e.Handled = true;
+    }
+
+    private void OnImageFilmstripPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (!_imageFilmstripDragging)
+            return;
+
+        _imageFilmstripDragging = false;
+        try { ImageFilmstripList.ReleasePointerCapture(e.Pointer); } catch { }
+    }
+
+    private void OnImageFilmstripPointerCanceled(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => EndImageFilmstripDrag(e.Pointer);
+
+    private void OnImageFilmstripPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _imageFilmstripDragging = false;
+
+    private void OnImageFilmstripPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
+        if (_imageFilmstripScrollViewer is null)
+            return;
+
+        int delta = e.GetCurrentPoint(ImageFilmstripList).Properties.MouseWheelDelta;
+        if (delta == 0)
+            return;
+
+        _imageFilmstripScrollViewer.ChangeView(
+            _imageFilmstripScrollViewer.HorizontalOffset - delta,
+            null,
+            null,
+            disableAnimation: false);
+        e.Handled = true;
+    }
+
+    private void EndImageFilmstripDrag(Microsoft.UI.Xaml.Input.Pointer pointer)
+    {
+        _imageFilmstripDragging = false;
+        try { ImageFilmstripList.ReleasePointerCapture(pointer); } catch { }
+    }
+
     private async void OnPreviousImageClick(object sender, RoutedEventArgs e)
         => await NavigateImageSiblingAsync(-1);
 
@@ -1420,6 +1687,12 @@ public sealed partial class MainWindow : Window
 
     private async void OnImageFilmstripItemClick(object sender, ItemClickEventArgs e)
     {
+        if (_imageFilmstripSuppressClick)
+        {
+            _imageFilmstripSuppressClick = false;
+            return;
+        }
+
         if (e.ClickedItem is ImageFilmstripItem item)
             await PreviewImagePathAsync(item.Path);
     }
@@ -1458,6 +1731,32 @@ public sealed partial class MainWindow : Window
 
     private void OnPreviewMoreTabClick(object sender, RoutedEventArgs e)
         => SetPreviewInfoRailTab(PreviewInfoRailTab.More);
+
+    private void OnOpenExifLocationInMapsClick(object sender, RoutedEventArgs e)
+    {
+        if (!HasExifLocation || _currentExifLatitude is not { } latitude || _currentExifLongitude is not { } longitude)
+            return;
+
+        string query = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{latitude:0.#####},{longitude:0.#####}");
+        string url = "https://www.google.com/maps/search/?api=1&query=" + Uri.EscapeDataString(query);
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "open EXIF location failed: " + ex.Message);
+            StatusText.Text = ex.Message;
+            StatusBar.Visibility = Visibility.Visible;
+        }
+    }
 
     private void SetPreviewInfoRailTab(PreviewInfoRailTab tab)
     {
