@@ -1041,7 +1041,7 @@ const OFFICE_EMUS_PER_DIP: f64 = 9525.0;
 const XLSX_CELL_WIDTH: f64 = 96.0;
 const XLSX_ROW_HEIGHT: f64 = 28.0;
 
-pub fn render_office(path: &str) -> String {
+pub fn render_office(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -3536,7 +3536,7 @@ fn render_epub(path: &str) -> String {
         .unwrap_or_else(|| "content.opf".to_string());
 
     let Some(opf_xml) = read_zip_text(&mut zip, &rootfile, MAX_EBOOK_XML_BYTES) else {
-        return render_archive(path);
+        return render_archive(path, None);
     };
     let opf = parse_epub_opf(&opf_xml);
     let title = first_non_empty_owned([opf.title.as_str(), filename]).to_string();
@@ -4109,7 +4109,7 @@ pub fn is_archive(ext: &str, kind: &str, magic: &[u8]) -> bool {
 }
 
 /// Produce JSON for an archive listing: `{"kind":"archive","title":"...","listing":{...}}`.
-pub fn render_archive(path: &str) -> String {
+pub fn render_archive(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let lower = path.to_ascii_lowercase();
     if is_package_path(&lower) {
         return render_package(path);
@@ -5451,7 +5451,7 @@ fn type_for_ext(name: &str) -> &'static str {
 const MAX_FOLDER_ITEMS: usize = 5000;
 
 /// Produce JSON for a folder listing: `{"kind":"folder","title":"...","listing":{...}}`.
-pub fn render_folder(path: &str) -> String {
+pub fn render_folder(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let root_name = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())

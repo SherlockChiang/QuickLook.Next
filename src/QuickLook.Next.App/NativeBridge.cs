@@ -34,7 +34,7 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_archive_entry(
         byte[] archivePathUtf8,
@@ -46,13 +46,13 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_torrent(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_folder(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private static extern int ql_preview_folder(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_info(
         byte[] pathUtf8,
@@ -71,6 +71,7 @@ internal sealed class NativeBridge
     private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
@@ -139,16 +140,22 @@ internal sealed class NativeBridge
         {
             "text" => ql_preview_text,
             "ebook" => ql_preview_ebook,
+            "executable" => ql_preview_executable,
+            "torrent" => ql_preview_torrent,
+            _ => null,
+        };
+        NativePreviewCallWithCancel? cancelableCall = probe.Kind.ToLowerInvariant() switch
+        {
             "archive" => ql_preview_archive,
             "package" => ql_preview_archive,
             "office" => ql_preview_office,
-            "executable" => ql_preview_executable,
-            "torrent" => ql_preview_torrent,
             "folder" => ql_preview_folder,
             _ => null,
         };
 
-        string? json = call is not null
+        string? json = cancelableCall is not null
+            ? CallPreview(cancelableCall, path)
+            : call is not null
             ? CallPreview(call, path)
             : ShouldUseNativeInfo(probe) ? CallInfoPreview(path, probe) : null;
         return string.IsNullOrWhiteSpace(json) ? null : ParsePreviewReady(requestId, json);
@@ -270,6 +277,40 @@ internal sealed class NativeBridge
         }
 
         return null;
+    }
+
+    private static string? CallPreview(NativePreviewCallWithCancel call, string path)
+    {
+        try
+        {
+            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            int cap = 256 * 1024;
+            while (cap <= MaxNativePreviewJsonBytes)
+            {
+                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
+                try
+                {
+                    int n = call(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length, IntPtr.Zero);
+                    if (n > 0)
+                        return Encoding.UTF8.GetString(outBuf, 0, n);
+                    if (n < 0)
+                    {
+                        int needed = -n;
+                        if (needed <= cap || needed > MaxNativePreviewJsonBytes)
+                            return null;
+                        cap = needed;
+                        continue;
+                    }
+                    return null;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(outBuf);
+                }
+            }
+            return null;
+        }
+        catch { return null; }
     }
 
     private static NativeRasterImage? CallRaster(NativeRasterCall call, string path)

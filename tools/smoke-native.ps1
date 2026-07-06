@@ -43,10 +43,10 @@ public static class QuickLookNativeSmoke {
   public static extern int ql_preview_text(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
-  public static extern int ql_preview_archive(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+  public static extern int ql_preview_archive(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap, IntPtr cancelCb);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
-  public static extern int ql_preview_office(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+  public static extern int ql_preview_office(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap, IntPtr cancelCb);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_preview_executable(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
@@ -55,7 +55,7 @@ public static class QuickLookNativeSmoke {
   public static extern int ql_preview_torrent(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
-  public static extern int ql_preview_folder(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+  public static extern int ql_preview_folder(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap, IntPtr cancelCb);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_decode_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
@@ -114,14 +114,14 @@ function Invoke-Text([string]$path) {
 function Invoke-Archive([string]$path) {
     Invoke-NativeJson $path {
         param($pathBytes, $buffer)
-        [QuickLookNativeSmoke]::ql_preview_archive($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+        [QuickLookNativeSmoke]::ql_preview_archive($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [IntPtr]::Zero)
     }
 }
 
 function Invoke-ArchiveRawCode([string]$path) {
     $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
     $buffer = New-Object byte[] (256 * 1024)
-    [QuickLookNativeSmoke]::ql_preview_archive($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+    [QuickLookNativeSmoke]::ql_preview_archive($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [IntPtr]::Zero)
 }
 
 function Invoke-Torrent([string]$path) {
@@ -134,7 +134,7 @@ function Invoke-Torrent([string]$path) {
 function Invoke-Office([string]$path) {
     Invoke-NativeJson $path {
         param($pathBytes, $buffer)
-        [QuickLookNativeSmoke]::ql_preview_office($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+        [QuickLookNativeSmoke]::ql_preview_office($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [IntPtr]::Zero)
     }
 }
 
@@ -148,7 +148,7 @@ function Invoke-Executable([string]$path) {
 function Invoke-Folder([string]$path) {
     Invoke-NativeJson $path {
         param($pathBytes, $buffer)
-        [QuickLookNativeSmoke]::ql_preview_folder($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+        [QuickLookNativeSmoke]::ql_preview_folder($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [IntPtr]::Zero)
     }
 }
 

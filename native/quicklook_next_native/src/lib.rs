@@ -44,6 +44,7 @@ const VK_ADD_U32: u32 = 0x6B; // numpad +
 const VK_SUBTRACT_U32: u32 = 0x6D; // numpad -
 
 type Callback = unsafe extern "C" fn(*const u16);
+pub type CancelCallback = extern "C" fn() -> bool;
 
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
@@ -1129,6 +1130,7 @@ pub extern "C" fn ql_preview_office(
     path_len: usize,
     out_buf: *mut u8,
     out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
@@ -1137,7 +1139,7 @@ pub extern "C" fn ql_preview_office(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_office(path);
+    let json = preview::render_office(path, cancel_cb);
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -1167,6 +1169,7 @@ pub extern "C" fn ql_preview_archive(
     path_len: usize,
     out_buf: *mut u8,
     out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
@@ -1175,7 +1178,7 @@ pub extern "C" fn ql_preview_archive(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_archive(path);
+    let json = preview::render_archive(path, cancel_cb);
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -1251,6 +1254,7 @@ pub extern "C" fn ql_preview_folder(
     path_len: usize,
     out_buf: *mut u8,
     out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
@@ -1259,7 +1263,7 @@ pub extern "C" fn ql_preview_folder(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_folder(path);
+    let json = preview::render_folder(path, cancel_cb);
     write_json_out(&json, out_buf, out_cap)
 }
 
