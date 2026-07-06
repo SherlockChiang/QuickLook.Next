@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
@@ -17,6 +18,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private readonly nuint _subclassId;
     private bool _installed;
     private bool _disposed;
+    private bool _spaceDownHandled;
 
     public PreviewKeyboardHook(nint hwnd, Func<bool> isPreviewVisible, Action onSpace)
     {
@@ -26,6 +28,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
         _subclassProc = WndProc;
         _subclassId = (nuint)GetHashCode();
         _installed = SetWindowSubclass(_hwnd, _subclassProc, _subclassId, nint.Zero);
+        DiagLog.Write("App", $"keyboard hook install hwnd=0x{_hwnd:X}; installed={_installed}; lastError={Marshal.GetLastWin32Error()}");
     }
 
     public void Dispose()
@@ -36,7 +39,8 @@ internal sealed class PreviewKeyboardHook : IDisposable
         _disposed = true;
         if (_installed)
         {
-            RemoveWindowSubclass(_hwnd, _subclassProc, _subclassId);
+            bool removed = RemoveWindowSubclass(_hwnd, _subclassProc, _subclassId);
+            DiagLog.Write("App", $"keyboard hook remove hwnd=0x{_hwnd:X}; removed={removed}; lastError={Marshal.GetLastWin32Error()}");
             _installed = false;
         }
     }
@@ -48,7 +52,18 @@ internal sealed class PreviewKeyboardHook : IDisposable
             && _isPreviewVisible())
         {
             if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
-                _onSpace();
+            {
+                if (!_spaceDownHandled)
+                {
+                    _spaceDownHandled = true;
+                    DiagLog.Write("App", "keyboard hook handled Space down");
+                    _onSpace();
+                }
+            }
+            else
+            {
+                _spaceDownHandled = false;
+            }
             return 0;
         }
 

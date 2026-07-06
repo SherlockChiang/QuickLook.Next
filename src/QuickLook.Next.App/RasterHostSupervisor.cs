@@ -43,6 +43,7 @@ internal sealed class RasterHostSupervisor
 
     public async Task StartAsync()
     {
+        using var trace = DiagLog.TraceScope("App", "host start", 500);
         _stopping = false;
         int gen = ++_generation;
         // Dispose the old channel + process + pipe before creating new ones (prevents handle leaks on restart).
@@ -73,6 +74,7 @@ internal sealed class RasterHostSupervisor
         try
         {
             await _server.WaitForConnectionAsync(connectCts.Token);
+            DiagLog.Write("App", $"host pipe connected gen={gen}");
         }
         catch
         {
@@ -92,6 +94,7 @@ internal sealed class RasterHostSupervisor
         if (IsConnected)
             return;
 
+        DiagLog.Write("App", "host ensure start waiting");
         await _startLock.WaitAsync();
         try
         {
@@ -117,18 +120,28 @@ internal sealed class RasterHostSupervisor
     {
         try
         {
+            DiagLog.Write("App", $"host read loop start gen={gen}");
             while (true)
             {
                 ControlMessage? msg = await channel.ReceiveAsync();
-                if (msg is null || gen != _generation) break;
+                if (msg is null || gen != _generation)
+                {
+                    DiagLog.Write("App", $"host read loop stop gen={gen}; msgNull={msg is null}; currentGen={_generation}");
+                    break;
+                }
                 Dispatch(msg);
             }
         }
-        catch (Exception ex) { _pending.FailAll(ex); }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "host read loop failed: " + ex.Message);
+            _pending.FailAll(ex);
+        }
     }
 
     private void Dispatch(ControlMessage msg)
     {
+        DiagLog.Write("App", "host recv " + msg.GetType().Name);
         switch (msg)
         {
             case HostReady ready: AdapterLuid = ready.AdapterLuid; break;
@@ -152,6 +165,7 @@ internal sealed class RasterHostSupervisor
         try
         {
             if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
+            using var trace = DiagLog.TraceScope("App", $"host send open request={requestId}; path={path}", 100);
             await _channel.SendAsync(new PreviewOpen(requestId, path, probe));
         }
         catch (Exception ex)
@@ -163,25 +177,37 @@ internal sealed class RasterHostSupervisor
     public async Task ResizeAsync(string requestId, uint width, uint height, double dpi)
     {
         if (_channel is not null)
+        {
+            DiagLog.Write("App", $"host send resize request={requestId}; size={width}x{height}; dpi={dpi:0.##}");
             await _channel.SendAsync(new PreviewResize(requestId, width, height, dpi));
+        }
     }
 
     public async Task RenderPageAsync(string requestId, int pageIndex, double scale)
     {
         if (_channel is not null)
+        {
+            DiagLog.Write("App", $"host send page open request={requestId}; page={pageIndex}; scale={scale:0.###}");
             await _channel.SendAsync(new PreviewPageOpen(requestId, pageIndex, scale));
+        }
     }
 
     public async Task ClosePageAsync(string requestId, int pageIndex)
     {
         if (_channel is not null)
+        {
+            DiagLog.Write("App", $"host send page close request={requestId}; page={pageIndex}");
             await _channel.SendAsync(new PreviewPageClose(requestId, pageIndex));
+        }
     }
 
     public async Task CloseAsync(string requestId)
     {
         if (_channel is not null)
+        {
+            DiagLog.Write("App", $"host send close request={requestId}");
             await _channel.SendAsync(new PreviewClose(requestId));
+        }
     }
 
     public void SetBackgroundEfficiency(bool enabled)
@@ -193,6 +219,7 @@ internal sealed class RasterHostSupervisor
     private void OnHostExited(int gen)
     {
         if (_stopping || gen != _generation) return;
+        DiagLog.Write("App", $"host exited gen={gen}; scheduling restart");
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
         _ = RestartAsync(gen);
     }
@@ -230,6 +257,7 @@ internal sealed class RasterHostSupervisor
 
     public void Stop()
     {
+        DiagLog.Write("App", "host stop");
         _stopping = true;
         try { _channel?.Dispose(); } catch { }
         _channel = null;

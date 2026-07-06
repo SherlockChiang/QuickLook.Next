@@ -35,6 +35,9 @@ public sealed partial class MainWindow : Window
     private const double RasterToolbarHeight = 162;
     private const int SwitchDebounceMs = 110;
     private const int MaxImageThumbnailCacheItems = 256;
+    private const int MaxImageFilmstripItems = 600;
+    private const int MaxInitialFilmstripThumbnailLoads = 160;
+    private const int FilmstripThumbnailBatchSize = 12;
 
     private readonly NativeBridge _native = new();
     private readonly PreviewWindowController _windowController;
@@ -50,6 +53,7 @@ public sealed partial class MainWindow : Window
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
     private PreviewKeyboardHook? _previewKeyboardHook;
+    private UiThreadWatchdog? _uiWatchdog;
     private readonly PreviewSession _previewSession = new();
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
@@ -58,6 +62,7 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _switchDebounceCts;
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
+    private bool _keyboardCloseQueued;
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
     private bool _imageFilmstripSuppressClick;
@@ -168,6 +173,7 @@ public sealed partial class MainWindow : Window
         ImageFilmstripList.PointerWheelChanged += OnImageFilmstripPointerWheelChanged;
         Closed += (_, _) =>
         {
+            _uiWatchdog?.Dispose();
             _previewKeyboardHook?.Dispose();
             RemoveTrayIcon();
             _supervisor?.Stop();
@@ -189,6 +195,7 @@ public sealed partial class MainWindow : Window
         _isStarted = true;
 
         DiagLog.Write("App", $"background start; pid={Environment.ProcessId}");
+        _uiWatchdog ??= new UiThreadWatchdog(DispatcherQueue);
         SetBackgroundEfficiency(enabled: true);
         StatusBar.Visibility = ShowStatusBar ? Visibility.Visible : Visibility.Collapsed;
         AutoStart.RepairIfConfigured();
@@ -310,7 +317,26 @@ public sealed partial class MainWindow : Window
         var id = _previewSession.CurrentRequestId;
         if (id is null) return;
         _previewSession.SetRequestId(null);
-        await _supervisor!.CloseAsync(id);
+        RasterHostSupervisor? supervisor = _supervisor;
+        if (supervisor is null)
+        {
+            DiagLog.Write("App", $"close skip: no RasterHost; request={id}");
+            return;
+        }
+
+        try
+        {
+            using var trace = DiagLog.TraceScope("App", $"close request={id}", 100);
+            await supervisor.CloseAsync(id).WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        catch (TimeoutException)
+        {
+            DiagLog.Write("App", $"close timed out; request={id}");
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            DiagLog.Write("App", $"close ignored after host disconnect; request={id}; {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private async Task EnsureRasterHostStartedAsync()
@@ -382,6 +408,7 @@ public sealed partial class MainWindow : Window
         PreviewSessionSnapshot session = _previewSession.Begin(path, source);
         int generation = session.Generation;
         CancellationToken previewToken = session.Token;
+        using var previewTrace = DiagLog.TraceScope("App", $"preview path source={source} gen={generation} path={path}", 250);
         BeginPreviewTransition();
         ResetPreview();
         Title = System.IO.Path.GetFileName(path);
@@ -391,12 +418,15 @@ public sealed partial class MainWindow : Window
         {
             await CloseCurrentAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            DiagLog.Write("App", $"preview probe begin gen={generation}");
             FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
+            DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
 
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
                 PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe), previewToken);
+                DiagLog.Write("App", $"preview native media info end gen={generation}; hasInfo={mediaInfo is not null}");
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 var mediaReady = new PreviewReady(
                     $"media-{generation}",
@@ -419,6 +449,7 @@ public sealed partial class MainWindow : Window
 
             if (AnimatedImagePreviewPresenter.TryReadAnimatedSize(path) is { } animatedSize)
             {
+                DiagLog.Write("App", $"preview animated image detected gen={generation}; {animatedSize.Width}x{animatedSize.Height}");
                 var gifReady = new PreviewReady(
                     $"gif-{generation}",
                     "image",
@@ -433,6 +464,7 @@ public sealed partial class MainWindow : Window
             }
 
             PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
+            DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             if (nativeReady is not null)
             {
@@ -456,7 +488,9 @@ public sealed partial class MainWindow : Window
             var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
+            DiagLog.Write("App", $"preview host open sent gen={generation}; request={requestId}");
             ControlMessage result = await completion.WaitAsync(previewToken);
+            DiagLog.Write("App", $"preview host result gen={generation}; request={requestId}; type={result.GetType().Name}");
             if (!IsPreviewGenerationCurrent(generation, previewToken) || !_previewSession.IsCurrentRequest(requestId))
                 return;
             StatusText.Text = result switch
@@ -494,6 +528,7 @@ public sealed partial class MainWindow : Window
 
     private void BeginPreviewTransition()
     {
+        DiagLog.Write("App", $"preview transition begin; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         _previewRevealPending = true;
         PreviewContentHost.Opacity = 0;
         PreviewContentHost.IsHitTestVisible = false;
@@ -504,7 +539,9 @@ public sealed partial class MainWindow : Window
 
     private void RevealPreviewWindow(bool activate)
     {
+        DiagLog.Write("App", $"preview reveal; activate={activate}; visible={_previewVisible}; tempHidden={_previewTemporarilyHidden}");
         _previewRevealPending = false;
+        _keyboardCloseQueued = false;
         LoadingRing.IsActive = false;
         LoadingRing.Visibility = Visibility.Collapsed;
         if (!_previewVisible || _previewTemporarilyHidden)
@@ -693,6 +730,10 @@ public sealed partial class MainWindow : Window
 
     private void OnSurfaceReceived(PreviewSurface surface)
     {
+        using var trace = DiagLog.TraceScope(
+            "App",
+            $"surface received request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}",
+            50);
         EnsureCompositor();
         if (_compositor is null) return;
         // Only accept surfaces for the exact current request. While switching/closing the session request id is
@@ -884,6 +925,7 @@ public sealed partial class MainWindow : Window
 
     private void ResetPreview()
     {
+        DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         _rasterPresenter?.Clear();
         _animatedImagePresenter?.Clear();
         _mediaPresenter?.Clear();
@@ -1085,6 +1127,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            using var trace = DiagLog.TraceScope("App", $"image metadata load gen={generation}; path={path}", 250);
             StorageFile file = await StorageFile.GetFileFromPathAsync(path);
             ImageProperties image = await file.Properties.GetImagePropertiesAsync();
             var names = new[]
@@ -1194,6 +1237,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            using var trace = DiagLog.TraceScope("App", $"image filmstrip load gen={generation}; path={path}", 500);
             string? folder = Path.GetDirectoryName(path);
             if (string.IsNullOrWhiteSpace(folder))
                 return;
@@ -1208,10 +1252,11 @@ public sealed partial class MainWindow : Window
                     .Where(i => !i.IsFolder && IsImagePath(i.Path))
                     .OrderBy(i => Path.GetFileName(i.Path), StringComparer.CurrentCultureIgnoreCase)
                     .Select(i => i.NativePath ?? i.Path)
-                    .Take(600)
+                    .Take(MaxImageFilmstripItems)
                     .ToArray();
             }, token);
             token.ThrowIfCancellationRequested();
+            DiagLog.Write("App", $"image filmstrip listing gen={generation}; siblings={siblings.Length}");
 
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
@@ -1235,12 +1280,16 @@ public sealed partial class MainWindow : Window
                 ImageFilmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
             });
 
-            foreach (string sibling in PrioritizeSiblings(siblings, path))
+            var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
+            int thumbnailAttempts = 0;
+            foreach (string sibling in PrioritizeSiblings(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
             {
                 token.ThrowIfCancellationRequested();
+                thumbnailAttempts++;
                 if (TryGetCachedImageThumbnail(sibling, out ImageSource? cachedSource) && cachedSource is not null)
                 {
-                    SetFilmstripThumbnail(generation, token, sibling, cachedSource);
+                    thumbnailBatch.Add((sibling, cachedSource));
+                    FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
                     continue;
                 }
 
@@ -1252,8 +1301,11 @@ public sealed partial class MainWindow : Window
                     continue;
                 AddCachedImageThumbnail(sibling, source);
 
-                SetFilmstripThumbnail(generation, token, sibling, source);
+                thumbnailBatch.Add((sibling, source));
+                FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
             }
+            FlushFilmstripThumbnailBatch(generation, token, thumbnailBatch);
+            DiagLog.Write("App", $"image filmstrip thumbnails done gen={generation}; siblings={siblings.Length}; attempted={thumbnailAttempts}");
         }
         catch (OperationCanceledException)
         {
@@ -1277,16 +1329,36 @@ public sealed partial class MainWindow : Window
     private void RemoveCachedImageThumbnail(string path)
         => _imageThumbnailCache.Remove(path);
 
-    private void SetFilmstripThumbnail(int generation, CancellationToken token, string path, ImageSource source)
+    private void FlushFilmstripThumbnailBatchIfNeeded(
+        int generation,
+        CancellationToken token,
+        List<(string Path, ImageSource Source)> batch)
     {
+        if (batch.Count >= FilmstripThumbnailBatchSize)
+            FlushFilmstripThumbnailBatch(generation, token, batch);
+    }
+
+    private void FlushFilmstripThumbnailBatch(
+        int generation,
+        CancellationToken token,
+        List<(string Path, ImageSource Source)> batch)
+    {
+        if (batch.Count == 0)
+            return;
+
+        (string Path, ImageSource Source)[] updates = batch.ToArray();
+        batch.Clear();
         DispatcherQueue.TryEnqueue(() =>
         {
             if (!IsPreviewGenerationCurrent(generation, token))
                 return;
-            ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
-                string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-            if (item is not null)
-                item.Thumbnail = source;
+            foreach ((string path, ImageSource source) in updates)
+            {
+                ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
+                    string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (item is not null)
+                    item.Thumbnail = source;
+            }
         });
     }
 
@@ -1540,6 +1612,7 @@ public sealed partial class MainWindow : Window
             contentHeight,
             maxWidth,
             maxHeight);
+        DiagLog.Write("App", $"window resize content={contentWidth:0}x{contentHeight:0}; target={size.Width}x{size.Height}; visible={_previewVisible}; pending={_previewRevealPending}; topmost={setTopmost}");
         TemporarilyHideWindowForTransitionResize();
         GetAppWindow().Resize(size);
         if (setTopmost && _previewVisible)
@@ -1560,6 +1633,7 @@ public sealed partial class MainWindow : Window
 
         try { GetAppWindow().Hide(); }
         catch { _windowController.Hide(); }
+        DiagLog.Write("App", "window temporarily hidden for transition resize");
         _previewTemporarilyHidden = true;
     }
 
@@ -1822,7 +1896,11 @@ public sealed partial class MainWindow : Window
     {
         if (!_previewVisible)
             return;
+        if (_keyboardCloseQueued)
+            return;
 
+        _keyboardCloseQueued = true;
+        DiagLog.Write("App", "keyboard close queued");
         _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
     }
 
@@ -2079,6 +2157,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowPreviewWindow(bool activate, bool resizeToDefault = true)
     {
+        using var trace = DiagLog.TraceScope("App", $"window show activate={activate}; resizeDefault={resizeToDefault}; visible={_previewVisible}", 100);
         bool openingFromHidden = !_previewVisible;
         if (activate)
             _windowController.SetNoActivateStyle(enabled: false);
@@ -2105,7 +2184,9 @@ public sealed partial class MainWindow : Window
 
     private void HidePreviewWindow()
     {
+        using var trace = DiagLog.TraceScope("App", $"window hide visible={_previewVisible}; request={_previewSession.CurrentRequestId}", 100);
         CancelSwitchDebounce();
+        _keyboardCloseQueued = false;
         _previewRevealPending = false;
         _previewTemporarilyHidden = false;
         LoadingRing.IsActive = false;

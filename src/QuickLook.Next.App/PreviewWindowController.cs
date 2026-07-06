@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
+using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
@@ -16,6 +17,7 @@ internal sealed class PreviewWindowController
 
     public void Raise(bool activate)
     {
+        using var trace = DiagLog.TraceScope("App", $"window raise activate={activate}", 50);
         nint hwnd = _hwndProvider();
         uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW;
         if (!activate)
@@ -29,7 +31,7 @@ internal sealed class PreviewWindowController
 
     public void ReleaseTopmost()
     {
-        SetWindowPos(
+        bool ok = SetWindowPos(
             _hwndProvider(),
             HWND_NOTOPMOST,
             0,
@@ -37,6 +39,7 @@ internal sealed class PreviewWindowController
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        DiagLog.Write("App", $"window release topmost ok={ok}; lastError={Marshal.GetLastWin32Error()}");
     }
 
     public void SetNoActivateStyle(bool enabled)
@@ -45,24 +48,37 @@ internal sealed class PreviewWindowController
         nint ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
         nint next = enabled ? ex | WS_EX_NOACTIVATE : ex & ~WS_EX_NOACTIVATE;
         if (next != ex)
+        {
             SetWindowLongPtr(hwnd, GWL_EXSTYLE, next);
+            DiagLog.Write("App", $"window no-activate style enabled={enabled}; lastError={Marshal.GetLastWin32Error()}");
+        }
     }
 
     public void ShowNoActivate()
     {
+        using var trace = DiagLog.TraceScope("App", "window show no-activate", 50);
         nint hwnd = _hwndProvider();
         SetNoActivateStyle(enabled: false);
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        bool shown = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        DiagLog.Write("App", $"window ShowWindow(SW_SHOWNOACTIVATE) result={shown}; lastError={Marshal.GetLastWin32Error()}");
         PulseTopmost(hwnd, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     public void Hide()
-        => ShowWindow(_hwndProvider(), SW_HIDE);
+    {
+        bool hidden = ShowWindow(_hwndProvider(), SW_HIDE);
+        DiagLog.Write("App", $"window ShowWindow(SW_HIDE) result={hidden}; lastError={Marshal.GetLastWin32Error()}");
+    }
 
     private static void PulseTopmost(nint hwnd, uint flags)
     {
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
-        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        bool topmost = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+        int topmostError = Marshal.GetLastWin32Error();
+        bool notTopmost = SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        int notTopmostError = Marshal.GetLastWin32Error();
+        DiagLog.Write(
+            "App",
+            $"window topmost pulse flags=0x{flags:X}; topmost={topmost}/{topmostError}; notTopmost={notTopmost}/{notTopmostError}");
     }
 
     private const int GWL_EXSTYLE = -20;

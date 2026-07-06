@@ -1,5 +1,6 @@
 using System.Text;
 using System.Threading.Channels;
+using System.Diagnostics;
 
 namespace QuickLook.Next.Core;
 
@@ -39,6 +40,12 @@ public static class DiagLog
         Lines.Writer.TryWrite(line);
     }
 
+    public static IDisposable TraceScope(string tag, string operation, int slowThresholdMs = 50)
+    {
+        Write(tag, operation + " begin");
+        return new Scope(tag, operation, slowThresholdMs);
+    }
+
     private static void EnsureWriterStarted()
     {
         lock (StartLock)
@@ -75,4 +82,36 @@ public static class DiagLog
             }
         }
     }
+
+    private sealed class Scope : IDisposable
+    {
+        private readonly string _tag;
+        private readonly string _operation;
+        private readonly int _slowThresholdMs;
+        private readonly Stopwatch _watch = Stopwatch.StartNew();
+        private bool _disposed;
+
+        public Scope(string tag, string operation, int slowThresholdMs)
+        {
+            _tag = tag;
+            _operation = operation;
+            _slowThresholdMs = slowThresholdMs;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _watch.Stop();
+            string suffix = _watch.ElapsedMilliseconds >= _slowThresholdMs ? " slow" : "";
+            Write(_tag, $"{_operation} end {ElapsedText(_watch.Elapsed)}{suffix}");
+        }
+    }
+
+    private static string ElapsedText(TimeSpan elapsed)
+        => elapsed.TotalMilliseconds < 1000
+            ? $"{elapsed.TotalMilliseconds:0}ms"
+            : $"{elapsed.TotalSeconds:0.000}s";
 }
