@@ -179,6 +179,11 @@ internal sealed class PdfPreviewPresenter
 
     public void Clear()
     {
+        string? requestId = _requestId;
+        RasterHostSupervisor? supervisor = requestId is null ? null : _supervisorProvider();
+        foreach (int pageIndex in _requestedPages.ToArray())
+            _ = supervisor?.ClosePageAsync(requestId!, pageIndex);
+
         foreach (var host in _pageHosts.Values)
         {
             ElementCompositionPreview.SetElementChildVisual(host, null);
