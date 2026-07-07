@@ -39,6 +39,7 @@ public static class QuickLookNativeSmoke {
   public delegate bool CancelCallback();
 
   public static readonly CancelCallback NeverCancel = () => false;
+  public static readonly CancelCallback AlwaysCancel = () => true;
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_probe_file(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
@@ -173,6 +174,12 @@ function Invoke-ImageDecode([string]$path) {
     }
 }
 
+function Invoke-ImageDecodeCanceled([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (16 + 4096 * 4096 * 4)
+    [QuickLookNativeSmoke]::ql_decode_image_cancelable($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [QuickLookNativeSmoke]::AlwaysCancel)
+}
+
 function Invoke-PackageIcon([string]$path) {
     $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
     $buffer = New-Object byte[] (8 + 512 * 512 * 4)
@@ -247,6 +254,7 @@ Assert-True ($batPreview.language -eq "batch") "Expected batch syntax language"
 
 $image = Invoke-ImageDecode $png
 Assert-True ($image.Width -gt 0 -and $image.Height -gt 0) "Expected decoded image dimensions"
+Assert-True ((Invoke-ImageDecodeCanceled $png) -lt 0) "Expected canceled image decode to fail closed"
 
 $folder = Invoke-Folder $testRoot
 Assert-True ($folder.kind -eq "folder") "Expected folder preview"
