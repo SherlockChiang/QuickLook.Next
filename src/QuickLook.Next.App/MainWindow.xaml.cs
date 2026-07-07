@@ -1445,11 +1445,16 @@ public sealed partial class MainWindow : Window
             foreach ((string sibling, int distance) in PrioritizeSiblingsWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
             {
                 token.ThrowIfCancellationRequested();
+                if (!IsImageFilmstripLoadCurrent(path, generation, token))
+                    return;
+
                 if (distance > ImmediateFilmstripThumbnailRadius && !delayedFarThumbnails)
                 {
                     FlushFilmstripThumbnailBatch(generation, token, thumbnailBatch);
                     delayedFarThumbnails = true;
                     await Task.Delay(DelayedFilmstripThumbnailStartMs, token);
+                    if (!IsImageFilmstripLoadCurrent(path, generation, token))
+                        return;
                 }
 
                 thumbnailAttempts++;
@@ -1461,6 +1466,9 @@ public sealed partial class MainWindow : Window
                 }
 
                 NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96), token);
+                if (!IsImageFilmstripLoadCurrent(path, generation, token))
+                    return;
+
                 if (raster is null)
                     continue;
                 ImageSource? source = CreateBitmapSource(raster);
@@ -1584,13 +1592,22 @@ public sealed partial class MainWindow : Window
             foreach (string target in targets)
             {
                 token.ThrowIfCancellationRequested();
+                if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
+                    return;
+
                 NativeRasterImage? raster = await Task.Run(() =>
                 {
                     if (token.IsCancellationRequested)
                         return null;
+                    if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
+                        return null;
+
                     _ = _native.ProbeFile(target);
                     return _native.TryGetThumbnail(target, 128);
                 }, token);
+                if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
+                    return;
+
                 if (raster is null)
                     continue;
 
@@ -1617,6 +1634,9 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", "image adjacent prefetch failed: " + ex.Message);
         }
     }
+
+    private bool IsImageFilmstripLoadCurrent(string path, int generation, CancellationToken token)
+        => IsPreviewGenerationCurrent(generation, token) && _previewSession.IsCurrentPath(path);
 
     private static IEnumerable<string> AdjacentImagePaths(string[] siblings, string currentPath, int radius)
     {
