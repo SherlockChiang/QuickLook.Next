@@ -6,7 +6,7 @@ namespace QuickLook.Next.RasterHost;
 
 internal static class SystemImageDecoder
 {
-    private const uint MaxPreviewRasterDimension = 2560;
+    private const uint MaxPreviewRasterDimension = 2048;
     private const int MaxDecodedImageBytes = (int)(MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 512L * 1024 * 1024;
 

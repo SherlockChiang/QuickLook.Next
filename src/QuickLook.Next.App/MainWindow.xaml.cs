@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private const int DelayedFilmstripThumbnailStartMs = 350;
     private const int AdjacentImagePrefetchRadius = 2;
     private const int DuplicateOpenCloseGuardMs = 750;
+    private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly NativeBridge _native = new();
     private readonly PreviewWindowController _windowController;
@@ -416,11 +417,12 @@ public sealed partial class MainWindow : Window
     /// (atomic on the UI dispatcher — no yield in between), so any late surface for it is dropped by the
     /// guard, and a second concurrent caller sees null and skips (de-dupes the close).
     /// </summary>
-    private async Task CloseCurrentAsync()
+    private async Task CloseCurrentAsync(string? requestId = null)
     {
-        var id = _previewSession.CurrentRequestId;
+        var id = requestId ?? _previewSession.CurrentRequestId;
         if (id is null) return;
-        _previewSession.SetRequestId(null);
+        if (requestId is null || string.Equals(_previewSession.CurrentRequestId, id, StringComparison.Ordinal))
+            _previewSession.SetRequestId(null);
         RasterHostSupervisor? supervisor = _supervisor;
         if (supervisor is null)
         {
@@ -441,6 +443,17 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", $"close ignored after host disconnect; request={id}; {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private async Task ClosePreviewImmediatelyAsync()
+    {
+        string? requestId = _previewSession.CurrentRequestId;
+        _previewSession.BeginClose();
+        ResetPreview();
+        _previewSession.Clear();
+        _previewSession.CancelOperation();
+        HidePreviewWindow();
+        await CloseCurrentAsync(requestId);
     }
 
     private async Task EnsureRasterHostStartedAsync()
@@ -469,12 +482,7 @@ public sealed partial class MainWindow : Window
 
         if (intent.Intent == PreviewIntent.Close)
         {
-            PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
-            ResetPreview();
-            await CloseCurrentAsync();
-            if (!_previewSession.IsCurrent(closeSession)) return;
-            _previewSession.Clear();
-            HidePreviewWindow();
+            await ClosePreviewImmediatelyAsync();
             return;
         }
 
@@ -494,12 +502,7 @@ public sealed partial class MainWindow : Window
                     return;
                 }
 
-                PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
-                ResetPreview();
-                await CloseCurrentAsync();
-                if (!_previewSession.IsCurrent(closeSession)) return;
-                _previewSession.Clear();
-                HidePreviewWindow();
+                await ClosePreviewImmediatelyAsync();
                 return;
             }
 
@@ -913,9 +916,9 @@ public sealed partial class MainWindow : Window
         UpdatePreviewChrome(ready, showRasterTools: true);
         _panelController.ShowRaster();
         RasterPreviewResult result = _rasterPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-        StartImageSidecarLoads(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
+        ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
 
@@ -926,9 +929,9 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-        StartImageSidecarLoads(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         ScheduleAnimatedImageLayoutUpdate();
+        ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
 
@@ -1244,6 +1247,18 @@ public sealed partial class MainWindow : Window
         _ = LoadImageFilmstripAsync(imagePath, generation, token);
     }
 
+    private void ScheduleImageSidecarLoads(PreviewReady ready)
+    {
+        int generation = _previewSession.Generation;
+        CancellationToken token = CurrentPreviewToken;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!IsPreviewGenerationCurrent(generation, token))
+                return;
+            StartImageSidecarLoads(ready);
+        });
+    }
+
     private void ClearImageSidecars()
     {
         _imageSiblingPaths = [];
@@ -1261,8 +1276,14 @@ public sealed partial class MainWindow : Window
         try
         {
             using var trace = DiagLog.TraceScope("App", $"image metadata load gen={generation}; path={path}", 250);
-            StorageFile file = await StorageFile.GetFileFromPathAsync(path);
-            ImageProperties image = await file.Properties.GetImagePropertiesAsync();
+            StorageFile file = await StorageFile
+                .GetFileFromPathAsync(path)
+                .AsTask(token)
+                .WaitAsync(ImageMetadataTimeout, token);
+            ImageProperties image = await file.Properties
+                .GetImagePropertiesAsync()
+                .AsTask(token)
+                .WaitAsync(ImageMetadataTimeout, token);
             var names = new[]
             {
                 "System.Image.HorizontalSize",
@@ -1302,7 +1323,7 @@ public sealed partial class MainWindow : Window
                 "System.GPS.Altitude",
                 "System.GPS.ImgDirection",
             };
-            IDictionary<string, object> props = await RetrieveImagePropertiesAsync(file, names);
+            IDictionary<string, object> props = await RetrieveImagePropertiesAsync(file, names, token);
             token.ThrowIfCancellationRequested();
 
             var rows = new List<(string Label, string Value)>();
@@ -1359,6 +1380,10 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (TimeoutException)
+        {
+            DiagLog.Write("App", $"image metadata timed out gen={generation}");
         }
         catch (Exception ex)
         {
@@ -1655,22 +1680,49 @@ public sealed partial class MainWindow : Window
     private static string? PropText(IDictionary<string, object> props, string name)
         => props.TryGetValue(name, out object? value) ? FormatPropertyValue(value) : null;
 
-    private static async Task<IDictionary<string, object>> RetrieveImagePropertiesAsync(StorageFile file, IReadOnlyList<string> names)
+    private static async Task<IDictionary<string, object>> RetrieveImagePropertiesAsync(
+        StorageFile file,
+        IReadOnlyList<string> names,
+        CancellationToken token)
     {
         try
         {
-            return await file.Properties.RetrievePropertiesAsync(names);
+            return await file.Properties
+                .RetrievePropertiesAsync(names)
+                .AsTask(token)
+                .WaitAsync(ImageMetadataTimeout, token);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            return new Dictionary<string, object>();
         }
         catch
         {
             var result = new Dictionary<string, object>();
+            DateTimeOffset deadline = DateTimeOffset.UtcNow + ImageMetadataTimeout;
             foreach (string name in names)
             {
+                token.ThrowIfCancellationRequested();
+                TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                    break;
+
                 try
                 {
-                    IDictionary<string, object> one = await file.Properties.RetrievePropertiesAsync([name]);
+                    IDictionary<string, object> one = await file.Properties
+                        .RetrievePropertiesAsync([name])
+                        .AsTask(token)
+                        .WaitAsync(remaining < TimeSpan.FromMilliseconds(150) ? remaining : TimeSpan.FromMilliseconds(150), token);
                     if (one.TryGetValue(name, out object? value) && value is not null)
                         result[name] = value;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch
                 {
@@ -2151,12 +2203,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            PreviewSessionSnapshot closeSession = _previewSession.BeginClose();
-            ResetPreview();
-            await CloseCurrentAsync();
-            if (!_previewSession.IsCurrent(closeSession)) return;
-            _previewSession.Clear();
-            HidePreviewWindow();
+            await ClosePreviewImmediatelyAsync();
         }
         catch (Exception ex)
         {
