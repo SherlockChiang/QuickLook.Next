@@ -1442,7 +1442,7 @@ public sealed partial class MainWindow : Window
             var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
             int thumbnailAttempts = 0;
             bool delayedFarThumbnails = false;
-            foreach ((string sibling, int distance) in PrioritizeSiblingsWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
+            foreach ((string sibling, int distance) in ImageFilmstripPlanner.PrioritizeWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
             {
                 token.ThrowIfCancellationRequested();
                 if (!IsImageFilmstripLoadCurrent(path, generation, token))
@@ -1582,7 +1582,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            string[] targets = AdjacentImagePaths(siblings, currentPath, AdjacentImagePrefetchRadius)
+            string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
                 .Where(path => !_imageThumbnailCache.ContainsKey(path))
                 .ToArray();
             if (targets.Length == 0)
@@ -1637,39 +1637,6 @@ public sealed partial class MainWindow : Window
 
     private bool IsImageFilmstripLoadCurrent(string path, int generation, CancellationToken token)
         => IsPreviewGenerationCurrent(generation, token) && _previewSession.IsCurrentPath(path);
-
-    private static IEnumerable<string> AdjacentImagePaths(string[] siblings, string currentPath, int radius)
-    {
-        int current = Array.FindIndex(siblings, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
-        if (current < 0)
-            yield break;
-
-        for (int distance = 1; distance <= radius; distance++)
-        {
-            int next = current + distance;
-            if (next < siblings.Length)
-                yield return siblings[next];
-
-            int previous = current - distance;
-            if (previous >= 0)
-                yield return siblings[previous];
-        }
-    }
-
-    private static IEnumerable<(string Path, int Distance)> PrioritizeSiblingsWithDistance(string[] siblings, string currentPath)
-    {
-        int current = Array.FindIndex(siblings, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
-        if (current < 0)
-        {
-            return siblings.Select((path, index) => (Path: path, Distance: index));
-        }
-
-        return siblings
-            .Select((path, index) => (Path: path, Distance: Math.Abs(index - current)))
-            .OrderBy(i => i.Distance)
-            .ThenBy(i => i.Path, StringComparer.CurrentCultureIgnoreCase);
-    }
-
 
     private void SelectCurrentFilmstripItem(string path)
     {
