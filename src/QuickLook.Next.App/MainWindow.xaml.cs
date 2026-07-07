@@ -1298,6 +1298,10 @@ public sealed partial class MainWindow : Window
         try
         {
             using var trace = DiagLog.TraceScope("App", $"image metadata load gen={generation}; path={path}", 250);
+            ImageMetadata? nativeMetadata = await Task.Run(() => _native.TryPreviewImageMetadata(path), token);
+            if (nativeMetadata is not null && RenderNativeImageMetadata(path, generation, token, nativeMetadata))
+                return;
+
             StorageFile file = await StorageFile
                 .GetFileFromPathAsync(path)
                 .AsTask(token)
@@ -1411,6 +1415,39 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", "image metadata load failed: " + ex.Message);
         }
+    }
+
+    private bool RenderNativeImageMetadata(string path, int generation, CancellationToken token, ImageMetadata metadata)
+    {
+        var rows = new List<(string Label, string Value)>();
+        AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
+        AddIfValue(rows, "Date taken", FormatExifDateTime(metadata.DateTime));
+        AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
+        AddIfValue(rows, "Orientation", metadata.Orientation?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Location", FormatLocation(metadata.Latitude, metadata.Longitude));
+
+        if (rows.Count == 0)
+            return false;
+        if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
+            return true;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
+                return;
+            _exifPresenter?.RenderRows(rows, metadata.Latitude, metadata.Longitude);
+        });
+        return true;
+    }
+
+    private static string? FormatExifDateTime(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        string trimmed = value.Trim();
+        return trimmed.Length >= 10 && trimmed[4] == ':' && trimmed[7] == ':'
+            ? trimmed[..4] + "-" + trimmed[5..7] + "-" + trimmed[8..]
+            : trimmed;
     }
 
     private async Task LoadImageFilmstripAsync(string path, int generation, CancellationToken token)

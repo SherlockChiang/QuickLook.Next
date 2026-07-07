@@ -214,7 +214,8 @@ const MAX_EBOOK_CHAPTERS: usize = 10;
 const MAX_EBOOK_TEXT_CHARS: usize = 140 * 1024;
 const MAX_EXIF_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ExifMetadata {
     make: Option<String>,
     model: Option<String>,
@@ -224,6 +225,12 @@ struct ExifMetadata {
     orientation: Option<u16>,
     latitude: Option<f64>,
     longitude: Option<f64>,
+}
+
+pub fn render_image_metadata(path: &str) -> String {
+    parse_jpeg_exif_metadata(path)
+        .map(|metadata| to_json(&metadata))
+        .unwrap_or_default()
 }
 
 fn file_size_modified(path: &str) -> (i64, i64) {

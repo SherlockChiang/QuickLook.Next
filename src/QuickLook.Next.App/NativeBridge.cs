@@ -64,6 +64,8 @@ internal sealed class NativeBridge
         byte[] outBuf,
         nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_image_metadata(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -173,6 +175,22 @@ internal sealed class NativeBridge
             return doc.RootElement.TryGetProperty("listing", out var listing)
                 ? JsonSerializer.Deserialize<PreviewListing>(listing.GetRawText(), ProtocolJson.Options)
                 : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public ImageMetadata? TryPreviewImageMetadata(string path)
+    {
+        string? json = CallPreview(ql_preview_image_metadata, path);
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<ImageMetadata>(json, ProtocolJson.Options);
         }
         catch
         {

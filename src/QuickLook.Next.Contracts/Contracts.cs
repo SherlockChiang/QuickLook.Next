@@ -119,6 +119,18 @@ public sealed record PreviewListingItem(string Name, string Path, string ParentP
     public string? NativePath { get; init; }
 }
 
+public sealed record ImageMetadata
+{
+    public string? Make { get; init; }
+    public string? Model { get; init; }
+    public string? DateTime { get; init; }
+    public uint? Width { get; init; }
+    public uint? Height { get; init; }
+    public ushort? Orientation { get; init; }
+    public double? Latitude { get; init; }
+    public double? Longitude { get; init; }
+}
+
 public sealed record PreviewTable(string Format)
 {
     public string Delimiter { get; init; } = ",";

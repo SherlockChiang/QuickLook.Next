@@ -54,6 +54,9 @@ public static class QuickLookNativeSmoke {
   public static extern int ql_preview_office(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap, IntPtr cancelCb);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_preview_image_metadata(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_preview_executable(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
@@ -180,6 +183,12 @@ function Invoke-ImageDecodeCanceled([string]$path) {
     [QuickLookNativeSmoke]::ql_decode_image_cancelable($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [QuickLookNativeSmoke]::AlwaysCancel)
 }
 
+function Invoke-ImageMetadataRaw([string]$path) {
+    $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
+    $buffer = New-Object byte[] (64 * 1024)
+    [QuickLookNativeSmoke]::ql_preview_image_metadata($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+}
+
 function Invoke-PackageIcon([string]$path) {
     $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
     $buffer = New-Object byte[] (8 + 512 * 512 * 4)
@@ -255,6 +264,7 @@ Assert-True ($batPreview.language -eq "batch") "Expected batch syntax language"
 $image = Invoke-ImageDecode $png
 Assert-True ($image.Width -gt 0 -and $image.Height -gt 0) "Expected decoded image dimensions"
 Assert-True ((Invoke-ImageDecodeCanceled $png) -lt 0) "Expected canceled image decode to fail closed"
+Assert-True ((Invoke-ImageMetadataRaw $png) -ge 0) "Expected image metadata call to fail closed"
 
 $folder = Invoke-Folder $testRoot
 Assert-True ($folder.kind -eq "folder") "Expected folder preview"

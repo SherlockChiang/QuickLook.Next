@@ -1179,6 +1179,25 @@ pub extern "C" fn ql_preview_office(
     write_json_out(&json, out_buf, out_cap)
 }
 
+/// Render bounded Rust-native image metadata. Returns JSON length, 0 on failure/no metadata.
+#[no_mangle]
+pub extern "C" fn ql_preview_image_metadata(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+        return 0;
+    }
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let json = preview::render_image_metadata(path);
+    write_json_out(&json, out_buf, out_cap)
+}
+
 /// Render a PE executable metadata preview. Returns JSON length, 0 on failure.
 #[no_mangle]
 pub extern "C" fn ql_preview_executable(
