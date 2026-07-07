@@ -1423,8 +1423,21 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
         AddIfValue(rows, "Date taken", FormatExifDateTime(metadata.DateTime));
         AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
+        AddIfValue(rows, "Lens", JoinNonEmpty(metadata.LensMake, metadata.LensModel));
+        AddIfValue(rows, "Focal length", FormatDoubleWithUnit(metadata.FocalLength, "mm"));
+        AddIfValue(rows, "Aperture", metadata.FNumber is > 0 ? $"f/{metadata.FNumber.Value:0.0}" : null);
+        AddIfValue(rows, "Shutter speed", FormatExposureSeconds(metadata.ExposureTime));
+        AddIfValue(rows, "ISO", metadata.Iso?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Exposure bias", FormatDoubleWithUnit(metadata.ExposureBias, "EV"));
+        AddIfValue(rows, "Metering", FormatExifEnum(metadata.MeteringMode, MeteringModeNames));
+        AddIfValue(rows, "White balance", FormatExifEnum(metadata.WhiteBalance, WhiteBalanceNames));
+        AddIfValue(rows, "Flash", FormatFlash(metadata.Flash));
         AddIfValue(rows, "Orientation", metadata.Orientation?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Color space", FormatExifEnum(metadata.ColorSpace, ColorSpaceNames));
         AddIfValue(rows, "Location", FormatLocation(metadata.Latitude, metadata.Longitude));
+        AddIfValue(rows, "Altitude", FormatDoubleWithUnit(metadata.Altitude, "m"));
+        AddIfValue(rows, "Direction", FormatDoubleWithUnit(metadata.Direction, "deg"));
+        AddIfValue(rows, "Software", metadata.Software);
 
         if (rows.Count == 0)
             return false;
@@ -1449,6 +1462,24 @@ public sealed partial class MainWindow : Window
             ? trimmed[..4] + "-" + trimmed[5..7] + "-" + trimmed[8..]
             : trimmed;
     }
+
+    private static string? FormatDoubleWithUnit(double? value, string unit)
+        => value.HasValue ? $"{value.Value:0.###} {unit}" : null;
+
+    private static string? FormatExposureSeconds(double? value)
+    {
+        if (!value.HasValue || value.Value <= 0)
+            return null;
+        return value.Value < 1.0
+            ? $"1/{Math.Round(1.0 / value.Value):0} s"
+            : $"{value.Value:0.###} s";
+    }
+
+    private static string? FormatExifEnum(ushort? value, IReadOnlyDictionary<int, string> names)
+        => value.HasValue ? FormatExifEnum(value.Value.ToString(CultureInfo.InvariantCulture), names) : null;
+
+    private static string? FormatFlash(ushort? value)
+        => value.HasValue ? FormatFlash(value.Value.ToString(CultureInfo.InvariantCulture)) : null;
 
     private async Task LoadImageFilmstripAsync(string path, int generation, CancellationToken token)
     {

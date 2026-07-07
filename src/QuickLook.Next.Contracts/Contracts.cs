@@ -127,8 +127,22 @@ public sealed record ImageMetadata
     public uint? Width { get; init; }
     public uint? Height { get; init; }
     public ushort? Orientation { get; init; }
+    public string? LensMake { get; init; }
+    public string? LensModel { get; init; }
+    public string? Software { get; init; }
+    public double? FNumber { get; init; }
+    public double? ExposureTime { get; init; }
+    public uint? Iso { get; init; }
+    public double? FocalLength { get; init; }
+    public double? ExposureBias { get; init; }
+    public ushort? MeteringMode { get; init; }
+    public ushort? Flash { get; init; }
+    public ushort? WhiteBalance { get; init; }
+    public ushort? ColorSpace { get; init; }
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
+    public double? Altitude { get; init; }
+    public double? Direction { get; init; }
 }
 
 public sealed record PreviewTable(string Format)
