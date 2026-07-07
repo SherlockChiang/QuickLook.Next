@@ -800,15 +800,30 @@ pub extern "C" fn ql_decode_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_decode_image_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return -1,
     };
 
-    let (width, height, original_width, original_height, bgra) = match decode_image_bgra(path) {
+    let (width, height, original_width, original_height, bgra) = match decode_image_bgra(path, cancel_cb) {
         Some(decoded) => decoded,
         None => return -2,
     };
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
+
     let total = 16 + bgra.len();
     if out.is_null() || out_cap < total {
         return -(total as i32);
@@ -824,13 +839,21 @@ pub extern "C" fn ql_decode_image(
     total as i32
 }
 
-fn decode_image_bgra(path: &str) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
+fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+
     let image = ImageReader::open(path)
         .ok()?
         .with_guessed_format()
         .ok()?
         .decode()
         .ok()?;
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+
     let (original_width, original_height) = image.dimensions();
     if original_width == 0 || original_height == 0 {
         return None;
@@ -844,12 +867,18 @@ fn decode_image_bgra(path: &str) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
     };
     let width = ((original_width as f64 * scale).round() as u32).max(1);
     let height = ((original_height as f64 * scale).round() as u32).max(1);
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
 
     let raster = if width == original_width && height == original_height {
         image
     } else {
         image.resize_exact(width, height, image::imageops::FilterType::Triangle)
     };
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
 
     let rgba = raster.to_rgba8();
     let mut bgra = Vec::with_capacity((width * height * 4) as usize);
@@ -863,8 +892,15 @@ fn decode_image_bgra(path: &str) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
         bgra.push(((r * a + 127) / 255) as u8);
         bgra.push(a as u8);
     }
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
 
     Some((width, height, original_width, original_height, bgra))
+}
+
+fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
+    cancel_cb.map(|cb| cb()).unwrap_or(false)
 }
 
 // ── Shell thumbnail (fallback preview for any file type) ───────────────────────────────────────

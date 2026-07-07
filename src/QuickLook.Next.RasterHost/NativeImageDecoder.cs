@@ -19,9 +19,19 @@ internal static class NativeImageDecoder
     private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
+    private static readonly NativeCancelCallback DecodeCancelCallback = IsDecodeCanceled;
+    private static readonly IntPtr DecodeCancelCallbackPtr = Marshal.GetFunctionPointerForDelegate(DecodeCancelCallback);
+    private static CancellationToken _decodeCancellationToken;
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool NativeCancelCallback();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
 
     public static async Task<NativeDecodedImage?> TryDecodeAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -61,7 +71,7 @@ internal static class NativeImageDecoder
             {
                 if (cancellationToken.IsCancellationRequested)
                     return null;
-                return TryDecode(path);
+                return TryDecode(path, cancellationToken);
             }, CancellationToken.None);
         }
         finally
@@ -71,6 +81,9 @@ internal static class NativeImageDecoder
     }
 
     public static NativeDecodedImage? TryDecode(string path)
+        => TryDecode(path, CancellationToken.None);
+
+    public static NativeDecodedImage? TryDecode(string path, CancellationToken cancellationToken)
     {
         try
         {
@@ -81,10 +94,13 @@ internal static class NativeImageDecoder
             int cap = 8 * 1024 * 1024;
             while (cap <= MaxDecodedImageBytes)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(cap);
                 try
                 {
-                    int n = ql_decode_image(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)buffer.Length);
+                    _decodeCancellationToken = cancellationToken;
+                    int n = ql_decode_image_cancelable(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)buffer.Length, DecodeCancelCallbackPtr);
+                    _decodeCancellationToken = CancellationToken.None;
                     if (n > HeaderBytes)
                     {
                         int width = checked((int)BitConverter.ToUInt32(buffer, 0));
@@ -113,6 +129,7 @@ internal static class NativeImageDecoder
                 }
                 finally
                 {
+                    _decodeCancellationToken = CancellationToken.None;
                     ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
@@ -124,6 +141,9 @@ internal static class NativeImageDecoder
 
         return null;
     }
+
+    private static bool IsDecodeCanceled()
+        => _decodeCancellationToken.IsCancellationRequested;
 
     private static bool IsTooLarge(string path)
     {
