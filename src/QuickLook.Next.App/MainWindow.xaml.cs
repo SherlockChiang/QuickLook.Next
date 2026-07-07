@@ -40,6 +40,7 @@ public sealed partial class MainWindow : Window
     private const int ImmediateFilmstripThumbnailRadius = 20;
     private const int FilmstripThumbnailBatchSize = 12;
     private const int DelayedFilmstripThumbnailStartMs = 350;
+    private const int ImageSidecarLoadDelayMs = 180;
     private const int AdjacentImagePrefetchRadius = 2;
     private const int DuplicateOpenCloseGuardMs = 750;
     private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
@@ -1256,8 +1257,28 @@ public sealed partial class MainWindow : Window
         {
             if (!IsPreviewGenerationCurrent(generation, token))
                 return;
-            StartImageSidecarLoads(ready);
+            _ = StartImageSidecarLoadsAfterDelayAsync(ready, generation, token);
         });
+    }
+
+    private async Task StartImageSidecarLoadsAfterDelayAsync(PreviewReady ready, int generation, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(ImageSidecarLoadDelayMs, token);
+            if (!IsPreviewGenerationCurrent(generation, token))
+                return;
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!IsPreviewGenerationCurrent(generation, token))
+                    return;
+                StartImageSidecarLoads(ready);
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private void ClearImageSidecars()
