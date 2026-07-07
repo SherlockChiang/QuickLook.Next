@@ -50,6 +50,14 @@ left visible instead of hidden behind vague TODOs.
   native metadata previews: fonts, SQLite/database headers, media container
   info in the playback chrome, ELF/minidump diagnostics, and safe Mail/CHM
   header previews.
+- The EXIF location crash investigation is resolved at the UI boundary: the
+  Google Maps action is a static XAML control instead of a dynamically-created
+  button/resource lookup during EXIF row rendering. Coordinates inside mainland
+  China are automatically converted from WGS84 to GCJ-02 before opening Google
+  Maps; non-China coordinates are left unchanged.
+- EXIF side-panel state/rendering is isolated in `ExifPreviewPresenter`, leaving
+  `MainWindow` responsible for preview lifecycle and metadata loading rather
+  than row/control construction.
 
 ## Verification Commands
 
@@ -59,6 +67,7 @@ Run these from the repository root:
 cargo test --manifest-path native\quicklook_next_native\Cargo.toml
 cargo build --release --manifest-path native\quicklook_next_native\Cargo.toml
 powershell -ExecutionPolicy Bypass -File tools\smoke-native.ps1
+powershell -ExecutionPolicy Bypass -File tools\smoke-exif-map.ps1
 dotnet build QuickLook.Next.slnx -c Release
 powershell -ExecutionPolicy Bypass -File tools\guard-architecture.ps1 -SkipDist
 ```
@@ -95,6 +104,18 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - Push cancellation deeper into Rust/native decode/listing loops. The App now
   prevents stale merge/update work, but native FFI calls are still synchronous
   once entered.
+- Keep improving the primary image path:
+  - Thumbnail filmstrip loading should keep prioritizing the current image and
+    nearby siblings, with LRU eviction to bound memory in large folders.
+  - Adjacent image prefetch should remain cancellation-aware so quick Explorer
+    selection changes do not keep decoding old images.
+  - Large image decode should eventually accept a native cancellation/epoch
+    signal, not just an App-side generation guard.
+  - EXIF metadata reads should keep timeout/cancellation boundaries so slow
+    property handlers cannot stall preview close or file switching.
+- PDF surface caching is intentionally small today. A bounded 3-5 page LRU for
+  recently rendered pages would make scroll-back smoother without returning to
+  unbounded GPU surface retention.
 - Continue Shell icon coverage for virtual archive entries if a stable file type
   icon can be resolved without pretending the virtual item is a real path.
 - Deep professional parsers remain intentionally staged: full MediaInfo tracks,
