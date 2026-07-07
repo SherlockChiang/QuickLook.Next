@@ -236,18 +236,27 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan ti
 {
     if (PreferSystemImageDecoder(path))
     {
+        using var systemTrace = DiagLog.TraceScope("RasterHost", $"system image decode path={path}", 250);
         var systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
         if (systemImage is not null)
             return systemImage;
     }
 
-    var nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken);
+    NativeDecodedImage? nativeImage;
+    using (DiagLog.TraceScope("RasterHost", $"native image decode path={path}", 250))
+        nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken);
     if (nativeImage is not null)
         return nativeImage;
 
     return PreferSystemImageDecoder(path)
         ? null
-        : await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+        : await DecodeSystemFallbackAsync(path, cancellationToken);
+}
+
+static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(string path, CancellationToken cancellationToken)
+{
+    using var trace = DiagLog.TraceScope("RasterHost", $"system image fallback decode path={path}", 250);
+    return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
 }
 
 static bool PreferSystemImageDecoder(string path)
