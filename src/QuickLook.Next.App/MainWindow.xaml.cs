@@ -1405,12 +1405,7 @@ public sealed partial class MainWindow : Window
                 if (listing == null)
                     return Array.Empty<string>();
 
-                return listing.Items
-                    .Where(i => !i.IsFolder && IsImagePath(i.Path))
-                    .OrderBy(i => Path.GetFileName(i.Path), StringComparer.CurrentCultureIgnoreCase)
-                    .Select(i => i.NativePath ?? i.Path)
-                    .Take(MaxImageFilmstripItems)
-                    .ToArray();
+                return ImageFilmstripPlanner.BuildSiblingPaths(listing, IsImagePath, MaxImageFilmstripItems);
             }, token);
             token.ThrowIfCancellationRequested();
             DiagLog.Write("App", $"image filmstrip listing gen={generation}; siblings={siblings.Length}");
