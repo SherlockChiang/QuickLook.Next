@@ -1802,29 +1802,6 @@ public sealed partial class MainWindow : Window
     private static bool IsImagePath(string? path)
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
 
-    private static async Task<(int Width, int Height)?> TryReadImageDisplaySizeAsync(string path, CancellationToken token)
-    {
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            StorageFile file = await StorageFile.GetFileFromPathAsync(path);
-            ImageProperties image = await file.Properties.GetImagePropertiesAsync();
-            token.ThrowIfCancellationRequested();
-            if (image.Width > 0 && image.Height > 0)
-                return (checked((int)image.Width), checked((int)image.Height));
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "image size probe failed: " + ex.Message);
-        }
-
-        return null;
-    }
-
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
         => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
 
