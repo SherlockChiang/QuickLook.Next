@@ -1108,7 +1108,7 @@ fn render_pptx(path: &str) -> String {
             }
             break;
         };
-        let text = extract_wordprocessing_text(&xml);
+        let text = extract_ppt_text(&xml);
         if !text.trim().is_empty() {
             slides.push(format!("Slide {slide_idx}\n{}", text.trim()));
         }
@@ -1605,6 +1605,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut rel_id = String::new();
     let mut text = String::new();
     let mut in_text = false;
+    let mut shape_paragraph_had_text = false;
     let mut preset_shape: Option<String> = None;
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
@@ -1625,6 +1626,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     rel_id.clear();
                     text.clear();
                     in_text = false;
+                    shape_paragraph_had_text = false;
                     preset_shape = None;
                     fill_color = None;
                     stroke_color = None;
@@ -1663,14 +1665,23 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     } else {
                         fill_color = color.or(fill_color);
                     }
+                } else if local == "tab" && shape_kind == "text" {
+                    text.push('\t');
+                    shape_paragraph_had_text = true;
                 } else if local == "br" && shape_kind == "text" {
                     text.push('\n');
+                    shape_paragraph_had_text = false;
                 }
             }
             Ok(Event::End(e)) if in_shape => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
                     in_text = false;
+                } else if local == "p" && shape_kind == "text" {
+                    if shape_paragraph_had_text && !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                    shape_paragraph_had_text = false;
                 } else if local == "solidfill" || local == "ln" {
                     color_target = "";
                 }
@@ -1721,10 +1732,18 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                 }
             }
             Ok(Event::Text(e)) if in_shape && in_text => {
-                text.push_str(&xml_unescape_bytes(e.as_ref()));
+                let value = xml_unescape_bytes(e.as_ref());
+                if !value.is_empty() {
+                    text.push_str(&value);
+                    shape_paragraph_had_text = true;
+                }
             }
             Ok(Event::CData(e)) if in_shape && in_text => {
-                text.push_str(&String::from_utf8_lossy(e.as_ref()));
+                let value = String::from_utf8_lossy(e.as_ref());
+                if !value.is_empty() {
+                    text.push_str(&value);
+                    shape_paragraph_had_text = true;
+                }
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -1732,6 +1751,64 @@ fn parse_ppt_slide_items<R: Read + Seek>(
         }
     }
     items
+}
+
+fn extract_ppt_text(xml: &str) -> String {
+    let mut reader = Reader::from_str(xml);
+    let mut out = String::new();
+    let mut in_text = false;
+    let mut paragraph_had_text = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "t" {
+                    in_text = true;
+                }
+            }
+            Ok(Event::End(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "t" {
+                    in_text = false;
+                } else if local == "p" {
+                    if paragraph_had_text && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    paragraph_had_text = false;
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "tab" {
+                    out.push('\t');
+                    paragraph_had_text = true;
+                } else if local == "br" {
+                    out.push('\n');
+                    paragraph_had_text = false;
+                }
+            }
+            Ok(Event::Text(e)) if in_text => {
+                let value = xml_unescape_bytes(e.as_ref());
+                if !value.is_empty() {
+                    out.push_str(&value);
+                    paragraph_had_text = true;
+                }
+            }
+            Ok(Event::CData(e)) if in_text => {
+                let value = String::from_utf8_lossy(e.as_ref());
+                if !value.is_empty() {
+                    out.push_str(&value);
+                    paragraph_had_text = true;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    normalize_preview_lines(&out)
 }
 
 fn parse_worksheet_layout_cells(
@@ -5721,6 +5798,49 @@ mod tests {
 
         assert!(truncated.starts_with(&"中".repeat(8)));
         assert!(truncated.contains("[Preview truncated at"));
+    }
+
+    #[test]
+    fn ppt_text_extraction_preserves_paragraphs_tabs_and_breaks() {
+        let text = extract_ppt_text(
+            r#"<p:sld xmlns:p="p" xmlns:a="a">
+                <p:sp><p:txBody>
+                    <a:p><a:r><a:t>Title</a:t></a:r></a:p>
+                    <a:p><a:r><a:t>Left</a:t></a:r><a:tab/><a:r><a:t>Right</a:t></a:r></a:p>
+                    <a:p><a:r><a:t>Line 1</a:t></a:r><a:br/><a:r><a:t>Line 2</a:t></a:r></a:p>
+                </p:txBody></p:sp>
+            </p:sld>"#,
+        );
+
+        assert_eq!(text, "Title\nLeft\tRight\nLine 1\nLine 2");
+    }
+
+    #[test]
+    fn ppt_layout_text_items_preserve_paragraph_boundaries() {
+        let mut cursor = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()))
+            .finish()
+            .expect("empty zip archive bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
+        let mut image_budget = 0;
+        let items = parse_ppt_slide_items(
+            &mut zip,
+            "ppt/slides/",
+            r#"<p:sld xmlns:p="p" xmlns:a="a">
+                <p:sp>
+                    <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
+                    <p:txBody>
+                        <a:p><a:r><a:t>First</a:t></a:r></a:p>
+                        <a:p><a:r><a:t>Second</a:t></a:r></a:p>
+                    </p:txBody>
+                </p:sp>
+            </p:sld>"#,
+            &BTreeMap::new(),
+            &mut image_budget,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text.as_deref(), Some("First\nSecond"));
     }
 
     #[test]
