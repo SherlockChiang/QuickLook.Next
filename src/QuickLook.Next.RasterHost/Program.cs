@@ -29,6 +29,7 @@ var pdfPageRenderCts = new Dictionary<(string RequestId, int PageIndex), Cancell
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 TimeSpan imageDecodeTimeout = TimeSpan.FromSeconds(8);
+TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 
 while (true)
 {
@@ -187,7 +188,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
 
         if (IsImage(open.Probe))
         {
-            var image = await DecodeImageAsync(open.Path, imageDecodeTimeout, cancellationToken);
+            var image = await DecodeImageAsync(open.Path, imageDecodeTimeout, systemImageDecodeTimeout, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
@@ -232,12 +233,12 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
     }
 }
 
-static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan timeout, TimeSpan systemTimeout, CancellationToken cancellationToken)
 {
     if (PreferSystemImageDecoder(path))
     {
         using var systemTrace = DiagLog.TraceScope("RasterHost", $"system image decode path={path}", 250);
-        var systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+        var systemImage = await DecodeSystemImageWithTimeoutAsync(path, systemTimeout, cancellationToken);
         if (systemImage is not null)
             return systemImage;
     }
@@ -250,13 +251,26 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan ti
 
     return PreferSystemImageDecoder(path)
         ? null
-        : await DecodeSystemFallbackAsync(path, cancellationToken);
+        : await DecodeSystemFallbackAsync(path, systemTimeout, cancellationToken);
 }
 
-static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(string path, CancellationToken cancellationToken)
+static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
 {
     using var trace = DiagLog.TraceScope("RasterHost", $"system image fallback decode path={path}", 250);
-    return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+    return await DecodeSystemImageWithTimeoutAsync(path, timeout, cancellationToken);
+}
+
+static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+{
+    try
+    {
+        return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken).WaitAsync(timeout, cancellationToken);
+    }
+    catch (TimeoutException)
+    {
+        DiagLog.Write("RasterHost", $"system image decode timed out path={path}; timeout={timeout.TotalMilliseconds:0}ms");
+        return null;
+    }
 }
 
 static bool PreferSystemImageDecoder(string path)
