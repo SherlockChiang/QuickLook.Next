@@ -643,6 +643,7 @@ public sealed partial class MainWindow : Window
     private void BeginPreviewTransition()
     {
         DiagLog.Write("App", $"preview transition begin; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
+        _native.SetPreviewVisible(true);
         _previewRevealPending = true;
         PreviewContentHost.Opacity = 0;
         PreviewContentHost.IsHitTestVisible = false;
