@@ -28,7 +28,7 @@ var pdfSessions = new Dictionary<string, PdfPreviewSession>();
 var pdfPageRenderCts = new Dictionary<(string RequestId, int PageIndex), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
-TimeSpan imageDecodeTimeout = TimeSpan.FromSeconds(8);
+TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 
 while (true)
