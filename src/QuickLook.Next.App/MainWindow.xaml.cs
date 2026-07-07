@@ -848,6 +848,14 @@ public sealed partial class MainWindow : Window
             $"surface received request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}",
             50);
         EnsureCompositor();
+        Compositor? compositor = _compositor;
+        if (compositor is null)
+        {
+            DiagLog.Write("App", "surface ignored: compositor unavailable");
+            StatusText.Text = UiStrings.SurfaceFailed;
+            return;
+        }
+
         // Only accept surfaces for the exact current request. While switching/closing the session request id is
         // null, so late surfaces for a just-closed request are dropped — never build a composition surface
         // from a handle whose swapchain the host may already be retiring.
@@ -862,7 +870,13 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (!_rasterPresenter!.AttachSurface(_compositor, surface, out string? error))
+            if (_rasterPresenter is null)
+            {
+                DiagLog.Write("App", "surface ignored: raster presenter unavailable");
+                return;
+            }
+
+            if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
             {
                 StatusText.Text = error ?? UiStrings.SurfaceFailed;
                 return;
