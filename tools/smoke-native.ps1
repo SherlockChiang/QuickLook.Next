@@ -36,6 +36,10 @@ using System;
 using System.Runtime.InteropServices;
 
 public static class QuickLookNativeSmoke {
+  public delegate bool CancelCallback();
+
+  public static readonly CancelCallback NeverCancel = () => false;
+
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_probe_file(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
 
@@ -59,6 +63,9 @@ public static class QuickLookNativeSmoke {
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_decode_image(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
+
+  [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
+  public static extern int ql_decode_image_cancelable(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap, CancelCallback cancelCb);
 
   [DllImport(@"$escapedDll", CallingConvention = CallingConvention.Cdecl)]
   public static extern int ql_extract_package_icon(byte[] pathUtf8, UIntPtr pathLen, byte[] outBuf, UIntPtr outCap);
@@ -155,7 +162,7 @@ function Invoke-Folder([string]$path) {
 function Invoke-ImageDecode([string]$path) {
     $pathBytes = [System.Text.Encoding]::UTF8.GetBytes((Resolve-Path -LiteralPath $path).Path)
     $buffer = New-Object byte[] (16 + 4096 * 4096 * 4)
-    $n = [QuickLookNativeSmoke]::ql_decode_image($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length))
+    $n = [QuickLookNativeSmoke]::ql_decode_image_cancelable($pathBytes, (New-UIntPtr $pathBytes.Length), $buffer, (New-UIntPtr $buffer.Length), [QuickLookNativeSmoke]::NeverCancel)
     Assert-True ($n -gt 16) "Image decode failed for $path with code $n"
     [pscustomobject]@{
         Bytes = $n
