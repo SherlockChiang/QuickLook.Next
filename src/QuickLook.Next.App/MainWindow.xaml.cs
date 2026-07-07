@@ -1253,6 +1253,7 @@ public sealed partial class MainWindow : Window
         ExifDetailsList.Children.Clear();
         ExifScrollViewer.Visibility = Visibility.Collapsed;
         ExifEmptyPanel.Visibility = Visibility.Visible;
+        ExifGoogleMapsButton.Visibility = Visibility.Collapsed;
         ExifUnavailableText.Text = UiStrings.NoExifData;
     }
 
@@ -1639,7 +1640,7 @@ public sealed partial class MainWindow : Window
 
         foreach (var (label, value) in rows)
             AddRailDetail(ExifDetailsList, label, value);
-            
+
         ExifGoogleMapsButton.Visibility = HasExifLocation ? Visibility.Visible : Visibility.Collapsed;
 
         ExifEmptyPanel.Visibility = Visibility.Collapsed;
@@ -2087,9 +2088,8 @@ public sealed partial class MainWindow : Window
         if (!HasExifLocation || _currentExifLatitude is not { } latitude || _currentExifLongitude is not { } longitude)
             return;
 
-        string query = string.Create(
-            CultureInfo.InvariantCulture,
-            $"{latitude:0.#####},{longitude:0.#####}");
+        MapLocation location = ExifMapLocation.NormalizeForGoogleMaps(latitude, longitude);
+        string query = location.ToQueryString();
         string url = "https://www.google.com/maps/search/?api=1&query=" + Uri.EscapeDataString(query);
 
         try
