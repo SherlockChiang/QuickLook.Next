@@ -223,8 +223,22 @@ struct ExifMetadata {
     width: Option<u32>,
     height: Option<u32>,
     orientation: Option<u16>,
+    lens_make: Option<String>,
+    lens_model: Option<String>,
+    software: Option<String>,
+    f_number: Option<f64>,
+    exposure_time: Option<f64>,
+    iso: Option<u32>,
+    focal_length: Option<f64>,
+    exposure_bias: Option<f64>,
+    metering_mode: Option<u16>,
+    flash: Option<u16>,
+    white_balance: Option<u16>,
+    color_space: Option<u16>,
     latitude: Option<f64>,
     longitude: Option<f64>,
+    altitude: Option<f64>,
+    direction: Option<f64>,
 }
 
 pub fn render_image_metadata(path: &str) -> String {
@@ -342,15 +356,27 @@ fn parse_exif_ifd(
             0x010F => metadata.make = exif_ascii(tiff, entry, endian),
             0x0110 => metadata.model = exif_ascii(tiff, entry, endian),
             0x0112 => metadata.orientation = exif_u16_value(tiff, entry, endian),
+            0x0131 => metadata.software = exif_ascii(tiff, entry, endian),
             0x0132 | 0x9003 => {
                 if metadata.date_time.is_none() {
                     metadata.date_time = exif_ascii(tiff, entry, endian);
                 }
             }
+            0x829A => metadata.exposure_time = exif_rational_value(tiff, entry, endian),
+            0x829D => metadata.f_number = exif_rational_value(tiff, entry, endian),
+            0x8827 => metadata.iso = exif_u32_or_u16_value(tiff, entry, endian),
             0x8769 => *exif_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
             0x8825 => *gps_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
+            0x9204 => metadata.exposure_bias = exif_signed_rational_value(tiff, entry, endian),
+            0x9207 => metadata.metering_mode = exif_u16_value(tiff, entry, endian),
+            0x9209 => metadata.flash = exif_u16_value(tiff, entry, endian),
+            0x920A => metadata.focal_length = exif_rational_value(tiff, entry, endian),
+            0xA001 => metadata.color_space = exif_u16_value(tiff, entry, endian),
             0xA002 => metadata.width = exif_u32_or_u16_value(tiff, entry, endian),
             0xA003 => metadata.height = exif_u32_or_u16_value(tiff, entry, endian),
+            0xA403 => metadata.white_balance = exif_u16_value(tiff, entry, endian),
+            0xA433 => metadata.lens_make = exif_ascii(tiff, entry, endian),
+            0xA434 => metadata.lens_model = exif_ascii(tiff, entry, endian),
             _ => {}
         }
     }
@@ -363,8 +389,11 @@ fn parse_gps_ifd(tiff: &[u8], offset: usize, endian: u8, metadata: &mut ExifMeta
     let entries = offset.saturating_add(2);
     let mut lat_ref = None;
     let mut lon_ref = None;
+    let mut altitude_ref = None;
     let mut lat = None;
     let mut lon = None;
+    let mut altitude = None;
+    let mut direction = None;
     for index in 0..count.min(64) {
         let entry = entries.saturating_add(index.saturating_mul(12));
         let Some(tag) = read_u16_endian(tiff, entry, endian) else {
@@ -375,12 +404,17 @@ fn parse_gps_ifd(tiff: &[u8], offset: usize, endian: u8, metadata: &mut ExifMeta
             2 => lat = exif_gps_coordinate(tiff, entry, endian),
             3 => lon_ref = exif_ascii(tiff, entry, endian),
             4 => lon = exif_gps_coordinate(tiff, entry, endian),
+            5 => altitude_ref = exif_u16_value(tiff, entry, endian),
+            6 => altitude = exif_rational_value(tiff, entry, endian),
+            17 => direction = exif_rational_value(tiff, entry, endian),
             _ => {}
         }
     }
 
     metadata.latitude = signed_gps_coordinate(lat, lat_ref.as_deref(), "S");
     metadata.longitude = signed_gps_coordinate(lon, lon_ref.as_deref(), "W");
+    metadata.altitude = altitude.map(|value| if altitude_ref == Some(1) { -value } else { value });
+    metadata.direction = direction;
 }
 
 fn exif_ascii(tiff: &[u8], entry: usize, endian: u8) -> Option<String> {
@@ -429,9 +463,34 @@ fn exif_gps_coordinate(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
     Some(degrees + minutes / 60.0 + seconds / 3600.0)
 }
 
+fn exif_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
+    if read_u16_endian(tiff, entry + 2, endian)? != 5 || read_u32_endian(tiff, entry + 4, endian)? == 0 {
+        return None;
+    }
+    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
+    exif_rational(tiff, offset, endian)
+}
+
+fn exif_signed_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
+    if read_u16_endian(tiff, entry + 2, endian)? != 10 || read_u32_endian(tiff, entry + 4, endian)? == 0 {
+        return None;
+    }
+    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
+    exif_signed_rational(tiff, offset, endian)
+}
+
 fn exif_rational(tiff: &[u8], offset: usize, endian: u8) -> Option<f64> {
     let numerator = read_u32_endian(tiff, offset, endian)? as f64;
     let denominator = read_u32_endian(tiff, offset + 4, endian)? as f64;
+    if denominator == 0.0 {
+        return None;
+    }
+    Some(numerator / denominator)
+}
+
+fn exif_signed_rational(tiff: &[u8], offset: usize, endian: u8) -> Option<f64> {
+    let numerator = read_i32_endian(tiff, offset, endian)? as f64;
+    let denominator = read_i32_endian(tiff, offset + 4, endian)? as f64;
     if denominator == 0.0 {
         return None;
     }
@@ -3738,6 +3797,16 @@ fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
 }
 
+fn read_i32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<i32> {
+    let end = offset.checked_add(4)?;
+    let chunk: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(if endian == 2 {
+        i32::from_be_bytes(chunk)
+    } else {
+        i32::from_le_bytes(chunk)
+    })
+}
+
 fn read_u16_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u16> {
     if endian == 2 {
         read_u16_be(bytes, offset)
@@ -6077,22 +6146,23 @@ mod tests {
 
     #[test]
     fn jpeg_exif_metadata_reads_core_fields_and_gps() {
-        let mut tiff = vec![0u8; 8 + 2 + 6 * 12 + 4];
+        let mut tiff = vec![0u8; 8 + 2 + 7 * 12 + 4];
         tiff[0..4].copy_from_slice(&[b'I', b'I', 42, 0]);
         write_le_u32(&mut tiff, 4, 8);
-        write_le_u16(&mut tiff, 8, 6);
+        write_le_u16(&mut tiff, 8, 7);
 
         let ifd0_entries = 10;
         write_ascii_entry(&mut tiff, ifd0_entries, 0, 0x010F, "Acme");
         write_ascii_entry(&mut tiff, ifd0_entries, 1, 0x0110, "PhoneCam");
         write_short_entry(&mut tiff, ifd0_entries, 2, 0x0112, 6);
+        write_ascii_entry(&mut tiff, ifd0_entries, 3, 0x0131, "QuickCamOS");
 
         let exif_ifd = tiff.len() as u32;
-        write_long_entry(&mut tiff, ifd0_entries, 3, 0x8769, exif_ifd);
+        write_long_entry(&mut tiff, ifd0_entries, 4, 0x8769, exif_ifd);
         append_exif_ifd(&mut tiff);
 
         let gps_ifd = tiff.len() as u32;
-        write_long_entry(&mut tiff, ifd0_entries, 4, 0x8825, gps_ifd);
+        write_long_entry(&mut tiff, ifd0_entries, 5, 0x8825, gps_ifd);
         append_gps_ifd(&mut tiff);
 
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
@@ -6109,8 +6179,22 @@ mod tests {
         assert_eq!(metadata.date_time.as_deref(), Some("2026:07:05 13:04:47"));
         assert_eq!(metadata.width, Some(4032));
         assert_eq!(metadata.height, Some(3024));
+        assert_eq!(metadata.lens_make.as_deref(), Some("Acme Lens"));
+        assert_eq!(metadata.lens_model.as_deref(), Some("24mm Prime"));
+        assert_eq!(metadata.software.as_deref(), Some("QuickCamOS"));
+        assert!((metadata.f_number.unwrap() - 1.8).abs() < 0.001);
+        assert!((metadata.exposure_time.unwrap() - 0.005).abs() < 0.0001);
+        assert_eq!(metadata.iso, Some(100));
+        assert!((metadata.focal_length.unwrap() - 24.0).abs() < 0.001);
+        assert!((metadata.exposure_bias.unwrap() + 0.3333).abs() < 0.001);
+        assert_eq!(metadata.metering_mode, Some(5));
+        assert_eq!(metadata.flash, Some(16));
+        assert_eq!(metadata.white_balance, Some(1));
+        assert_eq!(metadata.color_space, Some(1));
         assert!((metadata.latitude.unwrap() - 31.2304).abs() < 0.0001);
         assert!((metadata.longitude.unwrap() - 121.4737).abs() < 0.0001);
+        assert!((metadata.altitude.unwrap() - 12.5).abs() < 0.001);
+        assert!((metadata.direction.unwrap() - 180.0).abs() < 0.001);
 
         let path = std::env::temp_dir().join("quicklook-next-exif-smoke.jpg");
         fs::write(&path, &jpeg).expect("write temp jpeg");
@@ -6121,23 +6205,37 @@ mod tests {
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {
         let offset = tiff.len();
-        tiff.resize(offset + 2 + 3 * 12 + 4, 0);
-        write_le_u16(tiff, offset, 3);
+        tiff.resize(offset + 2 + 16 * 12 + 4, 0);
+        write_le_u16(tiff, offset, 16);
         let entries = offset + 2;
         write_ascii_entry(tiff, entries, 0, 0x9003, "2026:07:05 13:04:47");
-        write_long_entry(tiff, entries, 1, 0xA002, 4032);
-        write_long_entry(tiff, entries, 2, 0xA003, 3024);
+        write_rational_entry(tiff, entries, 1, 0x829A, 1, 200);
+        write_rational_entry(tiff, entries, 2, 0x829D, 18, 10);
+        write_short_entry(tiff, entries, 3, 0x8827, 100);
+        write_signed_rational_entry(tiff, entries, 4, 0x9204, -1, 3);
+        write_short_entry(tiff, entries, 5, 0x9207, 5);
+        write_short_entry(tiff, entries, 6, 0x9209, 16);
+        write_rational_entry(tiff, entries, 7, 0x920A, 24, 1);
+        write_short_entry(tiff, entries, 8, 0xA001, 1);
+        write_long_entry(tiff, entries, 9, 0xA002, 4032);
+        write_long_entry(tiff, entries, 10, 0xA003, 3024);
+        write_short_entry(tiff, entries, 11, 0xA403, 1);
+        write_ascii_entry(tiff, entries, 12, 0xA433, "Acme Lens");
+        write_ascii_entry(tiff, entries, 13, 0xA434, "24mm Prime");
     }
 
     fn append_gps_ifd(tiff: &mut Vec<u8>) {
         let offset = tiff.len();
-        tiff.resize(offset + 2 + 4 * 12 + 4, 0);
-        write_le_u16(tiff, offset, 4);
+        tiff.resize(offset + 2 + 7 * 12 + 4, 0);
+        write_le_u16(tiff, offset, 7);
         let entries = offset + 2;
         write_ascii_entry(tiff, entries, 0, 1, "N");
         write_rational3_entry(tiff, entries, 1, 2, [(31, 1), (13, 1), (4944, 100)]);
         write_ascii_entry(tiff, entries, 2, 3, "E");
         write_rational3_entry(tiff, entries, 3, 4, [(121, 1), (28, 1), (2532, 100)]);
+        write_short_entry(tiff, entries, 4, 5, 0);
+        write_rational_entry(tiff, entries, 5, 6, 25, 2);
+        write_rational_entry(tiff, entries, 6, 17, 180, 1);
     }
 
     fn write_ascii_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, value: &str) {
@@ -6184,6 +6282,34 @@ mod tests {
             write_le_u32(tiff, offset + i * 8, numerator);
             write_le_u32(tiff, offset + i * 8 + 4, denominator);
         }
+    }
+
+    fn write_rational_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, numerator: u32, denominator: u32) {
+        let entry = entries + index * 12;
+        write_le_u16(tiff, entry, tag);
+        write_le_u16(tiff, entry + 2, 5);
+        write_le_u32(tiff, entry + 4, 1);
+        let offset = tiff.len();
+        write_le_u32(tiff, entry + 8, offset as u32);
+        tiff.resize(offset + 8, 0);
+        write_le_u32(tiff, offset, numerator);
+        write_le_u32(tiff, offset + 4, denominator);
+    }
+
+    fn write_signed_rational_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, numerator: i32, denominator: i32) {
+        let entry = entries + index * 12;
+        write_le_u16(tiff, entry, tag);
+        write_le_u16(tiff, entry + 2, 10);
+        write_le_u32(tiff, entry + 4, 1);
+        let offset = tiff.len();
+        write_le_u32(tiff, entry + 8, offset as u32);
+        tiff.resize(offset + 8, 0);
+        bytes_write_i32(tiff, offset, numerator);
+        bytes_write_i32(tiff, offset + 4, denominator);
+    }
+
+    fn bytes_write_i32(bytes: &mut [u8], offset: usize, value: i32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     fn write_le_u16(bytes: &mut [u8], offset: usize, value: u16) {
