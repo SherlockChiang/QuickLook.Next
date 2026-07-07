@@ -51,6 +51,7 @@ public sealed partial class MainWindow : Window
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
     private AnimatedImagePreviewPresenter? _animatedImagePresenter;
+    private ExifPreviewPresenter? _exifPresenter;
     private PdfPreviewPresenter? _pdfPresenter;
     private MediaPreviewPresenter? _mediaPresenter;
     private Compositor? _compositor;
@@ -74,8 +75,6 @@ public sealed partial class MainWindow : Window
     private bool _imageFilmstripSuppressClick;
     private Windows.Foundation.Point _imageFilmstripDragStart;
     private double _imageFilmstripDragStartOffset;
-    private double? _currentExifLatitude;
-    private double? _currentExifLongitude;
     private string[] _imageSiblingPaths = [];
     private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
     private readonly Dictionary<string, ImageSource> _imageThumbnailCache = new(StringComparer.OrdinalIgnoreCase);
@@ -205,6 +204,14 @@ public sealed partial class MainWindow : Window
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
+        _exifPresenter = new ExifPreviewPresenter(
+            ExifDetailsList,
+            ExifScrollViewer,
+            ExifEmptyPanel,
+            ExifUnavailableText,
+            ExifGoogleMapsButton,
+            StatusText,
+            StatusBar);
         _pdfPresenter = new PdfPreviewPresenter(
             PdfScrollViewer,
             PdfPagesPanel,
@@ -1247,15 +1254,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void ResetExifDetails()
-    {
-        _currentExifLatitude = null;
-        _currentExifLongitude = null;
-        ExifDetailsList.Children.Clear();
-        ExifScrollViewer.Visibility = Visibility.Collapsed;
-        ExifEmptyPanel.Visibility = Visibility.Visible;
-        ExifGoogleMapsButton.Visibility = Visibility.Collapsed;
-        ExifUnavailableText.Text = UiStrings.NoExifData;
-    }
+        => _exifPresenter?.Reset();
 
     private async Task LoadImageMetadataAsync(string path, int generation, CancellationToken token)
     {
@@ -1355,7 +1354,7 @@ public sealed partial class MainWindow : Window
             {
                 if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
-                RenderExifRows(rows, image.Latitude, image.Longitude);
+                _exifPresenter?.RenderRows(rows, image.Latitude, image.Longitude);
             });
         }
         catch (OperationCanceledException)
@@ -1624,53 +1623,6 @@ public sealed partial class MainWindow : Window
             .Select((path, index) => (Path: path, Distance: Math.Abs(index - current)))
             .OrderBy(i => i.Distance)
             .ThenBy(i => i.Path, StringComparer.CurrentCultureIgnoreCase);
-    }
-
-    private void RenderExifRows(IReadOnlyList<(string Label, string Value)> rows, double? latitude, double? longitude)
-    {
-        ExifDetailsList.Children.Clear();
-        _currentExifLatitude = latitude;
-        _currentExifLongitude = longitude;
-        if (rows.Count == 0)
-        {
-            ExifScrollViewer.Visibility = Visibility.Collapsed;
-            ExifEmptyPanel.Visibility = Visibility.Visible;
-            return;
-        }
-
-        foreach (var (label, value) in rows)
-            AddRailDetail(ExifDetailsList, label, value);
-
-        ExifGoogleMapsButton.Visibility = HasExifLocation ? Visibility.Visible : Visibility.Collapsed;
-
-        ExifEmptyPanel.Visibility = Visibility.Collapsed;
-        ExifScrollViewer.Visibility = Visibility.Visible;
-    }
-
-    private bool HasExifLocation
-        => _currentExifLatitude is { } latitude
-            && _currentExifLongitude is { } longitude
-            && latitude >= -90
-            && latitude <= 90
-            && longitude >= -180
-            && longitude <= 180;
-
-    private static void AddRailDetail(StackPanel panel, string label, string value)
-    {
-        var stack = new StackPanel { Spacing = 2 };
-        stack.Children.Add(new TextBlock
-        {
-            Text = label,
-            FontSize = 11,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-        });
-        stack.Children.Add(new TextBlock
-        {
-            Text = value,
-            FontSize = 13,
-            TextWrapping = TextWrapping.WrapWholeWords,
-        });
-        panel.Children.Add(stack);
     }
 
 
@@ -2084,29 +2036,7 @@ public sealed partial class MainWindow : Window
         => SetPreviewInfoRailTab(PreviewInfoRailTab.More);
 
     private void OnOpenExifLocationInMapsClick(object sender, RoutedEventArgs e)
-    {
-        if (!HasExifLocation || _currentExifLatitude is not { } latitude || _currentExifLongitude is not { } longitude)
-            return;
-
-        MapLocation location = ExifMapLocation.NormalizeForGoogleMaps(latitude, longitude);
-        string query = location.ToQueryString();
-        string url = "https://www.google.com/maps/search/?api=1&query=" + Uri.EscapeDataString(query);
-
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "open EXIF location failed: " + ex.Message);
-            StatusText.Text = ex.Message;
-            StatusBar.Visibility = Visibility.Visible;
-        }
-    }
+        => _exifPresenter?.OpenLocationInGoogleMaps();
 
     private void SetPreviewInfoRailTab(PreviewInfoRailTab tab)
     {
