@@ -78,8 +78,7 @@ public sealed partial class MainWindow : Window
     private double _imageFilmstripDragStartOffset;
     private string[] _imageSiblingPaths = [];
     private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
-    private readonly Dictionary<string, ImageSource> _imageThumbnailCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly LinkedList<string> _imageThumbnailLru = new();
+    private readonly ImageThumbnailCache _imageThumbnailCache = new(MaxImageThumbnailCacheItems);
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -1458,7 +1457,7 @@ public sealed partial class MainWindow : Window
                 }
 
                 thumbnailAttempts++;
-                if (TryGetCachedImageThumbnail(sibling, out ImageSource? cachedSource) && cachedSource is not null)
+                if (_imageThumbnailCache.TryGet(sibling, out ImageSource? cachedSource) && cachedSource is not null)
                 {
                     thumbnailBatch.Add((sibling, cachedSource));
                     FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
@@ -1474,7 +1473,7 @@ public sealed partial class MainWindow : Window
                 ImageSource? source = CreateBitmapSource(raster);
                 if (source is null)
                     continue;
-                AddCachedImageThumbnail(sibling, source);
+                _imageThumbnailCache.Add(sibling, source);
 
                 thumbnailBatch.Add((sibling, source));
                 FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
@@ -1488,60 +1487,6 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", "image filmstrip load failed: " + ex.Message);
-        }
-    }
-
-    private bool TryGetCachedImageThumbnail(string path, out ImageSource? source)
-    {
-        if (_imageThumbnailCache.TryGetValue(path, out source))
-        {
-            TouchImageThumbnailCache(path);
-            return true;
-        }
-
-        source = null;
-        return false;
-    }
-
-    private void AddCachedImageThumbnail(string path, ImageSource source)
-    {
-        if (_imageThumbnailCache.ContainsKey(path))
-        {
-            _imageThumbnailCache[path] = source;
-            TouchImageThumbnailCache(path);
-            return;
-        }
-
-        while (_imageThumbnailCache.Count >= MaxImageThumbnailCacheItems && _imageThumbnailLru.First is { } first)
-        {
-            _imageThumbnailCache.Remove(first.Value);
-            _imageThumbnailLru.RemoveFirst();
-        }
-
-        _imageThumbnailCache[path] = source;
-        _imageThumbnailLru.AddLast(path);
-    }
-
-    private void RemoveCachedImageThumbnail(string path)
-    {
-        _imageThumbnailCache.Remove(path);
-        RemoveImageThumbnailLruEntry(path);
-    }
-
-    private void TouchImageThumbnailCache(string path)
-    {
-        RemoveImageThumbnailLruEntry(path);
-        _imageThumbnailLru.AddLast(path);
-    }
-
-    private void RemoveImageThumbnailLruEntry(string path)
-    {
-        for (LinkedListNode<string>? node = _imageThumbnailLru.First; node is not null; node = node.Next)
-        {
-            if (!string.Equals(node.Value, path, StringComparison.OrdinalIgnoreCase))
-                continue;
-            _imageThumbnailLru.Remove(node);
-            return;
         }
     }
 
@@ -1583,7 +1528,7 @@ public sealed partial class MainWindow : Window
         try
         {
             string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
-                .Where(path => !_imageThumbnailCache.ContainsKey(path))
+                .Where(path => !_imageThumbnailCache.Contains(path))
                 .ToArray();
             if (targets.Length == 0)
                 return;
@@ -1618,7 +1563,7 @@ public sealed partial class MainWindow : Window
                     ImageSource? source = CreateBitmapSource(raster);
                     if (source is null)
                         return;
-                    AddCachedImageThumbnail(target, source);
+                    _imageThumbnailCache.Add(target, source);
                     ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
                         string.Equals(i.Path, target, StringComparison.OrdinalIgnoreCase));
                     if (item is not null && item.Thumbnail is null)
@@ -2179,7 +2124,7 @@ public sealed partial class MainWindow : Window
         try
         {
             FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
-            RemoveCachedImageThumbnail(path);
+            _imageThumbnailCache.Remove(path);
             RemoveFilmstripItem(path);
             StatusText.Text = UiStrings.MovedToRecycleBin;
             StatusBar.Visibility = Visibility.Visible;
