@@ -64,6 +64,7 @@ while (true)
             break;
 
         case PreviewPageClose pageClose:
+            CancelPageRender(pageClose.RequestId, pageClose.PageIndex);
             _ = Task.Delay(250).ContinueWith(_ => producer.ReleasePage(pageClose.PageIndex), TaskContinuationOptions.OnlyOnRanToCompletion);
             break;
 
@@ -145,6 +146,15 @@ void CancelOpen(string requestId)
     }
 
     try { cts.Cancel(); } catch { }
+}
+
+void CancelPageRender(string requestId, int pageIndex)
+{
+    var key = (requestId, pageIndex);
+    if (!pdfPageRenderCts.Remove(key, out var cts))
+        return;
+
+    try { cts.Cancel(); } catch (ObjectDisposedException) { }
 }
 
 async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken)
