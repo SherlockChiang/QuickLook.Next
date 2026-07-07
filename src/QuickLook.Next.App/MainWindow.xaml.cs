@@ -481,6 +481,7 @@ public sealed partial class MainWindow : Window
 
         if (intent.Intent == PreviewIntent.Close)
         {
+            CancelSwitchDebounce();
             await ClosePreviewImmediatelyAsync();
             return;
         }

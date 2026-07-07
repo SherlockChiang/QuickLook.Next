@@ -243,7 +243,7 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan ti
 static bool PreferSystemImageDecoder(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
-    return ext is ".jpg" or ".jpeg" or ".jpe" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
+    return ext is ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
 }
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)
