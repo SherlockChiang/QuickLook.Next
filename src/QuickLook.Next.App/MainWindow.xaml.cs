@@ -248,7 +248,7 @@ public sealed partial class MainWindow : Window
         TrySetBackdrop();
         _previewKeyboardHook = new PreviewKeyboardHook(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
-            () => _previewVisible,
+            IsPreviewActiveForClose,
             ClosePreviewFromKeyboard);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
@@ -1983,7 +1983,7 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (e.Key == Windows.System.VirtualKey.Space && _previewVisible)
+        if (e.Key == Windows.System.VirtualKey.Space && IsPreviewActiveForClose())
         {
             e.Handled = true;
             ClosePreviewFromKeyboard();
@@ -2027,7 +2027,7 @@ public sealed partial class MainWindow : Window
 
     private void ClosePreviewFromKeyboard()
     {
-        if (!_previewVisible)
+        if (!IsPreviewActiveForClose())
             return;
         if (_keyboardCloseQueued)
             return;
@@ -2036,6 +2036,9 @@ public sealed partial class MainWindow : Window
         DiagLog.Write("App", "keyboard close queued");
         _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
     }
+
+    private bool IsPreviewActiveForClose()
+        => _previewVisible || _previewRevealPending;
 
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
         => OpenCurrentPreviewPath(revealInExplorer: true);
