@@ -34,15 +34,8 @@ public sealed partial class MainWindow : Window
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 162;
     private const int SwitchDebounceMs = 110;
-    private const int MaxImageThumbnailCacheItems = 256;
-    private const int MaxImageFilmstripItems = 600;
-    private const int MaxInitialFilmstripThumbnailLoads = 160;
-    private const int ImmediateFilmstripThumbnailRadius = 20;
-    private const int FilmstripThumbnailBatchSize = 12;
-    private const int DelayedFilmstripThumbnailStartMs = 350;
     private const int ImageSidecarLoadDelayMs = 180;
     private const int WindowsImageMetadataSupplementDelayMs = 850;
-    private const int AdjacentImagePrefetchRadius = 2;
     private const int DuplicateOpenCloseGuardMs = 750;
     private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
 
@@ -54,6 +47,7 @@ public sealed partial class MainWindow : Window
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
     private AnimatedImagePreviewPresenter? _animatedImagePresenter;
+    private ImageSidecarController? _imageSidecarController;
     private ExifPreviewPresenter? _exifPresenter;
     private PdfPreviewPresenter? _pdfPresenter;
     private MediaPreviewPresenter? _mediaPresenter;
@@ -78,9 +72,6 @@ public sealed partial class MainWindow : Window
     private bool _imageFilmstripSuppressClick;
     private Windows.Foundation.Point _imageFilmstripDragStart;
     private double _imageFilmstripDragStartOffset;
-    private string[] _imageSiblingPaths = [];
-    private readonly ObservableCollection<ImageFilmstripItem> _imageFilmstripItems = [];
-    private readonly ImageThumbnailCache _imageThumbnailCache = new(MaxImageThumbnailCacheItems);
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -206,6 +197,17 @@ public sealed partial class MainWindow : Window
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
+        _imageSidecarController = new ImageSidecarController(
+            ImageFilmstripList,
+            ImageFilmstrip,
+            DispatcherQueue,
+            path => _native.TryPreviewFolderListing(path),
+            IsImagePath,
+            IsPreviewGenerationCurrent,
+            IsImageFilmstripLoadCurrent,
+            (path, size, token) => _native.TryGetThumbnail(path, size, token),
+            path => _native.ProbeFile(path),
+            CreateBitmapSource);
         _exifPresenter = new ExifPreviewPresenter(
             ExifDetailsList,
             ExifScrollViewer,
@@ -240,7 +242,6 @@ public sealed partial class MainWindow : Window
             IsPreviewGenerationCurrent,
             PreviewListingItemAsync,
             LoadListingIconAsync);
-        ImageFilmstripList.ItemsSource = _imageFilmstripItems;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
@@ -1247,7 +1248,7 @@ public sealed partial class MainWindow : Window
         CancellationToken token = CurrentPreviewToken;
         ResetExifDetails();
         _ = LoadImageMetadataAsync(imagePath, generation, token);
-        _ = LoadImageFilmstripAsync(imagePath, generation, token);
+        _ = _imageSidecarController?.LoadFilmstripAsync(imagePath, generation, token);
     }
 
     private void ScheduleImageSidecarLoads(PreviewReady ready)
@@ -1284,10 +1285,7 @@ public sealed partial class MainWindow : Window
 
     private void ClearImageSidecars()
     {
-        _imageSiblingPaths = [];
-        _imageFilmstripItems.Clear();
-        ImageFilmstripList.SelectedItem = null;
-        ImageFilmstrip.Visibility = Visibility.Collapsed;
+        _imageSidecarController?.Clear();
         ResetExifDetails();
     }
 
@@ -1553,203 +1551,8 @@ public sealed partial class MainWindow : Window
     private static string? FormatFlash(ushort? value)
         => value.HasValue ? FormatFlash(value.Value.ToString(CultureInfo.InvariantCulture)) : null;
 
-    private async Task LoadImageFilmstripAsync(string path, int generation, CancellationToken token)
-    {
-        try
-        {
-            using var trace = DiagLog.TraceScope("App", $"image filmstrip load gen={generation}; path={path}", 500);
-            string? folder = Path.GetDirectoryName(path);
-            if (string.IsNullOrWhiteSpace(folder))
-                return;
-
-            string[] siblings = await Task.Run(() =>
-            {
-                var listing = _native.TryPreviewFolderListing(folder);
-                if (listing == null)
-                    return Array.Empty<string>();
-
-                return ImageFilmstripPlanner.BuildSiblingPaths(listing, IsImagePath, MaxImageFilmstripItems);
-            }, token);
-            token.ThrowIfCancellationRequested();
-            DiagLog.Write("App", $"image filmstrip listing gen={generation}; siblings={siblings.Length}");
-
-            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-                return;
-
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-                    return;
-
-                _imageSiblingPaths = siblings;
-                _imageFilmstripItems.Clear();
-                foreach (string sibling in siblings)
-                {
-                    _imageFilmstripItems.Add(new ImageFilmstripItem
-                    {
-                        Path = sibling,
-                        Name = Path.GetFileName(sibling),
-                    });
-                }
-                SelectCurrentFilmstripItem(path);
-                ImageFilmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
-            });
-            _ = PrefetchAdjacentImagesAsync(path, siblings, generation, token);
-
-            var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
-            int thumbnailAttempts = 0;
-            bool delayedFarThumbnails = false;
-            foreach ((string sibling, int distance) in ImageFilmstripPlanner.PrioritizeWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
-            {
-                token.ThrowIfCancellationRequested();
-                if (!IsImageFilmstripLoadCurrent(path, generation, token))
-                    return;
-
-                if (distance > ImmediateFilmstripThumbnailRadius && !delayedFarThumbnails)
-                {
-                    FlushFilmstripThumbnailBatch(generation, token, thumbnailBatch);
-                    delayedFarThumbnails = true;
-                    await Task.Delay(DelayedFilmstripThumbnailStartMs, token);
-                    if (!IsImageFilmstripLoadCurrent(path, generation, token))
-                        return;
-                }
-
-                thumbnailAttempts++;
-                if (_imageThumbnailCache.TryGet(sibling, out ImageSource? cachedSource) && cachedSource is not null)
-                {
-                    thumbnailBatch.Add((sibling, cachedSource));
-                    FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
-                    continue;
-                }
-
-                NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96, token), token);
-                if (!IsImageFilmstripLoadCurrent(path, generation, token))
-                    return;
-
-                if (raster is null)
-                    continue;
-                ImageSource? source = CreateBitmapSource(raster);
-                if (source is null)
-                    continue;
-                _imageThumbnailCache.Add(sibling, source);
-
-                thumbnailBatch.Add((sibling, source));
-                FlushFilmstripThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
-            }
-            FlushFilmstripThumbnailBatch(generation, token, thumbnailBatch);
-            DiagLog.Write("App", $"image filmstrip thumbnails done gen={generation}; siblings={siblings.Length}; attempted={thumbnailAttempts}");
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "image filmstrip load failed: " + ex.Message);
-        }
-    }
-
-    private void FlushFilmstripThumbnailBatchIfNeeded(
-        int generation,
-        CancellationToken token,
-        List<(string Path, ImageSource Source)> batch)
-    {
-        if (batch.Count >= FilmstripThumbnailBatchSize)
-            FlushFilmstripThumbnailBatch(generation, token, batch);
-    }
-
-    private void FlushFilmstripThumbnailBatch(
-        int generation,
-        CancellationToken token,
-        List<(string Path, ImageSource Source)> batch)
-    {
-        if (batch.Count == 0)
-            return;
-
-        (string Path, ImageSource Source)[] updates = batch.ToArray();
-        batch.Clear();
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (!IsPreviewGenerationCurrent(generation, token))
-                return;
-            foreach ((string path, ImageSource source) in updates)
-            {
-                ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
-                    string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-                if (item is not null)
-                    item.Thumbnail = source;
-            }
-        });
-    }
-
-    private async Task PrefetchAdjacentImagesAsync(string currentPath, string[] siblings, int generation, CancellationToken token)
-    {
-        try
-        {
-            string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
-                .Where(path => !_imageThumbnailCache.Contains(path))
-                .ToArray();
-            if (targets.Length == 0)
-                return;
-
-            DiagLog.Write("App", $"image adjacent prefetch gen={generation}; count={targets.Length}");
-            foreach (string target in targets)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
-                    return;
-
-                NativeRasterImage? raster = await Task.Run(() =>
-                {
-                    if (token.IsCancellationRequested)
-                        return null;
-                    if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
-                        return null;
-
-                    _ = _native.ProbeFile(target);
-                    return _native.TryGetThumbnail(target, 128, token);
-                }, token);
-                if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
-                    return;
-
-                if (raster is null)
-                    continue;
-
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (!IsPreviewGenerationCurrent(generation, token))
-                        return;
-                    ImageSource? source = CreateBitmapSource(raster);
-                    if (source is null)
-                        return;
-                    _imageThumbnailCache.Add(target, source);
-                    ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
-                        string.Equals(i.Path, target, StringComparison.OrdinalIgnoreCase));
-                    if (item is not null && item.Thumbnail is null)
-                        item.Thumbnail = source;
-                });
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "image adjacent prefetch failed: " + ex.Message);
-        }
-    }
-
     private bool IsImageFilmstripLoadCurrent(string path, int generation, CancellationToken token)
         => IsPreviewGenerationCurrent(generation, token) && _previewSession.IsCurrentPath(path);
-
-    private void SelectCurrentFilmstripItem(string path)
-    {
-        ImageFilmstripItem? current = _imageFilmstripItems.FirstOrDefault(i =>
-            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-        if (current is null)
-            return;
-        ImageFilmstripList.SelectedItem = current;
-        ImageFilmstripList.ScrollIntoView(current);
-    }
 
     private static void AddIfValue(List<(string Label, string Value)> rows, string label, string? value)
     {
@@ -2122,15 +1925,14 @@ public sealed partial class MainWindow : Window
     private async Task NavigateImageSiblingAsync(int delta)
     {
         string? currentPath = _previewSession.CurrentPath;
-        if (_imageSiblingPaths.Length == 0 || string.IsNullOrWhiteSpace(currentPath))
+        if (string.IsNullOrWhiteSpace(currentPath))
             return;
 
-        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
+        string? nextPath = _imageSidecarController?.GetRelativePath(currentPath, delta);
+        if (string.IsNullOrWhiteSpace(nextPath))
             return;
 
-        int next = (index + delta + _imageSiblingPaths.Length) % _imageSiblingPaths.Length;
-        await PreviewImagePathAsync(_imageSiblingPaths[next]);
+        await PreviewImagePathAsync(nextPath);
     }
 
     private async Task PreviewImagePathAsync(string path)
@@ -2141,7 +1943,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        SelectCurrentFilmstripItem(path);
+        _imageSidecarController?.SelectCurrent(path);
         await PreviewWindowPathAsync(path);
     }
 
@@ -2278,12 +2080,11 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
             return;
 
-        string? nextPath = NextImagePathAfterDelete(path);
+        string? nextPath = _imageSidecarController?.NextPathAfterDelete(path);
         try
         {
             FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
-            _imageThumbnailCache.Remove(path);
-            RemoveFilmstripItem(path);
+            _imageSidecarController?.RemovePath(path);
             StatusText.Text = UiStrings.MovedToRecycleBin;
             StatusBar.Visibility = Visibility.Visible;
 
@@ -2303,44 +2104,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private string? NextImagePathAfterDelete(string currentPath)
-    {
-        if (_imageSiblingPaths.Length == 0)
-            return null;
-
-        int index = Array.FindIndex(_imageSiblingPaths, p => string.Equals(p, currentPath, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
-            return null;
-
-        for (int i = index + 1; i < _imageSiblingPaths.Length; i++)
-        {
-            if (System.IO.File.Exists(_imageSiblingPaths[i]))
-                return _imageSiblingPaths[i];
-        }
-
-        for (int i = index - 1; i >= 0; i--)
-        {
-            if (System.IO.File.Exists(_imageSiblingPaths[i]))
-                return _imageSiblingPaths[i];
-        }
-
-        return null;
-    }
-
-    private void RemoveFilmstripItem(string path)
-    {
-        _imageSiblingPaths = _imageSiblingPaths
-            .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        ImageFilmstripItem? item = _imageFilmstripItems.FirstOrDefault(i =>
-            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-        if (item is not null)
-            _imageFilmstripItems.Remove(item);
-
-        ImageFilmstrip.Visibility = _imageSiblingPaths.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
     private void RefreshCurrentImageFilmstrip()
     {
         string? path = _previewSession.CurrentPath;
@@ -2349,7 +2112,7 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
-        _ = LoadImageFilmstripAsync(path, generation, token);
+        _ = _imageSidecarController?.LoadFilmstripAsync(path, generation, token);
     }
 
     private void OpenCurrentPreviewPath(bool revealInExplorer)
