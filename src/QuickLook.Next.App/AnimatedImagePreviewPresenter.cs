@@ -14,6 +14,8 @@ internal sealed class AnimatedImagePreviewPresenter
     private const double MaxZoom = 12.0;
     private const double InfoRailWidth = 246;
     private const double ToolbarHeight = 162;
+    private const long MaxWinUiDecodeBytes = 16L * 1024 * 1024;
+    private const long MaxWinUiDecodePixels = 12_000_000;
 
     private readonly Border _previewRoot;
     private readonly Image _image;
@@ -280,6 +282,25 @@ internal sealed class AnimatedImagePreviewPresenter
         }
     }
 
+    public static AnimatedImageRenderPlan? CreateRenderPlan(string path)
+    {
+        if (TryReadAnimatedSize(path) is not { } size)
+            return null;
+
+        long pixels = Math.Max(0, size.Width) * (long)Math.Max(0, size.Height);
+        bool useNativeFirstFrame = pixels > MaxWinUiDecodePixels;
+        if (!useNativeFirstFrame)
+        {
+            try { useNativeFirstFrame = new System.IO.FileInfo(path).Length > MaxWinUiDecodeBytes; }
+            catch { }
+        }
+
+        return new AnimatedImageRenderPlan(
+            size.Width,
+            size.Height,
+            useNativeFirstFrame ? AnimatedImagePlaybackMode.NativeFirstFrameRaster : AnimatedImagePlaybackMode.WinUiAnimatedPlayback);
+    }
+
     private static (int Width, int Height)? TryReadAnimatedWebPSize(string path)
     {
         try
@@ -420,3 +441,11 @@ internal sealed class AnimatedImagePreviewPresenter
 }
 
 internal readonly record struct AnimatedImagePreviewResult(string Status, double Width, double Height);
+
+internal enum AnimatedImagePlaybackMode
+{
+    WinUiAnimatedPlayback,
+    NativeFirstFrameRaster,
+}
+
+internal readonly record struct AnimatedImageRenderPlan(int Width, int Height, AnimatedImagePlaybackMode PlaybackMode);
