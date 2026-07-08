@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -27,6 +28,9 @@ internal sealed class AnimatedImagePreviewPresenter
     private Windows.Foundation.Point _panStart;
     private double _panStartX;
     private double _panStartY;
+    private int _layoutVersion;
+    private Stopwatch? _openWatch;
+    private string _currentPath = "";
 
     public AnimatedImagePreviewPresenter(Border previewRoot, Image image, TextBlock zoomText)
     {
@@ -38,6 +42,12 @@ internal sealed class AnimatedImagePreviewPresenter
         _previewRoot.Loaded += (_, _) => ScheduleLayoutUpdate();
         _image.ImageOpened += (_, _) =>
         {
+            if (_openWatch is { } watch)
+            {
+                watch.Stop();
+                DiagLog.Write("App", $"animated image opened {watch.ElapsedMilliseconds}ms; path={_currentPath}");
+                _openWatch = null;
+            }
             SyncDecodedImageSize();
             ScheduleLayoutUpdate();
         };
@@ -47,6 +57,9 @@ internal sealed class AnimatedImagePreviewPresenter
 
     public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
     {
+        _layoutVersion++;
+        _currentPath = path;
+        _openWatch = Stopwatch.StartNew();
         _sourceWidth = Math.Max(1, ready.PreferredWidth);
         _sourceHeight = Math.Max(1, ready.PreferredHeight);
         _image.Width = _sourceWidth;
@@ -65,6 +78,9 @@ internal sealed class AnimatedImagePreviewPresenter
 
     public void Clear()
     {
+        _layoutVersion++;
+        _openWatch = null;
+        _currentPath = "";
         _image.Source = null;
         _sourceWidth = 0;
         _sourceHeight = 0;
@@ -107,19 +123,30 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_image.Source is null)
             return;
 
+        int version = _layoutVersion;
         _previewRoot.DispatcherQueue.TryEnqueue(() =>
         {
+            if (version != _layoutVersion)
+                return;
+
+            var layoutWatch = Stopwatch.StartNew();
             UpdateLayout();
-            QueueDelayedLayoutUpdate(50);
-            QueueDelayedLayoutUpdate(150);
+            layoutWatch.Stop();
+            DiagLog.Write("App", $"animated image layout apply {layoutWatch.ElapsedMilliseconds}ms; path={_currentPath}");
+            QueueDelayedLayoutUpdate(50, version);
+            QueueDelayedLayoutUpdate(150, version);
         });
     }
 
-    private void QueueDelayedLayoutUpdate(int delayMs)
+    private void QueueDelayedLayoutUpdate(int delayMs, int version)
     {
         _ = Task.Delay(delayMs).ContinueWith(_ =>
         {
-            _previewRoot.DispatcherQueue.TryEnqueue(UpdateLayout);
+            _previewRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                if (version == _layoutVersion)
+                    UpdateLayout();
+            });
         }, TaskScheduler.Default);
     }
 
