@@ -3,8 +3,8 @@
 //! These replace the equivalent .NET plugins with pure-Rust implementations callable directly
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
-use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
@@ -350,7 +350,14 @@ fn parse_tiff_exif_metadata(tiff: &[u8]) -> Option<ExifMetadata> {
     let mut metadata = ExifMetadata::default();
     let mut exif_ifd = None;
     let mut gps_ifd = None;
-    parse_exif_ifd(tiff, ifd0, endian, &mut metadata, &mut exif_ifd, &mut gps_ifd);
+    parse_exif_ifd(
+        tiff,
+        ifd0,
+        endian,
+        &mut metadata,
+        &mut exif_ifd,
+        &mut gps_ifd,
+    );
     if let Some(offset) = exif_ifd {
         parse_exif_ifd(tiff, offset, endian, &mut metadata, &mut None, &mut None);
     }
@@ -408,7 +415,9 @@ fn parse_exif_ifd(
             0xA402 => metadata.exposure_mode = exif_u16_value(tiff, entry, endian),
             0xA403 => metadata.white_balance = exif_u16_value(tiff, entry, endian),
             0xA404 => metadata.digital_zoom_ratio = exif_rational_value(tiff, entry, endian),
-            0xA405 => metadata.focal_length_in_35mm_film = exif_u32_or_u16_value(tiff, entry, endian),
+            0xA405 => {
+                metadata.focal_length_in_35mm_film = exif_u32_or_u16_value(tiff, entry, endian)
+            }
             0xA407 => metadata.gain_control = exif_u16_value(tiff, entry, endian),
             0xA408 => metadata.contrast = exif_u16_value(tiff, entry, endian),
             0xA409 => metadata.saturation = exif_u16_value(tiff, entry, endian),
@@ -453,7 +462,13 @@ fn parse_gps_ifd(tiff: &[u8], offset: usize, endian: u8, metadata: &mut ExifMeta
 
     metadata.latitude = signed_gps_coordinate(lat, lat_ref.as_deref(), "S");
     metadata.longitude = signed_gps_coordinate(lon, lon_ref.as_deref(), "W");
-    metadata.altitude = altitude.map(|value| if altitude_ref == Some(1) { -value } else { value });
+    metadata.altitude = altitude.map(|value| {
+        if altitude_ref == Some(1) {
+            -value
+        } else {
+            value
+        }
+    });
     metadata.direction = direction;
 }
 
@@ -502,7 +517,9 @@ fn exif_u32_or_u16_value(tiff: &[u8], entry: usize, endian: u8) -> Option<u32> {
 }
 
 fn exif_gps_coordinate(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 5 || read_u32_endian(tiff, entry + 4, endian)? < 3 {
+    if read_u16_endian(tiff, entry + 2, endian)? != 5
+        || read_u32_endian(tiff, entry + 4, endian)? < 3
+    {
         return None;
     }
     let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
@@ -513,7 +530,9 @@ fn exif_gps_coordinate(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
 }
 
 fn exif_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 5 || read_u32_endian(tiff, entry + 4, endian)? == 0 {
+    if read_u16_endian(tiff, entry + 2, endian)? != 5
+        || read_u32_endian(tiff, entry + 4, endian)? == 0
+    {
         return None;
     }
     let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
@@ -521,7 +540,9 @@ fn exif_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
 }
 
 fn exif_signed_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 10 || read_u32_endian(tiff, entry + 4, endian)? == 0 {
+    if read_u16_endian(tiff, entry + 2, endian)? != 10
+        || read_u32_endian(tiff, entry + 4, endian)? == 0
+    {
         return None;
     }
     let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
@@ -546,7 +567,11 @@ fn exif_signed_rational(tiff: &[u8], offset: usize, endian: u8) -> Option<f64> {
     Some(numerator / denominator)
 }
 
-fn signed_gps_coordinate(value: Option<f64>, reference: Option<&str>, negative_ref: &str) -> Option<f64> {
+fn signed_gps_coordinate(
+    value: Option<f64>,
+    reference: Option<&str>,
+    negative_ref: &str,
+) -> Option<f64> {
     let mut value = value?;
     if reference?.trim().eq_ignore_ascii_case(negative_ref) {
         value = -value;
@@ -834,7 +859,12 @@ fn parse_markdown_blocks(text: &str) -> (Vec<PreviewMarkdownBlockDto>, bool) {
                 code.push('\n');
                 i += 1;
             }
-            blocks.push(markdown_block("code", 0, code.trim_end_matches('\n'), &language));
+            blocks.push(markdown_block(
+                "code",
+                0,
+                code.trim_end_matches('\n'),
+                &language,
+            ));
             continue;
         }
 
@@ -920,7 +950,12 @@ fn markdown_block(kind: &str, level: usize, text: &str, language: &str) -> Previ
     }
 }
 
-fn markdown_inline(kind: &str, text: &str, url: &str, children: Vec<PreviewMarkdownInlineDto>) -> PreviewMarkdownInlineDto {
+fn markdown_inline(
+    kind: &str,
+    text: &str,
+    url: &str,
+    children: Vec<PreviewMarkdownInlineDto>,
+) -> PreviewMarkdownInlineDto {
     PreviewMarkdownInlineDto {
         kind: kind.to_string(),
         text: truncate_markdown_text(text),
@@ -961,7 +996,11 @@ fn is_markdown_rule(trimmed: &str) -> bool {
 }
 
 fn parse_list_item(trimmed: &str) -> Option<(bool, &str)> {
-    if let Some(text) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")).or_else(|| trimmed.strip_prefix("+ ")) {
+    if let Some(text) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
         return Some((false, text.trim()));
     }
     let dot = trimmed.find('.')?;
@@ -982,7 +1021,16 @@ fn parse_markdown_list(
     ordered: bool,
     first_text: &str,
 ) -> (PreviewMarkdownBlockDto, usize, bool) {
-    let mut block = markdown_block(if ordered { "orderedList" } else { "unorderedList" }, 0, "", "");
+    let mut block = markdown_block(
+        if ordered {
+            "orderedList"
+        } else {
+            "unorderedList"
+        },
+        0,
+        "",
+        "",
+    );
     let mut i = start;
     let mut partial = false;
     let mut next_text = Some(first_text.to_string());
@@ -1044,9 +1092,12 @@ fn is_markdown_table_start(lines: &[&str], index: usize) -> bool {
 fn is_markdown_table_separator(line: &str) -> bool {
     let cells = split_markdown_table_row(line);
     cells.len() >= 2
-        && cells
-            .iter()
-            .all(|cell| cell.trim().chars().all(|c| c == '-' || c == ':' || c.is_whitespace()) && cell.contains('-'))
+        && cells.iter().all(|cell| {
+            cell.trim()
+                .chars()
+                .all(|c| c == '-' || c == ':' || c.is_whitespace())
+                && cell.contains('-')
+        })
 }
 
 fn parse_markdown_table(lines: &[&str], start: usize) -> (PreviewMarkdownBlockDto, usize, bool) {
@@ -1100,7 +1151,12 @@ fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
         if let Some(after) = rest.strip_prefix("**") {
             if let Some(end) = after.find("**") {
                 let inner = &after[..end];
-                out.push(markdown_inline("strong", "", "", parse_markdown_inlines(inner)));
+                out.push(markdown_inline(
+                    "strong",
+                    "",
+                    "",
+                    parse_markdown_inlines(inner),
+                ));
                 i += end + 4;
                 continue;
             }
@@ -1108,7 +1164,12 @@ fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
         if let Some(after) = rest.strip_prefix('*') {
             if let Some(end) = after.find('*') {
                 let inner = &after[..end];
-                out.push(markdown_inline("emphasis", "", "", parse_markdown_inlines(inner)));
+                out.push(markdown_inline(
+                    "emphasis",
+                    "",
+                    "",
+                    parse_markdown_inlines(inner),
+                ));
                 i += end + 2;
                 continue;
             }
@@ -1118,7 +1179,12 @@ fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
                 if let Some(end) = rest[close + 2..].find(')') {
                     let label = &rest[1..close];
                     let url = &rest[close + 2..close + 2 + end];
-                    out.push(markdown_inline("link", "", url, parse_markdown_inlines(label)));
+                    out.push(markdown_inline(
+                        "link",
+                        "",
+                        url,
+                        parse_markdown_inlines(label),
+                    ));
                     i += close + 3 + end;
                     continue;
                 }
@@ -1252,12 +1318,7 @@ fn parse_delimited_records(text: &str, delimiter: char) -> (Vec<Vec<String>>, us
                 chars.next();
             }
             finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-            finish_table_row(
-                &mut records,
-                &mut row,
-                &mut total_records,
-                &mut is_partial,
-            );
+            finish_table_row(&mut records, &mut row, &mut total_records, &mut is_partial);
         } else if cell.chars().count() < MAX_TABLE_CELL_CHARS {
             cell.push(ch);
         } else {
@@ -1267,12 +1328,7 @@ fn parse_delimited_records(text: &str, delimiter: char) -> (Vec<Vec<String>>, us
 
     if saw_any && (!cell.is_empty() || !row.is_empty()) {
         finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-        finish_table_row(
-            &mut records,
-            &mut row,
-            &mut total_records,
-            &mut is_partial,
-        );
+        finish_table_row(&mut records, &mut row, &mut total_records, &mut is_partial);
     }
 
     (records, total_records, total_columns, is_partial)
@@ -1315,7 +1371,8 @@ fn finish_table_row(
 }
 
 fn looks_like_header_row(row: &[String]) -> bool {
-    row.iter().any(|cell| cell.chars().any(|ch| ch.is_alphabetic()))
+    row.iter()
+        .any(|cell| cell.chars().any(|ch| ch.is_alphabetic()))
 }
 
 fn normalize_table_headers(mut headers: Vec<String>, column_count: usize) -> Vec<String> {
@@ -1713,8 +1770,13 @@ fn build_xlsx_layout(
         let metrics = parse_xlsx_sheet_metrics(&sheet_xml);
         let merge_regions = parse_xlsx_merge_regions(&sheet_xml);
         let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(&sheet_xml);
-        let mut cells =
-            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions, &styles);
+        let mut cells = parse_worksheet_layout_cells(
+            &sheet_xml,
+            shared_strings,
+            &metrics,
+            &merge_regions,
+            &styles,
+        );
         let mut items =
             parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
         let (width, height) = xlsx_page_size(&cells, &items);
@@ -1765,7 +1827,9 @@ fn build_docx_layout(
 
     for paragraph in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let clipped = paragraph.chars().take(420).collect::<String>();
-        let line_count = (clipped.chars().count() as f64 / 72.0).ceil().clamp(1.0, 5.0);
+        let line_count = (clipped.chars().count() as f64 / 72.0)
+            .ceil()
+            .clamp(1.0, 5.0);
         let height = 24.0 * line_count + 10.0;
         if y + height > page_height - margin {
             push_docx_page(&mut pages, page_index, page_width, page_height, items);
@@ -1821,7 +1885,13 @@ fn build_docx_layout(
             shape: None,
             fill_color: None,
             stroke_color: None,
-            image_name: Some(entry.rsplit('/').next().unwrap_or(entry.as_str()).to_string()),
+            image_name: Some(
+                entry
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(entry.as_str())
+                    .to_string(),
+            ),
             mime_type: image_mime_type(&lower).map(str::to_string),
             image_base64: Some(base64_encode(&bytes)),
         });
@@ -2285,7 +2355,10 @@ fn parse_worksheet_layout_cells(
                                 vertical_alignment: styles
                                     .get(cell_style)
                                     .and_then(|style| style.vertical_alignment.clone()),
-                                bold: styles.get(cell_style).map(|style| style.bold).unwrap_or(false),
+                                bold: styles
+                                    .get(cell_style)
+                                    .map(|style| style.bold)
+                                    .unwrap_or(false),
                             });
                         }
                         in_cell = false;
@@ -2355,7 +2428,12 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                     in_cell_xfs = true;
                 } else if local == "xf" && in_cell_xfs {
                     in_xf = true;
-                    current_xf = Some(xlsx_style_from_xf(&e, &custom_formats, &fill_colors, &font_bold));
+                    current_xf = Some(xlsx_style_from_xf(
+                        &e,
+                        &custom_formats,
+                        &fill_colors,
+                        &font_bold,
+                    ));
                 } else if local == "alignment" && in_xf {
                     if let Some(style) = current_xf.as_mut() {
                         apply_xlsx_alignment(style, &e);
@@ -2373,7 +2451,12 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 } else if (local == "fgcolor" || local == "bgcolor") && in_fill {
                     current_fill_color = xlsx_color_from_element(&e).or(current_fill_color);
                 } else if local == "xf" && in_cell_xfs {
-                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors, &font_bold));
+                    styles.push(xlsx_style_from_xf(
+                        &e,
+                        &custom_formats,
+                        &fill_colors,
+                        &font_bold,
+                    ));
                 } else if local == "alignment" && in_xf {
                     if let Some(style) = current_xf.as_mut() {
                         apply_xlsx_alignment(style, &e);
@@ -2432,7 +2515,10 @@ fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32,
     }
 }
 
-fn xlsx_style_number_format(e: &BytesStart, custom_formats: &BTreeMap<u32, String>) -> Option<String> {
+fn xlsx_style_number_format(
+    e: &BytesStart,
+    custom_formats: &BTreeMap<u32, String>,
+) -> Option<String> {
     let id = attr_value(e, "numfmtid").and_then(|value| value.parse::<u32>().ok())?;
     custom_formats
         .get(&id)
@@ -2897,7 +2983,10 @@ fn parse_xlsx_freeze_pane(xml: &str) -> (Option<usize>, Option<usize>) {
                     }
                     let rows = attr_f64(&e, "ysplit").map(|value| value.max(0.0) as usize);
                     let columns = attr_f64(&e, "xsplit").map(|value| value.max(0.0) as usize);
-                    return (rows.filter(|value| *value > 0), columns.filter(|value| *value > 0));
+                    return (
+                        rows.filter(|value| *value > 0),
+                        columns.filter(|value| *value > 0),
+                    );
                 }
             }
             Ok(Event::Eof) => break,
@@ -2991,7 +3080,9 @@ fn xlsx_row_height(metrics: &XlsxSheetMetrics, row: usize) -> f64 {
 }
 
 fn xlsx_col_x(metrics: &XlsxSheetMetrics, col: usize) -> f64 {
-    (0..col.min(64)).map(|idx| xlsx_col_width(metrics, idx)).sum()
+    (0..col.min(64))
+        .map(|idx| xlsx_col_width(metrics, idx))
+        .sum()
 }
 
 fn xlsx_row_y(metrics: &XlsxSheetMetrics, row: usize) -> f64 {
@@ -3630,7 +3721,9 @@ fn decode_xml_entity(entity: &str) -> Option<char> {
 }
 
 fn decode_numeric_xml_entity(entity: &str) -> Option<char> {
-    let digits = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X"));
+    let digits = entity
+        .strip_prefix("#x")
+        .or_else(|| entity.strip_prefix("#X"));
     let value = if let Some(hex) = digits {
         u32::from_str_radix(hex, 16).ok()?
     } else {
@@ -3685,11 +3778,13 @@ fn generic_info_json(
         title: format!("{filename} — {summary}"),
         format: Some("plain".to_string()),
         language: Some("text".to_string()),
-        text: Some(body.unwrap_or_else(|| format!(
-            "Name: {filename}\nKind: {kind}\nSize: {}\nModified: {}",
-            format_number(size),
-            format_timestamp(modified_unix)
-        ))),
+        text: Some(body.unwrap_or_else(|| {
+            format!(
+                "Name: {filename}\nKind: {kind}\nSize: {}\nModified: {}",
+                format_number(size),
+                format_timestamp(modified_unix)
+            )
+        })),
         office_layout: None,
         listing: None,
         table: None,
@@ -3745,7 +3840,10 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
             }
         }
         if let Some(encoding) = read_u32_be(&bytes, 56) {
-            text.push_str(&format!("\nText encoding: {}", sqlite_encoding_name(encoding)));
+            text.push_str(&format!(
+                "\nText encoding: {}",
+                sqlite_encoding_name(encoding)
+            ));
         }
         if let Some(user_version) = read_u32_be(&bytes, 60) {
             text.push_str(&format!("\nUser version: {}", user_version));
@@ -3773,13 +3871,22 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
         let headers = parse_mail_headers(&content);
         text.push_str("\nFormat: RFC 5322 message");
         for key in ["From", "To", "Cc", "Subject", "Date", "Content-Type"] {
-            if let Some(value) = headers.iter().find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v)) {
+            if let Some(value) = headers
+                .iter()
+                .find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v))
+            {
                 text.push_str(&format!("\n{key}: {}", value.trim()));
             }
         }
         if filename.to_ascii_lowercase().ends_with(".mbox") {
-            let count = content.lines().filter(|line| line.starts_with("From ")).count();
-            text.push_str(&format!("\nMailbox messages observed: {}", format_number(count as i64)));
+            let count = content
+                .lines()
+                .filter(|line| line.starts_with("From "))
+                .count();
+            text.push_str(&format!(
+                "\nMailbox messages observed: {}",
+                format_number(count as i64)
+            ));
         }
     }
     generic_info_json(path, "mail", size, modified_unix, Some(text))
@@ -3822,7 +3929,10 @@ fn render_dump_info(path: &str, size: i64, modified_unix: i64) -> String {
             text.push_str(&format!("\nDirectory RVA: 0x{directory_rva:08X}"));
         }
         if let Some(timestamp) = read_u32(&bytes, 20) {
-            text.push_str(&format!("\nTimestamp: {}", format_timestamp(timestamp as i64)));
+            text.push_str(&format!(
+                "\nTimestamp: {}",
+                format_timestamp(timestamp as i64)
+            ));
         }
         if let Some(flags) = read_u64(&bytes, 24) {
             text.push_str(&format!("\nFlags: 0x{flags:016X}"));
@@ -3848,13 +3958,17 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
     let filename = file_name(path);
     let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, kind, size, modified_unix);
-    text.push_str(&format!("\nContainer: {}", media_container_name(path, &bytes)));
+    text.push_str(&format!(
+        "\nContainer: {}",
+        media_container_name(path, &bytes)
+    ));
     if let Some(brand) = mp4_major_brand(&bytes) {
         text.push_str(&format!("\nBrand: {brand}"));
     }
     if let Some(duration) = mp4_duration_seconds(&bytes) {
         text.push_str(&format!("\nDuration: {}", format_duration(duration)));
     }
+    append_id3_metadata(&mut text, &bytes);
     generic_info_json(path, kind, size, modified_unix, Some(text))
 }
 
@@ -3979,9 +4093,15 @@ fn decode_font_name(platform: u16, bytes: &[u8]) -> String {
             .chunks_exact(2)
             .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
-        String::from_utf16_lossy(&units).trim_matches('\0').trim().to_string()
+        String::from_utf16_lossy(&units)
+            .trim_matches('\0')
+            .trim()
+            .to_string()
     } else {
-        String::from_utf8_lossy(bytes).trim_matches('\0').trim().to_string()
+        String::from_utf8_lossy(bytes)
+            .trim_matches('\0')
+            .trim()
+            .to_string()
     }
 }
 
@@ -4171,6 +4291,190 @@ fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
     find_mp4_atom_payload(bytes, b"mvhd").and_then(parse_mvhd_duration_seconds)
 }
 
+fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
+    let fields = parse_id3_text_fields(bytes);
+    for (label, key) in [
+        ("Title", "TIT2"),
+        ("Artist", "TPE1"),
+        ("Album", "TALB"),
+        ("Track", "TRCK"),
+        ("Year", "TDRC"),
+        ("Year", "TYER"),
+        ("Genre", "TCON"),
+        ("Comment", "COMM"),
+    ] {
+        if let Some(value) = fields.get(key).filter(|value| !value.is_empty()) {
+            text.push_str(&format!("\n{label}: {value}"));
+        }
+    }
+}
+
+fn parse_id3_text_fields(bytes: &[u8]) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::<String, String>::new();
+    if bytes.len() < 10 || bytes.get(0..3) != Some(b"ID3") {
+        return fields;
+    }
+    let version = bytes[3];
+    if !(2..=4).contains(&version) {
+        return fields;
+    }
+    let Some(tag_size) = read_id3_synchsafe(bytes, 6) else {
+        return fields;
+    };
+    let tag_end = 10usize.saturating_add(tag_size).min(bytes.len());
+    let mut offset = 10usize;
+    while offset + 10 <= tag_end {
+        let Some(frame_id) = bytes.get(offset..offset + 4) else {
+            break;
+        };
+        if frame_id.iter().all(|b| *b == 0) {
+            break;
+        }
+        if !frame_id
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        {
+            break;
+        }
+        let frame_size = if version == 4 {
+            read_id3_synchsafe(bytes, offset + 4)
+        } else {
+            read_u32_be(bytes, offset + 4).map(|value| value as usize)
+        };
+        let Some(frame_size) = frame_size else {
+            break;
+        };
+        let frame_start = offset + 10;
+        let Some(frame_end) = frame_start.checked_add(frame_size) else {
+            break;
+        };
+        if frame_size == 0 || frame_end > tag_end {
+            break;
+        }
+        let id = String::from_utf8_lossy(frame_id).to_string();
+        if matches!(
+            id.as_str(),
+            "TIT2" | "TPE1" | "TALB" | "TRCK" | "TDRC" | "TYER" | "TCON"
+        ) {
+            if let Some(value) = decode_id3_text_frame(&bytes[frame_start..frame_end]) {
+                fields.entry(id).or_insert(value);
+            }
+        } else if id == "COMM" {
+            if let Some(value) = decode_id3_comment_frame(&bytes[frame_start..frame_end]) {
+                fields.entry(id).or_insert(value);
+            }
+        }
+        offset = frame_end;
+    }
+    fields
+}
+
+fn read_id3_synchsafe(bytes: &[u8], offset: usize) -> Option<usize> {
+    let chunk = bytes.get(offset..offset + 4)?;
+    if chunk.iter().any(|b| b & 0x80 != 0) {
+        return None;
+    }
+    Some(
+        ((chunk[0] as usize) << 21)
+            | ((chunk[1] as usize) << 14)
+            | ((chunk[2] as usize) << 7)
+            | chunk[3] as usize,
+    )
+}
+
+fn decode_id3_text_frame(bytes: &[u8]) -> Option<String> {
+    let (&encoding, payload) = bytes.split_first()?;
+    let value = decode_id3_text_payload(encoding, payload);
+    (!value.is_empty()).then_some(value)
+}
+
+fn decode_id3_comment_frame(bytes: &[u8]) -> Option<String> {
+    let (&encoding, rest) = bytes.split_first()?;
+    let payload = rest.get(3..).unwrap_or_default();
+    let comment = if encoding == 1 || encoding == 2 {
+        let content = strip_id3_utf16_description(payload, encoding == 2);
+        decode_id3_text_payload(encoding, content)
+    } else {
+        let content = payload
+            .iter()
+            .position(|b| *b == 0)
+            .and_then(|index| payload.get(index + 1..))
+            .unwrap_or(payload);
+        decode_id3_text_payload(encoding, content)
+    };
+    (!comment.is_empty()).then_some(comment)
+}
+
+fn strip_id3_utf16_description(bytes: &[u8], big_endian_without_bom: bool) -> &[u8] {
+    let mut index = 0usize;
+    while index + 1 < bytes.len() {
+        if bytes[index] == 0 && bytes[index + 1] == 0 {
+            return bytes.get(index + 2..).unwrap_or_default();
+        }
+        index += 2;
+    }
+    if big_endian_without_bom {
+        bytes
+    } else {
+        bytes
+    }
+}
+
+fn decode_id3_text_payload(encoding: u8, bytes: &[u8]) -> String {
+    let raw = trim_id3_text_bytes(bytes);
+    match encoding {
+        1 => decode_id3_utf16(raw),
+        2 => decode_id3_utf16_be(raw),
+        3 => String::from_utf8_lossy(raw).trim().to_string(),
+        _ => decode_latin1(raw).trim().to_string(),
+    }
+}
+
+fn trim_id3_text_bytes(bytes: &[u8]) -> &[u8] {
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1] == 0 {
+        end -= 1;
+    }
+    &bytes[..end]
+}
+
+fn decode_id3_utf16(bytes: &[u8]) -> String {
+    let (be, payload) = if bytes.starts_with(&[0xFE, 0xFF]) {
+        (true, &bytes[2..])
+    } else if bytes.starts_with(&[0xFF, 0xFE]) {
+        (false, &bytes[2..])
+    } else {
+        (false, bytes)
+    };
+    if be {
+        decode_id3_utf16_be(payload)
+    } else {
+        let units = payload
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
+            .trim_matches('\0')
+            .trim()
+            .to_string()
+    }
+}
+
+fn decode_id3_utf16_be(bytes: &[u8]) -> String {
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
+        .trim_matches('\0')
+        .trim()
+        .to_string()
+}
+
+fn decode_latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| char::from(*b)).collect()
+}
+
 fn find_mp4_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
     find_mp4_atom_payload_in_range(bytes, 0, bytes.len(), atom, 0)
 }
@@ -4217,7 +4521,10 @@ fn find_mp4_atom_payload_in_range<'a>(
 }
 
 fn is_mp4_container_atom(typ: &[u8]) -> bool {
-    matches!(typ, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"edts")
+    matches!(
+        typ,
+        b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"edts"
+    )
 }
 
 fn parse_mvhd_duration_seconds(payload: &[u8]) -> Option<f64> {
@@ -4492,11 +4799,7 @@ fn render_epub(path: &str) -> String {
         None => return String::new(),
     };
 
-    let container = read_zip_text(
-        &mut zip,
-        "META-INF/container.xml",
-        MAX_EBOOK_XML_BYTES,
-    );
+    let container = read_zip_text(&mut zip, "META-INF/container.xml", MAX_EBOOK_XML_BYTES);
     let rootfile = container
         .as_deref()
         .and_then(parse_epub_rootfile)
@@ -4551,7 +4854,8 @@ fn render_epub(path: &str) -> String {
             continue;
         }
         let chapter_path = normalize_zip_target(&base_dir, &item.href);
-        let Some(chapter_xml) = read_zip_text(&mut zip, &chapter_path, MAX_EBOOK_CHAPTER_BYTES) else {
+        let Some(chapter_xml) = read_zip_text(&mut zip, &chapter_path, MAX_EBOOK_CHAPTER_BYTES)
+        else {
             continue;
         };
         let chapter = extract_xhtml_markdown(&chapter_xml, &ebook_item_label(&item.href));
@@ -4645,7 +4949,11 @@ fn parse_epub_opf(xml: &str) -> EpubOpf {
                 set_epub_metadata(&mut opf, &current_meta, &xml_unescape_bytes(e.as_ref()));
             }
             Ok(Event::CData(e)) if in_metadata && !current_meta.is_empty() => {
-                set_epub_metadata(&mut opf, &current_meta, &String::from_utf8_lossy(e.as_ref()));
+                set_epub_metadata(
+                    &mut opf,
+                    &current_meta,
+                    &String::from_utf8_lossy(e.as_ref()),
+                );
             }
             Ok(Event::End(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -4672,7 +4980,8 @@ fn add_epub_manifest_item(opf: &mut EpubOpf, e: &BytesStart<'_>) {
         return;
     };
     let media_type = attr_value(e, "media-type").unwrap_or_default();
-    opf.manifest.insert(id, EpubManifestItem { href, media_type });
+    opf.manifest
+        .insert(id, EpubManifestItem { href, media_type });
 }
 
 fn set_epub_metadata(opf: &mut EpubOpf, name: &str, value: &str) {
@@ -4809,7 +5118,11 @@ fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
 
     flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
     if !saw_heading && !out.trim().is_empty() {
-        format!("## {}\n\n{}", markdown_escape_line(fallback_title), out.trim())
+        format!(
+            "## {}\n\n{}",
+            markdown_escape_line(fallback_title),
+            out.trim()
+        )
     } else {
         out.trim().to_string()
     }
@@ -4864,16 +5177,27 @@ fn render_fb2(path: &str) -> String {
                 match name.as_str() {
                     "title-info" => in_title_info = true,
                     "body" => in_body = true,
-                    "section" if in_body => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
-                    }
+                    "section" if in_body => flush_ebook_block(
+                        &mut markdown,
+                        &mut current_block,
+                        0,
+                        &mut saw_body_heading,
+                    ),
                     "title" if in_body => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading);
+                        flush_ebook_block(
+                            &mut markdown,
+                            &mut current_block,
+                            0,
+                            &mut saw_body_heading,
+                        );
                         current_meta = "body-title".to_string();
                     }
-                    "p" if in_body => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
-                    }
+                    "p" if in_body => flush_ebook_block(
+                        &mut markdown,
+                        &mut current_block,
+                        0,
+                        &mut saw_body_heading,
+                    ),
                     _ if in_title_info => current_meta = name,
                     _ => {}
                 }
@@ -4904,16 +5228,29 @@ fn render_fb2(path: &str) -> String {
                 match name.as_str() {
                     "title-info" => in_title_info = false,
                     "body" => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading);
+                        flush_ebook_block(
+                            &mut markdown,
+                            &mut current_block,
+                            0,
+                            &mut saw_body_heading,
+                        );
                         in_body = false;
                     }
                     "title" if current_meta == "body-title" => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 2, &mut saw_body_heading);
+                        flush_ebook_block(
+                            &mut markdown,
+                            &mut current_block,
+                            2,
+                            &mut saw_body_heading,
+                        );
                         current_meta.clear();
                     }
-                    "p" if in_body => {
-                        flush_ebook_block(&mut markdown, &mut current_block, 0, &mut saw_body_heading)
-                    }
+                    "p" if in_body => flush_ebook_block(
+                        &mut markdown,
+                        &mut current_block,
+                        0,
+                        &mut saw_body_heading,
+                    ),
                     _ if name == current_meta => current_meta.clear(),
                     _ => {}
                 }
@@ -5537,8 +5874,8 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
         let entry = zip.by_index_raw(i).ok()?;
         let raw_name = entry.name().to_string();
         let normalized_name = raw_name.replace('\\', "/");
-        let score =
-            package_icon_candidate_score(&normalized_name) + manifest_icon_candidate_score(&normalized_name, &manifest_icons);
+        let score = package_icon_candidate_score(&normalized_name)
+            + manifest_icon_candidate_score(&normalized_name, &manifest_icons);
         if score > 0 && entry.size() <= MAX_PACKAGE_ICON_BYTES {
             candidates.push((score, raw_name));
         }
@@ -5573,7 +5910,10 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
 fn expand_appx_icon_candidates(paths: &[String]) -> Vec<String> {
     let mut candidates = Vec::new();
     for path in paths {
-        let normalized = path.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase();
+        let normalized = path
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_ascii_lowercase();
         if normalized.is_empty() {
             continue;
         }
@@ -5610,7 +5950,10 @@ fn manifest_icon_candidate_score(name: &str, manifest_icons: &[String]) -> i32 {
     if manifest_icons.is_empty() {
         return 0;
     }
-    let lower = name.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase();
+    let lower = name
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_ascii_lowercase();
     if manifest_icons.iter().any(|candidate| candidate == &lower) {
         return 320;
     }
@@ -5620,7 +5963,11 @@ fn manifest_icon_candidate_score(name: &str, manifest_icons: &[String]) -> i32 {
     };
     manifest_icons
         .iter()
-        .filter_map(|candidate| candidate.rsplit_once('.').map(|(candidate_stem, _)| candidate_stem))
+        .filter_map(|candidate| {
+            candidate
+                .rsplit_once('.')
+                .map(|(candidate_stem, _)| candidate_stem)
+        })
         .any(|candidate_stem| stem.starts_with(candidate_stem))
         .then_some(260)
         .unwrap_or(0)
@@ -6866,7 +7213,8 @@ mod tests {
 
         let path = std::env::temp_dir().join("quicklook-next-exif-smoke.jpg");
         fs::write(&path, &jpeg).expect("write temp jpeg");
-        let from_file = parse_jpeg_exif_metadata(path.to_str().unwrap()).expect("file exif metadata");
+        let from_file =
+            parse_jpeg_exif_metadata(path.to_str().unwrap()).expect("file exif metadata");
         let _ = fs::remove_file(path);
         assert_eq!(from_file.make.as_deref(), Some("Acme"));
     }
@@ -6952,7 +7300,13 @@ mod tests {
         write_le_u32(tiff, entry + 8, value);
     }
 
-    fn write_rational3_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, values: [(u32, u32); 3]) {
+    fn write_rational3_entry(
+        tiff: &mut Vec<u8>,
+        entries: usize,
+        index: usize,
+        tag: u16,
+        values: [(u32, u32); 3],
+    ) {
         let entry = entries + index * 12;
         write_le_u16(tiff, entry, tag);
         write_le_u16(tiff, entry + 2, 5);
@@ -6966,7 +7320,14 @@ mod tests {
         }
     }
 
-    fn write_rational_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, numerator: u32, denominator: u32) {
+    fn write_rational_entry(
+        tiff: &mut Vec<u8>,
+        entries: usize,
+        index: usize,
+        tag: u16,
+        numerator: u32,
+        denominator: u32,
+    ) {
         let entry = entries + index * 12;
         write_le_u16(tiff, entry, tag);
         write_le_u16(tiff, entry + 2, 5);
@@ -6978,15 +7339,29 @@ mod tests {
         write_le_u32(tiff, offset + 4, denominator);
     }
 
-    fn write_undefined_entry(tiff: &mut [u8], entries: usize, index: usize, tag: u16, value: &[u8]) {
+    fn write_undefined_entry(
+        tiff: &mut [u8],
+        entries: usize,
+        index: usize,
+        tag: u16,
+        value: &[u8],
+    ) {
         let entry = entries + index * 12;
         write_le_u16(tiff, entry, tag);
         write_le_u16(tiff, entry + 2, 7);
         write_le_u32(tiff, entry + 4, value.len() as u32);
-        tiff[entry + 8..entry + 8 + value.len().min(4)].copy_from_slice(&value[..value.len().min(4)]);
+        tiff[entry + 8..entry + 8 + value.len().min(4)]
+            .copy_from_slice(&value[..value.len().min(4)]);
     }
 
-    fn write_signed_rational_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, numerator: i32, denominator: i32) {
+    fn write_signed_rational_entry(
+        tiff: &mut Vec<u8>,
+        entries: usize,
+        index: usize,
+        tag: u16,
+        numerator: i32,
+        denominator: i32,
+    ) {
         let entry = entries + index * 12;
         write_le_u16(tiff, entry, tag);
         write_le_u16(tiff, entry + 2, 10);
@@ -7071,11 +7446,32 @@ mod tests {
             </styleSheet>"#,
         );
 
-        assert_eq!(styles.get(0).and_then(|style| style.fill_color.as_deref()), None);
-        assert_eq!(styles.get(1).and_then(|style| style.fill_color.as_deref()), Some("#FFE699"));
-        assert_eq!(styles.get(1).and_then(|style| style.number_format.as_deref()), Some("m/d/yy"));
-        assert_eq!(styles.get(1).and_then(|style| style.horizontal_alignment.as_deref()), Some("center"));
-        assert_eq!(styles.get(1).and_then(|style| style.vertical_alignment.as_deref()), Some("top"));
+        assert_eq!(
+            styles.get(0).and_then(|style| style.fill_color.as_deref()),
+            None
+        );
+        assert_eq!(
+            styles.get(1).and_then(|style| style.fill_color.as_deref()),
+            Some("#FFE699")
+        );
+        assert_eq!(
+            styles
+                .get(1)
+                .and_then(|style| style.number_format.as_deref()),
+            Some("m/d/yy")
+        );
+        assert_eq!(
+            styles
+                .get(1)
+                .and_then(|style| style.horizontal_alignment.as_deref()),
+            Some("center")
+        );
+        assert_eq!(
+            styles
+                .get(1)
+                .and_then(|style| style.vertical_alignment.as_deref()),
+            Some("top")
+        );
         assert_eq!(styles.get(1).map(|style| style.bold), Some(true));
     }
 
@@ -7093,7 +7489,8 @@ mod tests {
 
     #[test]
     fn markdown_parser_does_not_panic_on_non_ascii() {
-        let (blocks, partial) = parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。");
+        let (blocks, partial) =
+            parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。");
         assert!(!partial);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].kind, "heading");
@@ -7104,7 +7501,8 @@ mod tests {
 
     #[test]
     fn markdown_parser_emits_lists_quotes_and_code() {
-        let (blocks, partial) = parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```");
+        let (blocks, partial) =
+            parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```");
 
         assert!(!partial);
         assert_eq!(blocks[0].kind, "blockquote");
@@ -7121,8 +7519,14 @@ mod tests {
         assert!(!partial);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, "table");
-        assert_eq!(blocks[0].table_headers, vec!["A".to_string(), "B".to_string()]);
-        assert_eq!(blocks[0].table_rows[0], vec!["1".to_string(), "2".to_string()]);
+        assert_eq!(
+            blocks[0].table_headers,
+            vec!["A".to_string(), "B".to_string()]
+        );
+        assert_eq!(
+            blocks[0].table_rows[0],
+            vec!["1".to_string(), "2".to_string()]
+        );
     }
 
     #[test]
@@ -7173,7 +7577,10 @@ mod tests {
 
     #[test]
     fn ebook_label_normalizes_file_names() {
-        assert_eq!(ebook_item_label("Text/chapter-01_intro.xhtml"), "chapter 01 intro");
+        assert_eq!(
+            ebook_item_label("Text/chapter-01_intro.xhtml"),
+            "chapter 01 intro"
+        );
     }
 
     #[test]
@@ -7235,11 +7642,79 @@ mod tests {
     }
 
     #[test]
-    fn mail_header_parser_unfolds_continuations() {
-        let headers = parse_mail_headers("Subject: hello\r\n world\r\nFrom: a@example.test\r\n\r\nbody");
+    fn media_info_reads_id3_text_frames() {
+        let bytes = make_id3_tag(&[
+            ("TIT2", b"\x03Skyline".as_slice()),
+            ("TPE1", b"\x03QuickLook Next".as_slice()),
+            ("TALB", b"\x03Preview Sessions".as_slice()),
+            ("TRCK", b"\x031/9".as_slice()),
+            ("TDRC", b"\x032026".as_slice()),
+            ("TCON", b"\x03Test".as_slice()),
+            ("COMM", b"\x03eng\x00Fast native preview".as_slice()),
+        ]);
+        let mut text = String::new();
 
-        assert_eq!(headers[0], ("Subject".to_string(), "hello world".to_string()));
-        assert_eq!(headers[1], ("From".to_string(), "a@example.test".to_string()));
+        append_id3_metadata(&mut text, &bytes);
+
+        assert!(text.contains("Title: Skyline"));
+        assert!(text.contains("Artist: QuickLook Next"));
+        assert!(text.contains("Album: Preview Sessions"));
+        assert!(text.contains("Track: 1/9"));
+        assert!(text.contains("Year: 2026"));
+        assert!(text.contains("Genre: Test"));
+        assert!(text.contains("Comment: Fast native preview"));
+    }
+
+    #[test]
+    fn id3_text_decodes_utf16_bom() {
+        let mut payload = vec![1, 0xFF, 0xFE];
+        for unit in "北京".encode_utf16() {
+            payload.extend_from_slice(&unit.to_le_bytes());
+        }
+        let bytes = make_id3_tag(&[("TIT2", payload.as_slice())]);
+        let fields = parse_id3_text_fields(&bytes);
+
+        assert_eq!(fields.get("TIT2").map(String::as_str), Some("北京"));
+    }
+
+    fn make_id3_tag(frames: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (id, payload) in frames {
+            body.extend_from_slice(id.as_bytes());
+            body.extend_from_slice(&id3_synchsafe_bytes(payload.len()));
+            body.extend_from_slice(&[0, 0]);
+            body.extend_from_slice(payload);
+        }
+        let mut tag = Vec::new();
+        tag.extend_from_slice(b"ID3");
+        tag.extend_from_slice(&[4, 0, 0]);
+        tag.extend_from_slice(&id3_synchsafe_bytes(body.len()));
+        tag.extend_from_slice(&body);
+        tag
+    }
+
+    fn id3_synchsafe_bytes(value: usize) -> [u8; 4] {
+        [
+            ((value >> 21) & 0x7F) as u8,
+            ((value >> 14) & 0x7F) as u8,
+            ((value >> 7) & 0x7F) as u8,
+            (value & 0x7F) as u8,
+        ]
+    }
+
+    #[test]
+    fn mail_header_parser_unfolds_continuations() {
+        let headers =
+            parse_mail_headers("Subject: hello\r\n world\r\nFrom: a@example.test\r\n\r\nbody");
+
+        assert_eq!(
+            headers[0],
+            ("Subject".to_string(), "hello world".to_string())
+        );
+        assert_eq!(
+            headers[1],
+            ("From".to_string(), "a@example.test".to_string())
+        );
     }
 
     #[test]
