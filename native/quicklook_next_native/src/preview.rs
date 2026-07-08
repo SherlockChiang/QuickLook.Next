@@ -5328,7 +5328,10 @@ fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
         text.push_str(&format!("\nVideo: {}x{}", summary.width, summary.height));
     }
     if !summary.video_codec.is_empty() {
-        text.push_str(&format!("\nVideo codec: {}", summary.video_codec));
+        text.push_str(&format!(
+            "\nVideo codec: {}",
+            media_codec_label(&summary.video_codec)
+        ));
     }
     if summary.audio_channels > 0 {
         text.push_str(&format!("\nAudio channels: {}", summary.audio_channels));
@@ -5340,13 +5343,34 @@ fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
         ));
     }
     if !summary.audio_codec.is_empty() {
-        text.push_str(&format!("\nAudio codec: {}", summary.audio_codec));
+        text.push_str(&format!(
+            "\nAudio codec: {}",
+            media_codec_label(&summary.audio_codec)
+        ));
     }
     if !summary.writing_app.is_empty() {
         text.push_str(&format!("\nWriting app: {}", summary.writing_app));
     }
     if !summary.muxing_app.is_empty() {
         text.push_str(&format!("\nMuxing app: {}", summary.muxing_app));
+    }
+}
+
+fn media_codec_label(codec: &str) -> String {
+    match codec {
+        "V_MPEG4/ISO/AVC" => "H.264 / AVC".to_string(),
+        "V_MPEGH/ISO/HEVC" => "H.265 / HEVC".to_string(),
+        "V_AV1" => "AV1".to_string(),
+        "V_VP8" => "VP8".to_string(),
+        "V_VP9" => "VP9".to_string(),
+        "A_AAC" | "A_AAC/MPEG2/LC" | "A_AAC/MPEG4/LC" => "AAC".to_string(),
+        "A_AC3" => "AC-3".to_string(),
+        "A_EAC3" => "E-AC-3".to_string(),
+        "A_FLAC" => "FLAC".to_string(),
+        "A_OPUS" => "Opus".to_string(),
+        "A_VORBIS" => "Vorbis".to_string(),
+        "A_PCM/INT/LIT" => "PCM".to_string(),
+        _ => codec.to_string(),
     }
 }
 
@@ -9396,6 +9420,7 @@ mod tests {
         assert_eq!(summary.audio_channels, 2);
         assert_eq!(summary.sample_rate, Some(48_000.0));
         assert!(text.contains("Duration: 1:30"));
+        assert!(text.contains("Audio codec: Opus"));
         assert!(text.contains("Writing app: QuickLook Writer"));
     }
 
