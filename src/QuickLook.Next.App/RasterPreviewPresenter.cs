@@ -3,6 +3,7 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
@@ -71,7 +72,7 @@ internal sealed class RasterPreviewPresenter
 
         ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
         DisposeSprite();
-        
+
         var brush = compositor.CreateSurfaceBrush(compSurface);
         brush.Stretch = CompositionStretch.Fill;
         var sprite = compositor.CreateSpriteVisual();
@@ -88,6 +89,7 @@ internal sealed class RasterPreviewPresenter
     {
         ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
         DisposeSprite();
+        _previewRoot.Clip = null;
         _surfaceWidth = 0;
         _surfaceHeight = 0;
         ResetView();
@@ -100,6 +102,10 @@ internal sealed class RasterPreviewPresenter
 
         double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
         double availableHeight = Math.Max(1, _previewRoot.ActualHeight);
+        _previewRoot.Clip = new RectangleGeometry
+        {
+            Rect = new Windows.Foundation.Rect(0, 0, availableWidth, availableHeight),
+        };
         double fitScale = Math.Min(availableWidth / _surfaceWidth, availableHeight / _surfaceHeight);
         double scale = fitScale * _zoom;
         double scaledWidth = _surfaceWidth * scale;
