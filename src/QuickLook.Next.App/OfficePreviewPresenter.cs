@@ -233,18 +233,46 @@ internal sealed class OfficePreviewPresenter
             {
                 Text = cell.Text,
                 FontSize = 12,
+                FontWeight = new Windows.UI.Text.FontWeight { Weight = cell.Bold ? (ushort)600 : (ushort)400 },
                 MaxWidth = Math.Max(4, width - 10),
                 MaxHeight = Math.Max(4, height - 4),
                 TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.WordEllipsis,
                 Foreground = OfficeBlackBrush,
-                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
+                HorizontalAlignment = HorizontalAlignmentFor(cell.HorizontalAlignment),
+                VerticalAlignment = VerticalAlignmentFor(cell.VerticalAlignment),
             },
         };
         Canvas.SetLeft(border, offsetX + cell.X * scale);
         Canvas.SetTop(border, offsetY + cell.Y * scale);
         canvas.Children.Add(border);
     }
+
+    private static TextAlignment TextAlignmentFor(string? value)
+        => value switch
+        {
+            "center" => TextAlignment.Center,
+            "right" => TextAlignment.Right,
+            "justify" or "distributed" => TextAlignment.Justify,
+            _ => TextAlignment.Left,
+        };
+
+    private static HorizontalAlignment HorizontalAlignmentFor(string? value)
+        => value switch
+        {
+            "center" => HorizontalAlignment.Center,
+            "right" => HorizontalAlignment.Right,
+            _ => HorizontalAlignment.Left,
+        };
+
+    private static VerticalAlignment VerticalAlignmentFor(string? value)
+        => value switch
+        {
+            "top" => VerticalAlignment.Top,
+            "bottom" => VerticalAlignment.Bottom,
+            _ => VerticalAlignment.Center,
+        };
 
     private static void AddFreezePaneIndicators(
         Canvas canvas,

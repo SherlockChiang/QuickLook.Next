@@ -87,6 +87,9 @@ public sealed record OfficeCell(int Row, int Column, string Text)
     public int ColumnSpan { get; init; } = 1;
     public string? NumberFormat { get; init; }
     public string? FillColor { get; init; }
+    public string? HorizontalAlignment { get; init; }
+    public string? VerticalAlignment { get; init; }
+    public bool Bold { get; init; }
 }
 
 public sealed record OfficeLayoutItem(string Kind)

@@ -82,6 +82,12 @@ struct OfficeCellDto {
     number_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fill_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    horizontal_alignment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vertical_alignment: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    bold: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -192,6 +198,10 @@ enum BValue {
 
 fn to_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // ── Text preview ─────────────────────────────────────────────────────────────
@@ -2269,6 +2279,13 @@ fn parse_worksheet_layout_cells(
                                 fill_color: styles
                                     .get(cell_style)
                                     .and_then(|style| style.fill_color.clone()),
+                                horizontal_alignment: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.horizontal_alignment.clone()),
+                                vertical_alignment: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.vertical_alignment.clone()),
+                                bold: styles.get(cell_style).map(|style| style.bold).unwrap_or(false),
                             });
                         }
                         in_cell = false;
@@ -2295,23 +2312,39 @@ fn parse_worksheet_layout_cells(
 struct XlsxStyle {
     number_format: Option<String>,
     fill_color: Option<String>,
+    horizontal_alignment: Option<String>,
+    vertical_alignment: Option<String>,
+    bold: bool,
 }
 
 fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut reader = Reader::from_str(xml);
     let mut custom_formats = BTreeMap::<u32, String>::new();
+    let mut font_bold = Vec::<bool>::new();
     let mut fill_colors = Vec::<Option<String>>::new();
     let mut styles = Vec::<XlsxStyle>::new();
+    let mut in_fonts = false;
+    let mut in_font = false;
     let mut in_fills = false;
     let mut in_fill = false;
     let mut in_cell_xfs = false;
+    let mut in_xf = false;
+    let mut current_xf: Option<XlsxStyle> = None;
+    let mut current_font_bold = false;
     let mut current_fill_color: Option<String> = None;
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
-                if local == "fills" {
+                if local == "fonts" {
+                    in_fonts = true;
+                } else if local == "font" && in_fonts {
+                    in_font = true;
+                    current_font_bold = false;
+                } else if local == "b" && in_font {
+                    current_font_bold = true;
+                } else if local == "fills" {
                     in_fills = true;
                 } else if local == "fill" && in_fills {
                     in_fill = true;
@@ -2321,30 +2354,52 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 } else if local == "cellxfs" {
                     in_cell_xfs = true;
                 } else if local == "xf" && in_cell_xfs {
-                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors));
+                    in_xf = true;
+                    current_xf = Some(xlsx_style_from_xf(&e, &custom_formats, &fill_colors, &font_bold));
+                } else if local == "alignment" && in_xf {
+                    if let Some(style) = current_xf.as_mut() {
+                        apply_xlsx_alignment(style, &e);
+                    }
                 } else if local == "numfmt" {
                     collect_xlsx_custom_number_format(&e, &mut custom_formats);
                 }
             }
             Ok(Event::Empty(e)) => {
                 let local = local_xml_name(e.name().as_ref());
-                if local == "fill" && in_fills {
+                if local == "b" && in_font {
+                    current_font_bold = true;
+                } else if local == "fill" && in_fills {
                     fill_colors.push(None);
                 } else if (local == "fgcolor" || local == "bgcolor") && in_fill {
                     current_fill_color = xlsx_color_from_element(&e).or(current_fill_color);
                 } else if local == "xf" && in_cell_xfs {
-                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors));
+                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors, &font_bold));
+                } else if local == "alignment" && in_xf {
+                    if let Some(style) = current_xf.as_mut() {
+                        apply_xlsx_alignment(style, &e);
+                    }
                 } else if local == "numfmt" {
                     collect_xlsx_custom_number_format(&e, &mut custom_formats);
                 }
             }
             Ok(Event::End(e)) => {
                 let local = local_xml_name(e.name().as_ref());
-                if local == "fill" && in_fill {
+                if local == "font" && in_font {
+                    font_bold.push(current_font_bold);
+                    in_font = false;
+                    current_font_bold = false;
+                } else if local == "fonts" {
+                    in_fonts = false;
+                } else if local == "fill" && in_fill {
                     fill_colors.push(current_fill_color.take());
                     in_fill = false;
                 } else if local == "fills" {
                     in_fills = false;
+                } else if local == "xf" && in_xf {
+                    if let Some(style) = current_xf.take() {
+                        styles.push(style);
+                    }
+                    in_xf = false;
                 } else if local == "cellxfs" {
                     in_cell_xfs = false;
                 }
@@ -2389,13 +2444,45 @@ fn xlsx_style_from_xf(
     e: &BytesStart,
     custom_formats: &BTreeMap<u32, String>,
     fill_colors: &[Option<String>],
+    font_bold: &[bool],
 ) -> XlsxStyle {
     let fill_color = attr_value(e, "fillid")
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|id| fill_colors.get(id).cloned().flatten());
+    let bold = attr_value(e, "fontid")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|id| font_bold.get(id).copied())
+        .unwrap_or(false);
     XlsxStyle {
         number_format: xlsx_style_number_format(e, custom_formats),
         fill_color,
+        bold,
+        ..Default::default()
+    }
+}
+
+fn apply_xlsx_alignment(style: &mut XlsxStyle, e: &BytesStart) {
+    style.horizontal_alignment = attr_value(e, "horizontal")
+        .and_then(|value| normalize_xlsx_horizontal_alignment(&value))
+        .or_else(|| style.horizontal_alignment.clone());
+    style.vertical_alignment = attr_value(e, "vertical")
+        .and_then(|value| normalize_xlsx_vertical_alignment(&value))
+        .or_else(|| style.vertical_alignment.clone());
+}
+
+fn normalize_xlsx_horizontal_alignment(value: &str) -> Option<String> {
+    match value {
+        "left" | "center" | "right" | "general" | "fill" | "justify" | "distributed" => {
+            Some(value.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn normalize_xlsx_vertical_alignment(value: &str) -> Option<String> {
+    match value {
+        "top" | "center" | "bottom" | "justify" | "distributed" => Some(value.to_string()),
+        _ => None,
     }
 }
 
@@ -6968,6 +7055,10 @@ mod tests {
     fn xlsx_styles_include_fill_colors() {
         let styles = parse_xlsx_styles(
             r#"<styleSheet>
+                <fonts count="2">
+                    <font><sz val="11"/></font>
+                    <font><b/><sz val="11"/></font>
+                </fonts>
                 <fills count="3">
                     <fill><patternFill patternType="none"/></fill>
                     <fill><patternFill patternType="gray125"/></fill>
@@ -6975,7 +7066,7 @@ mod tests {
                 </fills>
                 <cellXfs count="2">
                     <xf numFmtId="0" fillId="0"/>
-                    <xf numFmtId="14" fillId="2"/>
+                    <xf numFmtId="14" fillId="2" fontId="1"><alignment horizontal="center" vertical="top"/></xf>
                 </cellXfs>
             </styleSheet>"#,
         );
@@ -6983,6 +7074,9 @@ mod tests {
         assert_eq!(styles.get(0).and_then(|style| style.fill_color.as_deref()), None);
         assert_eq!(styles.get(1).and_then(|style| style.fill_color.as_deref()), Some("#FFE699"));
         assert_eq!(styles.get(1).and_then(|style| style.number_format.as_deref()), Some("m/d/yy"));
+        assert_eq!(styles.get(1).and_then(|style| style.horizontal_alignment.as_deref()), Some("center"));
+        assert_eq!(styles.get(1).and_then(|style| style.vertical_alignment.as_deref()), Some("top"));
+        assert_eq!(styles.get(1).map(|style| style.bold), Some(true));
     }
 
     #[test]
