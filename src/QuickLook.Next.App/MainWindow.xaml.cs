@@ -289,10 +289,12 @@ public sealed partial class MainWindow : Window
         RootGrid.ActualThemeChanged += (s, e) =>
         {
             UpdateTitleBarColors();
+            ApplyImageCheckerboardBackdrops();
             ApplyWindowIcon();
             RefreshTrayIcon();
         };
         UpdateTitleBarColors();
+        ApplyImageCheckerboardBackdrops();
         _listingPresenter.UpdateSortHeaders();
     }
 
@@ -915,10 +917,58 @@ public sealed partial class MainWindow : Window
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
-        => _rasterPresenter?.UpdateLayout();
+    {
+        ApplyImageCheckerboardBackdrop(PreviewRoot);
+        _rasterPresenter?.UpdateLayout();
+    }
 
     private void OnAnimatedImageRootSizeChanged(object sender, SizeChangedEventArgs e)
-        => _animatedImagePresenter?.ScheduleLayoutUpdate();
+    {
+        ApplyImageCheckerboardBackdrop(AnimatedImagePreviewRoot);
+        _animatedImagePresenter?.ScheduleLayoutUpdate();
+    }
+
+    private void ApplyImageCheckerboardBackdrops()
+    {
+        ApplyImageCheckerboardBackdrop(PreviewRoot);
+        ApplyImageCheckerboardBackdrop(AnimatedImagePreviewRoot);
+    }
+
+    private void ApplyImageCheckerboardBackdrop(Border border)
+    {
+        int width = (int)Math.Ceiling(border.ActualWidth);
+        int height = (int)Math.Ceiling(border.ActualHeight);
+        if (width <= 0 || height <= 0)
+            return;
+
+        const int cell = 16;
+        var bitmap = new WriteableBitmap(width, height);
+        byte light = RootGrid.ActualTheme == ElementTheme.Dark ? (byte)58 : (byte)230;
+        byte dark = RootGrid.ActualTheme == ElementTheme.Dark ? (byte)44 : (byte)208;
+        byte[] pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+        {
+            int row = y / cell;
+            for (int x = 0; x < width; x++)
+            {
+                byte tone = ((x / cell + row) & 1) == 0 ? light : dark;
+                int offset = (y * width + x) * 4;
+                pixels[offset] = tone;
+                pixels[offset + 1] = tone;
+                pixels[offset + 2] = tone;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        using (Stream stream = bitmap.PixelBuffer.AsStream())
+            stream.Write(pixels, 0, pixels.Length);
+        bitmap.Invalidate();
+        border.Background = new ImageBrush
+        {
+            ImageSource = bitmap,
+            Stretch = Stretch.Fill,
+        };
+    }
 
     private void OnPreviousPdfPageClick(object sender, RoutedEventArgs e)
         => _pdfPresenter?.GoToPreviousPage();
