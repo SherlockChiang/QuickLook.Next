@@ -1686,6 +1686,9 @@ fn build_xlsx_layout(
 ) -> Option<OfficeLayoutDto> {
     let mut pages = Vec::new();
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
+    let number_formats = read_zip_text(zip, "xl/styles.xml", 4 * 1024 * 1024)
+        .map(|xml| parse_xlsx_style_number_formats(&xml))
+        .unwrap_or_default();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let sheet_name = format!("xl/worksheets/sheet{sheet_idx}.xml");
         let Some(sheet_xml) = read_zip_text(zip, &sheet_name, 16 * 1024 * 1024) else {
@@ -1699,7 +1702,7 @@ fn build_xlsx_layout(
         let merge_regions = parse_xlsx_merge_regions(&sheet_xml);
         let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(&sheet_xml);
         let mut cells =
-            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions);
+            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions, &number_formats);
         let mut items =
             parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
         let (width, height) = xlsx_page_size(&cells, &items);
@@ -2144,6 +2147,7 @@ fn parse_worksheet_layout_cells(
     shared_strings: &[String],
     metrics: &XlsxSheetMetrics,
     merge_regions: &BTreeMap<(usize, usize), XlsxMergeRegion>,
+    number_formats: &[Option<String>],
 ) -> Vec<OfficeCellDto> {
     let mut reader = Reader::from_str(xml);
     let mut cells = Vec::new();
@@ -2155,6 +2159,7 @@ fn parse_worksheet_layout_cells(
     let mut row_index = 0usize;
     let mut next_col = 0usize;
     let mut cell_col = 0usize;
+    let mut cell_style = 0usize;
     let mut cell_type = String::new();
     let mut cell_value = String::new();
 
@@ -2180,6 +2185,9 @@ fn parse_worksheet_layout_cells(
                             .and_then(|reference| cell_reference_column(&reference))
                             .unwrap_or(next_col);
                         next_col = cell_col + 1;
+                        cell_style = attr_value(&e, "s")
+                            .and_then(|value| value.parse::<usize>().ok())
+                            .unwrap_or(0);
                         cell_type = attr_value(&e, "t").unwrap_or_default();
                     }
                     "v" if in_cell => in_value = true,
@@ -2223,7 +2231,7 @@ fn parse_worksheet_layout_cells(
                                 ),
                                 row_span,
                                 column_span,
-                                number_format: None,
+                                number_format: number_formats.get(cell_style).and_then(|value| value.clone()),
                             });
                         }
                         in_cell = false;
@@ -2244,6 +2252,100 @@ fn parse_worksheet_layout_cells(
         }
     }
     cells
+}
+
+fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
+    let mut reader = Reader::from_str(xml);
+    let mut custom_formats = BTreeMap::<u32, String>::new();
+    let mut style_formats = Vec::<Option<String>>::new();
+    let mut in_cell_xfs = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "cellxfs" {
+                    in_cell_xfs = true;
+                } else if local == "xf" && in_cell_xfs {
+                    style_formats.push(xlsx_style_number_format(&e, &custom_formats));
+                } else if local == "numfmt" {
+                    collect_xlsx_custom_number_format(&e, &mut custom_formats);
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "xf" && in_cell_xfs {
+                    style_formats.push(xlsx_style_number_format(&e, &custom_formats));
+                } else if local == "numfmt" {
+                    collect_xlsx_custom_number_format(&e, &mut custom_formats);
+                }
+            }
+            Ok(Event::End(e)) => {
+                if local_xml_name(e.name().as_ref()) == "cellxfs" {
+                    in_cell_xfs = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    style_formats
+}
+
+fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32, String>) {
+    let Some(id) = attr_value(e, "numFmtId").and_then(|value| value.parse::<u32>().ok()) else {
+        return;
+    };
+    let Some(format) = attr_value(e, "formatCode") else {
+        return;
+    };
+    if !format.trim().is_empty() {
+        formats.insert(id, format);
+    }
+}
+
+fn xlsx_style_number_format(e: &BytesStart, custom_formats: &BTreeMap<u32, String>) -> Option<String> {
+    let id = attr_value(e, "numFmtId").and_then(|value| value.parse::<u32>().ok())?;
+    custom_formats
+        .get(&id)
+        .cloned()
+        .or_else(|| xlsx_builtin_number_format(id).map(str::to_string))
+}
+
+fn xlsx_builtin_number_format(id: u32) -> Option<&'static str> {
+    Some(match id {
+        0 => return None,
+        1 => "0",
+        2 => "0.00",
+        3 => "#,##0",
+        4 => "#,##0.00",
+        9 => "0%",
+        10 => "0.00%",
+        11 => "0.00E+00",
+        12 => "# ?/?",
+        13 => "# ??/??",
+        14 => "m/d/yy",
+        15 => "d-mmm-yy",
+        16 => "d-mmm",
+        17 => "mmm-yy",
+        18 => "h:mm AM/PM",
+        19 => "h:mm:ss AM/PM",
+        20 => "h:mm",
+        21 => "h:mm:ss",
+        22 => "m/d/yy h:mm",
+        37 => "#,##0;(#,##0)",
+        38 => "#,##0;[Red](#,##0)",
+        39 => "#,##0.00;(#,##0.00)",
+        40 => "#,##0.00;[Red](#,##0.00)",
+        45 => "mm:ss",
+        46 => "[h]:mm:ss",
+        47 => "mmss.0",
+        48 => "##0.0E+0",
+        49 => "@",
+        _ => return None,
+    })
 }
 
 fn parse_xlsx_sheet_images<R: Read + Seek>(
@@ -6414,6 +6516,24 @@ mod tests {
 
         assert_eq!(rows, Some(1));
         assert_eq!(columns, Some(2));
+    }
+
+    #[test]
+    fn xlsx_style_number_formats_include_custom_and_builtin_formats() {
+        let formats = parse_xlsx_style_number_formats(
+            r#"<styleSheet>
+                <numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts>
+                <cellXfs count="3">
+                    <xf numFmtId="0"/>
+                    <xf numFmtId="14"/>
+                    <xf numFmtId="164"/>
+                </cellXfs>
+            </styleSheet>"#,
+        );
+
+        assert_eq!(formats.get(0), Some(&None));
+        assert_eq!(formats.get(1), Some(&Some("m/d/yy".to_string())));
+        assert_eq!(formats.get(2), Some(&Some("yyyy-mm-dd".to_string())));
     }
 
     #[test]
