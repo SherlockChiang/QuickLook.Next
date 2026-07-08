@@ -2,7 +2,9 @@
 
 This document captures the next practical optimization targets after the
 Rust-first rewrite work. Items are ordered by user-visible impact and fit with
-the current architecture boundary.
+the current architecture boundary. The newer product-level PRD is
+`docs/prd-next-preview-optimization.md`; use that document for priority and
+acceptance criteria.
 
 ## Highest Priority
 
@@ -56,6 +58,10 @@ the current architecture boundary.
   extraction.
 
 ## Office Targets
+
+Office preview is now in maintenance mode. Keep it approximate, bounded, and
+identification-focused. Avoid turning QuickLook.Next into a partial Office
+renderer.
 
 - PPTX: parse placeholder type (`title`, `subtitle`, `body`), basic text style,
   bullet level, alignment, grouped shapes, and z-order.
