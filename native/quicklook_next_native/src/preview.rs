@@ -3577,6 +3577,7 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
         if let Some(app_id) = read_u32_be(&bytes, 68) {
             text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
         }
+        append_sqlite_header_details(&mut text, &bytes);
     } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Microsoft Compound File database");
     } else {
@@ -3808,6 +3809,55 @@ fn sqlite_encoding_name(value: u32) -> &'static str {
         2 => "UTF-16le",
         3 => "UTF-16be",
         _ => "unknown",
+    }
+}
+
+fn append_sqlite_header_details(text: &mut String, bytes: &[u8]) {
+    let write_version = bytes.get(18).copied().unwrap_or(0);
+    let read_version = bytes.get(19).copied().unwrap_or(0);
+    if write_version > 0 || read_version > 0 {
+        text.push_str(&format!(
+            "\nJournal mode: {}",
+            sqlite_journal_mode_name(write_version, read_version)
+        ));
+    }
+    if let Some(schema_format) = read_u32_be(bytes, 44) {
+        text.push_str(&format!(
+            "\nSchema format: {}",
+            sqlite_schema_format_name(schema_format)
+        ));
+    }
+    if let Some(schema_cookie) = read_u32_be(bytes, 40) {
+        text.push_str(&format!("\nSchema cookie: {}", schema_cookie));
+    }
+    if let Some(freelist_pages) = read_u32_be(bytes, 36) {
+        text.push_str(&format!(
+            "\nFreelist pages: {}",
+            format_number(freelist_pages as i64)
+        ));
+    }
+    if let Some(version) = read_u32_be(bytes, 96) {
+        if version > 0 {
+            text.push_str(&format!("\nSQLite version: {}", version));
+        }
+    }
+}
+
+fn sqlite_journal_mode_name(write_version: u8, read_version: u8) -> &'static str {
+    match (write_version, read_version) {
+        (2, 2) => "WAL",
+        (1, 1) => "rollback journal",
+        _ => "mixed/unknown",
+    }
+}
+
+fn sqlite_schema_format_name(value: u32) -> String {
+    match value {
+        1 => "1 (legacy)".to_string(),
+        2 => "2".to_string(),
+        3 => "3".to_string(),
+        4 => "4 (current)".to_string(),
+        _ => format!("{value}"),
     }
 }
 
@@ -6827,6 +6877,27 @@ mod tests {
 
         assert_eq!(summary.format, "WOFF font");
         assert_eq!(summary.tables, 3);
+    }
+
+    #[test]
+    fn sqlite_header_details_include_journal_and_schema_fields() {
+        let mut bytes = vec![0u8; 100];
+        bytes[0..16].copy_from_slice(b"SQLite format 3\0");
+        bytes[18] = 2;
+        bytes[19] = 2;
+        bytes[36..40].copy_from_slice(&7u32.to_be_bytes());
+        bytes[40..44].copy_from_slice(&11u32.to_be_bytes());
+        bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
+        bytes[96..100].copy_from_slice(&3_045_000u32.to_be_bytes());
+        let mut text = String::new();
+
+        append_sqlite_header_details(&mut text, &bytes);
+
+        assert!(text.contains("Journal mode: WAL"));
+        assert!(text.contains("Schema format: 4 (current)"));
+        assert!(text.contains("Schema cookie: 11"));
+        assert!(text.contains("Freelist pages: 7"));
+        assert!(text.contains("SQLite version: 3045000"));
     }
 
     #[test]
