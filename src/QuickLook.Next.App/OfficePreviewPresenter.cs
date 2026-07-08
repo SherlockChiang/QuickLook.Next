@@ -238,7 +238,7 @@ internal sealed class OfficePreviewPresenter
                 MaxHeight = Math.Max(4, height - 4),
                 TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
                 TextTrimming = TextTrimming.WordEllipsis,
-                Foreground = OfficeBlackBrush,
+                Foreground = BrushFromHex(cell.TextColor) ?? OfficeBlackBrush,
                 TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
                 HorizontalAlignment = HorizontalAlignmentFor(cell.HorizontalAlignment),
                 VerticalAlignment = VerticalAlignmentFor(cell.VerticalAlignment),

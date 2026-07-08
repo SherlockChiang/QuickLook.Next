@@ -83,6 +83,8 @@ struct OfficeCellDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     fill_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    text_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     horizontal_alignment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vertical_alignment: Option<String>,
@@ -2351,6 +2353,9 @@ fn parse_worksheet_layout_cells(
                                 fill_color: styles
                                     .get(cell_style)
                                     .and_then(|style| style.fill_color.clone()),
+                                text_color: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.text_color.clone()),
                                 horizontal_alignment: styles
                                     .get(cell_style)
                                     .and_then(|style| style.horizontal_alignment.clone()),
@@ -2391,6 +2396,7 @@ fn parse_worksheet_layout_cells(
 struct XlsxStyle {
     number_format: Option<String>,
     fill_color: Option<String>,
+    text_color: Option<String>,
     horizontal_alignment: Option<String>,
     vertical_alignment: Option<String>,
     bold: bool,
@@ -2401,6 +2407,7 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut reader = Reader::from_str(xml);
     let mut custom_formats = BTreeMap::<u32, String>::new();
     let mut font_bold = Vec::<bool>::new();
+    let mut font_colors = Vec::<Option<String>>::new();
     let mut fill_colors = Vec::<Option<String>>::new();
     let mut styles = Vec::<XlsxStyle>::new();
     let mut in_fonts = false;
@@ -2411,6 +2418,7 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut in_xf = false;
     let mut current_xf: Option<XlsxStyle> = None;
     let mut current_font_bold = false;
+    let mut current_font_color: Option<String> = None;
     let mut current_fill_color: Option<String> = None;
 
     loop {
@@ -2422,8 +2430,11 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 } else if local == "font" && in_fonts {
                     in_font = true;
                     current_font_bold = false;
+                    current_font_color = None;
                 } else if local == "b" && in_font {
                     current_font_bold = true;
+                } else if local == "color" && in_font {
+                    current_font_color = xlsx_color_from_element(&e).or(current_font_color);
                 } else if local == "fills" {
                     in_fills = true;
                 } else if local == "fill" && in_fills {
@@ -2440,6 +2451,7 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                         &custom_formats,
                         &fill_colors,
                         &font_bold,
+                        &font_colors,
                     ));
                 } else if local == "alignment" && in_xf {
                     if let Some(style) = current_xf.as_mut() {
@@ -2453,6 +2465,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "b" && in_font {
                     current_font_bold = true;
+                } else if local == "color" && in_font {
+                    current_font_color = xlsx_color_from_element(&e).or(current_font_color);
                 } else if local == "fill" && in_fills {
                     fill_colors.push(None);
                 } else if (local == "fgcolor" || local == "bgcolor") && in_fill {
@@ -2463,6 +2477,7 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                         &custom_formats,
                         &fill_colors,
                         &font_bold,
+                        &font_colors,
                     ));
                 } else if local == "alignment" && in_xf {
                     if let Some(style) = current_xf.as_mut() {
@@ -2476,6 +2491,7 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "font" && in_font {
                     font_bold.push(current_font_bold);
+                    font_colors.push(current_font_color.take());
                     in_font = false;
                     current_font_bold = false;
                 } else if local == "fonts" {
@@ -2538,6 +2554,7 @@ fn xlsx_style_from_xf(
     custom_formats: &BTreeMap<u32, String>,
     fill_colors: &[Option<String>],
     font_bold: &[bool],
+    font_colors: &[Option<String>],
 ) -> XlsxStyle {
     let fill_color = attr_value(e, "fillid")
         .and_then(|value| value.parse::<usize>().ok())
@@ -2546,9 +2563,13 @@ fn xlsx_style_from_xf(
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|id| font_bold.get(id).copied())
         .unwrap_or(false);
+    let text_color = attr_value(e, "fontid")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|id| font_colors.get(id).cloned().flatten());
     XlsxStyle {
         number_format: xlsx_style_number_format(e, custom_formats),
         fill_color,
+        text_color,
         bold,
         ..Default::default()
     }
@@ -7609,7 +7630,7 @@ mod tests {
             r#"<styleSheet>
                 <fonts count="2">
                     <font><sz val="11"/></font>
-                    <font><b/><sz val="11"/></font>
+                    <font><b/><color rgb="FF9C0006"/><sz val="11"/></font>
                 </fonts>
                 <fills count="3">
                     <fill><patternFill patternType="none"/></fill>
@@ -7651,6 +7672,7 @@ mod tests {
         );
         assert_eq!(styles.get(1).map(|style| style.bold), Some(true));
         assert_eq!(styles.get(1).map(|style| style.wrap_text), Some(true));
+        assert_eq!(styles.get(1).and_then(|style| style.text_color.as_deref()), Some("#9C0006"));
     }
 
     #[test]
