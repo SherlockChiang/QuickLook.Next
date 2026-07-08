@@ -323,6 +323,7 @@ fn parse_webp_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
     let mut has_alpha = None;
     let mut animated = false;
     let mut frames = 0u32;
+    let mut sidecar = ExifMetadata::default();
     while offset.checked_add(8).is_some_and(|end| end <= bytes.len()) {
         let chunk = bytes.get(offset..offset + 4)?;
         let size = read_u32(bytes, offset + 4)? as usize;
@@ -363,19 +364,98 @@ fn parse_webp_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
             b"ALPH" => {
                 has_alpha = Some(true);
             }
+            b"EXIF" => {
+                if let Some(exif) =
+                    parse_tiff_exif_metadata(bytes.get(payload..payload_end).unwrap_or_default())
+                {
+                    merge_missing_metadata(&mut sidecar, exif);
+                }
+            }
+            b"XMP " => {
+                if let Some(xmp) =
+                    parse_xmp_metadata(bytes.get(payload..payload_end).unwrap_or_default())
+                {
+                    merge_missing_metadata(&mut sidecar, xmp);
+                }
+            }
             _ => {}
         }
         offset = payload_end + (size % 2);
     }
-    Some(ExifMetadata {
-        format: Some("WebP".to_string()),
-        width,
-        height,
-        has_alpha,
-        animated: Some(animated),
-        frame_count: (frames > 0).then_some(frames),
-        ..Default::default()
-    })
+    sidecar.format = Some("WebP".to_string());
+    sidecar.width = sidecar.width.or(width);
+    sidecar.height = sidecar.height.or(height);
+    sidecar.has_alpha = sidecar.has_alpha.or(has_alpha);
+    sidecar.animated = Some(animated);
+    sidecar.frame_count = sidecar.frame_count.or((frames > 0).then_some(frames));
+    Some(sidecar)
+}
+
+fn merge_missing_metadata(target: &mut ExifMetadata, source: ExifMetadata) {
+    target.title = target.title.take().or(source.title);
+    target.comment = target.comment.take().or(source.comment);
+    target.make = target.make.take().or(source.make);
+    target.model = target.model.take().or(source.model);
+    target.date_time = target.date_time.take().or(source.date_time);
+    target.width = target.width.or(source.width);
+    target.height = target.height.or(source.height);
+    target.orientation = target.orientation.or(source.orientation);
+    target.lens_make = target.lens_make.take().or(source.lens_make);
+    target.lens_model = target.lens_model.take().or(source.lens_model);
+    target.software = target.software.take().or(source.software);
+    target.f_number = target.f_number.or(source.f_number);
+    target.exposure_time = target.exposure_time.or(source.exposure_time);
+    target.iso = target.iso.or(source.iso);
+    target.focal_length = target.focal_length.or(source.focal_length);
+}
+
+fn parse_xmp_metadata(bytes: &[u8]) -> Option<ExifMetadata> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut metadata = ExifMetadata::default();
+    metadata.title = extract_xml_text(&text, &["dc:title", "title"]);
+    metadata.comment =
+        extract_xml_text(&text, &["dc:description", "description", "xmp:Description"]);
+    metadata.software = extract_xml_text(&text, &["xmp:CreatorTool", "CreatorTool", "software"]);
+    (metadata.title.is_some() || metadata.comment.is_some() || metadata.software.is_some())
+        .then_some(metadata)
+}
+
+fn extract_xml_text(text: &str, names: &[&str]) -> Option<String> {
+    for name in names {
+        let open = format!("<{name}");
+        let Some(start) = text.find(&open) else {
+            continue;
+        };
+        let Some(content_start) = text[start..].find('>').map(|idx| start + idx + 1) else {
+            continue;
+        };
+        let close = format!("</{name}>");
+        let Some(content_end) = text[content_start..]
+            .find(&close)
+            .map(|idx| content_start + idx)
+        else {
+            continue;
+        };
+        let value = strip_xml_tags(&text[content_start..content_end]);
+        if !value.is_empty() {
+            return Some(value.chars().take(512).collect());
+        }
+    }
+    None
+}
+
+fn strip_xml_tags(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    xml_unescape_str(out.trim()).trim().to_string()
 }
 
 fn read_u24_le(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -521,7 +601,8 @@ fn parse_png_animation_chunks(bytes: &[u8]) -> Option<PngAnimationSummary> {
                 let numerator = read_u16_be(bytes, payload_start + 20).unwrap_or(0) as u32;
                 let denominator = read_u16_be(bytes, payload_start + 22).unwrap_or(100) as u32;
                 let denominator = if denominator == 0 { 100 } else { denominator };
-                duration_ms = duration_ms.saturating_add(numerator.saturating_mul(1000) / denominator);
+                duration_ms =
+                    duration_ms.saturating_add(numerator.saturating_mul(1000) / denominator);
             }
             b"IEND" => break,
             _ => {}
@@ -9106,6 +9187,43 @@ mod tests {
         assert_eq!(metadata.has_alpha, Some(true));
         assert_eq!(metadata.animated, Some(true));
         assert_eq!(metadata.frame_count, Some(2));
+    }
+
+    #[test]
+    fn webp_metadata_reads_xmp_text_summary() {
+        let xmp = br#"<x:xmpmeta>
+            <rdf:Description>
+                <dc:title><rdf:Alt><rdf:li>Layered WebP</rdf:li></rdf:Alt></dc:title>
+                <dc:description><rdf:Alt><rdf:li>Alpha artwork</rdf:li></rdf:Alt></dc:description>
+                <xmp:CreatorTool>QuickDraw</xmp:CreatorTool>
+            </rdf:Description>
+        </x:xmpmeta>"#;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8X");
+        bytes.extend_from_slice(&10u32.to_le_bytes());
+        bytes.push(0x14);
+        bytes.extend_from_slice(&[0, 0, 0]);
+        bytes.extend_from_slice(&639u32.to_le_bytes()[..3]);
+        bytes.extend_from_slice(&479u32.to_le_bytes()[..3]);
+        bytes.extend_from_slice(b"XMP ");
+        bytes.extend_from_slice(&(xmp.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(xmp);
+        if xmp.len() % 2 == 1 {
+            bytes.push(0);
+        }
+
+        let metadata = parse_webp_metadata_from_bytes(&bytes).expect("webp metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("WebP"));
+        assert_eq!(metadata.width, Some(640));
+        assert_eq!(metadata.height, Some(480));
+        assert_eq!(metadata.has_alpha, Some(true));
+        assert_eq!(metadata.title.as_deref(), Some("Layered WebP"));
+        assert_eq!(metadata.comment.as_deref(), Some("Alpha artwork"));
+        assert_eq!(metadata.software.as_deref(), Some("QuickDraw"));
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {
