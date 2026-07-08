@@ -348,6 +348,7 @@ internal sealed class TextPreviewPresenter
         _textBlock.UpdateLayout();
         
         // Disable outline sync temporarily while we animate to the target
+        int version = _renderVersion;
         _updatingOutline = true;
         
         double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
@@ -359,7 +360,8 @@ internal sealed class TextPreviewPresenter
         }
         finally
         {
-            _updatingOutline = false;
+            if (version == _renderVersion)
+                _updatingOutline = false;
         }
     }
 
@@ -713,7 +715,10 @@ internal sealed class TextPreviewPresenter
             var sp = (StackPanel)copyBtn.Content;
             ((FontIcon)sp.Children[0]).Glyph = "\uE73E"; // Checkmark
             ((TextBlock)sp.Children[1]).Text = UiStrings.CopiedAction;
+            int version = _renderVersion;
             await Task.Delay(2000);
+            if (version != _renderVersion)
+                return;
             ((FontIcon)sp.Children[0]).Glyph = "\uE8C8";
             ((TextBlock)sp.Children[1]).Text = UiStrings.CopyAction;
         };
