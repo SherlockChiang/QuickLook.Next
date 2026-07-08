@@ -1477,6 +1477,8 @@ public sealed partial class MainWindow : Window
     {
         var rows = new List<(string Label, string Value)>();
         AddIfValue(rows, "Format", metadata.Format);
+        AddIfValue(rows, "Title", metadata.Title);
+        AddIfValue(rows, "Comment", metadata.Comment);
         AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
         AddIfValue(rows, "Bit depth", metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
         AddIfValue(rows, "Color type", metadata.ColorType);

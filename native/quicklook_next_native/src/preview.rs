@@ -252,6 +252,8 @@ const MAX_EXIF_BYTES: usize = 256 * 1024;
 #[serde(rename_all = "camelCase")]
 struct ExifMetadata {
     format: Option<String>,
+    title: Option<String>,
+    comment: Option<String>,
     make: Option<String>,
     model: Option<String>,
     date_time: Option<String>,
@@ -302,7 +304,7 @@ pub fn render_image_metadata(path: &str) -> String {
 }
 
 fn parse_png_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, 64)?;
+    let bytes = read_file_prefix(path, 256 * 1024)?;
     parse_png_metadata_from_bytes(&bytes)
 }
 
@@ -314,10 +316,14 @@ fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
         return None;
     }
     let color = *bytes.get(25)?;
+    let (title, comment, software) = parse_png_text_chunks(bytes);
     Some(ExifMetadata {
         format: Some("PNG".to_string()),
+        title,
+        comment,
         width: read_u32_be(bytes, 16),
         height: read_u32_be(bytes, 20),
+        software,
         bit_depth: bytes.get(24).copied(),
         color_type: Some(png_color_type_name(color).to_string()),
         has_alpha: Some(matches!(color, 4 | 6)),
@@ -327,6 +333,60 @@ fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
         }),
         ..Default::default()
     })
+}
+
+fn parse_png_text_chunks(bytes: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
+    let mut title = None;
+    let mut comment = None;
+    let mut software = None;
+    let mut offset = 8usize;
+    while offset.checked_add(12).is_some_and(|end| end <= bytes.len()) {
+        let Some(length) = read_u32_be(bytes, offset).map(|value| value as usize) else {
+            break;
+        };
+        let chunk_type = bytes.get(offset + 4..offset + 8).unwrap_or_default();
+        let payload_start = offset + 8;
+        let Some(payload_end) = payload_start.checked_add(length) else {
+            break;
+        };
+        let Some(next) = payload_end.checked_add(4) else {
+            break;
+        };
+        if payload_end > bytes.len() {
+            break;
+        }
+        if chunk_type == b"tEXt" {
+            if let Some((keyword, value)) =
+                parse_png_text_chunk(bytes.get(payload_start..payload_end).unwrap_or_default())
+            {
+                match keyword.to_ascii_lowercase().as_str() {
+                    "title" if title.is_none() => title = Some(value),
+                    "description" | "comment" if comment.is_none() => comment = Some(value),
+                    "software" if software.is_none() => software = Some(value),
+                    _ => {}
+                }
+            }
+        }
+        if chunk_type == b"IEND" {
+            break;
+        }
+        offset = next;
+    }
+    (title, comment, software)
+}
+
+fn parse_png_text_chunk(payload: &[u8]) -> Option<(String, String)> {
+    let separator = payload.iter().position(|byte| *byte == 0)?;
+    let keyword = String::from_utf8_lossy(payload.get(..separator)?)
+        .trim()
+        .to_string();
+    let value = String::from_utf8_lossy(payload.get(separator + 1..)?)
+        .trim_matches('\0')
+        .trim()
+        .chars()
+        .take(512)
+        .collect::<String>();
+    (!keyword.is_empty() && !value.is_empty()).then_some((keyword, value))
 }
 
 fn png_color_type_name(value: u8) -> &'static str {
@@ -8725,10 +8785,21 @@ mod tests {
         bytes.extend_from_slice(&800u32.to_be_bytes());
         bytes.extend_from_slice(&600u32.to_be_bytes());
         bytes.extend_from_slice(&[8, 6, 0, 0, 1]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&12u32.to_be_bytes());
+        bytes.extend_from_slice(b"tEXt");
+        bytes.extend_from_slice(b"Title\0Sunset");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&17u32.to_be_bytes());
+        bytes.extend_from_slice(b"tEXt");
+        bytes.extend_from_slice(b"Comment\0Wide shot");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
 
         let metadata = parse_png_metadata_from_bytes(&bytes).expect("png metadata");
 
         assert_eq!(metadata.format.as_deref(), Some("PNG"));
+        assert_eq!(metadata.title.as_deref(), Some("Sunset"));
+        assert_eq!(metadata.comment.as_deref(), Some("Wide shot"));
         assert_eq!(metadata.width, Some(800));
         assert_eq!(metadata.height, Some(600));
         assert_eq!(metadata.bit_depth, Some(8));

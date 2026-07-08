@@ -135,6 +135,8 @@ public sealed record PreviewListingItem(string Name, string Path, string ParentP
 public sealed record ImageMetadata
 {
     public string? Format { get; init; }
+    public string? Title { get; init; }
+    public string? Comment { get; init; }
     public string? Make { get; init; }
     public string? Model { get; init; }
     public string? DateTime { get; init; }
