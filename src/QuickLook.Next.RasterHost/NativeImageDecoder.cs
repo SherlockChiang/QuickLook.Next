@@ -22,9 +22,10 @@ internal static class NativeImageDecoder
     private const string Dll = "quicklook_next_native";
     private const int HeaderBytes = 28;
     private const int MaxPreviewRasterDimension = 2048;
+    private const int MaxSystemFailureNativeFallbackDimension = 1600;
     private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
-    private const long MaxNativeFallbackAfterSystemFailureBytes = 32L * 1024 * 1024;
+    private const long MaxNativeFallbackAfterSystemFailureBytes = 16L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
     private static readonly NativeCancelCallback DecodeCancelCallback = IsDecodeCanceled;
     private static readonly IntPtr DecodeCancelCallbackPtr = Marshal.GetFunctionPointerForDelegate(DecodeCancelCallback);
@@ -62,7 +63,8 @@ internal static class NativeImageDecoder
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (ShouldPreferSystemDecoder(path))
+        bool systemPreferred = ShouldPreferSystemDecoder(path);
+        if (systemPreferred)
         {
             NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
             if (systemImage is not null)
@@ -73,6 +75,8 @@ internal static class NativeImageDecoder
                 DiagLog.Write("RasterHost", $"native fallback skipped after system decode failure; path={path}");
                 return null;
             }
+            targetWidth = BoundSystemFailureFallbackTarget(targetWidth);
+            targetHeight = BoundSystemFailureFallbackTarget(targetHeight);
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -229,5 +233,12 @@ internal static class NativeImageDecoder
 
         try { return new FileInfo(path).Length > MaxNativeFallbackAfterSystemFailureBytes; }
         catch { return false; }
+    }
+
+    private static uint BoundSystemFailureFallbackTarget(uint target)
+    {
+        if (target == 0)
+            return MaxSystemFailureNativeFallbackDimension;
+        return Math.Min(target, MaxSystemFailureNativeFallbackDimension);
     }
 }
