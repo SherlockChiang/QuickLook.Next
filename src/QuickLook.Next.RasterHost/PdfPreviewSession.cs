@@ -22,6 +22,7 @@ internal sealed class PdfPreviewSession : IDisposable
     private static long _cacheBytes;
     private static readonly object _inflightLock = new();
     private static readonly Dictionary<string, Task<(byte[] Bgra, int Width, int Height)>> _inflightRenders = new();
+    private static readonly SemaphoreSlim RenderWorkerPool = new(2, 2);
 
     private sealed class CachedPage(byte[] bgra, int w, int h, LinkedListNode<string> node)
     {
@@ -32,7 +33,6 @@ internal sealed class PdfPreviewSession : IDisposable
     }
 
     private readonly PdfDocument _document;
-    private readonly SemaphoreSlim _renderLock = new(2, 2); // allow 2 pages to render in parallel
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly long _mtimeTicks;
     private bool _disposed;
@@ -162,7 +162,7 @@ internal sealed class PdfPreviewSession : IDisposable
         CancellationToken token = linkedCts.Token;
 
         // Single GetPage call: read size and render from the same page object (was 2× GetPage before).
-        await _renderLock.WaitAsync(token);
+        await RenderWorkerPool.WaitAsync(token);
         try
         {
             token.ThrowIfCancellationRequested();
@@ -183,7 +183,7 @@ internal sealed class PdfPreviewSession : IDisposable
         }
         finally
         {
-            _renderLock.Release();
+            RenderWorkerPool.Release();
         }
     }
 
@@ -221,6 +221,5 @@ internal sealed class PdfPreviewSession : IDisposable
         _disposed = true;
         try { _disposeCts.Cancel(); } catch { }
         _disposeCts.Dispose();
-        // In-flight renders may continue briefly to populate the cross-request cache.
     }
 }
