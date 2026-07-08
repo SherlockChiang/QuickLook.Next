@@ -1122,6 +1122,34 @@ mod tests {
     }
 
     #[test]
+    fn native_jpeg_decode_accepts_icc_profile_corpus() {
+        let path = temp_image_path("jpg");
+        let jpeg = jpeg_with_icc_segment();
+        std::fs::write(&path, jpeg).expect("write jpeg");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode icc jpeg");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7.len(), 2 * 1 * 4);
+    }
+
+    #[test]
+    fn native_jpeg_decode_accepts_adobe_transform_corpus() {
+        let path = temp_image_path("jpg");
+        let jpeg = jpeg_with_adobe_transform_segment();
+        std::fs::write(&path, jpeg).expect("write adobe jpeg");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode adobe jpeg");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7.len(), 2 * 1 * 4);
+    }
+
+    #[test]
     fn native_tiff_decode_handles_16_bit_luma_corpus() {
         let path = temp_image_path("tiff");
         let pixels = [0u8, 0, 255, 255];
@@ -1213,6 +1241,55 @@ mod tests {
         output.extend_from_slice(&[0xFF, 0xE1]);
         output.extend_from_slice(&len.to_be_bytes());
         output.extend_from_slice(&app1);
+        output.extend_from_slice(&jpeg[2..]);
+        output
+    }
+
+    fn jpeg_with_icc_segment() -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
+        encoder
+            .encode(&[255, 0, 0, 0, 255, 0], 2, 1, image::ExtendedColorType::Rgb8)
+            .expect("encode jpeg");
+        drop(encoder);
+
+        let mut app2 = Vec::new();
+        app2.extend_from_slice(b"ICC_PROFILE\0");
+        app2.push(1);
+        app2.push(1);
+        app2.extend_from_slice(b"quicklook-next-test-icc");
+        let len = (app2.len() + 2) as u16;
+
+        let mut output = Vec::with_capacity(jpeg.len() + app2.len() + 4);
+        output.extend_from_slice(&jpeg[..2]);
+        output.extend_from_slice(&[0xFF, 0xE2]);
+        output.extend_from_slice(&len.to_be_bytes());
+        output.extend_from_slice(&app2);
+        output.extend_from_slice(&jpeg[2..]);
+        output
+    }
+
+    fn jpeg_with_adobe_transform_segment() -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
+        encoder
+            .encode(&[255, 255, 0, 0, 255, 255], 2, 1, image::ExtendedColorType::Rgb8)
+            .expect("encode jpeg");
+        drop(encoder);
+
+        let mut app14 = Vec::new();
+        app14.extend_from_slice(b"Adobe");
+        app14.extend_from_slice(&100u16.to_be_bytes());
+        app14.extend_from_slice(&0u16.to_be_bytes());
+        app14.extend_from_slice(&0u16.to_be_bytes());
+        app14.push(1);
+        let len = (app14.len() + 2) as u16;
+
+        let mut output = Vec::with_capacity(jpeg.len() + app14.len() + 4);
+        output.extend_from_slice(&jpeg[..2]);
+        output.extend_from_slice(&[0xFF, 0xEE]);
+        output.extend_from_slice(&len.to_be_bytes());
+        output.extend_from_slice(&app14);
         output.extend_from_slice(&jpeg[2..]);
         output
     }
