@@ -4207,6 +4207,7 @@ struct SqliteSchemaRow {
     name: String,
     table_name: String,
     root_page: i64,
+    sql: String,
 }
 
 fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usize) {
@@ -4221,6 +4222,9 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
             "\n- {} {} (table: {}, root: {})",
             row.typ, row.name, row.table_name, row.root_page
         ));
+        if !row.sql.is_empty() {
+            text.push_str(&format!("\n  SQL: {}", truncate_sqlite_schema_sql(&row.sql)));
+        }
     }
 }
 
@@ -4280,12 +4284,25 @@ fn parse_sqlite_schema_record(payload: &[u8]) -> Option<SqliteSchemaRow> {
     let name = sqlite_record_text(payload, &mut value_pos, serials[1])?;
     let table_name = sqlite_record_text(payload, &mut value_pos, serials[2])?;
     let root_page = sqlite_record_integer(payload, &mut value_pos, serials[3])?;
+    let sql = sqlite_record_text(payload, &mut value_pos, serials[4])?;
     Some(SqliteSchemaRow {
         typ,
         name,
         table_name,
         root_page,
+        sql,
     })
+}
+
+fn truncate_sqlite_schema_sql(sql: &str) -> String {
+    let compact = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_SQL_CHARS: usize = 160;
+    if compact.chars().count() <= MAX_SQL_CHARS {
+        return compact;
+    }
+    let mut out = compact.chars().take(MAX_SQL_CHARS).collect::<String>();
+    out.push_str("...");
+    out
 }
 
 fn read_sqlite_varint(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
@@ -7818,7 +7835,7 @@ mod tests {
 
     #[test]
     fn sqlite_schema_record_extracts_object_summary() {
-        let mut payload = vec![6, 23, 23, 23, 1, 75];
+        let mut payload = vec![6, 23, 23, 23, 1, 97];
         payload.extend_from_slice(b"table");
         payload.extend_from_slice(b"users");
         payload.extend_from_slice(b"users");
@@ -7830,6 +7847,7 @@ mod tests {
         assert_eq!(row.name, "users");
         assert_eq!(row.table_name, "users");
         assert_eq!(row.root_page, 2);
+        assert_eq!(row.sql, "CREATE TABLE users(id INTEGER PRIMARY KEY)");
     }
 
     #[test]
