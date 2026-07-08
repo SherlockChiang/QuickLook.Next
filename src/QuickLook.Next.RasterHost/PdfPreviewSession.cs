@@ -184,7 +184,7 @@ internal sealed class PdfPreviewSession : IDisposable
             if (TryGetCached(cacheKey, out var cached)) return cached;
 
             var waitWatch = Stopwatch.StartNew();
-            var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(_document, Path, pageIndex, targetW, targetH))
+            var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(Path, pageIndex, targetW, targetH))
                 .WaitAsync(token);
             waitWatch.Stop();
             DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
@@ -197,12 +197,16 @@ internal sealed class PdfPreviewSession : IDisposable
     }
 
     private static async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
-        PdfDocument document,
         string path,
         int pageIndex,
         uint targetW,
         uint targetH)
     {
+        StorageFile file = await StorageFile.GetFileFromPathAsync(path);
+        PdfDocument document = await PdfDocument.LoadFromFileAsync(file);
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
+            throw new ArgumentOutOfRangeException(nameof(pageIndex));
+
         using PdfPage page = document.GetPage((uint)pageIndex);
         using var stream = new InMemoryRandomAccessStream();
         var renderWatch = Stopwatch.StartNew();
