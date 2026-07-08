@@ -1016,12 +1016,115 @@ mod tests {
         assert_eq!(decoded.7.len(), 2 * 2 * 4);
     }
 
+    #[test]
+    fn native_jpeg_decode_accepts_exif_orientation_corpus() {
+        let path = temp_image_path("jpg");
+        let jpeg = jpeg_with_orientation_segment(6);
+        std::fs::write(&path, jpeg).expect("write jpeg");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode jpeg");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 1);
+        assert_eq!(decoded.1, 2);
+        assert_eq!(decoded.2, 1);
+        assert_eq!(decoded.3, 2);
+    }
+
+    #[test]
+    fn native_tiff_decode_handles_16_bit_luma_corpus() {
+        let path = temp_image_path("tiff");
+        let pixels = [0u8, 0, 255, 255];
+        image::save_buffer(&path, &pixels, 2, 1, image::ColorType::L16).expect("write tiff");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode tiff");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7, vec![0, 0, 0, 255, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn native_webp_decode_corpus_preserves_pixels() {
+        let path = temp_image_path("webp");
+        let pixels = [10u8, 20, 30, 255, 200, 210, 220, 255];
+        image::save_buffer(&path, &pixels, 2, 1, image::ColorType::Rgba8).expect("write webp");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode webp");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7, vec![30, 20, 10, 255, 220, 210, 200, 255]);
+    }
+
+    #[test]
+    fn native_gif_decode_uses_first_animation_frame_corpus() {
+        use image::codecs::gif::{GifEncoder, Repeat};
+
+        let path = temp_image_path("gif");
+        let first = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let second = image::RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap();
+        let file = std::fs::File::create(&path).expect("create gif");
+        let mut encoder = GifEncoder::new(file);
+        encoder.set_repeat(Repeat::Infinite).expect("set repeat");
+        encoder
+            .encode_frame(image::Frame::new(first))
+            .expect("write first frame");
+        encoder
+            .encode_frame(image::Frame::new(second))
+            .expect("write second frame");
+        drop(encoder);
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode gif");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 1);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7, vec![0, 0, 255, 255]);
+    }
+
     fn temp_image_path(ext: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("quicklook-next-native-{nanos}.{ext}"))
+    }
+
+    fn jpeg_with_orientation_segment(orientation: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
+        encoder
+            .encode(&[255, 0, 0, 0, 0, 255], 1, 2, image::ExtendedColorType::Rgb8)
+            .expect("encode jpeg");
+        drop(encoder);
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&orientation.to_le_bytes());
+        tiff.extend_from_slice(&0u16.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut app1 = Vec::new();
+        app1.extend_from_slice(b"Exif\0\0");
+        app1.extend_from_slice(&tiff);
+        let len = (app1.len() + 2) as u16;
+
+        let mut output = Vec::with_capacity(jpeg.len() + app1.len() + 4);
+        output.extend_from_slice(&jpeg[..2]);
+        output.extend_from_slice(&[0xFF, 0xE1]);
+        output.extend_from_slice(&len.to_be_bytes());
+        output.extend_from_slice(&app1);
+        output.extend_from_slice(&jpeg[2..]);
+        output
     }
 }
 
