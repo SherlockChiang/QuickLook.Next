@@ -3343,6 +3343,8 @@ fn extract_wordprocessing_text(xml: &str) -> String {
                     paragraph_had_text = false;
                 } else if local == "pstyle" {
                     paragraph_prefix = docx_paragraph_prefix(&e);
+                } else if local == "sectpr" && !in_cell {
+                    append_docx_block_marker(&mut out, "[section break]");
                 }
             }
             Ok(Event::End(e)) => {
@@ -3397,12 +3399,16 @@ fn extract_wordprocessing_text(xml: &str) -> String {
                 } else if local == "br" {
                     if in_cell {
                         cell_text.push(' ');
+                    } else if attr_value(&e, "type").as_deref() == Some("page") {
+                        append_docx_block_marker(&mut out, "[page break]");
                     } else {
                         out.push('\n');
                     }
                     paragraph_had_text = false;
                 } else if local == "pstyle" {
                     paragraph_prefix = docx_paragraph_prefix(&e);
+                } else if local == "sectpr" && !in_cell {
+                    append_docx_block_marker(&mut out, "[section break]");
                 }
             }
             Ok(Event::Text(e)) if in_text => {
@@ -3434,6 +3440,14 @@ fn extract_wordprocessing_text(xml: &str) -> String {
     }
 
     normalize_preview_lines(&out)
+}
+
+fn append_docx_block_marker(out: &mut String, marker: &str) {
+    if !out.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(marker);
+    out.push('\n');
 }
 
 fn docx_paragraph_prefix(e: &BytesStart<'_>) -> String {
@@ -8206,6 +8220,20 @@ mod tests {
         );
 
         assert_eq!(text, "| Name | Value |\n| Rows | 42 |");
+    }
+
+    #[test]
+    fn docx_text_extraction_marks_page_and_section_breaks() {
+        let text = extract_wordprocessing_text(
+            r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:r><w:t>First page</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>Second page</w:t></w:r></w:p>
+                <w:sectPr/>
+                <w:p><w:r><w:t>Next section</w:t></w:r></w:p>
+            </w:body></w:document>"#,
+        );
+
+        assert!(text.contains("First page\n[page break]\nSecond page"));
+        assert!(text.contains("[section break]\nNext section"));
     }
 
     #[test]
