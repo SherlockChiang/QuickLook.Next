@@ -203,7 +203,10 @@ internal static class NativeImageDecoder
     private static bool ShouldPreferSystemDecoder(string path)
     {
         string ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".jpg" or ".jpeg"
+        return ext is ".png"
+            or ".bmp"
+            or ".webp"
+            or ".jpg" or ".jpeg"
             or ".tif" or ".tiff"
             or ".heic" or ".heif"
             or ".avif"

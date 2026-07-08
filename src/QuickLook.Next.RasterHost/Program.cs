@@ -305,7 +305,7 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
 static bool PreferSystemImageDecoder(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
-    return ext is ".jpg" or ".jpeg" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
+    return ext is ".png" or ".bmp" or ".webp" or ".jpg" or ".jpeg" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
 }
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)
