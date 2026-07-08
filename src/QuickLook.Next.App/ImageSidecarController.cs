@@ -23,7 +23,6 @@ internal sealed class ImageSidecarController
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<string, PreviewListing?> _loadFolderListing;
     private readonly Func<string, bool> _isImagePath;
-    private readonly Func<int, CancellationToken, bool> _isGenerationCurrent;
     private readonly Func<string, int, CancellationToken, bool> _isPathCurrent;
     private readonly Func<string, int, CancellationToken, NativeRasterImage?> _loadThumbnail;
     private readonly Func<string, FileProbe?> _probeFile;
@@ -37,7 +36,6 @@ internal sealed class ImageSidecarController
         DispatcherQueue dispatcherQueue,
         Func<string, PreviewListing?> loadFolderListing,
         Func<string, bool> isImagePath,
-        Func<int, CancellationToken, bool> isGenerationCurrent,
         Func<string, int, CancellationToken, bool> isPathCurrent,
         Func<string, int, CancellationToken, NativeRasterImage?> loadThumbnail,
         Func<string, FileProbe?> probeFile,
@@ -48,7 +46,6 @@ internal sealed class ImageSidecarController
         _dispatcherQueue = dispatcherQueue;
         _loadFolderListing = loadFolderListing;
         _isImagePath = isImagePath;
-        _isGenerationCurrent = isGenerationCurrent;
         _isPathCurrent = isPathCurrent;
         _loadThumbnail = loadThumbnail;
         _probeFile = probeFile;
@@ -119,7 +116,7 @@ internal sealed class ImageSidecarController
 
                 if (distance > ImmediateFilmstripThumbnailRadius && !delayedFarThumbnails)
                 {
-                    FlushThumbnailBatch(generation, token, thumbnailBatch);
+                    FlushThumbnailBatch(path, generation, token, thumbnailBatch);
                     delayedFarThumbnails = true;
                     await Task.Delay(DelayedFilmstripThumbnailStartMs, token);
                     if (!_isPathCurrent(path, generation, token))
@@ -130,7 +127,7 @@ internal sealed class ImageSidecarController
                 if (_thumbnailCache.TryGet(sibling, out ImageSource? cachedSource) && cachedSource is not null)
                 {
                     thumbnailBatch.Add((sibling, cachedSource));
-                    FlushThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
+                    FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
                     continue;
                 }
 
@@ -146,9 +143,9 @@ internal sealed class ImageSidecarController
                 _thumbnailCache.Add(sibling, source);
 
                 thumbnailBatch.Add((sibling, source));
-                FlushThumbnailBatchIfNeeded(generation, token, thumbnailBatch);
+                FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
             }
-            FlushThumbnailBatch(generation, token, thumbnailBatch);
+            FlushThumbnailBatch(path, generation, token, thumbnailBatch);
             DiagLog.Write("App", $"image filmstrip thumbnails done gen={generation}; siblings={siblings.Length}; attempted={thumbnailAttempts}");
         }
         catch (OperationCanceledException)
@@ -213,15 +210,17 @@ internal sealed class ImageSidecarController
     }
 
     private void FlushThumbnailBatchIfNeeded(
+        string currentPath,
         int generation,
         CancellationToken token,
         List<(string Path, ImageSource Source)> batch)
     {
         if (batch.Count >= FilmstripThumbnailBatchSize)
-            FlushThumbnailBatch(generation, token, batch);
+            FlushThumbnailBatch(currentPath, generation, token, batch);
     }
 
     private void FlushThumbnailBatch(
+        string currentPath,
         int generation,
         CancellationToken token,
         List<(string Path, ImageSource Source)> batch)
@@ -233,7 +232,7 @@ internal sealed class ImageSidecarController
         batch.Clear();
         _dispatcherQueue.TryEnqueue(() =>
         {
-            if (!_isGenerationCurrent(generation, token))
+            if (!_isPathCurrent(currentPath, generation, token))
                 return;
             foreach ((string path, ImageSource source) in updates)
             {
@@ -278,7 +277,7 @@ internal sealed class ImageSidecarController
 
                 _dispatcherQueue.TryEnqueue(() =>
                 {
-                    if (!_isGenerationCurrent(generation, token))
+                    if (!_isPathCurrent(currentPath, generation, token))
                         return;
                     ImageSource? source = _createBitmapSource(raster);
                     if (source is null)

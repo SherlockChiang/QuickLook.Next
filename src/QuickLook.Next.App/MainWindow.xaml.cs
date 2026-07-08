@@ -204,7 +204,6 @@ public sealed partial class MainWindow : Window
             DispatcherQueue,
             path => _native.TryPreviewFolderListing(path),
             IsImagePath,
-            IsPreviewGenerationCurrent,
             IsImageFilmstripLoadCurrent,
             (path, size, token) => _native.TryGetThumbnail(path, size, token),
             path => _native.ProbeFile(path),
@@ -1180,7 +1179,13 @@ public sealed partial class MainWindow : Window
         }
 
         int generation = _previewSession.Generation;
-        Task.Run(() => LoadPreviewHeroRaster(ready, path)).ContinueWith(task =>
+        CancellationToken token = CurrentPreviewToken;
+        Task.Run(() =>
+        {
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
+                return null;
+            return LoadPreviewHeroRaster(ready, path);
+        }, token).ContinueWith(task =>
         {
             if (task.IsFaulted || task.IsCanceled || task.Result is null)
                 return;
@@ -1329,27 +1334,31 @@ public sealed partial class MainWindow : Window
 
     private void ScheduleImageSidecarLoads(PreviewReady ready)
     {
+        string? path = _previewSession.CurrentPath;
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!IsPreviewGenerationCurrent(generation, token))
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
-            _ = StartImageSidecarLoadsAfterDelayAsync(ready, generation, token);
+            _ = StartImageSidecarLoadsAfterDelayAsync(ready, path, generation, token);
         });
     }
 
-    private async Task StartImageSidecarLoadsAfterDelayAsync(PreviewReady ready, int generation, CancellationToken token)
+    private async Task StartImageSidecarLoadsAfterDelayAsync(PreviewReady ready, string path, int generation, CancellationToken token)
     {
         try
         {
             await Task.Delay(ImageSidecarLoadDelayMs, token);
-            if (!IsPreviewGenerationCurrent(generation, token))
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
 
             DispatcherQueue.TryEnqueue(() =>
             {
-                if (!IsPreviewGenerationCurrent(generation, token))
+                if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
                 StartImageSidecarLoads(ready);
             });
