@@ -882,8 +882,14 @@ public sealed partial class MainWindow : Window
 
             if (surface.PageIndex >= 0)
             {
+                var pdfAttachWatch = Stopwatch.StartNew();
                 if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
+                {
                     StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
+                    return;
+                }
+                pdfAttachWatch.Stop();
+                DiagLog.Write("App", $"pdf page surface attach/apply {pdfAttachWatch.ElapsedMilliseconds}ms; request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}");
                 return;
             }
 
