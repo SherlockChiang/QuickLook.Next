@@ -4080,6 +4080,7 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
     if let Some(duration) = mp4_duration_seconds(&bytes) {
         text.push_str(&format!("\nDuration: {}", format_duration(duration)));
     }
+    append_wav_metadata(&mut text, &bytes);
     append_id3_metadata(&mut text, &bytes);
     generic_info_json(path, kind, size, modified_unix, Some(text))
 }
@@ -4858,6 +4859,9 @@ fn media_container_name(path: &str, bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"AVI ") {
         return "AVI";
     }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
+        return "WAV";
+    }
     if bytes.starts_with(b"ID3") || ext == "mp3" {
         return "MP3";
     }
@@ -4885,6 +4889,82 @@ fn mp4_major_brand(bytes: &[u8]) -> Option<String> {
 
 fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
     find_mp4_atom_payload(bytes, b"mvhd").and_then(parse_mvhd_duration_seconds)
+}
+
+struct WavSummary {
+    audio_format: u16,
+    channels: u16,
+    sample_rate: u32,
+    byte_rate: u32,
+    bits_per_sample: u16,
+    data_bytes: u32,
+}
+
+fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
+    let Some(summary) = parse_wav_summary(bytes) else {
+        return;
+    };
+    text.push_str(&format!("\nAudio format: {}", wav_audio_format_name(summary.audio_format)));
+    text.push_str(&format!("\nChannels: {}", summary.channels));
+    text.push_str(&format!("\nSample rate: {} Hz", format_number(summary.sample_rate as i64)));
+    if summary.bits_per_sample > 0 {
+        text.push_str(&format!("\nBits per sample: {}", summary.bits_per_sample));
+    }
+    if summary.byte_rate > 0 && summary.data_bytes > 0 {
+        text.push_str(&format!(
+            "\nDuration: {}",
+            format_duration(summary.data_bytes as f64 / summary.byte_rate as f64)
+        ));
+    }
+}
+
+fn parse_wav_summary(bytes: &[u8]) -> Option<WavSummary> {
+    if bytes.len() < 12 || bytes.get(0..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return None;
+    }
+    let mut offset = 12usize;
+    let mut format: Option<WavSummary> = None;
+    let mut data_bytes = 0u32;
+    while offset.checked_add(8)? <= bytes.len() {
+        let chunk_id = bytes.get(offset..offset + 4)?;
+        let chunk_size = read_u32(bytes, offset + 4)? as usize;
+        let payload = offset + 8;
+        let next = payload.checked_add(chunk_size + (chunk_size % 2))?;
+        if payload.checked_add(chunk_size)? > bytes.len() && chunk_id != b"data" {
+            break;
+        }
+        if chunk_id == b"fmt " && chunk_size >= 16 {
+            format = Some(WavSummary {
+                audio_format: read_u16(bytes, payload)?,
+                channels: read_u16(bytes, payload + 2)?,
+                sample_rate: read_u32(bytes, payload + 4)?,
+                byte_rate: read_u32(bytes, payload + 8)?,
+                bits_per_sample: read_u16(bytes, payload + 14).unwrap_or(0),
+                data_bytes,
+            });
+        } else if chunk_id == b"data" {
+            data_bytes = chunk_size as u32;
+            if let Some(summary) = format.as_mut() {
+                summary.data_bytes = data_bytes;
+            }
+        }
+        offset = next;
+    }
+    format.map(|mut summary| {
+        summary.data_bytes = data_bytes;
+        summary
+    })
+}
+
+fn wav_audio_format_name(value: u16) -> String {
+    match value {
+        1 => "PCM".to_string(),
+        3 => "IEEE float".to_string(),
+        6 => "A-law".to_string(),
+        7 => "mu-law".to_string(),
+        0xFFFE => "extensible".to_string(),
+        _ => format!("0x{value:04X}"),
+    }
 }
 
 fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
@@ -8406,6 +8486,37 @@ mod tests {
         assert_eq!(mp4_major_brand(&bytes).as_deref(), Some("isom"));
         assert_eq!(mp4_duration_seconds(&bytes), Some(90.0));
         assert_eq!(format_duration(90.0), "1:30");
+    }
+
+    #[test]
+    fn media_info_reads_wav_format_and_duration() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&52u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&44_100u32.to_le_bytes());
+        bytes.extend_from_slice(&176_400u32.to_le_bytes());
+        bytes.extend_from_slice(&4u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&352_800u32.to_le_bytes());
+
+        let summary = parse_wav_summary(&bytes).expect("wav summary");
+        let mut text = String::new();
+        append_wav_metadata(&mut text, &bytes);
+
+        assert_eq!(media_container_name("clip.wav", &bytes), "WAV");
+        assert_eq!(summary.audio_format, 1);
+        assert_eq!(summary.channels, 2);
+        assert_eq!(summary.sample_rate, 44_100);
+        assert_eq!(summary.bits_per_sample, 16);
+        assert_eq!(summary.data_bytes, 352_800);
+        assert!(text.contains("Audio format: PCM"));
+        assert!(text.contains("Duration: 0:02"));
     }
 
     #[test]
