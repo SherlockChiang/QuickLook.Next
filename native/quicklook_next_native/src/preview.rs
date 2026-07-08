@@ -4717,6 +4717,7 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
     append_mkv_metadata(&mut text, &bytes);
     append_wav_metadata(&mut text, &bytes);
     append_flac_metadata(&mut text, &bytes);
+    append_ogg_metadata(&mut text, &bytes);
     append_id3_metadata(&mut text, &bytes);
     generic_info_json(path, kind, size, modified_unix, Some(text))
 }
@@ -5718,6 +5719,130 @@ fn parse_flac_summary(bytes: &[u8]) -> Option<FlacSummary> {
         offset = payload + block_len;
     }
     None
+}
+
+#[derive(Default)]
+struct OggSummary {
+    codec: String,
+    channels: u8,
+    sample_rate: u32,
+    vendor: String,
+    comments: u32,
+}
+
+fn append_ogg_metadata(text: &mut String, bytes: &[u8]) {
+    let Some(summary) = parse_ogg_summary(bytes) else {
+        return;
+    };
+    if !summary.codec.is_empty() {
+        text.push_str(&format!("\nAudio codec: {}", summary.codec));
+    }
+    if summary.channels > 0 {
+        text.push_str(&format!("\nChannels: {}", summary.channels));
+    }
+    if summary.sample_rate > 0 {
+        text.push_str(&format!(
+            "\nSample rate: {} Hz",
+            format_number(summary.sample_rate as i64)
+        ));
+    }
+    if !summary.vendor.is_empty() {
+        text.push_str(&format!("\nVendor: {}", summary.vendor));
+    }
+    if summary.comments > 0 {
+        text.push_str(&format!("\nTags: {}", summary.comments));
+    }
+}
+
+fn parse_ogg_summary(bytes: &[u8]) -> Option<OggSummary> {
+    let packets = read_ogg_packets(bytes, 8);
+    if packets.is_empty() {
+        return None;
+    }
+
+    let mut summary = OggSummary::default();
+    for packet in packets {
+        if packet.starts_with(b"OpusHead") && packet.len() >= 19 {
+            summary.codec = "Opus".to_string();
+            summary.channels = packet[9];
+            summary.sample_rate = read_u32(&packet, 12).unwrap_or(48_000);
+        } else if packet.starts_with(b"OpusTags") && packet.len() >= 16 {
+            parse_ogg_comment_packet(&packet, 8, &mut summary);
+        } else if packet.starts_with(b"\x01vorbis") && packet.len() >= 30 {
+            summary.codec = "Vorbis".to_string();
+            summary.channels = packet[11];
+            summary.sample_rate = read_u32(&packet, 12).unwrap_or(0);
+        } else if packet.starts_with(b"\x03vorbis") && packet.len() >= 11 {
+            parse_ogg_comment_packet(&packet, 7, &mut summary);
+        }
+    }
+
+    (!summary.codec.is_empty() || !summary.vendor.is_empty()).then_some(summary)
+}
+
+fn parse_ogg_comment_packet(packet: &[u8], offset: usize, summary: &mut OggSummary) {
+    let Some(vendor_len) = read_u32(packet, offset).map(|value| value as usize) else {
+        return;
+    };
+    let vendor_start = offset + 4;
+    let Some(vendor_end) = vendor_start.checked_add(vendor_len) else {
+        return;
+    };
+    let Some(vendor) = packet.get(vendor_start..vendor_end) else {
+        return;
+    };
+    if summary.vendor.is_empty() {
+        summary.vendor = String::from_utf8_lossy(vendor)
+            .trim_matches('\0')
+            .trim()
+            .chars()
+            .take(128)
+            .collect();
+    }
+    summary.comments = read_u32(packet, vendor_end).unwrap_or(0);
+}
+
+fn read_ogg_packets(bytes: &[u8], max_packets: usize) -> Vec<Vec<u8>> {
+    let mut packets = Vec::new();
+    let mut current = Vec::new();
+    let mut offset = 0usize;
+    while offset.checked_add(27).is_some_and(|end| end <= bytes.len()) && packets.len() < max_packets
+    {
+        if bytes.get(offset..offset + 4) != Some(b"OggS") {
+            break;
+        }
+        let segments = bytes[offset + 26] as usize;
+        let lacing_start = offset + 27;
+        let payload_start = lacing_start + segments;
+        if payload_start > bytes.len() {
+            break;
+        }
+        let payload_len: usize = bytes[lacing_start..payload_start]
+            .iter()
+            .map(|value| *value as usize)
+            .sum();
+        let Some(payload_end) = payload_start.checked_add(payload_len) else {
+            break;
+        };
+        if payload_end > bytes.len() {
+            break;
+        }
+        let mut payload_offset = payload_start;
+        for segment_len in bytes[lacing_start..payload_start].iter().copied() {
+            let segment_len = segment_len as usize;
+            let segment_end = payload_offset + segment_len;
+            current.extend_from_slice(bytes.get(payload_offset..segment_end).unwrap_or_default());
+            payload_offset = segment_end;
+            if segment_len < 255 {
+                packets.push(std::mem::take(&mut current));
+                if packets.len() >= max_packets {
+                    break;
+                }
+            }
+        }
+        offset = payload_end;
+    }
+    packets
 }
 
 #[derive(Default)]
@@ -10016,6 +10141,62 @@ mod tests {
     }
 
     #[test]
+    fn media_info_reads_ogg_opus_summary() {
+        let mut head = b"OpusHead".to_vec();
+        head.extend_from_slice(&[1, 2]);
+        head.extend_from_slice(&312u16.to_le_bytes());
+        head.extend_from_slice(&48_000u32.to_le_bytes());
+        head.extend_from_slice(&0u16.to_le_bytes());
+        head.push(0);
+        let mut tags = b"OpusTags".to_vec();
+        tags.extend_from_slice(&7u32.to_le_bytes());
+        tags.extend_from_slice(b"libopus");
+        tags.extend_from_slice(&2u32.to_le_bytes());
+        let bytes = [ogg_page(&head), ogg_page(&tags)].concat();
+
+        let summary = parse_ogg_summary(&bytes).expect("ogg summary");
+        let mut text = String::new();
+        append_ogg_metadata(&mut text, &bytes);
+
+        assert_eq!(media_container_name("clip.ogg", &bytes), "Ogg");
+        assert_eq!(summary.codec, "Opus");
+        assert_eq!(summary.channels, 2);
+        assert_eq!(summary.sample_rate, 48_000);
+        assert_eq!(summary.vendor, "libopus");
+        assert_eq!(summary.comments, 2);
+        assert!(text.contains("Audio codec: Opus"));
+        assert!(text.contains("Tags: 2"));
+    }
+
+    #[test]
+    fn media_info_reads_ogg_vorbis_summary() {
+        let mut ident = b"\x01vorbis".to_vec();
+        ident.extend_from_slice(&0u32.to_le_bytes());
+        ident.push(2);
+        ident.extend_from_slice(&44_100u32.to_le_bytes());
+        ident.extend_from_slice(&0u32.to_le_bytes());
+        ident.extend_from_slice(&0u32.to_le_bytes());
+        ident.extend_from_slice(&0u32.to_le_bytes());
+        ident.extend_from_slice(&[0, 1]);
+        let mut comment = b"\x03vorbis".to_vec();
+        comment.extend_from_slice(&10u32.to_le_bytes());
+        comment.extend_from_slice(b"Xiph.Org  ");
+        comment.extend_from_slice(&1u32.to_le_bytes());
+        let bytes = [ogg_page(&ident), ogg_page(&comment)].concat();
+
+        let summary = parse_ogg_summary(&bytes).expect("ogg summary");
+        let mut text = String::new();
+        append_ogg_metadata(&mut text, &bytes);
+
+        assert_eq!(summary.codec, "Vorbis");
+        assert_eq!(summary.channels, 2);
+        assert_eq!(summary.sample_rate, 44_100);
+        assert_eq!(summary.vendor, "Xiph.Org");
+        assert_eq!(summary.comments, 1);
+        assert!(text.contains("Audio codec: Vorbis"));
+    }
+
+    #[test]
     fn media_info_reads_mkv_info_and_tracks() {
         fn ebml(id: &[u8], payload: Vec<u8>) -> Vec<u8> {
             let mut out = Vec::new();
@@ -10132,6 +10313,16 @@ mod tests {
         let fields = parse_id3_text_fields(&bytes);
 
         assert_eq!(fields.get("TIT2").map(String::as_str), Some("北京"));
+    }
+
+    fn ogg_page(packet: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"OggS");
+        out.extend_from_slice(&[0; 22]);
+        out.push(1);
+        out.push(packet.len() as u8);
+        out.extend_from_slice(packet);
+        out
     }
 
     fn make_id3_tag(frames: &[(&str, &[u8])]) -> Vec<u8> {
