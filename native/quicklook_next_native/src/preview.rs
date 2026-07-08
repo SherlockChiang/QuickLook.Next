@@ -3670,9 +3670,15 @@ fn render_elf_info(path: &str, size: i64, modified_unix: i64) -> String {
 
 fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
-    let bytes = read_file_prefix(path, 64).unwrap_or_default();
+    let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, kind, size, modified_unix);
     text.push_str(&format!("\nContainer: {}", media_container_name(path, &bytes)));
+    if let Some(brand) = mp4_major_brand(&bytes) {
+        text.push_str(&format!("\nBrand: {brand}"));
+    }
+    if let Some(duration) = mp4_duration_seconds(&bytes) {
+        text.push_str(&format!("\nDuration: {}", format_duration(duration)));
+    }
     generic_info_json(path, kind, size, modified_unix, Some(text))
 }
 
@@ -3977,6 +3983,100 @@ fn media_container_name(path: &str, bytes: &[u8]) -> &'static str {
     }
 }
 
+fn mp4_major_brand(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 12 || bytes.get(4..8) != Some(b"ftyp") {
+        return None;
+    }
+    let brand = std::str::from_utf8(bytes.get(8..12)?).ok()?.trim();
+    (!brand.is_empty()).then(|| brand.to_string())
+}
+
+fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
+    find_mp4_atom_payload(bytes, b"mvhd").and_then(parse_mvhd_duration_seconds)
+}
+
+fn find_mp4_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
+    find_mp4_atom_payload_in_range(bytes, 0, bytes.len(), atom, 0)
+}
+
+fn find_mp4_atom_payload_in_range<'a>(
+    bytes: &'a [u8],
+    start: usize,
+    end: usize,
+    atom: &[u8; 4],
+    depth: usize,
+) -> Option<&'a [u8]> {
+    if depth > 4 || start >= end || end > bytes.len() {
+        return None;
+    }
+    let mut pos = start;
+    while pos + 8 <= end {
+        let size32 = read_u32_be(bytes, pos)? as usize;
+        let typ = bytes.get(pos + 4..pos + 8)?;
+        let (header, atom_end) = if size32 == 1 {
+            let size64 = read_u64_be(bytes, pos + 8)? as usize;
+            (16usize, pos.checked_add(size64)?)
+        } else if size32 == 0 {
+            (8usize, end)
+        } else {
+            (8usize, pos.checked_add(size32)?)
+        };
+        if atom_end > end || atom_end <= pos + header {
+            break;
+        }
+        let payload_start = pos + header;
+        if typ == atom {
+            return bytes.get(payload_start..atom_end);
+        }
+        if is_mp4_container_atom(typ) {
+            if let Some(found) =
+                find_mp4_atom_payload_in_range(bytes, payload_start, atom_end, atom, depth + 1)
+            {
+                return Some(found);
+            }
+        }
+        pos = atom_end;
+    }
+    None
+}
+
+fn is_mp4_container_atom(typ: &[u8]) -> bool {
+    matches!(typ, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"edts")
+}
+
+fn parse_mvhd_duration_seconds(payload: &[u8]) -> Option<f64> {
+    let version = *payload.first()?;
+    match version {
+        0 => {
+            let timescale = read_u32_be(payload, 12)?;
+            let duration = read_u32_be(payload, 16)? as u64;
+            duration_from_timescale(duration, timescale)
+        }
+        1 => {
+            let timescale = read_u32_be(payload, 20)?;
+            let duration = read_u64_be(payload, 24)?;
+            duration_from_timescale(duration, timescale)
+        }
+        _ => None,
+    }
+}
+
+fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f64> {
+    (timescale > 0).then(|| duration as f64 / timescale as f64)
+}
+
+fn format_duration(seconds: f64) -> String {
+    let total = seconds.round().max(0.0) as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
 // ── Executable preview ──────────────────────────────────────────────────────
 
 pub fn render_executable(path: &str) -> String {
@@ -4104,6 +4204,11 @@ fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
 fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
     let end = offset.checked_add(4)?;
     Some(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    Some(u64::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
 }
 
 fn read_i32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<i32> {
@@ -6898,6 +7003,31 @@ mod tests {
         assert!(text.contains("Schema cookie: 11"));
         assert!(text.contains("Freelist pages: 7"));
         assert!(text.contains("SQLite version: 3045000"));
+    }
+
+    #[test]
+    fn media_info_reads_mp4_brand_and_duration() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&16u32.to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(b"isom");
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+
+        let mut mvhd_payload = vec![0u8; 20];
+        mvhd_payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
+        mvhd_payload[16..20].copy_from_slice(&90_000u32.to_be_bytes());
+        let mvhd_size = (8 + mvhd_payload.len()) as u32;
+        let moov_size = 8 + mvhd_size;
+        bytes.extend_from_slice(&moov_size.to_be_bytes());
+        bytes.extend_from_slice(b"moov");
+        bytes.extend_from_slice(&mvhd_size.to_be_bytes());
+        bytes.extend_from_slice(b"mvhd");
+        bytes.extend_from_slice(&mvhd_payload);
+
+        assert_eq!(media_container_name("clip.mp4", &bytes), "ISO BMFF / MP4");
+        assert_eq!(mp4_major_brand(&bytes).as_deref(), Some("isom"));
+        assert_eq!(mp4_duration_seconds(&bytes), Some(90.0));
+        assert_eq!(format_duration(90.0), "1:30");
     }
 
     #[test]
