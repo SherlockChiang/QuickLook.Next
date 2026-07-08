@@ -257,7 +257,7 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
     if (PreferSystemImageDecoder(path))
     {
         using var systemTrace = DiagLog.TraceScope("RasterHost", $"system image decode path={path}", 250);
-        var systemImage = await DecodeSystemImageWithTimeoutAsync(path, systemTimeout, cancellationToken);
+        var systemImage = await DecodeSystemImageWithTimeoutAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
         if (systemImage is not null)
             return systemImage;
     }
@@ -270,20 +270,30 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
 
     return PreferSystemImageDecoder(path)
         ? null
-        : await DecodeSystemFallbackAsync(path, systemTimeout, cancellationToken);
+        : await DecodeSystemFallbackAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
 }
 
-static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(
+    string path,
+    TimeSpan timeout,
+    CancellationToken cancellationToken,
+    uint targetWidth,
+    uint targetHeight)
 {
     using var trace = DiagLog.TraceScope("RasterHost", $"system image fallback decode path={path}", 250);
-    return await DecodeSystemImageWithTimeoutAsync(path, timeout, cancellationToken);
+    return await DecodeSystemImageWithTimeoutAsync(path, timeout, cancellationToken, targetWidth, targetHeight);
 }
 
-static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
+    string path,
+    TimeSpan timeout,
+    CancellationToken cancellationToken,
+    uint targetWidth,
+    uint targetHeight)
 {
     try
     {
-        return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken).WaitAsync(timeout, cancellationToken);
+        return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight).WaitAsync(timeout, cancellationToken);
     }
     catch (TimeoutException)
     {
@@ -295,7 +305,7 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(string 
 static bool PreferSystemImageDecoder(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
-    return ext is ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
+    return ext is ".jpg" or ".jpeg" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
 }
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)

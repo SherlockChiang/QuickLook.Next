@@ -10,7 +10,11 @@ internal static class SystemImageDecoder
     private const int MaxDecodedImageBytes = (int)(MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 512L * 1024 * 1024;
 
-    public static async Task<NativeDecodedImage?> TryDecodeAsync(string path, CancellationToken cancellationToken)
+    public static async Task<NativeDecodedImage?> TryDecodeAsync(
+        string path,
+        CancellationToken cancellationToken,
+        uint targetWidth = 0,
+        uint targetHeight = 0)
     {
         try
         {
@@ -29,7 +33,9 @@ internal static class SystemImageDecoder
                 return null;
 
             var transform = new BitmapTransform();
-            double scale = Math.Min(1.0, Math.Min(MaxPreviewRasterDimension / (double)originalWidth, MaxPreviewRasterDimension / (double)originalHeight));
+            uint decodeTargetWidth = targetWidth > 0 ? Math.Min(targetWidth, MaxPreviewRasterDimension) : MaxPreviewRasterDimension;
+            uint decodeTargetHeight = targetHeight > 0 ? Math.Min(targetHeight, MaxPreviewRasterDimension) : MaxPreviewRasterDimension;
+            double scale = Math.Min(1.0, Math.Min(decodeTargetWidth / (double)originalWidth, decodeTargetHeight / (double)originalHeight));
             if (scale < 1.0)
             {
                 transform.ScaledWidth = Math.Max(1, (uint)Math.Round(originalWidth * scale));

@@ -62,7 +62,7 @@ internal static class NativeImageDecoder
 
         if (ShouldPreferSystemDecoder(path))
         {
-            NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+            NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
             if (systemImage is not null)
                 return systemImage;
         }
@@ -72,11 +72,11 @@ internal static class NativeImageDecoder
         Task delayTask = Task.Delay(timeout, timeoutCts.Token);
         Task completed = await Task.WhenAny(decodeTask, delayTask);
         if (completed != decodeTask)
-            return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+            return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
 
         timeoutCts.Cancel();
         NativeDecodedImage? nativeImage = await decodeTask;
-        return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
+        return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
     }
 
     private static async Task<NativeDecodedImage?> DecodeOnGateAsync(
@@ -203,7 +203,8 @@ internal static class NativeImageDecoder
     private static bool ShouldPreferSystemDecoder(string path)
     {
         string ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".tif" or ".tiff"
+        return ext is ".jpg" or ".jpeg"
+            or ".tif" or ".tiff"
             or ".heic" or ".heif"
             or ".avif"
             or ".jxl";
