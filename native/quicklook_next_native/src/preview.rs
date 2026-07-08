@@ -4269,6 +4269,13 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
         if !row.sql.is_empty() {
             text.push_str(&format!("\n  SQL: {}", truncate_sqlite_schema_sql(&row.sql)));
         }
+        if row.typ.eq_ignore_ascii_case("table") {
+            let columns = parse_sqlite_table_columns(&row.sql, 8);
+            if !columns.is_empty() {
+                text.push_str("\n  Columns: ");
+                text.push_str(&columns.join(", "));
+            }
+        }
     }
 }
 
@@ -4347,6 +4354,172 @@ fn truncate_sqlite_schema_sql(sql: &str) -> String {
     let mut out = compact.chars().take(MAX_SQL_CHARS).collect::<String>();
     out.push_str("...");
     out
+}
+
+fn parse_sqlite_table_columns(sql: &str, limit: usize) -> Vec<String> {
+    let Some(body) = sqlite_parenthesized_body(sql) else {
+        return Vec::new();
+    };
+    sqlite_split_top_level_csv(body)
+        .into_iter()
+        .filter_map(sqlite_column_summary)
+        .take(limit)
+        .collect()
+}
+
+fn sqlite_parenthesized_body(sql: &str) -> Option<&str> {
+    let start = sql.find('(')?;
+    let mut depth = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut previous = '\0';
+    for (index, ch) in sql[start..].char_indices() {
+        if let Some(quote) = in_quote {
+            if ch == quote && previous != '\\' {
+                in_quote = None;
+            }
+            previous = ch;
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' | '[' => in_quote = Some(if ch == '[' { ']' } else { ch }),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = start + index;
+                    return sql.get(start + 1..end);
+                }
+            }
+            _ => {}
+        }
+        previous = ch;
+    }
+    None
+}
+
+fn sqlite_split_top_level_csv(body: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut in_quote: Option<char> = None;
+    let mut previous = '\0';
+    for (index, ch) in body.char_indices() {
+        if let Some(quote) = in_quote {
+            if ch == quote && previous != '\\' {
+                in_quote = None;
+            }
+            previous = ch;
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' | '[' => in_quote = Some(if ch == '[' { ']' } else { ch }),
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                if let Some(item) = body.get(start..index) {
+                    items.push(item.trim());
+                }
+                start = index + 1;
+            }
+            _ => {}
+        }
+        previous = ch;
+    }
+    if let Some(item) = body.get(start..) {
+        items.push(item.trim());
+    }
+    items
+}
+
+fn sqlite_column_summary(definition: &str) -> Option<String> {
+    let trimmed = definition.trim();
+    if trimmed.is_empty() || sqlite_is_table_constraint(trimmed) {
+        return None;
+    }
+    let (name, rest) = sqlite_take_identifier(trimmed)?;
+    let typ = sqlite_column_type(rest);
+    Some(if typ.is_empty() {
+        name
+    } else {
+        format!("{name} {typ}")
+    })
+}
+
+fn sqlite_is_table_constraint(value: &str) -> bool {
+    let upper = value
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CONSTRAINT" | "PRIMARY" | "FOREIGN" | "UNIQUE" | "CHECK"
+    )
+}
+
+fn sqlite_take_identifier(value: &str) -> Option<(String, &str)> {
+    let value = value.trim_start();
+    let mut chars = value.char_indices();
+    let (_, first) = chars.next()?;
+    if matches!(first, '"' | '\'' | '`' | '[') {
+        let quote = if first == '[' { ']' } else { first };
+        for (index, ch) in chars {
+            if ch == quote {
+                let name = value.get(first.len_utf8()..index)?.to_string();
+                let rest = value.get(index + ch.len_utf8()..).unwrap_or_default();
+                return Some((name, rest));
+            }
+        }
+        return None;
+    }
+    let end = value
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(index))
+        .unwrap_or(value.len());
+    Some((value.get(..end)?.to_string(), value.get(end..).unwrap_or_default()))
+}
+
+fn sqlite_column_type(rest: &str) -> String {
+    let rest = rest.trim_start();
+    let mut token_start: Option<usize> = None;
+    let mut depth = 0i32;
+    let mut in_quote: Option<char> = None;
+    for (index, ch) in rest.char_indices() {
+        if let Some(quote) = in_quote {
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' | '[' => in_quote = Some(if ch == '[' { ']' } else { ch }),
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ch if ch.is_whitespace() && depth == 0 => {
+                if let Some(start) = token_start.take() {
+                    if sqlite_is_column_constraint_keyword(&rest[start..index]) {
+                        return rest[..start].trim().trim_end_matches(',').to_string();
+                    }
+                }
+            }
+            _ if token_start.is_none() && depth == 0 => token_start = Some(index),
+            _ => {}
+        }
+    }
+    if let Some(start) = token_start {
+        if sqlite_is_column_constraint_keyword(&rest[start..]) {
+            return rest[..start].trim().trim_end_matches(',').to_string();
+        }
+    }
+    rest.trim().trim_end_matches(',').to_string()
+}
+
+fn sqlite_is_column_constraint_keyword(token: &str) -> bool {
+    matches!(
+        token.trim_matches(',').to_ascii_uppercase().as_str(),
+        "PRIMARY" | "NOT" | "NULL" | "DEFAULT" | "COLLATE" | "REFERENCES" | "CHECK"
+            | "UNIQUE" | "CONSTRAINT" | "GENERATED" | "AS"
+    )
 }
 
 fn read_sqlite_varint(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
@@ -7894,6 +8067,30 @@ mod tests {
         assert_eq!(row.table_name, "users");
         assert_eq!(row.root_page, 2);
         assert_eq!(row.sql, "CREATE TABLE users(id INTEGER PRIMARY KEY)");
+    }
+
+    #[test]
+    fn sqlite_table_column_parser_summarizes_columns() {
+        let columns = parse_sqlite_table_columns(
+            r#"CREATE TABLE "users"(
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                "display,name" VARCHAR(80),
+                balance DECIMAL(10, 2) DEFAULT 0,
+                CONSTRAINT users_name UNIQUE(name)
+            )"#,
+            8,
+        );
+
+        assert_eq!(
+            columns,
+            vec![
+                "id INTEGER".to_string(),
+                "name TEXT".to_string(),
+                "display,name VARCHAR(80)".to_string(),
+                "balance DECIMAL(10, 2)".to_string(),
+            ]
+        );
     }
 
     #[test]
