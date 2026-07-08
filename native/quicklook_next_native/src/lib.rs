@@ -895,7 +895,7 @@ fn decode_image_bgra(
     }
 
     let decode_start = Instant::now();
-    let image = ImageReader::open(path)
+    let mut image = ImageReader::open(path)
         .ok()?
         .with_guessed_format()
         .ok()?
@@ -906,7 +906,13 @@ fn decode_image_bgra(
         return None;
     }
 
-    if original_width == 0 || original_height == 0 {
+    let orientation = jpeg_exif_orientation(path);
+    if let Some(orientation) = orientation {
+        image = apply_exif_orientation(image, orientation);
+    }
+
+    let (oriented_width, oriented_height) = (image.width(), image.height());
+    if oriented_width == 0 || oriented_height == 0 {
         return None;
     }
 
@@ -914,19 +920,19 @@ fn decode_image_bgra(
     let target_height = if target_height > 0 { target_height } else { MAX_IMAGE_RASTER_DIMENSION };
     let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
     let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
-    let scale = if original_width > target_width || original_height > target_height {
-        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
+    let scale = if oriented_width > target_width || oriented_height > target_height {
+        (target_width as f64 / oriented_width as f64).min(target_height as f64 / oriented_height as f64)
     } else {
         1.0
     };
-    let width = ((original_width as f64 * scale).round() as u32).max(1);
-    let height = ((original_height as f64 * scale).round() as u32).max(1);
+    let width = ((oriented_width as f64 * scale).round() as u32).max(1);
+    let height = ((oriented_height as f64 * scale).round() as u32).max(1);
     if cancel_requested(cancel_cb) {
         return None;
     }
 
     let resize_start = Instant::now();
-    let raster = if width == original_width && height == original_height {
+    let raster = if width == oriented_width && height == oriented_height {
         image
     } else {
         image.resize_exact(width, height, image::imageops::FilterType::Triangle)
@@ -958,6 +964,90 @@ fn decode_image_bgra(
     let convert_ms = elapsed_ms_u32(convert_start);
 
     Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+}
+
+fn apply_exif_orientation(image: image::DynamicImage, orientation: u16) -> image::DynamicImage {
+    match orientation {
+        2 => image.fliph(),
+        3 => image.rotate180(),
+        4 => image.flipv(),
+        5 => image.fliph().rotate90(),
+        6 => image.rotate90(),
+        7 => image.fliph().rotate270(),
+        8 => image.rotate270(),
+        _ => image,
+    }
+}
+
+fn jpeg_exif_orientation(path: &str) -> Option<u16> {
+    let ext = std::path::Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
+    if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
+        return None;
+    }
+
+    let bytes = std::fs::read(path).ok()?;
+    let mut pos = 2usize;
+    if bytes.get(0..2)? != [0xFF, 0xD8] {
+        return None;
+    }
+    while pos + 4 <= bytes.len() {
+        if bytes[pos] != 0xFF {
+            return None;
+        }
+        let marker = bytes[pos + 1];
+        pos += 2;
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        let len = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+        if len < 2 || pos + len > bytes.len() {
+            return None;
+        }
+        let payload = pos + 2;
+        let payload_end = pos + len;
+        if marker == 0xE1 && bytes.get(payload..payload + 6) == Some(b"Exif\0\0") {
+            return tiff_orientation(bytes.get(payload + 6..payload_end)?);
+        }
+        pos = payload_end;
+    }
+    None
+}
+
+fn tiff_orientation(tiff: &[u8]) -> Option<u16> {
+    let endian = match tiff.get(0..2)? {
+        b"II" => 0,
+        b"MM" => 1,
+        _ => return None,
+    };
+    if read_u16(tiff, 2, endian)? != 42 {
+        return None;
+    }
+    let ifd = read_u32(tiff, 4, endian)? as usize;
+    let count = read_u16(tiff, ifd, endian)? as usize;
+    for index in 0..count {
+        let entry = ifd + 2 + index * 12;
+        if entry + 12 > tiff.len() {
+            return None;
+        }
+        if read_u16(tiff, entry, endian)? == 0x0112 {
+            let field_type = read_u16(tiff, entry + 2, endian)?;
+            let value_count = read_u32(tiff, entry + 4, endian)?;
+            if field_type == 3 && value_count == 1 {
+                return read_u16(tiff, entry + 8, endian);
+            }
+        }
+    }
+    None
+}
+
+fn read_u16(bytes: &[u8], offset: usize, endian: u8) -> Option<u16> {
+    let raw = [*bytes.get(offset)?, *bytes.get(offset + 1)?];
+    Some(if endian == 0 { u16::from_le_bytes(raw) } else { u16::from_be_bytes(raw) })
+}
+
+fn read_u32(bytes: &[u8], offset: usize, endian: u8) -> Option<u32> {
+    let raw = [*bytes.get(offset)?, *bytes.get(offset + 1)?, *bytes.get(offset + 2)?, *bytes.get(offset + 3)?];
+    Some(if endian == 0 { u32::from_le_bytes(raw) } else { u32::from_be_bytes(raw) })
 }
 
 fn elapsed_ms_u32(start: Instant) -> u32 {
@@ -1025,8 +1115,8 @@ mod tests {
         let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode jpeg");
         let _ = std::fs::remove_file(path);
 
-        assert_eq!(decoded.0, 1);
-        assert_eq!(decoded.1, 2);
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
         assert_eq!(decoded.2, 1);
         assert_eq!(decoded.3, 2);
     }
