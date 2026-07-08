@@ -66,6 +66,11 @@ internal static class SystemImageDecoder
                     return null;
             }
 
+            DiagLog.Write(
+                "RasterHost",
+                $"system image decoded ext={Path.GetExtension(path).ToLowerInvariant()}; target={targetWidth}x{targetHeight}; " +
+                $"original={originalWidth}x{originalHeight}; output={width}x{height}; bytes={bgra.Length}");
+
             return new NativeDecodedImage(bgra, width, height, checked((int)originalWidth), checked((int)originalHeight));
         }
         catch (OperationCanceledException)

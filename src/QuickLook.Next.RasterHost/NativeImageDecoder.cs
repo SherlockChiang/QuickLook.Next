@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
+using QuickLook.Next.Core;
 
 namespace QuickLook.Next.RasterHost;
 
@@ -65,6 +66,7 @@ internal static class NativeImageDecoder
             NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
             if (systemImage is not null)
                 return systemImage;
+            DiagLog.Write("RasterHost", $"system image preferred decode failed; falling back to native path={path}");
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
