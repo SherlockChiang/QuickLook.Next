@@ -88,6 +88,8 @@ struct OfficeCellDto {
     vertical_alignment: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     bold: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    wrap_text: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -2359,6 +2361,10 @@ fn parse_worksheet_layout_cells(
                                     .get(cell_style)
                                     .map(|style| style.bold)
                                     .unwrap_or(false),
+                                wrap_text: styles
+                                    .get(cell_style)
+                                    .map(|style| style.wrap_text)
+                                    .unwrap_or(false),
                             });
                         }
                         in_cell = false;
@@ -2388,6 +2394,7 @@ struct XlsxStyle {
     horizontal_alignment: Option<String>,
     vertical_alignment: Option<String>,
     bold: bool,
+    wrap_text: bool,
 }
 
 fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
@@ -2554,6 +2561,7 @@ fn apply_xlsx_alignment(style: &mut XlsxStyle, e: &BytesStart) {
     style.vertical_alignment = attr_value(e, "vertical")
         .and_then(|value| normalize_xlsx_vertical_alignment(&value))
         .or_else(|| style.vertical_alignment.clone());
+    style.wrap_text = attr_bool(e, "wraptext").unwrap_or(style.wrap_text);
 }
 
 fn normalize_xlsx_horizontal_alignment(value: &str) -> Option<String> {
@@ -2882,6 +2890,14 @@ fn attr_value(e: &BytesStart<'_>, name: &str) -> Option<String> {
 
 fn attr_f64(e: &BytesStart<'_>, name: &str) -> Option<f64> {
     attr_value(e, name).and_then(|v| v.parse::<f64>().ok())
+}
+
+fn attr_bool(e: &BytesStart<'_>, name: &str) -> Option<bool> {
+    attr_value(e, name).and_then(|v| match v.as_str() {
+        "1" | "true" | "TRUE" | "True" => Some(true),
+        "0" | "false" | "FALSE" | "False" => Some(false),
+        _ => None,
+    })
 }
 
 fn office_color_from_element(e: &BytesStart<'_>) -> Option<String> {
@@ -7441,7 +7457,7 @@ mod tests {
                 </fills>
                 <cellXfs count="2">
                     <xf numFmtId="0" fillId="0"/>
-                    <xf numFmtId="14" fillId="2" fontId="1"><alignment horizontal="center" vertical="top"/></xf>
+                    <xf numFmtId="14" fillId="2" fontId="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
                 </cellXfs>
             </styleSheet>"#,
         );
@@ -7473,6 +7489,7 @@ mod tests {
             Some("top")
         );
         assert_eq!(styles.get(1).map(|style| style.bold), Some(true));
+        assert_eq!(styles.get(1).map(|style| style.wrap_text), Some(true));
     }
 
     #[test]

@@ -90,6 +90,7 @@ public sealed record OfficeCell(int Row, int Column, string Text)
     public string? HorizontalAlignment { get; init; }
     public string? VerticalAlignment { get; init; }
     public bool Bold { get; init; }
+    public bool WrapText { get; init; }
 }
 
 public sealed record OfficeLayoutItem(string Kind)

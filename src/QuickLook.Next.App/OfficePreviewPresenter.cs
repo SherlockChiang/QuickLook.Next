@@ -236,7 +236,7 @@ internal sealed class OfficePreviewPresenter
                 FontWeight = new Windows.UI.Text.FontWeight { Weight = cell.Bold ? (ushort)600 : (ushort)400 },
                 MaxWidth = Math.Max(4, width - 10),
                 MaxHeight = Math.Max(4, height - 4),
-                TextWrapping = TextWrapping.Wrap,
+                TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
                 TextTrimming = TextTrimming.WordEllipsis,
                 Foreground = OfficeBlackBrush,
                 TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
