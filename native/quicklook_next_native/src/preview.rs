@@ -3868,6 +3868,7 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
             text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
         }
         append_sqlite_header_details(&mut text, &bytes);
+        append_sqlite_schema_summary(&mut text, &bytes, page_size as usize);
     } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Microsoft Compound File database");
     } else {
@@ -4177,6 +4178,166 @@ fn sqlite_schema_format_name(value: u32) -> String {
         4 => "4 (current)".to_string(),
         _ => format!("{value}"),
     }
+}
+
+#[derive(Debug, PartialEq)]
+struct SqliteSchemaRow {
+    typ: String,
+    name: String,
+    table_name: String,
+    root_page: i64,
+}
+
+fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usize) {
+    let rows = parse_sqlite_schema_rows(bytes, page_size, 8);
+    if rows.is_empty() {
+        return;
+    }
+
+    text.push_str("\nSchema objects:");
+    for row in rows {
+        text.push_str(&format!(
+            "\n- {} {} (table: {}, root: {})",
+            row.typ, row.name, row.table_name, row.root_page
+        ));
+    }
+}
+
+fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec<SqliteSchemaRow> {
+    if page_size < 512 || bytes.len() < 128 || !bytes.starts_with(b"SQLite format 3\0") {
+        return Vec::new();
+    }
+    let page = &bytes[..page_size.min(bytes.len())];
+    let header = 100usize;
+    if page.get(header).copied() != Some(0x0D) {
+        return Vec::new();
+    }
+
+    let cell_count = read_u16_be(page, header + 3).unwrap_or(0).min(256) as usize;
+    let mut rows = Vec::new();
+    for index in 0..cell_count {
+        if rows.len() >= limit {
+            break;
+        }
+        let ptr_offset = header + 8 + index * 2;
+        let Some(cell_offset) = read_u16_be(page, ptr_offset).map(usize::from) else {
+            break;
+        };
+        if let Some(row) = parse_sqlite_schema_leaf_cell(page, cell_offset) {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+fn parse_sqlite_schema_leaf_cell(page: &[u8], offset: usize) -> Option<SqliteSchemaRow> {
+    let (payload_len, mut pos) = read_sqlite_varint(page, offset)?;
+    let (_rowid, next) = read_sqlite_varint(page, pos)?;
+    pos = next;
+    let end = pos.checked_add(payload_len as usize)?;
+    parse_sqlite_schema_record(page.get(pos..end)?)
+}
+
+fn parse_sqlite_schema_record(payload: &[u8]) -> Option<SqliteSchemaRow> {
+    let (header_len, mut pos) = read_sqlite_varint(payload, 0)?;
+    let header_len = header_len as usize;
+    if header_len == 0 || header_len > payload.len() {
+        return None;
+    }
+    let mut serials = Vec::new();
+    while pos < header_len && serials.len() < 5 {
+        let (serial, next) = read_sqlite_varint(payload, pos)?;
+        serials.push(serial);
+        pos = next;
+    }
+    if serials.len() < 5 {
+        return None;
+    }
+
+    let mut value_pos = header_len;
+    let typ = sqlite_record_text(payload, &mut value_pos, serials[0])?;
+    let name = sqlite_record_text(payload, &mut value_pos, serials[1])?;
+    let table_name = sqlite_record_text(payload, &mut value_pos, serials[2])?;
+    let root_page = sqlite_record_integer(payload, &mut value_pos, serials[3])?;
+    Some(SqliteSchemaRow {
+        typ,
+        name,
+        table_name,
+        root_page,
+    })
+}
+
+fn read_sqlite_varint(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for i in 0..9 {
+        let b = *bytes.get(offset + i)?;
+        if i == 8 {
+            value = (value << 8) | b as u64;
+            return Some((value, offset + i + 1));
+        }
+        value = (value << 7) | (b & 0x7F) as u64;
+        if b & 0x80 == 0 {
+            return Some((value, offset + i + 1));
+        }
+    }
+    None
+}
+
+fn sqlite_record_text(payload: &[u8], pos: &mut usize, serial: u64) -> Option<String> {
+    if serial < 13 || serial % 2 == 0 {
+        sqlite_skip_record_value(payload, pos, serial)?;
+        return Some(String::new());
+    }
+    let len = ((serial - 13) / 2) as usize;
+    let end = pos.checked_add(len)?;
+    let text = String::from_utf8_lossy(payload.get(*pos..end)?).to_string();
+    *pos = end;
+    Some(text)
+}
+
+fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option<i64> {
+    match serial {
+        0 => Some(0),
+        1 => {
+            let value = *payload.get(*pos)? as i8 as i64;
+            *pos += 1;
+            Some(value)
+        }
+        2 => {
+            let end = pos.checked_add(2)?;
+            let value = i16::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?) as i64;
+            *pos = end;
+            Some(value)
+        }
+        4 => {
+            let end = pos.checked_add(4)?;
+            let value = i32::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?) as i64;
+            *pos = end;
+            Some(value)
+        }
+        8 => Some(0),
+        9 => Some(1),
+        _ => {
+            sqlite_skip_record_value(payload, pos, serial)?;
+            Some(0)
+        }
+    }
+}
+
+fn sqlite_skip_record_value(payload: &[u8], pos: &mut usize, serial: u64) -> Option<()> {
+    let len = match serial {
+        0 | 8 | 9 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        4 => 4,
+        5 => 6,
+        6 | 7 => 8,
+        n if n >= 12 => ((n - 12) / 2) as usize,
+        _ => return None,
+    };
+    *pos = pos.checked_add(len)?;
+    (payload.len() >= *pos).then_some(())
 }
 
 fn parse_mail_headers(content: &str) -> Vec<(String, String)> {
@@ -7631,6 +7792,22 @@ mod tests {
         assert!(text.contains("Schema cookie: 11"));
         assert!(text.contains("Freelist pages: 7"));
         assert!(text.contains("SQLite version: 3045000"));
+    }
+
+    #[test]
+    fn sqlite_schema_record_extracts_object_summary() {
+        let mut payload = vec![6, 23, 23, 23, 1, 75];
+        payload.extend_from_slice(b"table");
+        payload.extend_from_slice(b"users");
+        payload.extend_from_slice(b"users");
+        payload.push(2);
+        payload.extend_from_slice(b"CREATE TABLE users(id INTEGER PRIMARY KEY)");
+
+        let row = parse_sqlite_schema_record(&payload).expect("schema row");
+        assert_eq!(row.typ, "table");
+        assert_eq!(row.name, "users");
+        assert_eq!(row.table_name, "users");
+        assert_eq!(row.root_page, 2);
     }
 
     #[test]
