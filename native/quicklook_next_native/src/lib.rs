@@ -825,13 +825,26 @@ pub extern "C" fn ql_decode_image_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    ql_decode_image_sized_cancelable(path_utf8, path_len, 0, 0, out, out_cap, cancel_cb)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_decode_image_sized_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return -1,
     };
 
     let (width, height, original_width, original_height, bgra) =
-        match decode_image_bgra(path, cancel_cb) {
+        match decode_image_bgra(path, target_width, target_height, cancel_cb) {
             Some(decoded) => decoded,
             None => return -2,
         };
@@ -856,6 +869,8 @@ pub extern "C" fn ql_decode_image_cancelable(
 
 fn decode_image_bgra(
     path: &str,
+    target_width: u32,
+    target_height: u32,
     cancel_cb: Option<CancelCallback>,
 ) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
     if cancel_requested(cancel_cb) {
@@ -889,9 +904,12 @@ fn decode_image_bgra(
         return None;
     }
 
-    let largest = original_width.max(original_height);
-    let scale = if largest > MAX_IMAGE_RASTER_DIMENSION {
-        MAX_IMAGE_RASTER_DIMENSION as f64 / largest as f64
+    let target_width = if target_width > 0 { target_width } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_height = if target_height > 0 { target_height } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let scale = if original_width > target_width || original_height > target_height {
+        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
     } else {
         1.0
     };

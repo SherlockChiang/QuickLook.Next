@@ -31,7 +31,11 @@ public sealed record Hello(int AppProcessId) : ControlMessage;
 public sealed record HostReady(long AdapterLuid) : ControlMessage;
 
 /// <summary>App → Host: open a file. Probe comes from the Rust native layer.</summary>
-public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe) : ControlMessage;
+public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe) : ControlMessage
+{
+    public uint TargetWidth { get; init; }
+    public uint TargetHeight { get; init; }
+}
 
 /// <summary>Host → App: the shared composition surface handle (already duplicated into the App process).</summary>
 public sealed record PreviewSurface(

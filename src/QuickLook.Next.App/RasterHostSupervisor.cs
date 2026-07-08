@@ -152,21 +152,29 @@ internal sealed class RasterHostSupervisor
     }
 
     /// <summary>Open a file for preview; resolves on PreviewReady, PreviewError, or a watchdog timeout.</summary>
-    public (string RequestId, Task<ControlMessage> Completion) BeginOpen(string path, FileProbe probe)
+    public (string RequestId, Task<ControlMessage> Completion) BeginOpen(
+        string path,
+        FileProbe probe,
+        uint targetWidth = 0,
+        uint targetHeight = 0)
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
-        _ = SendOpenAsync(requestId, path, probe);
+        _ = SendOpenAsync(requestId, path, probe, targetWidth, targetHeight);
         return (requestId, completion);
     }
 
-    private async Task SendOpenAsync(string requestId, string path, FileProbe probe)
+    private async Task SendOpenAsync(string requestId, string path, FileProbe probe, uint targetWidth, uint targetHeight)
     {
         try
         {
             if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
-            using var trace = DiagLog.TraceScope("App", $"host send open request={requestId}; path={path}", 100);
-            await _channel.SendAsync(new PreviewOpen(requestId, path, probe));
+            using var trace = DiagLog.TraceScope("App", $"host send open request={requestId}; target={targetWidth}x{targetHeight}; path={path}", 100);
+            await _channel.SendAsync(new PreviewOpen(requestId, path, probe)
+            {
+                TargetWidth = targetWidth,
+                TargetHeight = targetHeight,
+            });
         }
         catch (Exception ex)
         {

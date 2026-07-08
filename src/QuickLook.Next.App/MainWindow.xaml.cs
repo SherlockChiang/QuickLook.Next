@@ -602,7 +602,8 @@ public sealed partial class MainWindow : Window
 
             await EnsureRasterHostStartedAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            var (requestId, completion) = _supervisor!.BeginOpen(path, probe);
+            var targetSize = GetRasterDecodeTargetSize();
+            var (requestId, completion) = _supervisor!.BeginOpen(path, probe, targetSize.Width, targetSize.Height);
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
             DiagLog.Write("App", $"preview host open sent gen={generation}; request={requestId}");
@@ -924,6 +925,14 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
         ScheduleImageSidecarLoads(ready);
         return result.Status;
+    }
+
+    private (uint Width, uint Height) GetRasterDecodeTargetSize()
+    {
+        var maxContent = GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight);
+        double width = Math.Max(1, maxContent.Width - RasterInfoRailWidth);
+        double height = Math.Max(1, maxContent.Height - RasterToolbarHeight);
+        return ((uint)Math.Ceiling(width), (uint)Math.Ceiling(height));
     }
 
     private string ShowAnimatedImagePreview(PreviewReady ready, string path)

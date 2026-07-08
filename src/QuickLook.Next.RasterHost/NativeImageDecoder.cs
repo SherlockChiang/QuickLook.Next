@@ -33,7 +33,22 @@ internal static class NativeImageDecoder
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
 
-    public static async Task<NativeDecodedImage?> TryDecodeAsync(string path, TimeSpan timeout, CancellationToken cancellationToken)
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_image_sized_cancelable(
+        byte[] pathUtf8,
+        nuint pathLen,
+        uint targetWidth,
+        uint targetHeight,
+        byte[] outBuf,
+        nuint outCap,
+        IntPtr cancelCb);
+
+    public static async Task<NativeDecodedImage?> TryDecodeAsync(
+        string path,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        uint targetWidth = 0,
+        uint targetHeight = 0)
     {
         if (IsTooLarge(path))
             return null;
@@ -48,7 +63,7 @@ internal static class NativeImageDecoder
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<NativeDecodedImage?> decodeTask = DecodeOnGateAsync(path, cancellationToken);
+        Task<NativeDecodedImage?> decodeTask = DecodeOnGateAsync(path, cancellationToken, targetWidth, targetHeight);
         Task delayTask = Task.Delay(timeout, timeoutCts.Token);
         Task completed = await Task.WhenAny(decodeTask, delayTask);
         if (completed != decodeTask)
@@ -59,7 +74,11 @@ internal static class NativeImageDecoder
         return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken);
     }
 
-    private static async Task<NativeDecodedImage?> DecodeOnGateAsync(string path, CancellationToken cancellationToken)
+    private static async Task<NativeDecodedImage?> DecodeOnGateAsync(
+        string path,
+        CancellationToken cancellationToken,
+        uint targetWidth,
+        uint targetHeight)
     {
         await DecodeGate.WaitAsync(cancellationToken);
         try
@@ -71,7 +90,7 @@ internal static class NativeImageDecoder
             {
                 if (cancellationToken.IsCancellationRequested)
                     return null;
-                return TryDecode(path, cancellationToken);
+                return TryDecode(path, cancellationToken, targetWidth, targetHeight);
             }, CancellationToken.None);
         }
         finally
@@ -83,7 +102,11 @@ internal static class NativeImageDecoder
     public static NativeDecodedImage? TryDecode(string path)
         => TryDecode(path, CancellationToken.None);
 
-    public static NativeDecodedImage? TryDecode(string path, CancellationToken cancellationToken)
+    public static NativeDecodedImage? TryDecode(
+        string path,
+        CancellationToken cancellationToken,
+        uint targetWidth = 0,
+        uint targetHeight = 0)
     {
         try
         {
@@ -99,7 +122,14 @@ internal static class NativeImageDecoder
                 try
                 {
                     _decodeCancellationToken = cancellationToken;
-                    int n = ql_decode_image_cancelable(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)buffer.Length, DecodeCancelCallbackPtr);
+                    int n = ql_decode_image_sized_cancelable(
+                        pathBytes,
+                        (nuint)pathBytes.Length,
+                        targetWidth,
+                        targetHeight,
+                        buffer,
+                        (nuint)buffer.Length,
+                        DecodeCancelCallbackPtr);
                     _decodeCancellationToken = CancellationToken.None;
                     if (n > HeaderBytes)
                     {

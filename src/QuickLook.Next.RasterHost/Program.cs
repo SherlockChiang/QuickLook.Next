@@ -188,7 +188,13 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
 
         if (IsImage(open.Probe))
         {
-            var image = await DecodeImageAsync(open.Path, imageDecodeTimeout, systemImageDecodeTimeout, cancellationToken);
+            var image = await DecodeImageAsync(
+                open.Path,
+                imageDecodeTimeout,
+                systemImageDecodeTimeout,
+                cancellationToken,
+                open.TargetWidth,
+                open.TargetHeight);
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
@@ -233,7 +239,13 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
     }
 }
 
-static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan timeout, TimeSpan systemTimeout, CancellationToken cancellationToken)
+static async Task<NativeDecodedImage?> DecodeImageAsync(
+    string path,
+    TimeSpan timeout,
+    TimeSpan systemTimeout,
+    CancellationToken cancellationToken,
+    uint targetWidth,
+    uint targetHeight)
 {
     if (PreferSystemImageDecoder(path))
     {
@@ -244,8 +256,8 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(string path, TimeSpan ti
     }
 
     NativeDecodedImage? nativeImage;
-    using (DiagLog.TraceScope("RasterHost", $"native image decode path={path}", 250))
-        nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken);
+    using (DiagLog.TraceScope("RasterHost", $"native image decode target={targetWidth}x{targetHeight} path={path}", 250))
+        nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken, targetWidth, targetHeight);
     if (nativeImage is not null)
         return nativeImage;
 
