@@ -292,6 +292,7 @@ struct ExifMetadata {
     direction: Option<f64>,
     bit_depth: Option<u8>,
     color_type: Option<String>,
+    compression: Option<String>,
     has_alpha: Option<bool>,
     interlace: Option<String>,
     animated: Option<bool>,
@@ -304,8 +305,16 @@ pub fn render_image_metadata(path: &str) -> String {
         .or_else(|| parse_png_metadata(path))
         .or_else(|| parse_gif_metadata(path))
         .or_else(|| parse_webp_metadata(path))
+        .or_else(|| parse_tiff_metadata(path))
         .map(|metadata| to_json(&metadata))
         .unwrap_or_default()
+}
+
+fn parse_tiff_metadata(path: &str) -> Option<ExifMetadata> {
+    let bytes = read_file_prefix(path, MAX_EXIF_BYTES)?;
+    let mut metadata = parse_tiff_exif_metadata(&bytes)?;
+    metadata.format = Some("TIFF".to_string());
+    Some(metadata)
 }
 
 fn parse_webp_metadata(path: &str) -> Option<ExifMetadata> {
@@ -400,6 +409,9 @@ fn merge_missing_metadata(target: &mut ExifMetadata, source: ExifMetadata) {
     target.width = target.width.or(source.width);
     target.height = target.height.or(source.height);
     target.orientation = target.orientation.or(source.orientation);
+    target.bit_depth = target.bit_depth.or(source.bit_depth);
+    target.color_type = target.color_type.take().or(source.color_type);
+    target.compression = target.compression.take().or(source.compression);
     target.lens_make = target.lens_make.take().or(source.lens_make);
     target.lens_model = target.lens_model.take().or(source.lens_model);
     target.software = target.software.take().or(source.software);
@@ -799,6 +811,31 @@ fn parse_exif_ifd(
             break;
         };
         match tag {
+            0x0100 => {
+                metadata.width = metadata
+                    .width
+                    .or_else(|| exif_u32_or_u16_value(tiff, entry, endian))
+            }
+            0x0101 => {
+                metadata.height = metadata
+                    .height
+                    .or_else(|| exif_u32_or_u16_value(tiff, entry, endian))
+            }
+            0x0102 => {
+                metadata.bit_depth = metadata
+                    .bit_depth
+                    .or_else(|| tiff_bits_per_sample(tiff, entry, endian))
+            }
+            0x0103 => {
+                metadata.compression = metadata.compression.take().or_else(|| {
+                    tiff_compression_name(exif_u16_value(tiff, entry, endian)?).map(str::to_string)
+                })
+            }
+            0x0106 => {
+                metadata.color_type = metadata.color_type.take().or_else(|| {
+                    tiff_photometric_name(exif_u16_value(tiff, entry, endian)?).map(str::to_string)
+                })
+            }
             0x010F => metadata.make = exif_ascii(tiff, entry, endian),
             0x0110 => metadata.model = exif_ascii(tiff, entry, endian),
             0x0112 => metadata.orientation = exif_u16_value(tiff, entry, endian),
@@ -927,6 +964,52 @@ fn exif_u32_or_u16_value(tiff: &[u8], entry: usize, endian: u8) -> Option<u32> {
         4 => exif_u32_value(tiff, entry, endian),
         _ => None,
     }
+}
+
+fn tiff_bits_per_sample(tiff: &[u8], entry: usize, endian: u8) -> Option<u8> {
+    if read_u16_endian(tiff, entry + 2, endian)? != 3 {
+        return None;
+    }
+    let count = read_u32_endian(tiff, entry + 4, endian)? as usize;
+    if count == 0 {
+        return None;
+    }
+    let value = if count == 1 {
+        read_u16_endian(tiff, entry + 8, endian)?
+    } else {
+        let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
+        read_u16_endian(tiff, offset, endian)?
+    };
+    u8::try_from(value).ok()
+}
+
+fn tiff_compression_name(value: u16) -> Option<&'static str> {
+    Some(match value {
+        1 => "none",
+        2 => "CCITT Group 3 1-D",
+        3 => "Group 3 fax",
+        4 => "Group 4 fax",
+        5 => "LZW",
+        6 => "old JPEG",
+        7 => "JPEG",
+        8 => "Deflate",
+        32773 => "PackBits",
+        _ => return None,
+    })
+}
+
+fn tiff_photometric_name(value: u16) -> Option<&'static str> {
+    Some(match value {
+        0 => "white is zero",
+        1 => "black is zero",
+        2 => "RGB",
+        3 => "palette color",
+        4 => "transparency mask",
+        5 => "CMYK",
+        6 => "YCbCr",
+        8 => "CIELab",
+        _ => return None,
+    })
 }
 
 fn exif_gps_coordinate(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
@@ -9224,6 +9307,36 @@ mod tests {
         assert_eq!(metadata.title.as_deref(), Some("Layered WebP"));
         assert_eq!(metadata.comment.as_deref(), Some("Alpha artwork"));
         assert_eq!(metadata.software.as_deref(), Some("QuickDraw"));
+    }
+
+    #[test]
+    fn tiff_metadata_reads_header_ifd_summary() {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.resize(8 + 2 + 8 * 12 + 4, 0);
+        write_le_u16(&mut tiff, 8, 8);
+        let entries = 10;
+        write_long_entry(&mut tiff, entries, 0, 0x0100, 1024);
+        write_long_entry(&mut tiff, entries, 1, 0x0101, 768);
+        write_short_entry(&mut tiff, entries, 2, 0x0102, 16);
+        write_short_entry(&mut tiff, entries, 3, 0x0103, 5);
+        write_short_entry(&mut tiff, entries, 4, 0x0106, 2);
+        write_short_entry(&mut tiff, entries, 5, 0x0112, 6);
+        write_ascii_entry(&mut tiff, entries, 6, 0x0131, "ScanSoft");
+        write_ascii_entry(&mut tiff, entries, 7, 0x0132, "2026:07:08 10:11:12");
+
+        let metadata = parse_tiff_exif_metadata(&tiff).expect("tiff metadata");
+
+        assert_eq!(metadata.width, Some(1024));
+        assert_eq!(metadata.height, Some(768));
+        assert_eq!(metadata.bit_depth, Some(16));
+        assert_eq!(metadata.compression.as_deref(), Some("LZW"));
+        assert_eq!(metadata.color_type.as_deref(), Some("RGB"));
+        assert_eq!(metadata.orientation, Some(6));
+        assert_eq!(metadata.software.as_deref(), Some("ScanSoft"));
+        assert_eq!(metadata.date_time.as_deref(), Some("2026:07:08 10:11:12"));
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {

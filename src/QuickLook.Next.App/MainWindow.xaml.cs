@@ -1551,6 +1551,7 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
         AddIfValue(rows, "Bit depth", metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
         AddIfValue(rows, "Color type", metadata.ColorType);
+        AddIfValue(rows, "Compression", metadata.Compression);
         AddIfValue(rows, "Alpha", metadata.HasAlpha.HasValue ? (metadata.HasAlpha.Value ? "yes" : "no") : null);
         AddIfValue(rows, "Interlace", metadata.Interlace);
         AddIfValue(rows, "Animated", metadata.Animated.HasValue ? (metadata.Animated.Value ? "yes" : "no") : null);

@@ -175,6 +175,7 @@ public sealed record ImageMetadata
     public double? Direction { get; init; }
     public byte? BitDepth { get; init; }
     public string? ColorType { get; init; }
+    public string? Compression { get; init; }
     public bool? HasAlpha { get; init; }
     public string? Interlace { get; init; }
     public bool? Animated { get; init; }
