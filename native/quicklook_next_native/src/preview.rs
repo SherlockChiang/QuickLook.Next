@@ -3885,6 +3885,9 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
         if summary.tables > 0 {
             text.push_str(&format!("\nTables: {}", summary.tables));
         }
+        if summary.glyphs > 0 {
+            text.push_str(&format!("\nGlyphs: {}", format_number(summary.glyphs as i64)));
+        }
         if !summary.family.is_empty() {
             text.push_str(&format!("\nFamily: {}", summary.family));
         }
@@ -3896,6 +3899,12 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
         }
         if !summary.postscript_name.is_empty() {
             text.push_str(&format!("\nPostScript: {}", summary.postscript_name));
+        }
+        if !summary.version.is_empty() {
+            text.push_str(&format!("\nVersion: {}", summary.version));
+        }
+        if !summary.license.is_empty() {
+            text.push_str(&format!("\nLicense: {}", summary.license));
         }
     }
     generic_info_json(path, "font", size, modified_unix, Some(text))
@@ -4067,10 +4076,13 @@ struct FontSummary {
     format: &'static str,
     faces: u32,
     tables: u16,
+    glyphs: u16,
     family: String,
     subfamily: String,
     full_name: String,
     postscript_name: String,
+    version: String,
+    license: String,
 }
 
 fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
@@ -4112,6 +4124,9 @@ fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
     };
     if let Some((offset, length)) = find_sfnt_table(bytes, "name", tables) {
         parse_font_name_table(bytes, offset, length, &mut summary);
+    }
+    if let Some((offset, length)) = find_sfnt_table(bytes, "maxp", tables) {
+        summary.glyphs = parse_font_maxp_glyph_count(bytes, offset, length).unwrap_or(0);
     }
     Some(summary)
 }
@@ -4164,9 +4179,18 @@ fn parse_font_name_table(bytes: &[u8], offset: usize, length: usize, summary: &m
             2 if summary.subfamily.is_empty() => summary.subfamily = value,
             4 if summary.full_name.is_empty() => summary.full_name = value,
             6 if summary.postscript_name.is_empty() => summary.postscript_name = value,
+            5 if summary.version.is_empty() => summary.version = value,
+            13 if summary.license.is_empty() => summary.license = value,
             _ => {}
         }
     }
+}
+
+fn parse_font_maxp_glyph_count(bytes: &[u8], offset: usize, length: usize) -> Option<u16> {
+    if length < 6 || offset.checked_add(6)? > bytes.len() {
+        return None;
+    }
+    read_u16_be(bytes, offset + 4)
 }
 
 fn decode_font_name(platform: u16, bytes: &[u8]) -> String {
@@ -8029,6 +8053,58 @@ mod tests {
 
         assert_eq!(summary.format, "WOFF font");
         assert_eq!(summary.tables, 3);
+    }
+
+    #[test]
+    fn font_summary_reads_names_and_glyph_count() {
+        fn utf16be(value: &str) -> Vec<u8> {
+            value
+                .encode_utf16()
+                .flat_map(|unit| unit.to_be_bytes())
+                .collect()
+        }
+
+        let names = [
+            (1u16, utf16be("Quick Sans")),
+            (5u16, utf16be("Version 1.2")),
+            (13u16, utf16be("Open Font License")),
+        ];
+        let name_offset = 44usize;
+        let name_storage_offset = 6 + names.len() * 12;
+        let name_len = name_storage_offset + names.iter().map(|(_, v)| v.len()).sum::<usize>();
+        let maxp_offset = name_offset + name_len;
+        let mut bytes = vec![0u8; maxp_offset + 6];
+        bytes[0..4].copy_from_slice(&[0, 1, 0, 0]);
+        bytes[4..6].copy_from_slice(&2u16.to_be_bytes());
+        bytes[12..16].copy_from_slice(b"name");
+        bytes[20..24].copy_from_slice(&(name_offset as u32).to_be_bytes());
+        bytes[24..28].copy_from_slice(&(name_len as u32).to_be_bytes());
+        bytes[28..32].copy_from_slice(b"maxp");
+        bytes[36..40].copy_from_slice(&(maxp_offset as u32).to_be_bytes());
+        bytes[40..44].copy_from_slice(&6u32.to_be_bytes());
+        bytes[name_offset + 2..name_offset + 4].copy_from_slice(&(names.len() as u16).to_be_bytes());
+        bytes[name_offset + 4..name_offset + 6]
+            .copy_from_slice(&(name_storage_offset as u16).to_be_bytes());
+        let mut storage_pos = 0usize;
+        for (index, (name_id, value)) in names.iter().enumerate() {
+            let record = name_offset + 6 + index * 12;
+            bytes[record..record + 2].copy_from_slice(&3u16.to_be_bytes());
+            bytes[record + 6..record + 8].copy_from_slice(&name_id.to_be_bytes());
+            bytes[record + 8..record + 10].copy_from_slice(&(value.len() as u16).to_be_bytes());
+            bytes[record + 10..record + 12].copy_from_slice(&(storage_pos as u16).to_be_bytes());
+            let value_start = name_offset + name_storage_offset + storage_pos;
+            bytes[value_start..value_start + value.len()].copy_from_slice(value);
+            storage_pos += value.len();
+        }
+        bytes[maxp_offset..maxp_offset + 4].copy_from_slice(&[0, 1, 0, 0]);
+        bytes[maxp_offset + 4..maxp_offset + 6].copy_from_slice(&321u16.to_be_bytes());
+
+        let summary = parse_font_summary(&bytes).expect("font summary");
+
+        assert_eq!(summary.family, "Quick Sans");
+        assert_eq!(summary.version, "Version 1.2");
+        assert_eq!(summary.license, "Open Font License");
+        assert_eq!(summary.glyphs, 321);
     }
 
     #[test]
