@@ -220,7 +220,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             DiagLog.Write("RasterHost", "native image decode returned no raster; falling back to shell thumbnail");
         }
 
-        if (NativeThumbnail.TryGet(open.Path, 1920) is { } fallbackThumb)
+        if (await NativeThumbnail.TryGetAsync(open.Path, 1920, cancellationToken) is { } fallbackThumb)
         {
             cancellationToken.ThrowIfCancellationRequested();
             DiagLog.Write("RasterHost", $"shell thumbnail {fallbackThumb.Width}x{fallbackThumb.Height}");
