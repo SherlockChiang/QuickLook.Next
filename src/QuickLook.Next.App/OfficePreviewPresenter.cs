@@ -227,7 +227,8 @@ internal sealed class OfficePreviewPresenter
             BorderBrush = OfficeCellBorderBrush,
             BorderThickness = merged ? new Thickness(1.2) : new Thickness(0, 0, 1, 1),
             Padding = new Thickness(5, 2, 5, 2),
-            Background = merged ? new SolidColorBrush(ColorHelper.FromArgb(255, 252, 253, 255)) : null,
+            Background = BrushFromHex(cell.FillColor)
+                ?? (merged ? new SolidColorBrush(ColorHelper.FromArgb(255, 252, 253, 255)) : null),
             Child = new TextBlock
             {
                 Text = cell.Text,

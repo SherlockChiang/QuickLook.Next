@@ -86,6 +86,7 @@ public sealed record OfficeCell(int Row, int Column, string Text)
     public int RowSpan { get; init; } = 1;
     public int ColumnSpan { get; init; } = 1;
     public string? NumberFormat { get; init; }
+    public string? FillColor { get; init; }
 }
 
 public sealed record OfficeLayoutItem(string Kind)

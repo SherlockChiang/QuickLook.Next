@@ -80,6 +80,8 @@ struct OfficeCellDto {
     column_span: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     number_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fill_color: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1686,8 +1688,8 @@ fn build_xlsx_layout(
 ) -> Option<OfficeLayoutDto> {
     let mut pages = Vec::new();
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
-    let number_formats = read_zip_text(zip, "xl/styles.xml", 4 * 1024 * 1024)
-        .map(|xml| parse_xlsx_style_number_formats(&xml))
+    let styles = read_zip_text(zip, "xl/styles.xml", 4 * 1024 * 1024)
+        .map(|xml| parse_xlsx_styles(&xml))
         .unwrap_or_default();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let sheet_name = format!("xl/worksheets/sheet{sheet_idx}.xml");
@@ -1702,7 +1704,7 @@ fn build_xlsx_layout(
         let merge_regions = parse_xlsx_merge_regions(&sheet_xml);
         let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(&sheet_xml);
         let mut cells =
-            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions, &number_formats);
+            parse_worksheet_layout_cells(&sheet_xml, shared_strings, &metrics, &merge_regions, &styles);
         let mut items =
             parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
         let (width, height) = xlsx_page_size(&cells, &items);
@@ -2177,7 +2179,7 @@ fn parse_worksheet_layout_cells(
     shared_strings: &[String],
     metrics: &XlsxSheetMetrics,
     merge_regions: &BTreeMap<(usize, usize), XlsxMergeRegion>,
-    number_formats: &[Option<String>],
+    styles: &[XlsxStyle],
 ) -> Vec<OfficeCellDto> {
     let mut reader = Reader::from_str(xml);
     let mut cells = Vec::new();
@@ -2261,7 +2263,12 @@ fn parse_worksheet_layout_cells(
                                 ),
                                 row_span,
                                 column_span,
-                                number_format: number_formats.get(cell_style).and_then(|value| value.clone()),
+                                number_format: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.number_format.clone()),
+                                fill_color: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.fill_color.clone()),
                             });
                         }
                         in_cell = false;
@@ -2284,34 +2291,61 @@ fn parse_worksheet_layout_cells(
     cells
 }
 
-fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
+#[derive(Clone, Default)]
+struct XlsxStyle {
+    number_format: Option<String>,
+    fill_color: Option<String>,
+}
+
+fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut reader = Reader::from_str(xml);
     let mut custom_formats = BTreeMap::<u32, String>::new();
-    let mut style_formats = Vec::<Option<String>>::new();
+    let mut fill_colors = Vec::<Option<String>>::new();
+    let mut styles = Vec::<XlsxStyle>::new();
+    let mut in_fills = false;
+    let mut in_fill = false;
     let mut in_cell_xfs = false;
+    let mut current_fill_color: Option<String> = None;
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
-                if local == "cellxfs" {
+                if local == "fills" {
+                    in_fills = true;
+                } else if local == "fill" && in_fills {
+                    in_fill = true;
+                    current_fill_color = None;
+                } else if (local == "fgcolor" || local == "bgcolor") && in_fill {
+                    current_fill_color = xlsx_color_from_element(&e).or(current_fill_color);
+                } else if local == "cellxfs" {
                     in_cell_xfs = true;
                 } else if local == "xf" && in_cell_xfs {
-                    style_formats.push(xlsx_style_number_format(&e, &custom_formats));
+                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors));
                 } else if local == "numfmt" {
                     collect_xlsx_custom_number_format(&e, &mut custom_formats);
                 }
             }
             Ok(Event::Empty(e)) => {
                 let local = local_xml_name(e.name().as_ref());
-                if local == "xf" && in_cell_xfs {
-                    style_formats.push(xlsx_style_number_format(&e, &custom_formats));
+                if local == "fill" && in_fills {
+                    fill_colors.push(None);
+                } else if (local == "fgcolor" || local == "bgcolor") && in_fill {
+                    current_fill_color = xlsx_color_from_element(&e).or(current_fill_color);
+                } else if local == "xf" && in_cell_xfs {
+                    styles.push(xlsx_style_from_xf(&e, &custom_formats, &fill_colors));
                 } else if local == "numfmt" {
                     collect_xlsx_custom_number_format(&e, &mut custom_formats);
                 }
             }
             Ok(Event::End(e)) => {
-                if local_xml_name(e.name().as_ref()) == "cellxfs" {
+                let local = local_xml_name(e.name().as_ref());
+                if local == "fill" && in_fill {
+                    fill_colors.push(current_fill_color.take());
+                    in_fill = false;
+                } else if local == "fills" {
+                    in_fills = false;
+                } else if local == "cellxfs" {
                     in_cell_xfs = false;
                 }
             }
@@ -2321,7 +2355,14 @@ fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
         }
     }
 
-    style_formats
+    styles
+}
+
+fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
+    parse_xlsx_styles(xml)
+        .into_iter()
+        .map(|style| style.number_format)
+        .collect()
 }
 
 fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32, String>) {
@@ -2342,6 +2383,54 @@ fn xlsx_style_number_format(e: &BytesStart, custom_formats: &BTreeMap<u32, Strin
         .get(&id)
         .cloned()
         .or_else(|| xlsx_builtin_number_format(id).map(str::to_string))
+}
+
+fn xlsx_style_from_xf(
+    e: &BytesStart,
+    custom_formats: &BTreeMap<u32, String>,
+    fill_colors: &[Option<String>],
+) -> XlsxStyle {
+    let fill_color = attr_value(e, "fillid")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|id| fill_colors.get(id).cloned().flatten());
+    XlsxStyle {
+        number_format: xlsx_style_number_format(e, custom_formats),
+        fill_color,
+    }
+}
+
+fn xlsx_color_from_element(e: &BytesStart) -> Option<String> {
+    attr_value(e, "rgb")
+        .and_then(|value| {
+            let trimmed = value.trim().trim_start_matches('#');
+            let rgb = if trimmed.len() == 8 {
+                &trimmed[2..]
+            } else {
+                trimmed
+            };
+            normalize_hex_color(rgb)
+        })
+        .or_else(|| {
+            attr_value(e, "indexed")
+                .and_then(|value| value.parse::<u32>().ok())
+                .and_then(xlsx_indexed_color)
+        })
+}
+
+fn xlsx_indexed_color(index: u32) -> Option<String> {
+    Some(match index {
+        0 | 8 => "#000000".to_string(),
+        1 | 9 => "#FFFFFF".to_string(),
+        2 => "#FF0000".to_string(),
+        3 => "#00FF00".to_string(),
+        4 => "#0000FF".to_string(),
+        5 => "#FFFF00".to_string(),
+        6 => "#FF00FF".to_string(),
+        7 => "#00FFFF".to_string(),
+        22 => "#C0C0C0".to_string(),
+        23 => "#808080".to_string(),
+        _ => return None,
+    })
 }
 
 fn xlsx_builtin_number_format(id: u32) -> Option<&'static str> {
@@ -6873,6 +6962,27 @@ mod tests {
         assert_eq!(formats.get(0), Some(&None));
         assert_eq!(formats.get(1), Some(&Some("m/d/yy".to_string())));
         assert_eq!(formats.get(2), Some(&Some("yyyy-mm-dd".to_string())));
+    }
+
+    #[test]
+    fn xlsx_styles_include_fill_colors() {
+        let styles = parse_xlsx_styles(
+            r#"<styleSheet>
+                <fills count="3">
+                    <fill><patternFill patternType="none"/></fill>
+                    <fill><patternFill patternType="gray125"/></fill>
+                    <fill><patternFill patternType="solid"><fgColor rgb="FFFFE699"/></patternFill></fill>
+                </fills>
+                <cellXfs count="2">
+                    <xf numFmtId="0" fillId="0"/>
+                    <xf numFmtId="14" fillId="2"/>
+                </cellXfs>
+            </styleSheet>"#,
+        );
+
+        assert_eq!(styles.get(0).and_then(|style| style.fill_color.as_deref()), None);
+        assert_eq!(styles.get(1).and_then(|style| style.fill_color.as_deref()), Some("#FFE699"));
+        assert_eq!(styles.get(1).and_then(|style| style.number_format.as_deref()), Some("m/d/yy"));
     }
 
     #[test]
