@@ -114,6 +114,12 @@ struct OfficeLayoutItemDto {
     shape: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     placeholder_type: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    bold: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    italic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    font_size: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fill_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1871,6 +1877,9 @@ fn build_docx_layout(
             text: Some(clipped),
             shape: None,
             placeholder_type: None,
+            bold: false,
+            italic: false,
+            font_size: None,
             fill_color: None,
             stroke_color: None,
             image_name: None,
@@ -1910,6 +1919,9 @@ fn build_docx_layout(
             text: None,
             shape: None,
             placeholder_type: None,
+            bold: false,
+            italic: false,
+            font_size: None,
             fill_color: None,
             stroke_color: None,
             image_name: Some(
@@ -2049,6 +2061,9 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut paragraph_prefix = String::new();
     let mut preset_shape: Option<String> = None;
     let mut placeholder_type: Option<String> = None;
+    let mut text_bold = false;
+    let mut text_italic = false;
+    let mut text_font_size: Option<f64> = None;
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut color_target = "";
@@ -2072,6 +2087,9 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     paragraph_prefix.clear();
                     preset_shape = None;
                     placeholder_type = None;
+                    text_bold = false;
+                    text_italic = false;
+                    text_font_size = None;
                     fill_color = None;
                     stroke_color = None;
                     color_target = "";
@@ -2095,6 +2113,13 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     } else if local == "ph" {
                         placeholder_type =
                             attr_value(&e, "type").or_else(|| Some("body".to_string()));
+                    } else if local == "rpr" {
+                        apply_ppt_run_style(
+                            &e,
+                            &mut text_bold,
+                            &mut text_italic,
+                            &mut text_font_size,
+                        );
                     }
                 }
             }
@@ -2112,6 +2137,8 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     preset_shape = attr_value(&e, "prst");
                 } else if local == "ph" {
                     placeholder_type = attr_value(&e, "type").or_else(|| Some("body".to_string()));
+                } else if local == "rpr" {
+                    apply_ppt_run_style(&e, &mut text_bold, &mut text_italic, &mut text_font_size);
                 } else if local == "srgbclr" || local == "schemeclr" {
                     let color = office_color_from_element(&e);
                     if color_target == "stroke" {
@@ -2169,6 +2196,9 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                                 text: (!normalized.is_empty()).then_some(normalized),
                                 shape: preset_shape.clone(),
                                 placeholder_type: placeholder_type.clone(),
+                                bold: text_bold,
+                                italic: text_italic,
+                                font_size: text_font_size,
                                 fill_color: fill_color.clone(),
                                 stroke_color: stroke_color.clone(),
                                 image_name: None,
@@ -2231,6 +2261,23 @@ fn append_ppt_bullet_prefix(prefix: &mut String, e: &BytesStart<'_>) {
         .unwrap_or_else(|| "•".to_string());
     prefix.push_str(&bullet);
     prefix.push(' ');
+}
+
+fn apply_ppt_run_style(
+    e: &BytesStart<'_>,
+    bold: &mut bool,
+    italic: &mut bool,
+    font_size: &mut Option<f64>,
+) {
+    if attr_bool(e, "b") == Some(true) {
+        *bold = true;
+    }
+    if attr_bool(e, "i") == Some(true) {
+        *italic = true;
+    }
+    if let Some(size) = attr_f64(e, "sz") {
+        *font_size = Some((size / 100.0).clamp(6.0, 60.0));
+    }
 }
 
 fn extract_ppt_text(xml: &str) -> String {
@@ -2995,6 +3042,9 @@ fn image_item_from_relationship<R: Read + Seek>(
         text: None,
         shape: None,
         placeholder_type: None,
+        bold: false,
+        italic: false,
+        font_size: None,
         fill_color: None,
         stroke_color: None,
         image_name: Some(path.rsplit('/').next().unwrap_or(path.as_str()).to_string()),
@@ -8238,7 +8288,7 @@ mod tests {
                     <p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
                     <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
                     <p:txBody>
-                        <a:p><a:r><a:t>First</a:t></a:r></a:p>
+                        <a:p><a:r><a:rPr b="1" i="1" sz="2400"/><a:t>First</a:t></a:r></a:p>
                         <a:p><a:r><a:t>Second</a:t></a:r></a:p>
                     </p:txBody>
                 </p:sp>
@@ -8251,6 +8301,9 @@ mod tests {
         assert_eq!(items[0].z_index, 0);
         assert_eq!(items[0].text.as_deref(), Some("First\nSecond"));
         assert_eq!(items[0].placeholder_type.as_deref(), Some("title"));
+        assert!(items[0].bold);
+        assert!(items[0].italic);
+        assert_eq!(items[0].font_size, Some(24.0));
     }
 
     #[test]

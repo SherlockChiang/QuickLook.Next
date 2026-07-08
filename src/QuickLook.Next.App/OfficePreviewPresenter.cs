@@ -362,6 +362,8 @@ internal sealed class OfficePreviewPresenter
                 {
                     Text = item.Text,
                     FontSize = LayoutItemFontSize(layoutKind, item, scale),
+                    FontWeight = new Windows.UI.Text.FontWeight { Weight = item.Bold ? (ushort)600 : (ushort)400 },
+                    FontStyle = item.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
                     TextWrapping = TextWrapping.Wrap,
                     TextTrimming = TextTrimming.WordEllipsis,
                     Foreground = OfficeBlackBrush,
@@ -422,6 +424,7 @@ internal sealed class OfficePreviewPresenter
 
         return item.PlaceholderType switch
         {
+            _ when item.FontSize is > 0 => Math.Clamp(item.FontSize.Value * scale, 8, 36),
             "title" or "ctrTitle" => Math.Clamp(28 * scale, 16, 30),
             "subTitle" => Math.Clamp(22 * scale, 13, 24),
             "body" or "obj" => Math.Clamp(16 * scale, 10, 18),

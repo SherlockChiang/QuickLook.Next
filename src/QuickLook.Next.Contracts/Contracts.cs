@@ -106,6 +106,9 @@ public sealed record OfficeLayoutItem(string Kind)
     public string? Text { get; init; }
     public string? Shape { get; init; }
     public string? PlaceholderType { get; init; }
+    public bool Bold { get; init; }
+    public bool Italic { get; init; }
+    public double? FontSize { get; init; }
     public string? FillColor { get; init; }
     public string? StrokeColor { get; init; }
     public string? ImageName { get; init; }
