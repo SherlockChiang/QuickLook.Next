@@ -41,6 +41,7 @@ public sealed partial class MainWindow : Window
     private const int FilmstripThumbnailBatchSize = 12;
     private const int DelayedFilmstripThumbnailStartMs = 350;
     private const int ImageSidecarLoadDelayMs = 180;
+    private const int WindowsImageMetadataSupplementDelayMs = 850;
     private const int AdjacentImagePrefetchRadius = 2;
     private const int DuplicateOpenCloseGuardMs = 750;
     private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
@@ -1300,8 +1301,47 @@ public sealed partial class MainWindow : Window
             using var trace = DiagLog.TraceScope("App", $"image metadata load gen={generation}; path={path}", 250);
             ImageMetadata? nativeMetadata = await Task.Run(() => _native.TryPreviewImageMetadata(path), token);
             if (nativeMetadata is not null && RenderNativeImageMetadata(path, generation, token, nativeMetadata))
+            {
+                if (ShouldSupplementNativeImageMetadata(nativeMetadata))
+                    _ = LoadWindowsImageMetadataAfterDelayAsync(path, generation, token);
+                return;
+            }
+
+            await LoadWindowsImageMetadataAsync(path, generation, token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image metadata load failed: " + ex.Message);
+        }
+    }
+
+    private async Task LoadWindowsImageMetadataAfterDelayAsync(string path, int generation, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(WindowsImageMetadataSupplementDelayMs, token);
+            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
 
+            using var trace = DiagLog.TraceScope("App", $"windows image metadata supplement gen={generation}; path={path}", 250);
+            await LoadWindowsImageMetadataAsync(path, generation, token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "windows image metadata supplement failed: " + ex.Message);
+        }
+    }
+
+    private async Task LoadWindowsImageMetadataAsync(string path, int generation, CancellationToken token)
+    {
+        try
+        {
             StorageFile file = await StorageFile
                 .GetFileFromPathAsync(path)
                 .AsTask(token)
@@ -1416,6 +1456,24 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", "image metadata load failed: " + ex.Message);
         }
     }
+
+    private static bool ShouldSupplementNativeImageMetadata(ImageMetadata metadata)
+        => metadata.Width is null or 0
+            || metadata.Height is null or 0
+            || (string.IsNullOrWhiteSpace(metadata.Make) && string.IsNullOrWhiteSpace(metadata.Model))
+            || (metadata.FNumber is null && metadata.ExposureTime is null && metadata.Iso is null && metadata.FocalLength is null)
+            || metadata.MaxAperture is null
+            || metadata.FocalLengthIn35mmFilm is null
+            || metadata.ExposureProgram is null
+            || metadata.ExposureMode is null
+            || metadata.LightSource is null
+            || metadata.DigitalZoomRatio is null
+            || metadata.SubjectDistance is null
+            || metadata.Contrast is null
+            || metadata.Saturation is null
+            || metadata.Sharpness is null
+            || metadata.GainControl is null
+            || string.IsNullOrWhiteSpace(metadata.ExifVersion);
 
     private bool RenderNativeImageMetadata(string path, int generation, CancellationToken token, ImageMetadata metadata)
     {
