@@ -184,6 +184,7 @@ internal sealed class PdfPreviewPresenter
             }
         }
 
+        CancelFarPageRequests(renderFirst, renderLast);
         TrimSurfaceCache(renderFirst, renderLast);
     }
 
@@ -299,6 +300,21 @@ internal sealed class PdfPreviewPresenter
                 break;
 
             ReleasePageSurface(oldestIndex);
+        }
+    }
+
+    private void CancelFarPageRequests(int protectedFirst, int protectedLast)
+    {
+        foreach (int index in _requestedPages.ToArray())
+        {
+            if (index >= protectedFirst && index <= protectedLast)
+                continue;
+
+            if (_pageStates.TryGetValue(index, out PdfPageState state)
+                && state is PdfPageState.Requested or PdfPageState.Rendering)
+            {
+                ReleasePageSurface(index);
+            }
         }
     }
 
