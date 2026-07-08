@@ -331,9 +331,15 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
         if (!pdfPageRenderCts.TryGetValue(key, out var currentCts) || !ReferenceEquals(currentCts, pageCts))
             return;
 
+        var uploadWatch = Stopwatch.StartNew();
         long handle = producer.CreatePresentedPageSurface(page.PageIndex, rendered.Bgra, rendered.Width, rendered.Height);
+        uploadWatch.Stop();
+        DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
+        var sendWatch = Stopwatch.StartNew();
         await channel.SendAsync(new PreviewSurface(
             page.RequestId, handle, (uint)rendered.Width, (uint)rendered.Height, 96.0, "B8G8R8A8_UNORM", page.PageIndex));
+        sendWatch.Stop();
+        DiagLog.Write("RasterHost", $"pdf page surface send {sendWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}");
     }
     catch (OperationCanceledException)
     {

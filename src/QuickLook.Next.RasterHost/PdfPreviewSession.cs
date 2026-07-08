@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Windows.Data.Pdf;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using QuickLook.Next.Core;
 using WinColor = Windows.UI.Color;
 using WinSize = Windows.Foundation.Size;
 
@@ -51,6 +53,7 @@ internal sealed class PdfPreviewSession : IDisposable
 
     public static async Task<PdfPreviewSession> OpenAsync(string path)
     {
+        var watch = Stopwatch.StartNew();
         StorageFile file = await StorageFile.GetFileFromPathAsync(path);
         long mtime = 0;
         try { mtime = new FileInfo(path).LastWriteTimeUtc.Ticks; } catch { }
@@ -59,6 +62,8 @@ internal sealed class PdfPreviewSession : IDisposable
             throw new InvalidOperationException("PDF contains no pages.");
 
         using PdfPage first = document.GetPage(0);
+        watch.Stop();
+        DiagLog.Write("RasterHost", $"pdf open {watch.ElapsedMilliseconds}ms; pages={document.PageCount}; path={path}");
         return new PdfPreviewSession(path, document, first.Size, mtime);
     }
 
@@ -178,8 +183,12 @@ internal sealed class PdfPreviewSession : IDisposable
             string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
             if (TryGetCached(cacheKey, out var cached)) return cached;
 
-            return await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(_document, pageIndex, targetW, targetH))
+            var waitWatch = Stopwatch.StartNew();
+            var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(_document, Path, pageIndex, targetW, targetH))
                 .WaitAsync(token);
+            waitWatch.Stop();
+            DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
+            return rendered;
         }
         finally
         {
@@ -189,20 +198,25 @@ internal sealed class PdfPreviewSession : IDisposable
 
     private static async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
         PdfDocument document,
+        string path,
         int pageIndex,
         uint targetW,
         uint targetH)
     {
         using PdfPage page = document.GetPage((uint)pageIndex);
         using var stream = new InMemoryRandomAccessStream();
+        var renderWatch = Stopwatch.StartNew();
         await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
         {
             DestinationWidth = targetW,
             DestinationHeight = targetH,
             BackgroundColor = White,
         });
+        renderWatch.Stop();
+        DiagLog.Write("RasterHost", $"pdf page render {renderWatch.ElapsedMilliseconds}ms; page={pageIndex}; target={targetW}x{targetH}; path={path}");
 
         stream.Seek(0);
+        var decodeWatch = Stopwatch.StartNew();
         BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
         PixelDataProvider pixels = await decoder.GetPixelDataAsync(
             BitmapPixelFormat.Bgra8,
@@ -212,6 +226,8 @@ internal sealed class PdfPreviewSession : IDisposable
             ColorManagementMode.DoNotColorManage);
 
         byte[] bgra = pixels.DetachPixelData();
+        decodeWatch.Stop();
+        DiagLog.Write("RasterHost", $"pdf page bitmap decode {decodeWatch.ElapsedMilliseconds}ms; page={pageIndex}; bytes={bgra.Length}; path={path}");
         return (bgra, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
     }
 
