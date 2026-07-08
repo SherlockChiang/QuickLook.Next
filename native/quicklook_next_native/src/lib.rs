@@ -230,7 +230,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 let _ = PostThreadMessageW(tid, WM_QL_SWITCH_DELAYED, WPARAM(0), LPARAM(0));
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
-            if is_down && (explorer_foreground || PREVIEW_VISIBLE.load(Ordering::SeqCst)) && !text_input_active {
+            if is_down
+                && (explorer_foreground || PREVIEW_VISIBLE.load(Ordering::SeqCst))
+                && !text_input_active
+            {
                 let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
@@ -308,10 +311,7 @@ unsafe fn explorer_text_input_active() -> bool {
 }
 
 fn is_text_input_class_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Edit" | "RichEdit20W" | "RichEdit50W" | "RICHEDIT50W"
-    )
+    matches!(name, "Edit" | "RichEdit20W" | "RichEdit50W" | "RICHEDIT50W")
 }
 
 fn is_explorer_window_class_name(name: &str) -> bool {
@@ -451,7 +451,10 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     for k in 0..n {
         let item = items.GetItemAt(k)?;
         let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
-        out.push(pw.0.to_string().map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?);
+        out.push(
+            pw.0.to_string()
+                .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?,
+        );
     }
     Ok(out)
 }
@@ -459,7 +462,9 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
 struct PwstrGuard(PWSTR);
 impl Drop for PwstrGuard {
     fn drop(&mut self) {
-        unsafe { CoTaskMemFree(Some(self.0.0 as *const _)); }
+        unsafe {
+            CoTaskMemFree(Some(self.0 .0 as *const _));
+        }
     }
 }
 
@@ -610,7 +615,14 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
     const CERTIFICATE_EXTS: &[&str] = &[".cer", ".crt", ".der", ".pem", ".p7b", ".p7c"];
     const FONT_EXTS: &[&str] = &[".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"];
     const DATABASE_EXTS: &[&str] = &[
-        ".sqlite", ".sqlite3", ".db", ".db3", ".s3db", ".sqlite-shm", ".sqlite-wal", ".mdb",
+        ".sqlite",
+        ".sqlite3",
+        ".db",
+        ".db3",
+        ".s3db",
+        ".sqlite-shm",
+        ".sqlite-wal",
+        ".mdb",
         ".accdb",
     ];
     const MAIL_EXTS: &[&str] = &[".eml", ".msg", ".mbox", ".emlx"];
@@ -818,10 +830,11 @@ pub extern "C" fn ql_decode_image_cancelable(
         None => return -1,
     };
 
-    let (width, height, original_width, original_height, bgra) = match decode_image_bgra(path, cancel_cb) {
-        Some(decoded) => decoded,
-        None => return -2,
-    };
+    let (width, height, original_width, original_height, bgra) =
+        match decode_image_bgra(path, cancel_cb) {
+            Some(decoded) => decoded,
+            None => return -2,
+        };
     if cancel_requested(cancel_cb) {
         return -3;
     }
@@ -841,7 +854,10 @@ pub extern "C" fn ql_decode_image_cancelable(
     total as i32
 }
 
-fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
+fn decode_image_bgra(
+    path: &str,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -1012,7 +1028,11 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
     })
 }
 
-fn shell_thumbnail_on_sta(path: String, size: i32, cancel_cb: Option<CancelCallback>) -> ThumbnailResult {
+fn shell_thumbnail_on_sta(
+    path: String,
+    size: i32,
+    cancel_cb: Option<CancelCallback>,
+) -> ThumbnailResult {
     let (reply, result) = mpsc::channel();
     let request = ThumbnailRequest {
         path,
@@ -1320,7 +1340,8 @@ pub extern "C" fn ql_extract_archive_entry(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0
+    {
         return 0;
     }
     let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
