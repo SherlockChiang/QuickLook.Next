@@ -3888,6 +3888,24 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
         if summary.glyphs > 0 {
             text.push_str(&format!("\nGlyphs: {}", format_number(summary.glyphs as i64)));
         }
+        if summary.sfnt_size > 0 {
+            text.push_str(&format!(
+                "\nDecoded sfnt size: {}",
+                format_bytes(summary.sfnt_size as i64)
+            ));
+        }
+        if summary.compressed_size > 0 {
+            text.push_str(&format!(
+                "\nCompressed data size: {}",
+                format_bytes(summary.compressed_size as i64)
+            ));
+        }
+        if summary.metadata_size > 0 {
+            text.push_str(&format!(
+                "\nMetadata block: {}",
+                format_bytes(summary.metadata_size as i64)
+            ));
+        }
         if !summary.family.is_empty() {
             text.push_str(&format!("\nFamily: {}", summary.family));
         }
@@ -3905,6 +3923,9 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
         }
         if !summary.license.is_empty() {
             text.push_str(&format!("\nLicense: {}", summary.license));
+        }
+        if !summary.license_url.is_empty() {
+            text.push_str(&format!("\nLicense URL: {}", summary.license_url));
         }
     }
     generic_info_json(path, "font", size, modified_unix, Some(text))
@@ -4077,12 +4098,16 @@ struct FontSummary {
     faces: u32,
     tables: u16,
     glyphs: u16,
+    sfnt_size: u32,
+    compressed_size: u32,
+    metadata_size: u32,
     family: String,
     subfamily: String,
     full_name: String,
     postscript_name: String,
     version: String,
     license: String,
+    license_url: String,
 }
 
 fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
@@ -4097,6 +4122,8 @@ fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
         return Some(FontSummary {
             format: "WOFF font",
             tables: read_u16_be(bytes, 12).unwrap_or(0),
+            sfnt_size: read_u32_be(bytes, 16).unwrap_or(0),
+            metadata_size: read_u32_be(bytes, 28).unwrap_or(0),
             ..Default::default()
         });
     }
@@ -4104,6 +4131,9 @@ fn parse_font_summary(bytes: &[u8]) -> Option<FontSummary> {
         return Some(FontSummary {
             format: "WOFF2 font",
             tables: read_u16_be(bytes, 12).unwrap_or(0),
+            sfnt_size: read_u32_be(bytes, 16).unwrap_or(0),
+            compressed_size: read_u32_be(bytes, 20).unwrap_or(0),
+            metadata_size: read_u32_be(bytes, 32).unwrap_or(0),
             ..Default::default()
         });
     }
@@ -4181,6 +4211,7 @@ fn parse_font_name_table(bytes: &[u8], offset: usize, length: usize, summary: &m
             6 if summary.postscript_name.is_empty() => summary.postscript_name = value,
             5 if summary.version.is_empty() => summary.version = value,
             13 if summary.license.is_empty() => summary.license = value,
+            14 if summary.license_url.is_empty() => summary.license_url = value,
             _ => {}
         }
     }
@@ -8157,11 +8188,15 @@ mod tests {
         let mut bytes = vec![0u8; 44];
         bytes[0..4].copy_from_slice(b"wOFF");
         bytes[12..14].copy_from_slice(&3u16.to_be_bytes());
+        bytes[16..20].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[28..32].copy_from_slice(&256u32.to_be_bytes());
 
         let summary = parse_font_summary(&bytes).expect("woff summary");
 
         assert_eq!(summary.format, "WOFF font");
         assert_eq!(summary.tables, 3);
+        assert_eq!(summary.sfnt_size, 4096);
+        assert_eq!(summary.metadata_size, 256);
     }
 
     #[test]
@@ -8177,6 +8212,7 @@ mod tests {
             (1u16, utf16be("Quick Sans")),
             (5u16, utf16be("Version 1.2")),
             (13u16, utf16be("Open Font License")),
+            (14u16, utf16be("https://example.test/ofl")),
         ];
         let name_offset = 44usize;
         let name_storage_offset = 6 + names.len() * 12;
@@ -8213,6 +8249,7 @@ mod tests {
         assert_eq!(summary.family, "Quick Sans");
         assert_eq!(summary.version, "Version 1.2");
         assert_eq!(summary.license, "Open Font License");
+        assert_eq!(summary.license_url, "https://example.test/ofl");
         assert_eq!(summary.glyphs, 321);
     }
 
