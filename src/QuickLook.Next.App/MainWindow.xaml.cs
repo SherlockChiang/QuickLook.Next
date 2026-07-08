@@ -904,6 +904,9 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
             DispatcherQueue.TryEnqueue(() =>
             {
+                if (!_previewSession.IsCurrentRequest(surface.RequestId))
+                    return;
+
                 var layoutWatch = Stopwatch.StartNew();
                 _rasterPresenter.UpdateLayout();
                 layoutWatch.Stop();
@@ -982,7 +985,11 @@ public sealed partial class MainWindow : Window
         _panelController.ShowRaster();
         RasterPreviewResult result = _rasterPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_previewSession.IsCurrentRequest(ready.RequestId))
+                _rasterPresenter.UpdateLayout();
+        });
         ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
