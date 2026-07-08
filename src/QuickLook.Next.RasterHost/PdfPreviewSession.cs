@@ -12,6 +12,7 @@ namespace QuickLook.Next.RasterHost;
 internal sealed class PdfPreviewSession : IDisposable
 {
     private const double MaxRenderDimension = 2200.0;
+    private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
     private static readonly WinColor White = new() { A = 255, R = 255, G = 255, B = 255 };
 
     // Cross-session rendered-page cache: re-previewing the same PDF at the same zoom skips the
@@ -142,12 +143,14 @@ internal sealed class PdfPreviewSession : IDisposable
     {
         try
         {
+            await RenderWorkerPool.WaitAsync();
             var rendered = await start();
             StoreCached(key, rendered.Bgra, rendered.Width, rendered.Height);
             return rendered;
         }
         finally
         {
+            RenderWorkerPool.Release();
             lock (_inflightLock)
                 _inflightRenders.Remove(key);
         }
@@ -167,33 +170,25 @@ internal sealed class PdfPreviewSession : IDisposable
         CancellationToken token = linkedCts.Token;
 
         // Single GetPage call: read size and render from the same page object (was 2× GetPage before).
-        await RenderWorkerPool.WaitAsync(token);
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            using PdfPage page = _document.GetPage((uint)pageIndex);
-            WinSize pageSize = page.Size;
+        token.ThrowIfCancellationRequested();
+        using PdfPage page = _document.GetPage((uint)pageIndex);
+        WinSize pageSize = page.Size;
 
-            double targetScale = Math.Clamp(scale, 0.1, 4.0);
-            targetScale = Math.Min(targetScale, MaxRenderDimension / Math.Max(pageSize.Width, pageSize.Height));
-            targetScale = Math.Max(0.1, targetScale);
-            uint targetW = Math.Max(1, (uint)Math.Round(pageSize.Width * targetScale));
-            uint targetH = Math.Max(1, (uint)Math.Round(pageSize.Height * targetScale));
+        double targetScale = Math.Clamp(scale, 0.1, 4.0);
+        targetScale = Math.Min(targetScale, MaxRenderDimension / Math.Max(pageSize.Width, pageSize.Height));
+        targetScale = Math.Max(0.1, targetScale);
+        uint targetW = Math.Max(1, (uint)Math.Round(pageSize.Width * targetScale));
+        uint targetH = Math.Max(1, (uint)Math.Round(pageSize.Height * targetScale));
 
-            string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
-            if (TryGetCached(cacheKey, out var cached)) return cached;
+        string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
+        if (TryGetCached(cacheKey, out var cached)) return cached;
 
-            var waitWatch = Stopwatch.StartNew();
-            var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(Path, pageIndex, targetW, targetH))
-                .WaitAsync(token);
-            waitWatch.Stop();
-            DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
-            return rendered;
-        }
-        finally
-        {
-            RenderWorkerPool.Release();
-        }
+        var waitWatch = Stopwatch.StartNew();
+        var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(Path, pageIndex, targetW, targetH))
+            .WaitAsync(PageRenderTimeout, token);
+        waitWatch.Stop();
+        DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
+        return rendered;
     }
 
     private static async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
