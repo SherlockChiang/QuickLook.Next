@@ -12,6 +12,14 @@ namespace QuickLook.Next.App;
 
 internal sealed class PdfPreviewPresenter
 {
+    private enum PdfPageState
+    {
+        Requested,
+        Rendering,
+        Rendered,
+        Released,
+    }
+
     private const double PageTargetWidth = 860;
     private const double PageSpacing = 16;
     private const int OffscreenSurfaceCachePages = 5;
@@ -30,6 +38,7 @@ internal sealed class PdfPreviewPresenter
 
     private readonly Dictionary<int, Border> _pageHosts = new();
     private readonly HashSet<int> _requestedPages = new();
+    private readonly Dictionary<int, PdfPageState> _pageStates = new();
     private readonly Dictionary<int, long> _pageLastTouched = new();
 
     private string? _requestId;
@@ -107,6 +116,8 @@ internal sealed class PdfPreviewPresenter
         Compositor? compositor = _compositorProvider();
         if (compositor is null || !_pageHosts.TryGetValue(surface.PageIndex, out var pageHost))
             return true;
+        if (_pageStates.TryGetValue(surface.PageIndex, out PdfPageState state) && state == PdfPageState.Released)
+            return true;
 
         var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(compositor, (nint)surface.SharedHandle);
         if (hr < 0 || compSurface is null)
@@ -118,6 +129,7 @@ internal sealed class PdfPreviewPresenter
         pageHost.Width = surface.Width;
         pageHost.Height = surface.Height;
         TouchPage(surface.PageIndex);
+        SetPageState(surface.PageIndex, PdfPageState.Rendered);
         DisposePageVisual(pageHost);
 
         var brush = compositor.CreateSurfaceBrush(compSurface);
@@ -160,7 +172,8 @@ internal sealed class PdfPreviewPresenter
             {
                 _requestedPages.Add(index);
                 TouchPage(index);
-                _ = supervisor.RenderPageAsync(_requestId, index, _scale);
+                SetPageState(index, PdfPageState.Requested);
+                _ = RenderPageAsync(supervisor, _requestId, index, _scale);
             }
             else
             {
@@ -192,6 +205,7 @@ internal sealed class PdfPreviewPresenter
         _pagesPanel.Children.Clear();
         _pageHosts.Clear();
         _requestedPages.Clear();
+        _pageStates.Clear();
         _pageLastTouched.Clear();
         _touchTick = 0;
         _currentPageIndex = 0;
@@ -296,6 +310,33 @@ internal sealed class PdfPreviewPresenter
 
         if (_requestId is not null)
             _ = _supervisorProvider()?.ClosePageAsync(_requestId, pageIndex);
+        SetPageState(pageIndex, PdfPageState.Released);
+    }
+
+    private async Task RenderPageAsync(RasterHostSupervisor supervisor, string requestId, int pageIndex, double scale)
+    {
+        if (!string.Equals(_requestId, requestId, StringComparison.Ordinal))
+            return;
+
+        SetPageState(pageIndex, PdfPageState.Rendering);
+        try
+        {
+            await supervisor.RenderPageAsync(requestId, pageIndex, scale);
+        }
+        catch
+        {
+            if (string.Equals(_requestId, requestId, StringComparison.Ordinal)
+                && _pageStates.TryGetValue(pageIndex, out PdfPageState state)
+                && state == PdfPageState.Rendering)
+            {
+                SetPageState(pageIndex, PdfPageState.Requested);
+            }
+        }
+    }
+
+    private void SetPageState(int pageIndex, PdfPageState state)
+    {
+        _pageStates[pageIndex] = state;
     }
 
     private static void DisposePageVisual(Border host)
