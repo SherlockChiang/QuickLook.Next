@@ -4391,14 +4391,40 @@ fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec
     if page_size < 512 || bytes.len() < 128 || !bytes.starts_with(b"SQLite format 3\0") {
         return Vec::new();
     }
-    let page = &bytes[..page_size.min(bytes.len())];
-    let header = 100usize;
-    if page.get(header).copied() != Some(0x0D) {
-        return Vec::new();
-    }
-
-    let cell_count = read_u16_be(page, header + 3).unwrap_or(0).min(256) as usize;
+    let mut stack = vec![1u32];
+    let mut seen = BTreeSet::<u32>::new();
     let mut rows = Vec::new();
+    while let Some(page_no) = stack.pop() {
+        if rows.len() >= limit || seen.len() >= 32 || !seen.insert(page_no) {
+            if rows.len() >= limit {
+                break;
+            }
+            continue;
+        }
+        let Some(page) = sqlite_page(bytes, page_size, page_no) else {
+            continue;
+        };
+        let header = if page_no == 1 { 100usize } else { 0usize };
+        match page.get(header).copied().unwrap_or(0) {
+            0x0D => parse_sqlite_schema_leaf_page(page, header, limit, &mut rows),
+            0x05 => {
+                for child in sqlite_table_interior_children(page, header) {
+                    stack.push(child);
+                }
+            }
+            _ => {}
+        }
+    }
+    rows
+}
+
+fn parse_sqlite_schema_leaf_page(
+    page: &[u8],
+    header: usize,
+    limit: usize,
+    rows: &mut Vec<SqliteSchemaRow>,
+) {
+    let cell_count = read_u16_be(page, header + 3).unwrap_or(0).min(256) as usize;
     for index in 0..cell_count {
         if rows.len() >= limit {
             break;
@@ -4411,7 +4437,6 @@ fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec
             rows.push(row);
         }
     }
-    rows
 }
 
 fn parse_sqlite_schema_leaf_cell(page: &[u8], offset: usize) -> Option<SqliteSchemaRow> {
@@ -8227,6 +8252,39 @@ mod tests {
         assert_eq!(row.table_name, "users");
         assert_eq!(row.root_page, 2);
         assert_eq!(row.sql, "CREATE TABLE users(id INTEGER PRIMARY KEY)");
+    }
+
+    #[test]
+    fn sqlite_schema_parser_traverses_interior_pages() {
+        let page_size = 512usize;
+        let mut payload = vec![6, 23, 23, 23, 1, 97];
+        payload.extend_from_slice(b"table");
+        payload.extend_from_slice(b"users");
+        payload.extend_from_slice(b"users");
+        payload.push(2);
+        payload.extend_from_slice(b"CREATE TABLE users(id INTEGER PRIMARY KEY)");
+        let mut bytes = vec![0u8; page_size * 2];
+        bytes[0..16].copy_from_slice(b"SQLite format 3\0");
+        bytes[16..18].copy_from_slice(&(page_size as u16).to_be_bytes());
+        bytes[100] = 0x05;
+        bytes[103..105].copy_from_slice(&1u16.to_be_bytes());
+        bytes[112..114].copy_from_slice(&200u16.to_be_bytes());
+        bytes[200..204].copy_from_slice(&2u32.to_be_bytes());
+        bytes[204] = 1;
+        let leaf = page_size;
+        bytes[leaf] = 0x0D;
+        bytes[leaf + 3..leaf + 5].copy_from_slice(&1u16.to_be_bytes());
+        bytes[leaf + 8..leaf + 10].copy_from_slice(&400u16.to_be_bytes());
+        let cell = leaf + 400;
+        bytes[cell] = payload.len() as u8;
+        bytes[cell + 1] = 1;
+        bytes[cell + 2..cell + 2 + payload.len()].copy_from_slice(&payload);
+
+        let rows = parse_sqlite_schema_rows(&bytes, page_size, 8);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "users");
+        assert_eq!(rows[0].root_page, 2);
     }
 
     #[test]
