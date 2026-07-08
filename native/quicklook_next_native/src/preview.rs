@@ -106,6 +106,8 @@ struct OfficeLayoutItemDto {
     y: f64,
     width: f64,
     height: f64,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    z_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,6 +214,10 @@ fn to_json<T: Serialize>(value: &T) -> String {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
 }
 
 // ── Text preview ─────────────────────────────────────────────────────────────
@@ -1854,6 +1860,7 @@ fn build_docx_layout(
             y,
             width: page_width - margin * 2.0,
             height,
+            z_index: items.len(),
             text: Some(clipped),
             shape: None,
             placeholder_type: None,
@@ -1892,6 +1899,7 @@ fn build_docx_layout(
             y,
             width: 260.0,
             height: 170.0,
+            z_index: items.len(),
             text: None,
             shape: None,
             placeholder_type: None,
@@ -2150,6 +2158,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                                 y,
                                 width,
                                 height,
+                                z_index: items.len(),
                                 text: (!normalized.is_empty()).then_some(normalized),
                                 shape: preset_shape.clone(),
                                 placeholder_type: placeholder_type.clone(),
@@ -2169,6 +2178,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         y,
                         width,
                         height,
+                        items.len(),
                         image_budget,
                     ) {
                         items.push(item);
@@ -2866,6 +2876,7 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
                         y,
                         width,
                         height,
+                        items.len(),
                         image_budget,
                     ) {
                         items.push(item);
@@ -2903,6 +2914,7 @@ fn image_item_from_relationship<R: Read + Seek>(
     y: f64,
     width: f64,
     height: f64,
+    z_index: usize,
     image_budget: &mut usize,
 ) -> Option<OfficeLayoutItemDto> {
     if rel_id.is_empty() || *image_budget == 0 || width <= 1.0 || height <= 1.0 {
@@ -2922,6 +2934,7 @@ fn image_item_from_relationship<R: Read + Seek>(
         y,
         width,
         height,
+        z_index,
         text: None,
         shape: None,
         placeholder_type: None,
@@ -8154,6 +8167,7 @@ mod tests {
         );
 
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].z_index, 0);
         assert_eq!(items[0].text.as_deref(), Some("First\nSecond"));
         assert_eq!(items[0].placeholder_type.as_deref(), Some("title"));
     }

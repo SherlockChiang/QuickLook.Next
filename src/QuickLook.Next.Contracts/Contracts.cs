@@ -102,6 +102,7 @@ public sealed record OfficeLayoutItem(string Kind)
     public double Y { get; init; }
     public double Width { get; init; }
     public double Height { get; init; }
+    public int ZIndex { get; init; }
     public string? Text { get; init; }
     public string? Shape { get; init; }
     public string? PlaceholderType { get; init; }

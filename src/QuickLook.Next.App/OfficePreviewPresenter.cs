@@ -93,7 +93,7 @@ internal sealed class OfficePreviewPresenter
             AddFreezePaneIndicators(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
         }
 
-        foreach (OfficeLayoutItem item in page.Items)
+        foreach (OfficeLayoutItem item in page.Items.OrderBy(item => item.ZIndex))
             AddLayoutItem(canvas, item, scale, layout.LayoutKind, rowHeaderWidth, columnHeaderHeight);
 
         stack.Children.Add(new Border
