@@ -134,6 +134,7 @@ public sealed record PreviewListingItem(string Name, string Path, string ParentP
 
 public sealed record ImageMetadata
 {
+    public string? Format { get; init; }
     public string? Make { get; init; }
     public string? Model { get; init; }
     public string? DateTime { get; init; }
@@ -170,6 +171,10 @@ public sealed record ImageMetadata
     public double? Longitude { get; init; }
     public double? Altitude { get; init; }
     public double? Direction { get; init; }
+    public byte? BitDepth { get; init; }
+    public string? ColorType { get; init; }
+    public bool? HasAlpha { get; init; }
+    public string? Interlace { get; init; }
 }
 
 public sealed record PreviewTable(string Format)

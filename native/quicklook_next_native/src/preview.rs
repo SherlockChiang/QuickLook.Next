@@ -251,6 +251,7 @@ const MAX_EXIF_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExifMetadata {
+    format: Option<String>,
     make: Option<String>,
     model: Option<String>,
     date_time: Option<String>,
@@ -287,12 +288,56 @@ struct ExifMetadata {
     longitude: Option<f64>,
     altitude: Option<f64>,
     direction: Option<f64>,
+    bit_depth: Option<u8>,
+    color_type: Option<String>,
+    has_alpha: Option<bool>,
+    interlace: Option<String>,
 }
 
 pub fn render_image_metadata(path: &str) -> String {
     parse_jpeg_exif_metadata(path)
+        .or_else(|| parse_png_metadata(path))
         .map(|metadata| to_json(&metadata))
         .unwrap_or_default()
+}
+
+fn parse_png_metadata(path: &str) -> Option<ExifMetadata> {
+    let bytes = read_file_prefix(path, 64)?;
+    parse_png_metadata_from_bytes(&bytes)
+}
+
+fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
+    if bytes.get(0..8)? != b"\x89PNG\r\n\x1A\n" {
+        return None;
+    }
+    if read_u32_be(bytes, 8)? != 13 || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let color = *bytes.get(25)?;
+    Some(ExifMetadata {
+        format: Some("PNG".to_string()),
+        width: read_u32_be(bytes, 16),
+        height: read_u32_be(bytes, 20),
+        bit_depth: bytes.get(24).copied(),
+        color_type: Some(png_color_type_name(color).to_string()),
+        has_alpha: Some(matches!(color, 4 | 6)),
+        interlace: Some(match bytes.get(28).copied().unwrap_or(0) {
+            1 => "Adam7".to_string(),
+            _ => "none".to_string(),
+        }),
+        ..Default::default()
+    })
+}
+
+fn png_color_type_name(value: u8) -> &'static str {
+    match value {
+        0 => "grayscale",
+        2 => "truecolor",
+        3 => "indexed color",
+        4 => "grayscale with alpha",
+        6 => "truecolor with alpha",
+        _ => "unknown",
+    }
 }
 
 fn file_size_modified(path: &str) -> (i64, i64) {
@@ -8573,6 +8618,27 @@ mod tests {
             parse_jpeg_exif_metadata(path.to_str().unwrap()).expect("file exif metadata");
         let _ = fs::remove_file(path);
         assert_eq!(from_file.make.as_deref(), Some("Acme"));
+    }
+
+    #[test]
+    fn png_metadata_reads_ihdr_summary() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x89PNG\r\n\x1A\n");
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&800u32.to_be_bytes());
+        bytes.extend_from_slice(&600u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 1]);
+
+        let metadata = parse_png_metadata_from_bytes(&bytes).expect("png metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("PNG"));
+        assert_eq!(metadata.width, Some(800));
+        assert_eq!(metadata.height, Some(600));
+        assert_eq!(metadata.bit_depth, Some(8));
+        assert_eq!(metadata.color_type.as_deref(), Some("truecolor with alpha"));
+        assert_eq!(metadata.has_alpha, Some(true));
+        assert_eq!(metadata.interlace.as_deref(), Some("Adam7"));
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {

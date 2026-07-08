@@ -1476,7 +1476,12 @@ public sealed partial class MainWindow : Window
     private bool RenderNativeImageMetadata(string path, int generation, CancellationToken token, ImageMetadata metadata)
     {
         var rows = new List<(string Label, string Value)>();
+        AddIfValue(rows, "Format", metadata.Format);
         AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
+        AddIfValue(rows, "Bit depth", metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Color type", metadata.ColorType);
+        AddIfValue(rows, "Alpha", metadata.HasAlpha.HasValue ? (metadata.HasAlpha.Value ? "yes" : "no") : null);
+        AddIfValue(rows, "Interlace", metadata.Interlace);
         AddIfValue(rows, "Date taken", FormatExifDateTime(metadata.DateTime));
         AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
         AddIfValue(rows, "Lens", JoinNonEmpty(metadata.LensMake, metadata.LensModel));
