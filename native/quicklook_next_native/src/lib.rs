@@ -977,12 +977,51 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn native_image_decode_skips_extreme_pixel_counts() {
         assert!(!should_skip_native_image_decode(8_000, 6_000));
         assert!(should_skip_native_image_decode(8_001, 6_000));
         assert!(should_skip_native_image_decode(0, 6_000));
+    }
+
+    #[test]
+    fn native_png_decode_preserves_alpha_premultiply() {
+        let path = temp_image_path("png");
+        let pixels = [255u8, 0, 0, 128, 0, 255, 0, 255];
+        image::save_buffer(&path, &pixels, 2, 1, image::ColorType::Rgba8).expect("write png");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode png");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.7, vec![0, 0, 128, 128, 0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn native_bmp_decode_honors_target_size() {
+        let path = temp_image_path("bmp");
+        let pixels = vec![64u8; 4 * 4 * 3];
+        image::save_buffer(&path, &pixels, 4, 4, image::ColorType::Rgb8).expect("write bmp");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 2, 2, None).expect("decode bmp");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 2);
+        assert_eq!(decoded.2, 4);
+        assert_eq!(decoded.3, 4);
+        assert_eq!(decoded.7.len(), 2 * 2 * 4);
+    }
+
+    fn temp_image_path(ext: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("quicklook-next-native-{nanos}.{ext}"))
     }
 }
 

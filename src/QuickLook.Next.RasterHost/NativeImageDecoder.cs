@@ -24,6 +24,7 @@ internal static class NativeImageDecoder
     private const int MaxPreviewRasterDimension = 2048;
     private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
+    private const long MaxNativeFallbackAfterSystemFailureBytes = 32L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
     private static readonly NativeCancelCallback DecodeCancelCallback = IsDecodeCanceled;
     private static readonly IntPtr DecodeCancelCallbackPtr = Marshal.GetFunctionPointerForDelegate(DecodeCancelCallback);
@@ -67,6 +68,11 @@ internal static class NativeImageDecoder
             if (systemImage is not null)
                 return systemImage;
             DiagLog.Write("RasterHost", $"system image preferred decode failed; falling back to native path={path}");
+            if (ShouldSkipNativeFallbackAfterSystemFailure(path))
+            {
+                DiagLog.Write("RasterHost", $"native fallback skipped after system decode failure; path={path}");
+                return null;
+            }
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -213,5 +219,15 @@ internal static class NativeImageDecoder
             or ".heic" or ".heif"
             or ".avif"
             or ".jxl";
+    }
+
+    private static bool ShouldSkipNativeFallbackAfterSystemFailure(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".png" or ".bmp" or ".webp"))
+            return false;
+
+        try { return new FileInfo(path).Length > MaxNativeFallbackAfterSystemFailureBytes; }
+        catch { return false; }
     }
 }
