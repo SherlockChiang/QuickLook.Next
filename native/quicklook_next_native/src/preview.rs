@@ -4081,6 +4081,7 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
         text.push_str(&format!("\nDuration: {}", format_duration(duration)));
     }
     append_wav_metadata(&mut text, &bytes);
+    append_flac_metadata(&mut text, &bytes);
     append_id3_metadata(&mut text, &bytes);
     generic_info_json(path, kind, size, modified_unix, Some(text))
 }
@@ -4862,6 +4863,9 @@ fn media_container_name(path: &str, bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE") {
         return "WAV";
     }
+    if bytes.starts_with(b"fLaC") {
+        return "FLAC";
+    }
     if bytes.starts_with(b"ID3") || ext == "mp3" {
         return "MP3";
     }
@@ -4965,6 +4969,72 @@ fn wav_audio_format_name(value: u16) -> String {
         0xFFFE => "extensible".to_string(),
         _ => format!("0x{value:04X}"),
     }
+}
+
+struct FlacSummary {
+    sample_rate: u32,
+    channels: u8,
+    bits_per_sample: u8,
+    total_samples: u64,
+}
+
+fn append_flac_metadata(text: &mut String, bytes: &[u8]) {
+    let Some(summary) = parse_flac_summary(bytes) else {
+        return;
+    };
+    if summary.channels > 0 {
+        text.push_str(&format!("\nChannels: {}", summary.channels));
+    }
+    if summary.sample_rate > 0 {
+        text.push_str(&format!("\nSample rate: {} Hz", format_number(summary.sample_rate as i64)));
+    }
+    if summary.bits_per_sample > 0 {
+        text.push_str(&format!("\nBits per sample: {}", summary.bits_per_sample));
+    }
+    if summary.sample_rate > 0 && summary.total_samples > 0 {
+        text.push_str(&format!(
+            "\nDuration: {}",
+            format_duration(summary.total_samples as f64 / summary.sample_rate as f64)
+        ));
+    }
+}
+
+fn parse_flac_summary(bytes: &[u8]) -> Option<FlacSummary> {
+    if bytes.len() < 42 || bytes.get(0..4) != Some(b"fLaC") {
+        return None;
+    }
+    let mut offset = 4usize;
+    while offset.checked_add(4)? <= bytes.len() {
+        let block_type = bytes[offset] & 0x7F;
+        let block_len = ((bytes[offset + 1] as usize) << 16)
+            | ((bytes[offset + 2] as usize) << 8)
+            | bytes[offset + 3] as usize;
+        let payload = offset + 4;
+        if payload.checked_add(block_len)? > bytes.len() {
+            return None;
+        }
+        if block_type == 0 && block_len >= 34 {
+            let stream = bytes.get(payload..payload + 34)?;
+            let sample_rate = ((stream[10] as u32) << 12)
+                | ((stream[11] as u32) << 4)
+                | ((stream[12] as u32) >> 4);
+            let channels = ((stream[12] >> 1) & 0x07) + 1;
+            let bits_per_sample = (((stream[12] & 0x01) << 4) | (stream[13] >> 4)) + 1;
+            let total_samples = ((stream[13] as u64 & 0x0F) << 32)
+                | ((stream[14] as u64) << 24)
+                | ((stream[15] as u64) << 16)
+                | ((stream[16] as u64) << 8)
+                | stream[17] as u64;
+            return Some(FlacSummary {
+                sample_rate,
+                channels,
+                bits_per_sample,
+                total_samples,
+            });
+        }
+        offset = payload + block_len;
+    }
+    None
 }
 
 fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
@@ -8516,6 +8586,36 @@ mod tests {
         assert_eq!(summary.bits_per_sample, 16);
         assert_eq!(summary.data_bytes, 352_800);
         assert!(text.contains("Audio format: PCM"));
+        assert!(text.contains("Duration: 0:02"));
+    }
+
+    #[test]
+    fn media_info_reads_flac_streaminfo() {
+        let sample_rate = 44_100u64;
+        let channels = 2u64;
+        let bits_per_sample = 16u64;
+        let total_samples = 88_200u64;
+        let packed = (sample_rate << 44)
+            | ((channels - 1) << 41)
+            | ((bits_per_sample - 1) << 36)
+            | total_samples;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"fLaC");
+        bytes.extend_from_slice(&[0x80, 0x00, 0x00, 0x22]);
+        let mut stream = [0u8; 34];
+        stream[10..18].copy_from_slice(&packed.to_be_bytes());
+        bytes.extend_from_slice(&stream);
+
+        let summary = parse_flac_summary(&bytes).expect("flac summary");
+        let mut text = String::new();
+        append_flac_metadata(&mut text, &bytes);
+
+        assert_eq!(media_container_name("clip.bin", &bytes), "FLAC");
+        assert_eq!(summary.sample_rate, 44_100);
+        assert_eq!(summary.channels, 2);
+        assert_eq!(summary.bits_per_sample, 16);
+        assert_eq!(summary.total_samples, 88_200);
+        assert!(text.contains("Sample rate: 44,100 Hz"));
         assert!(text.contains("Duration: 0:02"));
     }
 
