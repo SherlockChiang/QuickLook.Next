@@ -3463,6 +3463,8 @@ fn extract_wordprocessing_text(xml: &str) -> String {
                     paragraph_had_text = false;
                 } else if local == "pstyle" {
                     paragraph_prefix = docx_paragraph_prefix(&e);
+                } else if local == "numpr" {
+                    paragraph_prefix = docx_numbered_paragraph_prefix(&paragraph_prefix);
                 } else if local == "sectpr" && !in_cell {
                     append_docx_block_marker(&mut out, "[section break]");
                 }
@@ -3527,6 +3529,8 @@ fn extract_wordprocessing_text(xml: &str) -> String {
                     paragraph_had_text = false;
                 } else if local == "pstyle" {
                     paragraph_prefix = docx_paragraph_prefix(&e);
+                } else if local == "numpr" {
+                    paragraph_prefix = docx_numbered_paragraph_prefix(&paragraph_prefix);
                 } else if local == "sectpr" && !in_cell {
                     append_docx_block_marker(&mut out, "[section break]");
                 }
@@ -3589,6 +3593,14 @@ fn docx_paragraph_prefix(e: &BytesStart<'_>) -> String {
         return "# ".to_string();
     }
     String::new()
+}
+
+fn docx_numbered_paragraph_prefix(current: &str) -> String {
+    if current.trim().is_empty() {
+        "- ".to_string()
+    } else {
+        current.to_string()
+    }
 }
 
 fn parse_shared_strings(xml: &str) -> Vec<String> {
@@ -8382,6 +8394,18 @@ mod tests {
 
         assert!(text.contains("First page\n[page break]\nSecond page"));
         assert!(text.contains("[section break]\nNext section"));
+    }
+
+    #[test]
+    fn docx_text_extraction_marks_numbered_paragraphs_as_list_items() {
+        let text = extract_wordprocessing_text(
+            r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>First</w:t></w:r></w:p>
+                <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
+            </w:body></w:document>"#,
+        );
+
+        assert_eq!(text, "- First\n- Second");
     }
 
     #[test]
