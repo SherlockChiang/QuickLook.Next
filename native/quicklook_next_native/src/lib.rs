@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use image::{GenericImageView, ImageReader};
+use image::ImageReader;
 
 mod preview;
 
@@ -61,6 +61,7 @@ static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 
 const MAX_FFI_STRING_BYTES: usize = 32 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
+const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
@@ -845,6 +846,19 @@ fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u
         return None;
     }
 
+    let (original_width, original_height) = ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if should_skip_native_image_decode(original_width, original_height) {
+        return None;
+    }
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+
     let image = ImageReader::open(path)
         .ok()?
         .with_guessed_format()
@@ -855,7 +869,6 @@ fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u
         return None;
     }
 
-    let (original_width, original_height) = image.dimensions();
     if original_width == 0 || original_height == 0 {
         return None;
     }
@@ -883,7 +896,10 @@ fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u
 
     let rgba = raster.to_rgba8();
     let mut bgra = Vec::with_capacity((width * height * 4) as usize);
-    for px in rgba.chunks_exact(4) {
+    for (index, px) in rgba.chunks_exact(4).enumerate() {
+        if index % 65_536 == 0 && cancel_requested(cancel_cb) {
+            return None;
+        }
         let r = px[0] as u32;
         let g = px[1] as u32;
         let b = px[2] as u32;
@@ -900,8 +916,26 @@ fn decode_image_bgra(path: &str, cancel_cb: Option<CancelCallback>) -> Option<(u
     Some((width, height, original_width, original_height, bgra))
 }
 
+fn should_skip_native_image_decode(width: u32, height: u32) -> bool {
+    width == 0
+        || height == 0
+        || (width as u64).saturating_mul(height as u64) > MAX_NATIVE_IMAGE_DECODE_PIXELS
+}
+
 fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
     cancel_cb.map(|cb| cb()).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_image_decode_skips_extreme_pixel_counts() {
+        assert!(!should_skip_native_image_decode(8_000, 6_000));
+        assert!(should_skip_native_image_decode(8_001, 6_000));
+        assert!(should_skip_native_image_decode(0, 6_000));
+    }
 }
 
 // ── Shell thumbnail (fallback preview for any file type) ───────────────────────────────────────
