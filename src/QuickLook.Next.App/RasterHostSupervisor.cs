@@ -29,6 +29,9 @@ internal sealed class RasterHostSupervisor
     private bool _stopping;
     private bool _backgroundEfficiencyEnabled = true;
     private readonly SemaphoreSlim _startLock = new(1, 1);
+    private readonly object _stateLock = new();
+    private string? _activeRequestId;
+    private string? _activePath;
 
     /// <summary>Raised on the UI thread when the host hands over a (new) shared surface to compose.</summary>
     public event Action<PreviewSurface>? SurfaceReceived;
@@ -160,6 +163,11 @@ internal sealed class RasterHostSupervisor
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        lock (_stateLock)
+        {
+            _activeRequestId = requestId;
+            _activePath = path;
+        }
         _ = SendOpenAsync(requestId, path, probe, targetWidth, targetHeight);
         return (requestId, completion);
     }
@@ -216,6 +224,14 @@ internal sealed class RasterHostSupervisor
             DiagLog.Write("App", $"host send close request={requestId}");
             await _channel.SendAsync(new PreviewClose(requestId));
         }
+        lock (_stateLock)
+        {
+            if (_activeRequestId == requestId)
+            {
+                _activeRequestId = null;
+                _activePath = null;
+            }
+        }
     }
 
     public void SetBackgroundEfficiency(bool enabled)
@@ -227,20 +243,21 @@ internal sealed class RasterHostSupervisor
     private void OnHostExited(int gen)
     {
         if (_stopping || gen != _generation) return;
-        DiagLog.Write("App", $"host exited gen={gen}; scheduling restart");
+        (string? requestId, string? path) = GetRestartContext();
+        DiagLog.Write("App", $"host exited gen={gen}; request={requestId}; scheduling restart");
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
-        _ = RestartAsync(gen);
+        _ = RestartAsync(gen, requestId, path);
     }
 
-    private async Task RestartAsync(int gen)
+    private async Task RestartAsync(int gen, string? requestId, string? path)
     {
         try
         {
             int attempt = Math.Min(Interlocked.Increment(ref _restartAttempts), 5);
             await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt * attempt));
-            if (_stopping || gen != _generation) return;
+            if (!IsRestartContextCurrent(gen, requestId, path)) return;
 
-            _ui.TryEnqueue(() => _ = StartRestartOnUiAsync(gen));
+            _ui.TryEnqueue(() => _ = StartRestartOnUiAsync(gen, requestId, path));
         }
         catch (Exception ex)
         {
@@ -249,11 +266,11 @@ internal sealed class RasterHostSupervisor
         }
     }
 
-    private async Task StartRestartOnUiAsync(int gen)
+    private async Task StartRestartOnUiAsync(int gen, string? requestId, string? path)
     {
         try
         {
-            if (!_stopping && gen == _generation)
+            if (IsRestartContextCurrent(gen, requestId, path))
                 await StartAsync();
         }
         catch (Exception ex)
@@ -261,6 +278,21 @@ internal sealed class RasterHostSupervisor
             DiagLog.Write("App", "host restart FAILED: " + ex);
             _pending.FailAll(ex);
         }
+    }
+
+    private (string? RequestId, string? Path) GetRestartContext()
+    {
+        lock (_stateLock)
+            return (_activeRequestId, _activePath);
+    }
+
+    private bool IsRestartContextCurrent(int gen, string? requestId, string? path)
+    {
+        if (_stopping || gen != _generation || requestId is null || path is null)
+            return false;
+
+        lock (_stateLock)
+            return _activeRequestId == requestId && string.Equals(_activePath, path, StringComparison.OrdinalIgnoreCase);
     }
 
     public void Stop()
