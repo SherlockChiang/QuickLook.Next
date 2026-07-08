@@ -28,6 +28,8 @@ public sealed partial class MainWindow : Window
 {
     private const double MaxImageWindowWidth = 1320;
     private const double MaxImageWindowHeight = 900;
+    private const long MaxAnimatedWinUiDecodeBytes = 16L * 1024 * 1024;
+    private const long MaxAnimatedWinUiDecodePixels = 12_000_000;
     private const double MaxPdfWindowWidth = 1040;
     private const double MaxPdfWindowHeight = 900;
     private const double MaxTextWindowWidth = 1100;
@@ -565,24 +567,35 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            bool forceAnimatedFirstFrameRaster = false;
             if (AnimatedImagePreviewPresenter.TryReadAnimatedSize(path) is { } animatedSize)
             {
                 DiagLog.Write("App", $"preview animated image detected gen={generation}; {animatedSize.Width}x{animatedSize.Height}");
-                var gifReady = new PreviewReady(
-                    $"gif-{generation}",
-                    "image",
-                    System.IO.Path.GetFileName(path),
-                    animatedSize.Width,
-                    animatedSize.Height);
-                _previewSession.CommitPath(path);
-                _previewSession.SetRequestId(null);
-                StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
-                RevealPreviewWindow(ShouldActivatePreview(gifReady));
-                return;
+                if (ShouldUseNativeAnimatedFirstFrame(path, animatedSize))
+                {
+                    DiagLog.Write("App", $"preview animated image using native first-frame raster gen={generation}; {animatedSize.Width}x{animatedSize.Height}");
+                    forceAnimatedFirstFrameRaster = true;
+                }
+                else
+                {
+                    var gifReady = new PreviewReady(
+                        $"gif-{generation}",
+                        "image",
+                        System.IO.Path.GetFileName(path),
+                        animatedSize.Width,
+                        animatedSize.Height);
+                    _previewSession.CommitPath(path);
+                    _previewSession.SetRequestId(null);
+                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
+                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
+                    return;
+                }
             }
 
 
-            PreviewReady? nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
+            PreviewReady? nativeReady = forceAnimatedFirstFrameRaster
+                ? null
+                : await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             if (nativeReady is not null)
@@ -645,6 +658,16 @@ public sealed partial class MainWindow : Window
 
     private bool IsPreviewGenerationCurrent(int generation, CancellationToken cancellationToken)
         => _previewSession.IsCurrent(generation, cancellationToken);
+
+    private static bool ShouldUseNativeAnimatedFirstFrame(string path, (int Width, int Height) animatedSize)
+    {
+        long pixels = Math.Max(0, animatedSize.Width) * (long)Math.Max(0, animatedSize.Height);
+        if (pixels > MaxAnimatedWinUiDecodePixels)
+            return true;
+
+        try { return new FileInfo(path).Length > MaxAnimatedWinUiDecodeBytes; }
+        catch { return false; }
+    }
 
     private void BeginPreviewTransition()
     {
