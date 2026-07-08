@@ -45,6 +45,7 @@ internal sealed class PdfPreviewPresenter
     private double _scale = 1.0;
     private long _touchTick;
     private int _currentPageIndex;
+    private double _lastScrollOffset;
 
     public PdfPreviewPresenter(
         ScrollViewer scrollViewer,
@@ -158,6 +159,8 @@ internal sealed class PdfPreviewPresenter
 
         double viewportHeight = Math.Max(1, _scrollViewer.ViewportHeight);
         double scrollOffset = _scrollViewer.VerticalOffset;
+        bool scrollingDown = scrollOffset >= _lastScrollOffset;
+        _lastScrollOffset = scrollOffset;
         double pageExtent = pageHeight + PageSpacing;
         int firstVisible = (int)Math.Floor(scrollOffset / pageExtent);
         int lastVisible = (int)Math.Ceiling((scrollOffset + viewportHeight) / pageExtent);
@@ -166,7 +169,7 @@ internal sealed class PdfPreviewPresenter
 
         int renderFirst = Math.Max(0, firstVisible - 1);
         int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
-        for (int index = renderFirst; index <= renderLast; index++)
+        foreach (int index in PrioritizePageRequests(renderFirst, renderLast, _currentPageIndex, scrollingDown))
         {
             if (!_requestedPages.Contains(index))
             {
@@ -209,6 +212,7 @@ internal sealed class PdfPreviewPresenter
         _pageLastTouched.Clear();
         _touchTick = 0;
         _currentPageIndex = 0;
+        _lastScrollOffset = 0;
         _requestId = null;
         _pagerBar.Visibility = Visibility.Collapsed;
         UpdatePager();
@@ -347,6 +351,14 @@ internal sealed class PdfPreviewPresenter
 
         try { (oldSprite.Brush as IDisposable)?.Dispose(); } catch { }
         try { oldSprite.Dispose(); } catch { }
+    }
+
+    private static IEnumerable<int> PrioritizePageRequests(int first, int last, int current, bool scrollingDown)
+    {
+        return Enumerable.Range(first, last - first + 1)
+            .OrderBy(index => Math.Abs(index - current))
+            .ThenBy(index => scrollingDown ? index < current : index > current)
+            .ThenBy(index => scrollingDown ? index : -index);
     }
 }
 
