@@ -2374,9 +2374,7 @@ fn parse_worksheet_layout_cells(
                                     .get(cell_style)
                                     .map(|style| style.italic)
                                     .unwrap_or(false),
-                                font_size: styles
-                                    .get(cell_style)
-                                    .and_then(|style| style.font_size),
+                                font_size: styles.get(cell_style).and_then(|style| style.font_size),
                                 wrap_text: styles
                                     .get(cell_style)
                                     .map(|style| style.wrap_text)
@@ -3886,7 +3884,10 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
             text.push_str(&format!("\nTables: {}", summary.tables));
         }
         if summary.glyphs > 0 {
-            text.push_str(&format!("\nGlyphs: {}", format_number(summary.glyphs as i64)));
+            text.push_str(&format!(
+                "\nGlyphs: {}",
+                format_number(summary.glyphs as i64)
+            ));
         }
         if summary.sfnt_size > 0 {
             text.push_str(&format!(
@@ -4080,6 +4081,7 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
     if let Some(duration) = mp4_duration_seconds(&bytes) {
         text.push_str(&format!("\nDuration: {}", format_duration(duration)));
     }
+    append_mkv_metadata(&mut text, &bytes);
     append_wav_metadata(&mut text, &bytes);
     append_flac_metadata(&mut text, &bytes);
     append_id3_metadata(&mut text, &bytes);
@@ -4324,7 +4326,10 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
             row.typ, row.name, row.table_name, row.root_page
         ));
         if !row.sql.is_empty() {
-            text.push_str(&format!("\n  SQL: {}", truncate_sqlite_schema_sql(&row.sql)));
+            text.push_str(&format!(
+                "\n  SQL: {}",
+                truncate_sqlite_schema_sql(&row.sql)
+            ));
         }
         if row.typ.eq_ignore_ascii_case("table") {
             let columns = parse_sqlite_table_columns(&row.sql, 8);
@@ -4642,7 +4647,10 @@ fn sqlite_take_identifier(value: &str) -> Option<(String, &str)> {
         .char_indices()
         .find_map(|(index, ch)| ch.is_whitespace().then_some(index))
         .unwrap_or(value.len());
-    Some((value.get(..end)?.to_string(), value.get(end..).unwrap_or_default()))
+    Some((
+        value.get(..end)?.to_string(),
+        value.get(end..).unwrap_or_default(),
+    ))
 }
 
 fn sqlite_column_type(rest: &str) -> String {
@@ -4683,8 +4691,17 @@ fn sqlite_column_type(rest: &str) -> String {
 fn sqlite_is_column_constraint_keyword(token: &str) -> bool {
     matches!(
         token.trim_matches(',').to_ascii_uppercase().as_str(),
-        "PRIMARY" | "NOT" | "NULL" | "DEFAULT" | "COLLATE" | "REFERENCES" | "CHECK"
-            | "UNIQUE" | "CONSTRAINT" | "GENERATED" | "AS"
+        "PRIMARY"
+            | "NOT"
+            | "NULL"
+            | "DEFAULT"
+            | "COLLATE"
+            | "REFERENCES"
+            | "CHECK"
+            | "UNIQUE"
+            | "CONSTRAINT"
+            | "GENERATED"
+            | "AS"
     )
 }
 
@@ -4908,9 +4925,15 @@ fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
     let Some(summary) = parse_wav_summary(bytes) else {
         return;
     };
-    text.push_str(&format!("\nAudio format: {}", wav_audio_format_name(summary.audio_format)));
+    text.push_str(&format!(
+        "\nAudio format: {}",
+        wav_audio_format_name(summary.audio_format)
+    ));
     text.push_str(&format!("\nChannels: {}", summary.channels));
-    text.push_str(&format!("\nSample rate: {} Hz", format_number(summary.sample_rate as i64)));
+    text.push_str(&format!(
+        "\nSample rate: {} Hz",
+        format_number(summary.sample_rate as i64)
+    ));
     if summary.bits_per_sample > 0 {
         text.push_str(&format!("\nBits per sample: {}", summary.bits_per_sample));
     }
@@ -4986,7 +5009,10 @@ fn append_flac_metadata(text: &mut String, bytes: &[u8]) {
         text.push_str(&format!("\nChannels: {}", summary.channels));
     }
     if summary.sample_rate > 0 {
-        text.push_str(&format!("\nSample rate: {} Hz", format_number(summary.sample_rate as i64)));
+        text.push_str(&format!(
+            "\nSample rate: {} Hz",
+            format_number(summary.sample_rate as i64)
+        ));
     }
     if summary.bits_per_sample > 0 {
         text.push_str(&format!("\nBits per sample: {}", summary.bits_per_sample));
@@ -5035,6 +5061,282 @@ fn parse_flac_summary(bytes: &[u8]) -> Option<FlacSummary> {
         offset = payload + block_len;
     }
     None
+}
+
+#[derive(Default)]
+struct MkvSummary {
+    timecode_scale: u64,
+    duration: Option<f64>,
+    muxing_app: String,
+    writing_app: String,
+    video_codec: String,
+    audio_codec: String,
+    width: u64,
+    height: u64,
+    audio_channels: u64,
+    sample_rate: Option<f64>,
+    tracks: u32,
+}
+
+fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
+    let Some(summary) = parse_mkv_summary(bytes) else {
+        return;
+    };
+    if let Some(duration) = summary.duration {
+        let scale = if summary.timecode_scale > 0 {
+            summary.timecode_scale as f64
+        } else {
+            1_000_000.0
+        };
+        text.push_str(&format!(
+            "\nDuration: {}",
+            format_duration(duration * scale / 1_000_000_000.0)
+        ));
+    }
+    if summary.tracks > 0 {
+        text.push_str(&format!("\nTracks: {}", summary.tracks));
+    }
+    if summary.width > 0 && summary.height > 0 {
+        text.push_str(&format!("\nVideo: {}x{}", summary.width, summary.height));
+    }
+    if !summary.video_codec.is_empty() {
+        text.push_str(&format!("\nVideo codec: {}", summary.video_codec));
+    }
+    if summary.audio_channels > 0 {
+        text.push_str(&format!("\nAudio channels: {}", summary.audio_channels));
+    }
+    if let Some(rate) = summary.sample_rate {
+        text.push_str(&format!(
+            "\nAudio sample rate: {} Hz",
+            format_number(rate.round() as i64)
+        ));
+    }
+    if !summary.audio_codec.is_empty() {
+        text.push_str(&format!("\nAudio codec: {}", summary.audio_codec));
+    }
+    if !summary.writing_app.is_empty() {
+        text.push_str(&format!("\nWriting app: {}", summary.writing_app));
+    }
+    if !summary.muxing_app.is_empty() {
+        text.push_str(&format!("\nMuxing app: {}", summary.muxing_app));
+    }
+}
+
+fn parse_mkv_summary(bytes: &[u8]) -> Option<MkvSummary> {
+    if !bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return None;
+    }
+    let mut summary = MkvSummary::default();
+    parse_mkv_elements(bytes, 0, bytes.len(), 0, &mut summary);
+    (summary.duration.is_some()
+        || summary.tracks > 0
+        || !summary.writing_app.is_empty()
+        || !summary.muxing_app.is_empty())
+    .then_some(summary)
+}
+
+fn parse_mkv_elements(
+    bytes: &[u8],
+    mut offset: usize,
+    end: usize,
+    depth: usize,
+    summary: &mut MkvSummary,
+) {
+    if depth > 6 {
+        return;
+    }
+    while offset < end && offset < bytes.len() {
+        let Some((id, id_next)) = read_ebml_id(bytes, offset) else {
+            break;
+        };
+        let Some((size, payload)) = read_ebml_size(bytes, id_next) else {
+            break;
+        };
+        let payload_end = payload.saturating_add(size).min(end).min(bytes.len());
+        match id {
+            0x1549A966 => parse_mkv_info(bytes, payload, payload_end, summary),
+            0x1654AE6B => parse_mkv_elements(bytes, payload, payload_end, depth + 1, summary),
+            0xAE => parse_mkv_track_entry(bytes, payload, payload_end, summary),
+            0x18538067 | 0x1A45DFA3 => {
+                parse_mkv_elements(bytes, payload, payload_end, depth + 1, summary)
+            }
+            _ => {}
+        }
+        if payload_end <= offset {
+            break;
+        }
+        offset = payload_end;
+    }
+}
+
+fn parse_mkv_info(bytes: &[u8], mut offset: usize, end: usize, summary: &mut MkvSummary) {
+    while offset < end {
+        let Some((id, id_next)) = read_ebml_id(bytes, offset) else {
+            break;
+        };
+        let Some((size, payload)) = read_ebml_size(bytes, id_next) else {
+            break;
+        };
+        let payload_end = payload.saturating_add(size).min(end).min(bytes.len());
+        match id {
+            0x2AD7B1 => {
+                summary.timecode_scale =
+                    read_ebml_uint(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            0x4489 => {
+                summary.duration =
+                    read_ebml_float(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            0x4D80 => {
+                summary.muxing_app =
+                    read_ebml_string(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            0x5741 => {
+                summary.writing_app =
+                    read_ebml_string(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            _ => {}
+        }
+        offset = payload_end;
+    }
+}
+
+fn parse_mkv_track_entry(bytes: &[u8], mut offset: usize, end: usize, summary: &mut MkvSummary) {
+    summary.tracks = summary.tracks.saturating_add(1);
+    let mut track_type = 0u64;
+    let mut codec = String::new();
+    let mut width = 0u64;
+    let mut height = 0u64;
+    let mut channels = 0u64;
+    let mut sample_rate = None;
+    while offset < end {
+        let Some((id, id_next)) = read_ebml_id(bytes, offset) else {
+            break;
+        };
+        let Some((size, payload)) = read_ebml_size(bytes, id_next) else {
+            break;
+        };
+        let payload_end = payload.saturating_add(size).min(end).min(bytes.len());
+        match id {
+            0x83 => {
+                track_type = read_ebml_uint(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            0x86 => codec = read_ebml_string(bytes.get(payload..payload_end).unwrap_or_default()),
+            0xE0 => (width, height) = parse_mkv_video(bytes, payload, payload_end),
+            0xE1 => (channels, sample_rate) = parse_mkv_audio(bytes, payload, payload_end),
+            _ => {}
+        }
+        offset = payload_end;
+    }
+    match track_type {
+        1 => {
+            if summary.video_codec.is_empty() {
+                summary.video_codec = codec;
+            }
+            if summary.width == 0 {
+                summary.width = width;
+                summary.height = height;
+            }
+        }
+        2 => {
+            if summary.audio_codec.is_empty() {
+                summary.audio_codec = codec;
+            }
+            if summary.audio_channels == 0 {
+                summary.audio_channels = channels;
+            }
+            if summary.sample_rate.is_none() {
+                summary.sample_rate = sample_rate;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_mkv_video(bytes: &[u8], mut offset: usize, end: usize) -> (u64, u64) {
+    let mut width = 0;
+    let mut height = 0;
+    while offset < end {
+        let Some((id, id_next)) = read_ebml_id(bytes, offset) else {
+            break;
+        };
+        let Some((size, payload)) = read_ebml_size(bytes, id_next) else {
+            break;
+        };
+        let payload_end = payload.saturating_add(size).min(end).min(bytes.len());
+        match id {
+            0xB0 => width = read_ebml_uint(bytes.get(payload..payload_end).unwrap_or_default()),
+            0xBA => height = read_ebml_uint(bytes.get(payload..payload_end).unwrap_or_default()),
+            _ => {}
+        }
+        offset = payload_end;
+    }
+    (width, height)
+}
+
+fn parse_mkv_audio(bytes: &[u8], mut offset: usize, end: usize) -> (u64, Option<f64>) {
+    let mut channels = 0;
+    let mut sample_rate = None;
+    while offset < end {
+        let Some((id, id_next)) = read_ebml_id(bytes, offset) else {
+            break;
+        };
+        let Some((size, payload)) = read_ebml_size(bytes, id_next) else {
+            break;
+        };
+        let payload_end = payload.saturating_add(size).min(end).min(bytes.len());
+        match id {
+            0x9F => channels = read_ebml_uint(bytes.get(payload..payload_end).unwrap_or_default()),
+            0xB5 => {
+                sample_rate = read_ebml_float(bytes.get(payload..payload_end).unwrap_or_default())
+            }
+            _ => {}
+        }
+        offset = payload_end;
+    }
+    (channels, sample_rate)
+}
+
+fn read_ebml_id(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+    let first = *bytes.get(offset)?;
+    let len = (0..4).find(|bit| first & (0x80 >> bit) != 0)? + 1;
+    let mut value = 0u64;
+    for index in 0..len {
+        value = (value << 8) | *bytes.get(offset + index)? as u64;
+    }
+    Some((value, offset + len))
+}
+
+fn read_ebml_size(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let first = *bytes.get(offset)?;
+    let len = (0..8).find(|bit| first & (0x80 >> bit) != 0)? + 1;
+    let mut value = (first & !(0x80 >> (len - 1))) as u64;
+    for index in 1..len {
+        value = (value << 8) | *bytes.get(offset + index)? as u64;
+    }
+    (value <= usize::MAX as u64).then_some((value as usize, offset + len))
+}
+
+fn read_ebml_uint(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .take(8)
+        .fold(0u64, |value, byte| (value << 8) | *byte as u64)
+}
+
+fn read_ebml_float(bytes: &[u8]) -> Option<f64> {
+    match bytes.len() {
+        4 => Some(f32::from_be_bytes(bytes.try_into().ok()?) as f64),
+        8 => Some(f64::from_be_bytes(bytes.try_into().ok()?)),
+        _ => None,
+    }
+}
+
+fn read_ebml_string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_matches('\0')
+        .trim()
+        .to_string()
 }
 
 fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
@@ -8222,7 +8524,10 @@ mod tests {
         assert_eq!(styles.get(1).map(|style| style.italic), Some(true));
         assert_eq!(styles.get(1).and_then(|style| style.font_size), Some(14.0));
         assert_eq!(styles.get(1).map(|style| style.wrap_text), Some(true));
-        assert_eq!(styles.get(1).and_then(|style| style.text_color.as_deref()), Some("#9C0006"));
+        assert_eq!(
+            styles.get(1).and_then(|style| style.text_color.as_deref()),
+            Some("#9C0006")
+        );
     }
 
     #[test]
@@ -8377,7 +8682,8 @@ mod tests {
         bytes[28..32].copy_from_slice(b"maxp");
         bytes[36..40].copy_from_slice(&(maxp_offset as u32).to_be_bytes());
         bytes[40..44].copy_from_slice(&6u32.to_be_bytes());
-        bytes[name_offset + 2..name_offset + 4].copy_from_slice(&(names.len() as u16).to_be_bytes());
+        bytes[name_offset + 2..name_offset + 4]
+            .copy_from_slice(&(names.len() as u16).to_be_bytes());
         bytes[name_offset + 4..name_offset + 6]
             .copy_from_slice(&(name_storage_offset as u16).to_be_bytes());
         let mut storage_pos = 0usize;
@@ -8617,6 +8923,88 @@ mod tests {
         assert_eq!(summary.total_samples, 88_200);
         assert!(text.contains("Sample rate: 44,100 Hz"));
         assert!(text.contains("Duration: 0:02"));
+    }
+
+    #[test]
+    fn media_info_reads_mkv_info_and_tracks() {
+        fn ebml(id: &[u8], payload: Vec<u8>) -> Vec<u8> {
+            let mut out = Vec::new();
+            out.extend_from_slice(id);
+            if payload.len() < 0x7F {
+                out.push(0x80 | payload.len() as u8);
+            } else {
+                out.push(0x40 | ((payload.len() >> 8) as u8 & 0x3F));
+                out.push((payload.len() & 0xFF) as u8);
+            }
+            out.extend_from_slice(&payload);
+            out
+        }
+
+        let info = ebml(
+            &[0x15, 0x49, 0xA9, 0x66],
+            [
+                ebml(&[0x2A, 0xD7, 0xB1], vec![0x0F, 0x42, 0x40]),
+                ebml(&[0x44, 0x89], 90_000.0f64.to_be_bytes().to_vec()),
+                ebml(&[0x57, 0x41], b"QuickLook Writer".to_vec()),
+            ]
+            .concat(),
+        );
+        let video = ebml(
+            &[0xAE],
+            [
+                ebml(&[0x83], vec![1]),
+                ebml(&[0x86], b"V_MPEG4".to_vec()),
+                ebml(
+                    &[0xE0],
+                    [
+                        ebml(&[0xB0], vec![0x07, 0x80]),
+                        ebml(&[0xBA], vec![0x04, 0x38]),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let audio = ebml(
+            &[0xAE],
+            [
+                ebml(&[0x83], vec![2]),
+                ebml(&[0x86], b"A_OPUS".to_vec()),
+                ebml(
+                    &[0xE1],
+                    [
+                        ebml(&[0x9F], vec![2]),
+                        ebml(&[0xB5], 48_000.0f64.to_be_bytes().to_vec()),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let segment = ebml(
+            &[0x18, 0x53, 0x80, 0x67],
+            [
+                info,
+                ebml(&[0x16, 0x54, 0xAE, 0x6B], [video, audio].concat()),
+            ]
+            .concat(),
+        );
+        let bytes = [ebml(&[0x1A, 0x45, 0xDF, 0xA3], Vec::new()), segment].concat();
+        let summary = parse_mkv_summary(&bytes).expect("mkv summary");
+        let mut text = String::new();
+
+        append_mkv_metadata(&mut text, &bytes);
+
+        assert_eq!(media_container_name("clip.bin", &bytes), "Matroska / WebM");
+        assert_eq!(summary.tracks, 2);
+        assert_eq!(summary.width, 1920);
+        assert_eq!(summary.height, 1080);
+        assert_eq!(summary.video_codec, "V_MPEG4");
+        assert_eq!(summary.audio_codec, "A_OPUS");
+        assert_eq!(summary.audio_channels, 2);
+        assert_eq!(summary.sample_rate, Some(48_000.0));
+        assert!(text.contains("Duration: 1:30"));
+        assert!(text.contains("Writing app: QuickLook Writer"));
     }
 
     #[test]
