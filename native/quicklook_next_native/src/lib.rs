@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use image::{GenericImageView, ImageReader};
 
@@ -67,6 +67,7 @@ type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 struct ThumbnailRequest {
     path: String,
     size: i32,
+    cancel_cb: Option<CancelCallback>,
     reply: mpsc::Sender<ThumbnailResult>,
 }
 
@@ -916,12 +917,27 @@ pub extern "C" fn ql_get_thumbnail(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_get_thumbnail_cancelable(path_utf8, path_len, size, out, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_get_thumbnail_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    size: i32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s.to_string(),
         None => return -1,
     };
 
-    let result = shell_thumbnail_on_sta(path, size.max(16));
+    let result = shell_thumbnail_on_sta(path, size.max(16), cancel_cb);
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
 
     let (w, h, bgra) = match result {
         Some(x) => x,
@@ -945,7 +961,15 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             while let Ok(request) = receiver.recv() {
+                if cancel_requested(request.cancel_cb) {
+                    let _ = request.reply.send(None);
+                    continue;
+                }
                 let result = shell_thumbnail(&request.path, request.size.max(16));
+                if cancel_requested(request.cancel_cb) {
+                    let _ = request.reply.send(None);
+                    continue;
+                }
                 let _ = request.reply.send(result);
             }
             CoUninitialize();
@@ -954,13 +978,28 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
     })
 }
 
-fn shell_thumbnail_on_sta(path: String, size: i32) -> ThumbnailResult {
+fn shell_thumbnail_on_sta(path: String, size: i32, cancel_cb: Option<CancelCallback>) -> ThumbnailResult {
     let (reply, result) = mpsc::channel();
-    let request = ThumbnailRequest { path, size, reply };
+    let request = ThumbnailRequest {
+        path,
+        size,
+        cancel_cb,
+        reply,
+    };
     if thumbnail_sta_worker().sender.send(request).is_err() {
         return None;
     }
-    result.recv_timeout(Duration::from_secs(4)).ok().flatten()
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        if cancel_requested(cancel_cb) || Instant::now() >= deadline {
+            return None;
+        }
+        match result.recv_timeout(Duration::from_millis(50)) {
+            Ok(value) => return value,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 /// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).

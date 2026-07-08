@@ -1622,7 +1622,7 @@ public sealed partial class MainWindow : Window
                     continue;
                 }
 
-                NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96), token);
+                NativeRasterImage? raster = await Task.Run(() => _native.TryGetThumbnail(sibling, 96, token), token);
                 if (!IsImageFilmstripLoadCurrent(path, generation, token))
                     return;
 
@@ -1706,7 +1706,7 @@ public sealed partial class MainWindow : Window
                         return null;
 
                     _ = _native.ProbeFile(target);
-                    return _native.TryGetThumbnail(target, 128);
+                    return _native.TryGetThumbnail(target, 128, token);
                 }, token);
                 if (!IsImageFilmstripLoadCurrent(currentPath, generation, token))
                     return;

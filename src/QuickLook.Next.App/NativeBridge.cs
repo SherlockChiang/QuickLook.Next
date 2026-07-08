@@ -20,6 +20,9 @@ internal sealed class NativeBridge
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void NativeCallback(IntPtr utf16);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private delegate bool NativeCancelCallback();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern void ql_set_callback(NativeCallback cb);
@@ -67,6 +70,8 @@ internal sealed class NativeBridge
     private static extern int ql_preview_image_metadata(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -234,16 +239,25 @@ internal sealed class NativeBridge
     }
 
     public NativeRasterImage? TryGetThumbnail(string path, int size)
+        => TryGetThumbnail(path, size, CancellationToken.None);
+
+    public NativeRasterImage? TryGetThumbnail(string path, int size, CancellationToken token)
     {
+        NativeCancelCallback? cancelCb = null;
         try
         {
             byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            cancelCb = token.CanBeCanceled
+                ? () => token.IsCancellationRequested
+                : null;
             return ReadRasterBuffer(cap =>
             {
                 byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
                 try
                 {
-                    int n = ql_get_thumbnail(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length);
+                    int n = cancelCb is null
+                        ? ql_get_thumbnail(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length)
+                        : ql_get_thumbnail_cancelable(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length, cancelCb);
                     return (n, outBuf);
                 }
                 catch
@@ -256,6 +270,10 @@ internal sealed class NativeBridge
         catch
         {
             return null;
+        }
+        finally
+        {
+            GC.KeepAlive(cancelCb);
         }
     }
 
