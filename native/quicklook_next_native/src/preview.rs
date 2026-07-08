@@ -4411,12 +4411,17 @@ struct SqliteSchemaRow {
 }
 
 fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usize) {
-    let rows = parse_sqlite_schema_rows(bytes, page_size, 8);
+    let summary = parse_sqlite_schema_summary(bytes, page_size, 8);
+    let rows = summary.rows;
     if rows.is_empty() {
         return;
     }
 
-    text.push_str("\nSchema objects:");
+    text.push_str(if summary.partial {
+        "\nSchema objects (partial):"
+    } else {
+        "\nSchema objects:"
+    });
     for row in rows {
         text.push_str(&format!(
             "\n- {} {} (table: {}, root: {})",
@@ -4443,6 +4448,11 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
             }
         }
     }
+}
+
+struct SqliteSchemaSummary {
+    rows: Vec<SqliteSchemaRow>,
+    partial: bool,
 }
 
 struct SqliteRowCount {
@@ -4523,20 +4533,34 @@ fn sqlite_table_interior_children(page: &[u8], header: usize) -> Vec<u32> {
 }
 
 fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec<SqliteSchemaRow> {
+    parse_sqlite_schema_summary(bytes, page_size, limit).rows
+}
+
+fn parse_sqlite_schema_summary(
+    bytes: &[u8],
+    page_size: usize,
+    limit: usize,
+) -> SqliteSchemaSummary {
     if page_size < 512 || bytes.len() < 128 || !bytes.starts_with(b"SQLite format 3\0") {
-        return Vec::new();
+        return SqliteSchemaSummary {
+            rows: Vec::new(),
+            partial: false,
+        };
     }
     let mut stack = vec![1u32];
     let mut seen = BTreeSet::<u32>::new();
     let mut rows = Vec::new();
+    let mut partial = false;
     while let Some(page_no) = stack.pop() {
-        if rows.len() >= limit || seen.len() >= 32 || !seen.insert(page_no) {
-            if rows.len() >= limit {
-                break;
-            }
+        if rows.len() >= limit || seen.len() >= 32 {
+            partial = true;
+            break;
+        }
+        if !seen.insert(page_no) {
             continue;
         }
         let Some(page) = sqlite_page(bytes, page_size, page_no) else {
+            partial = true;
             continue;
         };
         let header = if page_no == 1 { 100usize } else { 0usize };
@@ -4550,7 +4574,7 @@ fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec
             _ => {}
         }
     }
-    rows
+    SqliteSchemaSummary { rows, partial }
 }
 
 fn parse_sqlite_schema_leaf_page(
@@ -8931,6 +8955,24 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "users");
         assert_eq!(rows[0].root_page, 2);
+    }
+
+    #[test]
+    fn sqlite_schema_summary_marks_missing_pages_partial() {
+        let page_size = 512usize;
+        let mut bytes = vec![0u8; page_size];
+        bytes[0..16].copy_from_slice(b"SQLite format 3\0");
+        bytes[16..18].copy_from_slice(&(page_size as u16).to_be_bytes());
+        bytes[100] = 0x05;
+        bytes[103..105].copy_from_slice(&1u16.to_be_bytes());
+        bytes[112..114].copy_from_slice(&200u16.to_be_bytes());
+        bytes[200..204].copy_from_slice(&2u32.to_be_bytes());
+        bytes[204] = 1;
+
+        let summary = parse_sqlite_schema_summary(&bytes, page_size, 8);
+
+        assert!(summary.rows.is_empty());
+        assert!(summary.partial);
     }
 
     #[test]
