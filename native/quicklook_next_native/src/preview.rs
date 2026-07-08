@@ -1937,6 +1937,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut text = String::new();
     let mut in_text = false;
     let mut shape_paragraph_had_text = false;
+    let mut paragraph_prefix = String::new();
     let mut preset_shape: Option<String> = None;
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
@@ -1958,6 +1959,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     text.clear();
                     in_text = false;
                     shape_paragraph_had_text = false;
+                    paragraph_prefix.clear();
                     preset_shape = None;
                     fill_color = None;
                     stroke_color = None;
@@ -1967,7 +1969,12 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                 if in_shape {
                     shape_depth += 1;
                     if local == "t" {
+                        if !paragraph_prefix.is_empty() && !shape_paragraph_had_text {
+                            text.push_str(&paragraph_prefix);
+                        }
                         in_text = true;
+                    } else if local == "ppr" {
+                        paragraph_prefix = ppt_paragraph_prefix(&e);
                     } else if local == "blip" {
                         rel_id = attr_value(&e, "embed").unwrap_or_default();
                     } else if local == "solidfill" {
@@ -2002,6 +2009,10 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                 } else if local == "br" && shape_kind == "text" {
                     text.push('\n');
                     shape_paragraph_had_text = false;
+                } else if local == "ppr" && shape_kind == "text" {
+                    paragraph_prefix = ppt_paragraph_prefix(&e);
+                } else if local == "buchar" && shape_kind == "text" {
+                    append_ppt_bullet_prefix(&mut paragraph_prefix, &e);
                 }
             }
             Ok(Event::End(e)) if in_shape => {
@@ -2013,6 +2024,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         text.push('\n');
                     }
                     shape_paragraph_had_text = false;
+                    paragraph_prefix.clear();
                 } else if local == "solidfill" || local == "ln" {
                     color_target = "";
                 }
@@ -2082,6 +2094,24 @@ fn parse_ppt_slide_items<R: Read + Seek>(
         }
     }
     items
+}
+
+fn ppt_paragraph_prefix(e: &BytesStart<'_>) -> String {
+    let mut prefix = String::new();
+    match attr_value(e, "algn").as_deref() {
+        Some("ctr") => prefix.push_str("[center] "),
+        Some("r") => prefix.push_str("[right] "),
+        _ => {}
+    }
+    prefix
+}
+
+fn append_ppt_bullet_prefix(prefix: &mut String, e: &BytesStart<'_>) {
+    let bullet = attr_value(e, "char")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "•".to_string());
+    prefix.push_str(&bullet);
+    prefix.push(' ');
 }
 
 fn extract_ppt_text(xml: &str) -> String {
@@ -6281,6 +6311,37 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text.as_deref(), Some("First\nSecond"));
+    }
+
+    #[test]
+    fn ppt_layout_text_items_preserve_bullets_and_alignment_hints() {
+        let mut cursor = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()))
+            .finish()
+            .expect("empty zip archive bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
+        let mut image_budget = 0;
+        let items = parse_ppt_slide_items(
+            &mut zip,
+            "ppt/slides/",
+            r#"<p:sld xmlns:p="p" xmlns:a="a">
+                <p:sp>
+                    <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
+                    <p:txBody>
+                        <a:p><a:pPr algn="ctr"><a:buChar char="•"/></a:pPr><a:r><a:t>Centered bullet</a:t></a:r></a:p>
+                        <a:p><a:pPr algn="r"/><a:r><a:t>Right aligned</a:t></a:r></a:p>
+                    </p:txBody>
+                </p:sp>
+            </p:sld>"#,
+            &BTreeMap::new(),
+            &mut image_budget,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].text.as_deref(),
+            Some("[center] • Centered bullet\n[right] Right aligned")
+        );
     }
 
     #[test]
