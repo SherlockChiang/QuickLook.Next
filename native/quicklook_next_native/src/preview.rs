@@ -7915,6 +7915,9 @@ fn archive_listing_json(
     if let Some(types) = archive_type_summary(&entries) {
         summary.push_str(&format!(" - Types: {types}"));
     }
+    if let Some(projects) = archive_project_summary(&entries) {
+        summary.push_str(&format!(" - Project markers: {projects}"));
+    }
 
     let mut items = Vec::with_capacity(entries.len());
     for (path, (name, parent, is_folder, size, packed, modified)) in &entries {
@@ -7982,6 +7985,43 @@ fn archive_type_summary(
             .collect::<Vec<_>>()
             .join(", "),
     )
+}
+
+fn archive_project_summary(
+    entries: &BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+) -> Option<String> {
+    let mut markers = Vec::<String>::new();
+    for (name, _, is_folder, _, _, _) in entries.values() {
+        if *is_folder {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        let label = match lower.as_str() {
+            "package.json" => Some("package.json"),
+            "cargo.toml" => Some("Cargo.toml"),
+            "pyproject.toml" => Some("pyproject.toml"),
+            "go.mod" => Some("go.mod"),
+            "pom.xml" => Some("pom.xml"),
+            "composer.json" => Some("composer.json"),
+            "gemfile" => Some("Gemfile"),
+            "makefile" => Some("Makefile"),
+            "dockerfile" => Some("Dockerfile"),
+            _ if lower.ends_with(".sln") => Some(".sln"),
+            _ if lower.ends_with(".csproj") => Some(".csproj"),
+            _ => None,
+        };
+        if let Some(label) = label {
+            if !markers.iter().any(|existing| existing == label) {
+                markers.push(label.to_string());
+            }
+        }
+    }
+    if markers.is_empty() {
+        None
+    } else {
+        markers.sort();
+        Some(markers.into_iter().take(6).collect::<Vec<_>>().join(", "))
+    }
 }
 
 fn add_parent_folders(
@@ -8567,6 +8607,38 @@ mod tests {
         assert_eq!(
             archive_type_summary(&entries).as_deref(),
             Some("RS File 2, MD File 1")
+        );
+    }
+
+    #[test]
+    fn archive_project_summary_detects_project_markers() {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "app/package.json".to_string(),
+            (
+                "package.json".to_string(),
+                "app/".to_string(),
+                false,
+                10,
+                8,
+                0,
+            ),
+        );
+        entries.insert(
+            "src/QuickLook.Next.csproj".to_string(),
+            (
+                "QuickLook.Next.csproj".to_string(),
+                "src/".to_string(),
+                false,
+                10,
+                8,
+                0,
+            ),
+        );
+
+        assert_eq!(
+            archive_project_summary(&entries).as_deref(),
+            Some(".csproj, package.json")
         );
     }
 
