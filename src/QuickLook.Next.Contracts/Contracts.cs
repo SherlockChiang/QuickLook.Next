@@ -104,6 +104,7 @@ public sealed record OfficeLayoutItem(string Kind)
     public double Height { get; init; }
     public string? Text { get; init; }
     public string? Shape { get; init; }
+    public string? PlaceholderType { get; init; }
     public string? FillColor { get; init; }
     public string? StrokeColor { get; init; }
     public string? ImageName { get; init; }

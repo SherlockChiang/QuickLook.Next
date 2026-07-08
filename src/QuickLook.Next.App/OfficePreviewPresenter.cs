@@ -361,7 +361,7 @@ internal sealed class OfficePreviewPresenter
                 Child = new TextBlock
                 {
                     Text = item.Text,
-                    FontSize = layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase) ? Math.Clamp(16 * scale, 10, 18) : 12,
+                    FontSize = LayoutItemFontSize(layoutKind, item, scale),
                     TextWrapping = TextWrapping.Wrap,
                     TextTrimming = TextTrimming.WordEllipsis,
                     Foreground = OfficeBlackBrush,
@@ -413,6 +413,20 @@ internal sealed class OfficePreviewPresenter
         Canvas.SetLeft(element, x);
         Canvas.SetTop(element, y);
         canvas.Children.Add(element);
+    }
+
+    private static double LayoutItemFontSize(string layoutKind, OfficeLayoutItem item, double scale)
+    {
+        if (!layoutKind.Equals("presentation", StringComparison.OrdinalIgnoreCase))
+            return 12;
+
+        return item.PlaceholderType switch
+        {
+            "title" or "ctrTitle" => Math.Clamp(28 * scale, 16, 30),
+            "subTitle" => Math.Clamp(22 * scale, 13, 24),
+            "body" or "obj" => Math.Clamp(16 * scale, 10, 18),
+            _ => Math.Clamp(16 * scale, 10, 18),
+        };
     }
 
     private static ImageSource? CreateImageSourceFromBase64(string base64)

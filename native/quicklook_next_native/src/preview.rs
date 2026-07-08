@@ -111,6 +111,8 @@ struct OfficeLayoutItemDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     shape: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    placeholder_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     fill_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stroke_color: Option<String>,
@@ -1854,6 +1856,7 @@ fn build_docx_layout(
             height,
             text: Some(clipped),
             shape: None,
+            placeholder_type: None,
             fill_color: None,
             stroke_color: None,
             image_name: None,
@@ -1891,6 +1894,7 @@ fn build_docx_layout(
             height: 170.0,
             text: None,
             shape: None,
+            placeholder_type: None,
             fill_color: None,
             stroke_color: None,
             image_name: Some(
@@ -2029,6 +2033,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut shape_paragraph_had_text = false;
     let mut paragraph_prefix = String::new();
     let mut preset_shape: Option<String> = None;
+    let mut placeholder_type: Option<String> = None;
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut color_target = "";
@@ -2051,6 +2056,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     shape_paragraph_had_text = false;
                     paragraph_prefix.clear();
                     preset_shape = None;
+                    placeholder_type = None;
                     fill_color = None;
                     stroke_color = None;
                     color_target = "";
@@ -2071,6 +2077,9 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         color_target = "fill";
                     } else if local == "ln" {
                         color_target = "stroke";
+                    } else if local == "ph" {
+                        placeholder_type =
+                            attr_value(&e, "type").or_else(|| Some("body".to_string()));
                     }
                 }
             }
@@ -2086,6 +2095,8 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     rel_id = attr_value(&e, "embed").unwrap_or_default();
                 } else if local == "prstgeom" {
                     preset_shape = attr_value(&e, "prst");
+                } else if local == "ph" {
+                    placeholder_type = attr_value(&e, "type").or_else(|| Some("body".to_string()));
                 } else if local == "srgbclr" || local == "schemeclr" {
                     let color = office_color_from_element(&e);
                     if color_target == "stroke" {
@@ -2141,6 +2152,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                                 height,
                                 text: (!normalized.is_empty()).then_some(normalized),
                                 shape: preset_shape.clone(),
+                                placeholder_type: placeholder_type.clone(),
                                 fill_color: fill_color.clone(),
                                 stroke_color: stroke_color.clone(),
                                 image_name: None,
@@ -2912,6 +2924,7 @@ fn image_item_from_relationship<R: Read + Seek>(
         height,
         text: None,
         shape: None,
+        placeholder_type: None,
         fill_color: None,
         stroke_color: None,
         image_name: Some(path.rsplit('/').next().unwrap_or(path.as_str()).to_string()),
@@ -8114,6 +8127,7 @@ mod tests {
             "ppt/slides/",
             r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp>
+                    <p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
                     <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
                     <p:txBody>
                         <a:p><a:r><a:t>First</a:t></a:r></a:p>
@@ -8127,6 +8141,7 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].text.as_deref(), Some("First\nSecond"));
+        assert_eq!(items[0].placeholder_type.as_deref(), Some("title"));
     }
 
     #[test]
