@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using Windows.Data.Pdf;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -13,6 +14,7 @@ internal sealed class PdfPreviewSession : IDisposable
 {
     private const double MaxRenderDimension = 2200.0;
     private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
+    private const long MaxDiskCacheBytes = 256L * 1024 * 1024;
     private static readonly WinColor White = new() { A = 255, R = 255, G = 255, B = 255 };
 
     // Cross-session rendered-page cache: re-previewing the same PDF at the same zoom skips the
@@ -95,7 +97,47 @@ internal sealed class PdfPreviewSession : IDisposable
         return false;
     }
 
-    private static void StoreCached(string key, byte[] bgra, int w, int h)
+    private static bool TryGetDiskCached(string key, out (byte[] Bgra, int Width, int Height) result)
+    {
+        try
+        {
+            string path = DiskCachePath(key);
+            if (!File.Exists(path))
+            {
+                result = default;
+                return false;
+            }
+
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length <= 8)
+            {
+                result = default;
+                return false;
+            }
+
+            int width = BitConverter.ToInt32(bytes, 0);
+            int height = BitConverter.ToInt32(bytes, 4);
+            int pixelBytes = bytes.Length - 8;
+            if (width <= 0 || height <= 0 || pixelBytes != width * height * 4)
+            {
+                result = default;
+                return false;
+            }
+
+            var bgra = new byte[pixelBytes];
+            System.Buffer.BlockCopy(bytes, 8, bgra, 0, pixelBytes);
+            File.SetLastAccessTimeUtc(path, DateTime.UtcNow);
+            result = (bgra, width, height);
+            return true;
+        }
+        catch
+        {
+            result = default;
+            return false;
+        }
+    }
+
+    private static void StoreCached(string key, byte[] bgra, int w, int h, bool writeDisk = true)
     {
         lock (_cacheLock)
         {
@@ -119,6 +161,56 @@ internal sealed class PdfPreviewSession : IDisposable
                 if (_pageCache.Remove(oldNode.Value, out var evicted))
                     _cacheBytes -= evicted.Bgra.LongLength;
             }
+        }
+        if (writeDisk)
+            StoreDiskCached(key, bgra, w, h);
+    }
+
+    private static void StoreDiskCached(string key, byte[] bgra, int width, int height)
+    {
+        try
+        {
+            Directory.CreateDirectory(DiskCacheDirectory);
+            string path = DiskCachePath(key);
+            byte[] bytes = new byte[8 + bgra.Length];
+            BitConverter.GetBytes(width).CopyTo(bytes, 0);
+            BitConverter.GetBytes(height).CopyTo(bytes, 4);
+            System.Buffer.BlockCopy(bgra, 0, bytes, 8, bgra.Length);
+            File.WriteAllBytes(path, bytes);
+            TrimDiskCache();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("RasterHost", "pdf disk cache write failed: " + ex.Message);
+        }
+    }
+
+    private static string DiskCacheDirectory => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "QuickLook.Next",
+        "pdf-page-cache");
+
+    private static string DiskCachePath(string key)
+    {
+        byte[] hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
+        return System.IO.Path.Combine(DiskCacheDirectory, Convert.ToHexString(hash) + ".bgra");
+    }
+
+    private static void TrimDiskCache()
+    {
+        var directory = new DirectoryInfo(DiskCacheDirectory);
+        FileInfo[] files = directory.Exists ? directory.GetFiles("*.bgra") : [];
+        long total = files.Sum(file => file.Length);
+        foreach (FileInfo file in files.OrderBy(file => file.LastAccessTimeUtc))
+        {
+            if (total <= MaxDiskCacheBytes)
+                break;
+            try
+            {
+                total -= file.Length;
+                file.Delete();
+            }
+            catch { }
         }
     }
 
@@ -182,6 +274,11 @@ internal sealed class PdfPreviewSession : IDisposable
 
         string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
         if (TryGetCached(cacheKey, out var cached)) return cached;
+        if (TryGetDiskCached(cacheKey, out cached))
+        {
+            StoreCached(cacheKey, cached.Bgra, cached.Width, cached.Height, writeDisk: false);
+            return cached;
+        }
 
         var waitWatch = Stopwatch.StartNew();
         var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(Path, pageIndex, targetW, targetH))
