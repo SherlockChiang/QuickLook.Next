@@ -20,6 +20,8 @@ internal sealed class PdfPreviewSession : IDisposable
     private static readonly Dictionary<string, CachedPage> _pageCache = new();
     private static readonly LinkedList<string> _cacheLru = new();
     private static long _cacheBytes;
+    private static readonly object _inflightLock = new();
+    private static readonly Dictionary<string, Task<(byte[] Bgra, int Width, int Height)>> _inflightRenders = new();
 
     private sealed class CachedPage(byte[] bgra, int w, int h, LinkedListNode<string> node)
     {
@@ -114,6 +116,38 @@ internal sealed class PdfPreviewSession : IDisposable
         }
     }
 
+    private static Task<(byte[] Bgra, int Width, int Height)> GetOrStartInflight(
+        string key,
+        Func<Task<(byte[] Bgra, int Width, int Height)>> start)
+    {
+        lock (_inflightLock)
+        {
+            if (_inflightRenders.TryGetValue(key, out var existing))
+                return existing;
+
+            Task<(byte[] Bgra, int Width, int Height)> task = CompleteInflightAsync(key, start);
+            _inflightRenders[key] = task;
+            return task;
+        }
+    }
+
+    private static async Task<(byte[] Bgra, int Width, int Height)> CompleteInflightAsync(
+        string key,
+        Func<Task<(byte[] Bgra, int Width, int Height)>> start)
+    {
+        try
+        {
+            var rendered = await start();
+            StoreCached(key, rendered.Bgra, rendered.Width, rendered.Height);
+            return rendered;
+        }
+        finally
+        {
+            lock (_inflightLock)
+                _inflightRenders.Remove(key);
+        }
+    }
+
     /// <summary>
     /// Render one page directly to premultiplied BGRA. Uses BMP (uncompressed) as the intermediate
     /// format to eliminate the PNG compress/decompress round-trip — for a 2200×2800 page that's
@@ -144,37 +178,41 @@ internal sealed class PdfPreviewSession : IDisposable
             string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
             if (TryGetCached(cacheKey, out var cached)) return cached;
 
-            using var stream = new InMemoryRandomAccessStream();
-            token.ThrowIfCancellationRequested();
-            await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
-            {
-                DestinationWidth = targetW,
-                DestinationHeight = targetH,
-                BackgroundColor = White,
-            });
-            token.ThrowIfCancellationRequested();
-
-            stream.Seek(0);
-            BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
-            token.ThrowIfCancellationRequested();
-            PixelDataProvider pixels = await decoder.GetPixelDataAsync(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Premultiplied,
-                new BitmapTransform(),
-                ExifOrientationMode.IgnoreExifOrientation,
-                ColorManagementMode.DoNotColorManage);
-            token.ThrowIfCancellationRequested();
-
-            byte[] bgra = pixels.DetachPixelData();
-            int w = (int)decoder.PixelWidth;
-            int h = (int)decoder.PixelHeight;
-            StoreCached(cacheKey, bgra, w, h);
-            return (bgra, w, h);
+            return await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(_document, pageIndex, targetW, targetH))
+                .WaitAsync(token);
         }
         finally
         {
             _renderLock.Release();
         }
+    }
+
+    private static async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
+        PdfDocument document,
+        int pageIndex,
+        uint targetW,
+        uint targetH)
+    {
+        using PdfPage page = document.GetPage((uint)pageIndex);
+        using var stream = new InMemoryRandomAccessStream();
+        await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
+        {
+            DestinationWidth = targetW,
+            DestinationHeight = targetH,
+            BackgroundColor = White,
+        });
+
+        stream.Seek(0);
+        BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
+        PixelDataProvider pixels = await decoder.GetPixelDataAsync(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied,
+            new BitmapTransform(),
+            ExifOrientationMode.IgnoreExifOrientation,
+            ColorManagementMode.DoNotColorManage);
+
+        byte[] bgra = pixels.DetachPixelData();
+        return (bgra, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
     }
 
     public void Dispose()
@@ -183,6 +221,6 @@ internal sealed class PdfPreviewSession : IDisposable
         _disposed = true;
         try { _disposeCts.Cancel(); } catch { }
         _disposeCts.Dispose();
-        _renderLock.Dispose();
+        // In-flight renders may continue briefly to populate the cross-request cache.
     }
 }
