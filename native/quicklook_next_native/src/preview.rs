@@ -91,6 +91,10 @@ struct OfficeCellDto {
     #[serde(skip_serializing_if = "is_false")]
     bold: bool,
     #[serde(skip_serializing_if = "is_false")]
+    italic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    font_size: Option<f64>,
+    #[serde(skip_serializing_if = "is_false")]
     wrap_text: bool,
 }
 
@@ -2366,6 +2370,13 @@ fn parse_worksheet_layout_cells(
                                     .get(cell_style)
                                     .map(|style| style.bold)
                                     .unwrap_or(false),
+                                italic: styles
+                                    .get(cell_style)
+                                    .map(|style| style.italic)
+                                    .unwrap_or(false),
+                                font_size: styles
+                                    .get(cell_style)
+                                    .and_then(|style| style.font_size),
                                 wrap_text: styles
                                     .get(cell_style)
                                     .map(|style| style.wrap_text)
@@ -2400,6 +2411,8 @@ struct XlsxStyle {
     horizontal_alignment: Option<String>,
     vertical_alignment: Option<String>,
     bold: bool,
+    italic: bool,
+    font_size: Option<f64>,
     wrap_text: bool,
 }
 
@@ -2407,6 +2420,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut reader = Reader::from_str(xml);
     let mut custom_formats = BTreeMap::<u32, String>::new();
     let mut font_bold = Vec::<bool>::new();
+    let mut font_italic = Vec::<bool>::new();
+    let mut font_sizes = Vec::<Option<f64>>::new();
     let mut font_colors = Vec::<Option<String>>::new();
     let mut fill_colors = Vec::<Option<String>>::new();
     let mut styles = Vec::<XlsxStyle>::new();
@@ -2418,6 +2433,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut in_xf = false;
     let mut current_xf: Option<XlsxStyle> = None;
     let mut current_font_bold = false;
+    let mut current_font_italic = false;
+    let mut current_font_size: Option<f64> = None;
     let mut current_font_color: Option<String> = None;
     let mut current_fill_color: Option<String> = None;
 
@@ -2430,9 +2447,15 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 } else if local == "font" && in_fonts {
                     in_font = true;
                     current_font_bold = false;
+                    current_font_italic = false;
+                    current_font_size = None;
                     current_font_color = None;
                 } else if local == "b" && in_font {
                     current_font_bold = true;
+                } else if local == "i" && in_font {
+                    current_font_italic = true;
+                } else if local == "sz" && in_font {
+                    current_font_size = attr_f64(&e, "val").or(current_font_size);
                 } else if local == "color" && in_font {
                     current_font_color = xlsx_color_from_element(&e).or(current_font_color);
                 } else if local == "fills" {
@@ -2451,6 +2474,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                         &custom_formats,
                         &fill_colors,
                         &font_bold,
+                        &font_italic,
+                        &font_sizes,
                         &font_colors,
                     ));
                 } else if local == "alignment" && in_xf {
@@ -2465,6 +2490,10 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "b" && in_font {
                     current_font_bold = true;
+                } else if local == "i" && in_font {
+                    current_font_italic = true;
+                } else if local == "sz" && in_font {
+                    current_font_size = attr_f64(&e, "val").or(current_font_size);
                 } else if local == "color" && in_font {
                     current_font_color = xlsx_color_from_element(&e).or(current_font_color);
                 } else if local == "fill" && in_fills {
@@ -2477,6 +2506,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                         &custom_formats,
                         &fill_colors,
                         &font_bold,
+                        &font_italic,
+                        &font_sizes,
                         &font_colors,
                     ));
                 } else if local == "alignment" && in_xf {
@@ -2491,6 +2522,8 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "font" && in_font {
                     font_bold.push(current_font_bold);
+                    font_italic.push(current_font_italic);
+                    font_sizes.push(current_font_size);
                     font_colors.push(current_font_color.take());
                     in_font = false;
                     current_font_bold = false;
@@ -2554,6 +2587,8 @@ fn xlsx_style_from_xf(
     custom_formats: &BTreeMap<u32, String>,
     fill_colors: &[Option<String>],
     font_bold: &[bool],
+    font_italic: &[bool],
+    font_sizes: &[Option<f64>],
     font_colors: &[Option<String>],
 ) -> XlsxStyle {
     let fill_color = attr_value(e, "fillid")
@@ -2566,11 +2601,20 @@ fn xlsx_style_from_xf(
     let text_color = attr_value(e, "fontid")
         .and_then(|value| value.parse::<usize>().ok())
         .and_then(|id| font_colors.get(id).cloned().flatten());
+    let italic = attr_value(e, "fontid")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|id| font_italic.get(id).copied())
+        .unwrap_or(false);
+    let font_size = attr_value(e, "fontid")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|id| font_sizes.get(id).copied().flatten());
     XlsxStyle {
         number_format: xlsx_style_number_format(e, custom_formats),
         fill_color,
         text_color,
         bold,
+        italic,
+        font_size,
         ..Default::default()
     }
 }
@@ -7647,7 +7691,7 @@ mod tests {
             r#"<styleSheet>
                 <fonts count="2">
                     <font><sz val="11"/></font>
-                    <font><b/><color rgb="FF9C0006"/><sz val="11"/></font>
+                    <font><b/><i/><color rgb="FF9C0006"/><sz val="14"/></font>
                 </fonts>
                 <fills count="3">
                     <fill><patternFill patternType="none"/></fill>
@@ -7688,6 +7732,8 @@ mod tests {
             Some("top")
         );
         assert_eq!(styles.get(1).map(|style| style.bold), Some(true));
+        assert_eq!(styles.get(1).map(|style| style.italic), Some(true));
+        assert_eq!(styles.get(1).and_then(|style| style.font_size), Some(14.0));
         assert_eq!(styles.get(1).map(|style| style.wrap_text), Some(true));
         assert_eq!(styles.get(1).and_then(|style| style.text_color.as_deref()), Some("#9C0006"));
     }

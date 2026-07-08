@@ -232,8 +232,9 @@ internal sealed class OfficePreviewPresenter
             Child = new TextBlock
             {
                 Text = cell.Text,
-                FontSize = 12,
+                FontSize = FontSizeFor(cell.FontSize),
                 FontWeight = new Windows.UI.Text.FontWeight { Weight = cell.Bold ? (ushort)600 : (ushort)400 },
+                FontStyle = cell.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
                 MaxWidth = Math.Max(4, width - 10),
                 MaxHeight = Math.Max(4, height - 4),
                 TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
@@ -257,6 +258,9 @@ internal sealed class OfficePreviewPresenter
             "justify" or "distributed" => TextAlignment.Justify,
             _ => TextAlignment.Left,
         };
+
+    private static double FontSizeFor(double? value)
+        => value.HasValue ? Math.Clamp(value.Value, 6.0, 36.0) : 12.0;
 
     private static HorizontalAlignment HorizontalAlignmentFor(string? value)
         => value switch
