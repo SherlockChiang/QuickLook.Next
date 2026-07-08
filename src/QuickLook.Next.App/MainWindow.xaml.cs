@@ -1484,6 +1484,9 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Color type", metadata.ColorType);
         AddIfValue(rows, "Alpha", metadata.HasAlpha.HasValue ? (metadata.HasAlpha.Value ? "yes" : "no") : null);
         AddIfValue(rows, "Interlace", metadata.Interlace);
+        AddIfValue(rows, "Animated", metadata.Animated.HasValue ? (metadata.Animated.Value ? "yes" : "no") : null);
+        AddIfValue(rows, "Frames", metadata.FrameCount?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Animation duration", metadata.DurationMs is > 0 ? $"{metadata.DurationMs.Value / 1000.0:0.###} s" : null);
         AddIfValue(rows, "Date taken", FormatExifDateTime(metadata.DateTime));
         AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
         AddIfValue(rows, "Lens", JoinNonEmpty(metadata.LensMake, metadata.LensModel));

@@ -294,13 +294,88 @@ struct ExifMetadata {
     color_type: Option<String>,
     has_alpha: Option<bool>,
     interlace: Option<String>,
+    animated: Option<bool>,
+    frame_count: Option<u32>,
+    duration_ms: Option<u32>,
 }
 
 pub fn render_image_metadata(path: &str) -> String {
     parse_jpeg_exif_metadata(path)
         .or_else(|| parse_png_metadata(path))
+        .or_else(|| parse_gif_metadata(path))
         .map(|metadata| to_json(&metadata))
         .unwrap_or_default()
+}
+
+fn parse_gif_metadata(path: &str) -> Option<ExifMetadata> {
+    let bytes = read_file_prefix(path, 1024 * 1024)?;
+    parse_gif_metadata_from_bytes(&bytes)
+}
+
+fn parse_gif_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
+    if bytes.get(0..6)? != b"GIF87a" && bytes.get(0..6)? != b"GIF89a" {
+        return None;
+    }
+    let width = read_u16(bytes, 6)? as u32;
+    let height = read_u16(bytes, 8)? as u32;
+    let packed = *bytes.get(10)?;
+    let mut offset = 13usize;
+    if packed & 0x80 != 0 {
+        let colors = 1usize << ((packed & 0x07) + 1);
+        offset = offset.checked_add(colors.checked_mul(3)?)?;
+    }
+    let mut frames = 0u32;
+    let mut duration_ms = 0u32;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            0x2C => {
+                frames = frames.saturating_add(1);
+                offset = offset.checked_add(10)?;
+                let image_packed = *bytes.get(offset - 1)?;
+                if image_packed & 0x80 != 0 {
+                    let colors = 1usize << ((image_packed & 0x07) + 1);
+                    offset = offset.checked_add(colors.checked_mul(3)?)?;
+                }
+                offset = offset.checked_add(1)?;
+                offset = skip_gif_sub_blocks(bytes, offset)?;
+            }
+            0x21 => {
+                let label = *bytes.get(offset + 1)?;
+                if label == 0xF9 && bytes.get(offset + 2).copied() == Some(4) {
+                    let delay = read_u16(bytes, offset + 4).unwrap_or(0) as u32;
+                    duration_ms = duration_ms.saturating_add(delay.saturating_mul(10));
+                    offset = offset.checked_add(8)?;
+                } else {
+                    offset = skip_gif_sub_blocks(bytes, offset + 2)?;
+                }
+            }
+            0x3B => break,
+            _ => break,
+        }
+    }
+    Some(ExifMetadata {
+        format: Some("GIF".to_string()),
+        width: Some(width),
+        height: Some(height),
+        animated: Some(frames > 1),
+        frame_count: (frames > 0).then_some(frames),
+        duration_ms: (duration_ms > 0).then_some(duration_ms),
+        ..Default::default()
+    })
+}
+
+fn skip_gif_sub_blocks(bytes: &[u8], mut offset: usize) -> Option<usize> {
+    loop {
+        let len = *bytes.get(offset)? as usize;
+        offset = offset.checked_add(1)?;
+        if len == 0 {
+            return Some(offset);
+        }
+        offset = offset.checked_add(len)?;
+        if offset > bytes.len() {
+            return None;
+        }
+    }
 }
 
 fn parse_png_metadata(path: &str) -> Option<ExifMetadata> {
@@ -8806,6 +8881,35 @@ mod tests {
         assert_eq!(metadata.color_type.as_deref(), Some("truecolor with alpha"));
         assert_eq!(metadata.has_alpha, Some(true));
         assert_eq!(metadata.interlace.as_deref(), Some("Adam7"));
+    }
+
+    #[test]
+    fn gif_metadata_reads_animation_summary() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GIF89a");
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&3u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 0]);
+        for delay in [5u16, 7u16] {
+            bytes.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00]);
+            bytes.extend_from_slice(&delay.to_le_bytes());
+            bytes.extend_from_slice(&[0x00, 0x00]);
+            bytes.push(0x2C);
+            bytes.extend_from_slice(&[0, 0, 0, 0]);
+            bytes.extend_from_slice(&2u16.to_le_bytes());
+            bytes.extend_from_slice(&3u16.to_le_bytes());
+            bytes.extend_from_slice(&[0x00, 0x02, 0x02, 0x4C, 0x01, 0x00]);
+        }
+        bytes.push(0x3B);
+
+        let metadata = parse_gif_metadata_from_bytes(&bytes).expect("gif metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("GIF"));
+        assert_eq!(metadata.width, Some(2));
+        assert_eq!(metadata.height, Some(3));
+        assert_eq!(metadata.animated, Some(true));
+        assert_eq!(metadata.frame_count, Some(2));
+        assert_eq!(metadata.duration_ms, Some(120));
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {

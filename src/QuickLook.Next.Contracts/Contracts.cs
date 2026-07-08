@@ -177,6 +177,9 @@ public sealed record ImageMetadata
     public string? ColorType { get; init; }
     public bool? HasAlpha { get; init; }
     public string? Interlace { get; init; }
+    public bool? Animated { get; init; }
+    public uint? FrameCount { get; init; }
+    public uint? DurationMs { get; init; }
 }
 
 public sealed record PreviewTable(string Format)
