@@ -64,13 +64,19 @@ internal sealed class AnimatedImagePreviewPresenter
         _sourceHeight = Math.Max(1, ready.PreferredHeight);
         _image.Width = _sourceWidth;
         _image.Height = _sourceHeight;
-        _image.Source = new BitmapImage(new Uri(path));
-        ResetView();
-        ScheduleLayoutUpdate();
-
         double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
         double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
         double scale = Math.Min(1.0, Math.Min(imageMaxWidth / _sourceWidth, imageMaxHeight / _sourceHeight));
+        var bitmap = new BitmapImage(new Uri(path));
+        if (scale < 1.0)
+        {
+            bitmap.DecodePixelWidth = Math.Max(1, (int)Math.Round(_sourceWidth * scale));
+            bitmap.DecodePixelHeight = Math.Max(1, (int)Math.Round(_sourceHeight * scale));
+        }
+        _image.Source = bitmap;
+        ResetView();
+        ScheduleLayoutUpdate();
+
         double width = _sourceWidth * scale + InfoRailWidth;
         double height = _sourceHeight * scale + ToolbarHeight;
         return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
