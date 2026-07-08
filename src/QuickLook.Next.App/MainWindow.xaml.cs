@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.IO;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.VisualBasic.FileIO;
@@ -891,12 +892,21 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            var attachWatch = Stopwatch.StartNew();
             if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
             {
                 StatusText.Text = error ?? UiStrings.SurfaceFailed;
                 return;
             }
-            DispatcherQueue.TryEnqueue(_rasterPresenter.UpdateLayout);
+            attachWatch.Stop();
+            DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                var layoutWatch = Stopwatch.StartNew();
+                _rasterPresenter.UpdateLayout();
+                layoutWatch.Stop();
+                DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
+            });
         }
         catch (Exception ex)
         {

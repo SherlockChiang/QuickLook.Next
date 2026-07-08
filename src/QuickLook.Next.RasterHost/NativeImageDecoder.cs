@@ -9,12 +9,17 @@ internal sealed record NativeDecodedImage(
     int Width,
     int Height,
     int OriginalWidth,
-    int OriginalHeight);
+    int OriginalHeight)
+{
+    public int DecodeMilliseconds { get; init; }
+    public int ResizeMilliseconds { get; init; }
+    public int ConvertMilliseconds { get; init; }
+}
 
 internal static class NativeImageDecoder
 {
     private const string Dll = "quicklook_next_native";
-    private const int HeaderBytes = 16;
+    private const int HeaderBytes = 28;
     private const int MaxPreviewRasterDimension = 2048;
     private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
@@ -137,13 +142,21 @@ internal static class NativeImageDecoder
                         int height = checked((int)BitConverter.ToUInt32(buffer, 4));
                         int originalWidth = checked((int)BitConverter.ToUInt32(buffer, 8));
                         int originalHeight = checked((int)BitConverter.ToUInt32(buffer, 12));
+                        int decodeMs = checked((int)BitConverter.ToUInt32(buffer, 16));
+                        int resizeMs = checked((int)BitConverter.ToUInt32(buffer, 20));
+                        int convertMs = checked((int)BitConverter.ToUInt32(buffer, 24));
                         int pixelBytes = n - HeaderBytes;
                         if (width <= 0 || height <= 0 || pixelBytes != width * height * 4)
                             return null;
 
                         var bgra = new byte[pixelBytes];
                         Buffer.BlockCopy(buffer, HeaderBytes, bgra, 0, pixelBytes);
-                        return new NativeDecodedImage(bgra, width, height, originalWidth, originalHeight);
+                        return new NativeDecodedImage(bgra, width, height, originalWidth, originalHeight)
+                        {
+                            DecodeMilliseconds = decodeMs,
+                            ResizeMilliseconds = resizeMs,
+                            ConvertMilliseconds = convertMs,
+                        };
                     }
 
                     if (n < 0)

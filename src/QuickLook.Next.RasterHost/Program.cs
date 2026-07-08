@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using QuickLook.Next.Core;
 using QuickLook.Next.RasterHost;
@@ -198,8 +199,14 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
-                DiagLog.Write("RasterHost", $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}");
+                DiagLog.Write(
+                    "RasterHost",
+                    $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}; " +
+                    $"native decode={image.DecodeMilliseconds}ms resize={image.ResizeMilliseconds}ms convert={image.ConvertMilliseconds}ms");
+                var uploadWatch = Stopwatch.StartNew();
                 long imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                uploadWatch.Stop();
+                DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
                 cancellationToken.ThrowIfCancellationRequested();
                 await channel.SendAsync(new PreviewSurface(
                     open.RequestId, imageHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM"));

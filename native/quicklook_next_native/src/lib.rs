@@ -803,7 +803,8 @@ fn classify(ext: &str, magic: &[u8]) -> &'static str {
 
 // ── Native image decode ──────────────────────────────────────────────────────────────────────
 // Decode common image formats in Rust and return a constrained BGRA raster for the .NET raster host.
-// Output layout: [w:u32 LE][h:u32 LE][orig_w:u32 LE][orig_h:u32 LE][premultiplied BGRA bytes].
+// Output layout: [w:u32 LE][h:u32 LE][orig_w:u32 LE][orig_h:u32 LE]
+// [decode_ms:u32 LE][resize_ms:u32 LE][convert_ms:u32 LE][premultiplied BGRA bytes].
 
 const MAX_IMAGE_RASTER_DIMENSION: u32 = 2048;
 
@@ -843,7 +844,7 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
         None => return -1,
     };
 
-    let (width, height, original_width, original_height, bgra) =
+    let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
         match decode_image_bgra(path, target_width, target_height, cancel_cb) {
             Some(decoded) => decoded,
             None => return -2,
@@ -852,7 +853,7 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
         return -3;
     }
 
-    let total = 16 + bgra.len();
+    let total = 28 + bgra.len();
     if out.is_null() || out_cap < total {
         return -(total as i32);
     }
@@ -862,7 +863,10 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
         std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(4), 4);
         std::ptr::copy_nonoverlapping(original_width.to_le_bytes().as_ptr(), out.add(8), 4);
         std::ptr::copy_nonoverlapping(original_height.to_le_bytes().as_ptr(), out.add(12), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(16), bgra.len());
+        std::ptr::copy_nonoverlapping(decode_ms.to_le_bytes().as_ptr(), out.add(16), 4);
+        std::ptr::copy_nonoverlapping(resize_ms.to_le_bytes().as_ptr(), out.add(20), 4);
+        std::ptr::copy_nonoverlapping(convert_ms.to_le_bytes().as_ptr(), out.add(24), 4);
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(28), bgra.len());
     }
     total as i32
 }
@@ -872,7 +876,7 @@ fn decode_image_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, u32, u32, Vec<u8>)> {
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -890,12 +894,14 @@ fn decode_image_bgra(
         return None;
     }
 
+    let decode_start = Instant::now();
     let image = ImageReader::open(path)
         .ok()?
         .with_guessed_format()
         .ok()?
         .decode()
         .ok()?;
+    let decode_ms = elapsed_ms_u32(decode_start);
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -919,15 +925,18 @@ fn decode_image_bgra(
         return None;
     }
 
+    let resize_start = Instant::now();
     let raster = if width == original_width && height == original_height {
         image
     } else {
         image.resize_exact(width, height, image::imageops::FilterType::Triangle)
     };
+    let resize_ms = elapsed_ms_u32(resize_start);
     if cancel_requested(cancel_cb) {
         return None;
     }
 
+    let convert_start = Instant::now();
     let rgba = raster.to_rgba8();
     let mut bgra = Vec::with_capacity((width * height * 4) as usize);
     for (index, px) in rgba.chunks_exact(4).enumerate() {
@@ -946,8 +955,13 @@ fn decode_image_bgra(
     if cancel_requested(cancel_cb) {
         return None;
     }
+    let convert_ms = elapsed_ms_u32(convert_start);
 
-    Some((width, height, original_width, original_height, bgra))
+    Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+}
+
+fn elapsed_ms_u32(start: Instant) -> u32 {
+    start.elapsed().as_millis().min(u32::MAX as u128) as u32
 }
 
 fn should_skip_native_image_decode(width: u32, height: u32) -> bool {
