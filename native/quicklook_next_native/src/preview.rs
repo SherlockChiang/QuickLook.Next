@@ -2295,10 +2295,10 @@ fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
 }
 
 fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32, String>) {
-    let Some(id) = attr_value(e, "numFmtId").and_then(|value| value.parse::<u32>().ok()) else {
+    let Some(id) = attr_value(e, "numfmtid").and_then(|value| value.parse::<u32>().ok()) else {
         return;
     };
-    let Some(format) = attr_value(e, "formatCode") else {
+    let Some(format) = attr_value(e, "formatcode") else {
         return;
     };
     if !format.trim().is_empty() {
@@ -2307,7 +2307,7 @@ fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32,
 }
 
 fn xlsx_style_number_format(e: &BytesStart, custom_formats: &BTreeMap<u32, String>) -> Option<String> {
-    let id = attr_value(e, "numFmtId").and_then(|value| value.parse::<u32>().ok())?;
+    let id = attr_value(e, "numfmtid").and_then(|value| value.parse::<u32>().ok())?;
     custom_formats
         .get(&id)
         .cloned()
