@@ -1486,14 +1486,21 @@ fn render_docx(path: &str) -> String {
         None => return String::new(),
     };
     let media_entries = office_media_entries(&mut zip, &["word/media/"]);
+    let header_footer_entries = docx_header_footer_entries(&mut zip);
     let xml = match read_zip_text(&mut zip, "word/document.xml", 16 * 1024 * 1024) {
         Some(xml) => xml,
         None => return office_error_json(path, "DOCX", "word/document.xml not found"),
     };
+    let header_footer_text = extract_docx_header_footer_text(&mut zip, &header_footer_entries);
     let body = extract_wordprocessing_text(&xml);
     let layout = build_docx_layout(&mut zip, &body, &media_entries);
     let mut text = format!("Name: {filename}\nKind: Word document\n");
     append_office_media_summary(&mut text, &media_entries);
+    if !header_footer_text.is_empty() {
+        text.push_str("Headers/footers:\n");
+        text.push_str(&header_footer_text);
+        text.push('\n');
+    }
     let text = if body.trim().is_empty() {
         text.push_str("Status: no extractable text");
         text
@@ -2589,6 +2596,56 @@ fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32,
     if !format.trim().is_empty() {
         formats.insert(id, format);
     }
+}
+
+fn docx_header_footer_entries<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
+    let mut entries = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
+        if entry.size() > 1024 * 1024 {
+            continue;
+        }
+        let normalized = entry.name().replace('\\', "/");
+        if is_docx_header_footer_name(&normalized) {
+            entries.push(normalized);
+        }
+    }
+    entries.sort();
+    entries.truncate(8);
+    entries
+}
+
+fn is_docx_header_footer_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let Some(file) = lower.rsplit('/').next() else {
+        return false;
+    };
+    lower.starts_with("word/")
+        && lower.ends_with(".xml")
+        && (file.starts_with("header") || file.starts_with("footer"))
+}
+
+fn extract_docx_header_footer_text<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    entries: &[String],
+) -> String {
+    let mut out = Vec::new();
+    for entry in entries.iter().take(8) {
+        let Some(xml) = read_zip_text(zip, entry, 1024 * 1024) else {
+            continue;
+        };
+        let text = extract_wordprocessing_text(&xml);
+        if !text.trim().is_empty() {
+            out.push(format!(
+                "- {}: {}",
+                file_name(entry),
+                normalize_preview_lines(&text)
+            ));
+        }
+    }
+    out.join("\n")
 }
 
 fn xlsx_style_number_format(
@@ -8079,7 +8136,7 @@ fn days_to_date(days_since_epoch: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
 
     #[test]
     fn utf8_text_truncation_stays_on_char_boundary() {
@@ -8248,6 +8305,45 @@ mod tests {
 
         assert!(text.contains("First page\n[page break]\nSecond page"));
         assert!(text.contains("[section break]\nNext section"));
+    }
+
+    #[test]
+    fn docx_header_footer_entries_extract_text() {
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .start_file("word/header1.xml", options)
+            .expect("header file");
+        writer
+            .write_all(
+                br#"<w:hdr xmlns:w="w"><w:p><w:r><w:t>Confidential</w:t></w:r></w:p></w:hdr>"#,
+            )
+            .expect("header xml");
+        writer
+            .start_file("word/footer1.xml", options)
+            .expect("footer file");
+        writer
+            .write_all(
+                br#"<w:ftr xmlns:w="w"><w:p><w:r><w:t>Page footer</w:t></w:r></w:p></w:ftr>"#,
+            )
+            .expect("footer xml");
+        let mut cursor = writer.finish().expect("zip bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("docx zip");
+
+        let entries = docx_header_footer_entries(&mut zip);
+        let text = extract_docx_header_footer_text(&mut zip, &entries);
+
+        assert_eq!(
+            entries,
+            vec![
+                "word/footer1.xml".to_string(),
+                "word/header1.xml".to_string()
+            ]
+        );
+        assert!(text.contains("footer1.xml: Page footer"));
+        assert!(text.contains("header1.xml: Confidential"));
     }
 
     #[test]
