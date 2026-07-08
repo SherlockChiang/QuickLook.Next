@@ -4,7 +4,7 @@
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
@@ -4299,8 +4299,92 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
                 text.push_str("\n  Columns: ");
                 text.push_str(&columns.join(", "));
             }
+            if let Some(count) = count_sqlite_table_rows(bytes, page_size, row.root_page, 128) {
+                text.push_str(&format!(
+                    "\n  Rows observed: {}{}",
+                    format_number(count.rows as i64),
+                    if count.partial { " (partial)" } else { "" }
+                ));
+            }
         }
     }
+}
+
+struct SqliteRowCount {
+    rows: u64,
+    partial: bool,
+}
+
+fn count_sqlite_table_rows(
+    bytes: &[u8],
+    page_size: usize,
+    root_page: i64,
+    max_pages: usize,
+) -> Option<SqliteRowCount> {
+    if page_size < 512 || root_page <= 0 || max_pages == 0 {
+        return None;
+    }
+    let mut stack = vec![root_page as u32];
+    let mut seen = BTreeSet::<u32>::new();
+    let mut rows = 0u64;
+    let mut partial = false;
+    while let Some(page_no) = stack.pop() {
+        if seen.len() >= max_pages {
+            partial = true;
+            break;
+        }
+        if !seen.insert(page_no) {
+            continue;
+        }
+        let Some(page) = sqlite_page(bytes, page_size, page_no) else {
+            partial = true;
+            continue;
+        };
+        let header = if page_no == 1 { 100 } else { 0 };
+        let page_type = page.get(header).copied().unwrap_or(0);
+        let cell_count = read_u16_be(page, header + 3).unwrap_or(0) as u64;
+        match page_type {
+            0x0D => rows = rows.saturating_add(cell_count),
+            0x05 => {
+                for child in sqlite_table_interior_children(page, header) {
+                    stack.push(child);
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(SqliteRowCount { rows, partial })
+}
+
+fn sqlite_page(bytes: &[u8], page_size: usize, page_no: u32) -> Option<&[u8]> {
+    if page_no == 0 {
+        return None;
+    }
+    let start = (page_no as usize).checked_sub(1)?.checked_mul(page_size)?;
+    let end = start.checked_add(page_size)?;
+    bytes.get(start..end)
+}
+
+fn sqlite_table_interior_children(page: &[u8], header: usize) -> Vec<u32> {
+    let cell_count = read_u16_be(page, header + 3).unwrap_or(0).min(512) as usize;
+    let mut children = Vec::new();
+    if let Some(rightmost) = read_u32_be(page, header + 8) {
+        if rightmost > 0 {
+            children.push(rightmost);
+        }
+    }
+    for index in 0..cell_count {
+        let ptr_offset = header + 12 + index * 2;
+        let Some(cell_offset) = read_u16_be(page, ptr_offset).map(usize::from) else {
+            break;
+        };
+        if let Some(child) = read_u32_be(page, cell_offset) {
+            if child > 0 {
+                children.push(child);
+            }
+        }
+    }
+    children
 }
 
 fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec<SqliteSchemaRow> {
@@ -8167,6 +8251,41 @@ mod tests {
                 "balance DECIMAL(10, 2)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn sqlite_row_counter_counts_leaf_and_interior_pages() {
+        let page_size = 512usize;
+        let mut bytes = vec![0u8; page_size * 4];
+        bytes[page_size] = 0x05;
+        bytes[page_size + 3..page_size + 5].copy_from_slice(&1u16.to_be_bytes());
+        bytes[page_size + 8..page_size + 12].copy_from_slice(&4u32.to_be_bytes());
+        bytes[page_size + 12..page_size + 14].copy_from_slice(&100u16.to_be_bytes());
+        bytes[page_size + 100..page_size + 104].copy_from_slice(&3u32.to_be_bytes());
+        bytes[page_size * 2] = 0x0D;
+        bytes[page_size * 2 + 3..page_size * 2 + 5].copy_from_slice(&2u16.to_be_bytes());
+        bytes[page_size * 3] = 0x0D;
+        bytes[page_size * 3 + 3..page_size * 3 + 5].copy_from_slice(&3u16.to_be_bytes());
+
+        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128).expect("row count");
+
+        assert_eq!(count.rows, 5);
+        assert!(!count.partial);
+    }
+
+    #[test]
+    fn sqlite_row_counter_marks_missing_pages_partial() {
+        let page_size = 512usize;
+        let mut bytes = vec![0u8; page_size * 2];
+        bytes[page_size] = 0x05;
+        bytes[page_size + 3..page_size + 5].copy_from_slice(&1u16.to_be_bytes());
+        bytes[page_size + 12..page_size + 14].copy_from_slice(&100u16.to_be_bytes());
+        bytes[page_size + 100..page_size + 104].copy_from_slice(&3u32.to_be_bytes());
+
+        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128).expect("row count");
+
+        assert_eq!(count.rows, 0);
+        assert!(count.partial);
     }
 
     #[test]
