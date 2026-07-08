@@ -2953,49 +2953,118 @@ fn extract_wordprocessing_text(xml: &str) -> String {
     let mut out = String::new();
     let mut in_text = false;
     let mut paragraph_had_text = false;
+    let mut paragraph_prefix = String::new();
+    let mut in_table = false;
+    let mut in_row = false;
+    let mut in_cell = false;
+    let mut cell_text = String::new();
+    let mut row_cells: Vec<String> = Vec::new();
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
+                    if !paragraph_prefix.is_empty() && !paragraph_had_text {
+                        if in_cell {
+                            cell_text.push_str(&paragraph_prefix);
+                        } else {
+                            out.push_str(&paragraph_prefix);
+                        }
+                    }
                     in_text = true;
+                } else if local == "tbl" {
+                    in_table = true;
+                } else if local == "tr" && in_table {
+                    in_row = true;
+                    row_cells.clear();
+                } else if local == "tc" && in_row {
+                    in_cell = true;
+                    cell_text.clear();
+                    paragraph_had_text = false;
+                } else if local == "pstyle" {
+                    paragraph_prefix = docx_paragraph_prefix(&e);
                 }
             }
             Ok(Event::End(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
                     in_text = false;
-                } else if local == "p" || local == "tr" {
-                    if paragraph_had_text && !out.ends_with('\n') {
-                        out.push('\n');
+                } else if local == "p" {
+                    if paragraph_had_text {
+                        if in_cell {
+                            if !cell_text.ends_with(' ') {
+                                cell_text.push(' ');
+                            }
+                        } else if !out.ends_with('\n') {
+                            out.push('\n');
+                        }
                     }
                     paragraph_had_text = false;
+                    paragraph_prefix.clear();
+                } else if local == "tc" && in_cell {
+                    row_cells.push(normalize_preview_lines(&cell_text).replace('\n', " "));
+                    cell_text.clear();
+                    in_cell = false;
+                    paragraph_had_text = false;
+                    paragraph_prefix.clear();
+                } else if local == "tr" && in_row {
+                    if !row_cells.iter().all(|cell| cell.trim().is_empty()) {
+                        out.push_str("| ");
+                        out.push_str(&row_cells.join(" | "));
+                        out.push_str(" |\n");
+                    }
+                    row_cells.clear();
+                    in_row = false;
+                } else if local == "tbl" {
+                    in_table = false;
                 } else if local == "tab" {
-                    out.push('\t');
+                    if in_cell {
+                        cell_text.push('\t');
+                    } else {
+                        out.push('\t');
+                    }
                 }
             }
             Ok(Event::Empty(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "tab" {
-                    out.push('\t');
+                    if in_cell {
+                        cell_text.push('\t');
+                    } else {
+                        out.push('\t');
+                    }
                     paragraph_had_text = true;
                 } else if local == "br" {
-                    out.push('\n');
+                    if in_cell {
+                        cell_text.push(' ');
+                    } else {
+                        out.push('\n');
+                    }
                     paragraph_had_text = false;
+                } else if local == "pstyle" {
+                    paragraph_prefix = docx_paragraph_prefix(&e);
                 }
             }
             Ok(Event::Text(e)) if in_text => {
                 let value = xml_unescape_bytes(e.as_ref());
                 if !value.is_empty() {
-                    out.push_str(&value);
+                    if in_cell {
+                        cell_text.push_str(&value);
+                    } else {
+                        out.push_str(&value);
+                    }
                     paragraph_had_text = true;
                 }
             }
             Ok(Event::CData(e)) if in_text => {
                 let value = String::from_utf8_lossy(e.as_ref());
                 if !value.is_empty() {
-                    out.push_str(&value);
+                    if in_cell {
+                        cell_text.push_str(&value);
+                    } else {
+                        out.push_str(&value);
+                    }
                     paragraph_had_text = true;
                 }
             }
@@ -3006,6 +3075,27 @@ fn extract_wordprocessing_text(xml: &str) -> String {
     }
 
     normalize_preview_lines(&out)
+}
+
+fn docx_paragraph_prefix(e: &BytesStart<'_>) -> String {
+    let Some(style) = attr_value(e, "val") else {
+        return String::new();
+    };
+    let lower = style.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("heading") {
+        let level = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>()
+            .parse::<usize>()
+            .unwrap_or(1)
+            .clamp(1, 6);
+        return format!("{} ", "#".repeat(level));
+    }
+    if lower == "title" {
+        return "# ".to_string();
+    }
+    String::new()
 }
 
 fn parse_shared_strings(xml: &str) -> Vec<String> {
@@ -6342,6 +6432,39 @@ mod tests {
             items[0].text.as_deref(),
             Some("[center] • Centered bullet\n[right] Right aligned")
         );
+    }
+
+    #[test]
+    fn docx_text_extraction_marks_headings() {
+        let text = extract_wordprocessing_text(
+            r#"<w:document xmlns:w="w"><w:body>
+                <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Overview</w:t></w:r></w:p>
+                <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Details</w:t></w:r></w:p>
+                <w:p><w:r><w:t>Body copy</w:t></w:r></w:p>
+            </w:body></w:document>"#,
+        );
+
+        assert_eq!(text, "# Overview\n### Details\nBody copy");
+    }
+
+    #[test]
+    fn docx_text_extraction_formats_table_rows() {
+        let text = extract_wordprocessing_text(
+            r#"<w:document xmlns:w="w"><w:body>
+                <w:tbl>
+                    <w:tr>
+                        <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
+                        <w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc>
+                    </w:tr>
+                    <w:tr>
+                        <w:tc><w:p><w:r><w:t>Rows</w:t></w:r></w:p></w:tc>
+                        <w:tc><w:p><w:r><w:t>42</w:t></w:r></w:p></w:tc>
+                    </w:tr>
+                </w:tbl>
+            </w:body></w:document>"#,
+        );
+
+        assert_eq!(text, "| Name | Value |\n| Rows | 42 |");
     }
 
     #[test]
