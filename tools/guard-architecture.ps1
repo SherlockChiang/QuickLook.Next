@@ -177,3 +177,8 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host "architecture guard passed" -ForegroundColor Green
+
+$staleCallbackGuard = Join-Path $PSScriptRoot "guard-stale-callbacks.ps1"
+if (Test-Path $staleCallbackGuard) {
+    & $staleCallbackGuard -Root $Root
+}

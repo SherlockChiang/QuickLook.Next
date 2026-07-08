@@ -46,6 +46,7 @@ internal sealed class PdfPreviewPresenter
     private long _touchTick;
     private int _currentPageIndex;
     private double _lastScrollOffset;
+    private int _renderVersion;
 
     public PdfPreviewPresenter(
         ScrollViewer scrollViewer,
@@ -76,6 +77,7 @@ internal sealed class PdfPreviewPresenter
         Clear();
         _requestId = requestId;
         _currentPageIndex = 0;
+        int version = _renderVersion;
 
         double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
         double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
@@ -104,7 +106,11 @@ internal sealed class PdfPreviewPresenter
         _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         _pagerBar.Visibility = pageCount > 1 ? Visibility.Visible : Visibility.Collapsed;
         UpdatePager();
-        Task.Delay(100).ContinueWith(_ => _dispatcherQueue.TryEnqueue(RequestVisiblePages));
+        Task.Delay(100).ContinueWith(_ => _dispatcherQueue.TryEnqueue(() =>
+        {
+            if (version == _renderVersion)
+                RequestVisiblePages();
+        }));
         return new PdfPreviewResult(
             $"pdf: {ready.Title}",
             Math.Min(maxContent.Width, displayWidth + 64),
@@ -215,6 +221,7 @@ internal sealed class PdfPreviewPresenter
         _currentPageIndex = 0;
         _lastScrollOffset = 0;
         _requestId = null;
+        _renderVersion++;
         _pagerBar.Visibility = Visibility.Collapsed;
         UpdatePager();
     }
