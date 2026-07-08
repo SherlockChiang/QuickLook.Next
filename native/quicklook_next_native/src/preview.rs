@@ -7843,6 +7843,9 @@ fn archive_listing_json(
             summary.push_str(&format!(" - {:.1}% saved", saved.clamp(0.0, 100.0)));
         }
     }
+    if let Some(types) = archive_type_summary(&entries) {
+        summary.push_str(&format!(" - Types: {types}"));
+    }
 
     let mut items = Vec::with_capacity(entries.len());
     for (path, (name, parent, is_folder, size, packed, modified)) in &entries {
@@ -7885,6 +7888,31 @@ fn archive_listing_json(
         table: None,
         markdown: None,
     })
+}
+
+fn archive_type_summary(
+    entries: &BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+) -> Option<String> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for (name, _, is_folder, _, _, _) in entries.values() {
+        if *is_folder {
+            continue;
+        }
+        *counts.entry(type_for_ext(name).to_string()).or_default() += 1;
+    }
+    if counts.is_empty() {
+        return None;
+    }
+    let mut pairs = counts.into_iter().collect::<Vec<_>>();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Some(
+        pairs
+            .into_iter()
+            .take(4)
+            .map(|(typ, count)| format!("{typ} {count}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn add_parent_folders(
@@ -8445,6 +8473,32 @@ mod tests {
         );
         assert!(text.contains("footer1.xml: Page footer"));
         assert!(text.contains("header1.xml: Confidential"));
+    }
+
+    #[test]
+    fn archive_type_summary_counts_common_types() {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "src/".to_string(),
+            ("src".to_string(), "".to_string(), true, 0, 0, 0),
+        );
+        entries.insert(
+            "src/main.rs".to_string(),
+            ("main.rs".to_string(), "src/".to_string(), false, 10, 8, 0),
+        );
+        entries.insert(
+            "src/lib.rs".to_string(),
+            ("lib.rs".to_string(), "src/".to_string(), false, 10, 8, 0),
+        );
+        entries.insert(
+            "README.md".to_string(),
+            ("README.md".to_string(), "".to_string(), false, 10, 8, 0),
+        );
+
+        assert_eq!(
+            archive_type_summary(&entries).as_deref(),
+            Some("RS File 2, MD File 1")
+        );
     }
 
     #[test]
