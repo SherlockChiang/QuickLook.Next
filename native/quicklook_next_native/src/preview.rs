@@ -303,8 +303,87 @@ pub fn render_image_metadata(path: &str) -> String {
     parse_jpeg_exif_metadata(path)
         .or_else(|| parse_png_metadata(path))
         .or_else(|| parse_gif_metadata(path))
+        .or_else(|| parse_webp_metadata(path))
         .map(|metadata| to_json(&metadata))
         .unwrap_or_default()
+}
+
+fn parse_webp_metadata(path: &str) -> Option<ExifMetadata> {
+    let bytes = read_file_prefix(path, 1024 * 1024)?;
+    parse_webp_metadata_from_bytes(&bytes)
+}
+
+fn parse_webp_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
+    if bytes.len() < 12 || bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
+        return None;
+    }
+    let mut offset = 12usize;
+    let mut width = None;
+    let mut height = None;
+    let mut has_alpha = None;
+    let mut animated = false;
+    let mut frames = 0u32;
+    while offset.checked_add(8).is_some_and(|end| end <= bytes.len()) {
+        let chunk = bytes.get(offset..offset + 4)?;
+        let size = read_u32(bytes, offset + 4)? as usize;
+        let payload = offset + 8;
+        let payload_end = payload.checked_add(size)?;
+        if payload_end > bytes.len() {
+            break;
+        }
+        match chunk {
+            b"VP8X" if size >= 10 => {
+                let flags = bytes[payload];
+                has_alpha = Some(flags & 0x10 != 0);
+                animated = flags & 0x02 != 0;
+                width = Some(read_u24_le(bytes, payload + 4)? + 1);
+                height = Some(read_u24_le(bytes, payload + 7)? + 1);
+            }
+            b"VP8 "
+                if size >= 10
+                    && bytes.get(payload + 3..payload + 6) == Some(&[0x9D, 0x01, 0x2A]) =>
+            {
+                width = Some((read_u16(bytes, payload + 6)? & 0x3FFF) as u32);
+                height = Some((read_u16(bytes, payload + 8)? & 0x3FFF) as u32);
+                has_alpha.get_or_insert(false);
+            }
+            b"VP8L" if size >= 5 && bytes.get(payload).copied() == Some(0x2F) => {
+                let b1 = bytes[payload + 1] as u32;
+                let b2 = bytes[payload + 2] as u32;
+                let b3 = bytes[payload + 3] as u32;
+                let b4 = bytes[payload + 4] as u32;
+                width = Some(1 + b1 + ((b2 & 0x3F) << 8));
+                height = Some(1 + ((b2 & 0xC0) >> 6) + (b3 << 2) + ((b4 & 0x0F) << 10));
+                has_alpha.get_or_insert(true);
+            }
+            b"ANMF" => {
+                animated = true;
+                frames = frames.saturating_add(1);
+            }
+            b"ALPH" => {
+                has_alpha = Some(true);
+            }
+            _ => {}
+        }
+        offset = payload_end + (size % 2);
+    }
+    Some(ExifMetadata {
+        format: Some("WebP".to_string()),
+        width,
+        height,
+        has_alpha,
+        animated: Some(animated),
+        frame_count: (frames > 0).then_some(frames),
+        ..Default::default()
+    })
+}
+
+fn read_u24_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(
+        *bytes.get(offset)? as u32
+            | ((*bytes.get(offset + 1)? as u32) << 8)
+            | ((*bytes.get(offset + 2)? as u32) << 16),
+    )
 }
 
 fn parse_gif_metadata(path: &str) -> Option<ExifMetadata> {
@@ -8910,6 +8989,33 @@ mod tests {
         assert_eq!(metadata.animated, Some(true));
         assert_eq!(metadata.frame_count, Some(2));
         assert_eq!(metadata.duration_ms, Some(120));
+    }
+
+    #[test]
+    fn webp_metadata_reads_vp8x_animation_summary() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(b"VP8X");
+        bytes.extend_from_slice(&10u32.to_le_bytes());
+        bytes.push(0x12);
+        bytes.extend_from_slice(&[0, 0, 0]);
+        bytes.extend_from_slice(&799u32.to_le_bytes()[..3]);
+        bytes.extend_from_slice(&599u32.to_le_bytes()[..3]);
+        bytes.extend_from_slice(b"ANMF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"ANMF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        let metadata = parse_webp_metadata_from_bytes(&bytes).expect("webp metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("WebP"));
+        assert_eq!(metadata.width, Some(800));
+        assert_eq!(metadata.height, Some(600));
+        assert_eq!(metadata.has_alpha, Some(true));
+        assert_eq!(metadata.animated, Some(true));
+        assert_eq!(metadata.frame_count, Some(2));
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {
