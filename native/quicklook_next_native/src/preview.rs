@@ -471,6 +471,7 @@ fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
     }
     let color = *bytes.get(25)?;
     let (title, comment, software) = parse_png_text_chunks(bytes);
+    let animation = parse_png_animation_chunks(bytes);
     Some(ExifMetadata {
         format: Some("PNG".to_string()),
         title,
@@ -485,7 +486,57 @@ fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
             1 => "Adam7".to_string(),
             _ => "none".to_string(),
         }),
+        animated: animation.as_ref().map(|summary| summary.animated),
+        frame_count: animation.as_ref().and_then(|summary| summary.frame_count),
+        duration_ms: animation.and_then(|summary| summary.duration_ms),
         ..Default::default()
+    })
+}
+
+#[derive(Debug, Clone, Default)]
+struct PngAnimationSummary {
+    animated: bool,
+    frame_count: Option<u32>,
+    duration_ms: Option<u32>,
+}
+
+fn parse_png_animation_chunks(bytes: &[u8]) -> Option<PngAnimationSummary> {
+    let mut offset = 8usize;
+    let mut actl_frames = None;
+    let mut fctl_frames = 0u32;
+    let mut duration_ms = 0u32;
+    while offset.checked_add(12).is_some_and(|end| end <= bytes.len()) {
+        let length = read_u32_be(bytes, offset)? as usize;
+        let chunk_type = bytes.get(offset + 4..offset + 8).unwrap_or_default();
+        let payload_start = offset + 8;
+        let payload_end = payload_start.checked_add(length)?;
+        let next = payload_end.checked_add(4)?;
+        if payload_end > bytes.len() {
+            break;
+        }
+        match chunk_type {
+            b"acTL" if length >= 8 => actl_frames = read_u32_be(bytes, payload_start),
+            b"fcTL" if length >= 26 => {
+                fctl_frames = fctl_frames.saturating_add(1);
+                let numerator = read_u16_be(bytes, payload_start + 20).unwrap_or(0) as u32;
+                let denominator = read_u16_be(bytes, payload_start + 22).unwrap_or(100) as u32;
+                let denominator = if denominator == 0 { 100 } else { denominator };
+                duration_ms = duration_ms.saturating_add(numerator.saturating_mul(1000) / denominator);
+            }
+            b"IEND" => break,
+            _ => {}
+        }
+        offset = next;
+    }
+
+    if actl_frames.is_none() && fctl_frames == 0 {
+        return None;
+    }
+    let frames = actl_frames.or((fctl_frames > 0).then_some(fctl_frames));
+    Some(PngAnimationSummary {
+        animated: frames.unwrap_or(0) > 1 || fctl_frames > 1,
+        frame_count: frames,
+        duration_ms: (duration_ms > 0).then_some(duration_ms),
     })
 }
 
@@ -8960,6 +9011,45 @@ mod tests {
         assert_eq!(metadata.color_type.as_deref(), Some("truecolor with alpha"));
         assert_eq!(metadata.has_alpha, Some(true));
         assert_eq!(metadata.interlace.as_deref(), Some("Adam7"));
+    }
+
+    #[test]
+    fn png_metadata_reads_apng_animation_summary() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x89PNG\r\n\x1A\n");
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&320u32.to_be_bytes());
+        bytes.extend_from_slice(&180u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&8u32.to_be_bytes());
+        bytes.extend_from_slice(b"acTL");
+        bytes.extend_from_slice(&3u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        for (sequence, delay) in [(0u32, 5u16), (1u32, 7u16), (2u32, 9u16)] {
+            bytes.extend_from_slice(&26u32.to_be_bytes());
+            bytes.extend_from_slice(b"fcTL");
+            bytes.extend_from_slice(&sequence.to_be_bytes());
+            bytes.extend_from_slice(&320u32.to_be_bytes());
+            bytes.extend_from_slice(&180u32.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(&delay.to_be_bytes());
+            bytes.extend_from_slice(&100u16.to_be_bytes());
+            bytes.extend_from_slice(&[0, 0]);
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+        }
+
+        let metadata = parse_png_metadata_from_bytes(&bytes).expect("apng metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("PNG"));
+        assert_eq!(metadata.width, Some(320));
+        assert_eq!(metadata.height, Some(180));
+        assert_eq!(metadata.animated, Some(true));
+        assert_eq!(metadata.frame_count, Some(3));
+        assert_eq!(metadata.duration_ms, Some(210));
     }
 
     #[test]
