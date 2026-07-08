@@ -131,13 +131,13 @@
             <Border x:Name="PreviewRoot"
                     x:Uid="PreviewRoot"
                     Margin="14,0,14,14"
-                    Background="Transparent"
+                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
                     AutomationProperties.Name="Image preview surface" />
             <Border x:Name="AnimatedImagePreviewRoot"
                     x:Uid="AnimatedImagePreviewRoot"
                     Visibility="Collapsed"
                     Margin="14,0,14,14"
-                    Background="Transparent"
+                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
                     AutomationProperties.Name="Animated image preview">
                 <Grid>
                     <Image x:Name="AnimatedImagePreviewImage"
