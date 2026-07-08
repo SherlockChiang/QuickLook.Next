@@ -227,14 +227,28 @@ struct ExifMetadata {
     lens_model: Option<String>,
     software: Option<String>,
     f_number: Option<f64>,
+    max_aperture: Option<f64>,
     exposure_time: Option<f64>,
     iso: Option<u32>,
     focal_length: Option<f64>,
+    focal_length_in_35mm_film: Option<u32>,
     exposure_bias: Option<f64>,
+    exposure_program: Option<u16>,
+    exposure_mode: Option<u16>,
     metering_mode: Option<u16>,
     flash: Option<u16>,
     white_balance: Option<u16>,
+    light_source: Option<u16>,
+    digital_zoom_ratio: Option<f64>,
+    subject_distance: Option<f64>,
+    contrast: Option<u16>,
+    saturation: Option<u16>,
+    sharpness: Option<u16>,
+    gain_control: Option<u16>,
     color_space: Option<u16>,
+    exif_version: Option<String>,
+    camera_serial: Option<String>,
+    lens_serial: Option<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
     altitude: Option<f64>,
@@ -364,19 +378,33 @@ fn parse_exif_ifd(
             }
             0x829A => metadata.exposure_time = exif_rational_value(tiff, entry, endian),
             0x829D => metadata.f_number = exif_rational_value(tiff, entry, endian),
+            0x8822 => metadata.exposure_program = exif_u16_value(tiff, entry, endian),
             0x8827 => metadata.iso = exif_u32_or_u16_value(tiff, entry, endian),
             0x8769 => *exif_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
             0x8825 => *gps_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
             0x9204 => metadata.exposure_bias = exif_signed_rational_value(tiff, entry, endian),
+            0x9205 => metadata.max_aperture = exif_rational_value(tiff, entry, endian),
+            0x9206 => metadata.subject_distance = exif_rational_value(tiff, entry, endian),
             0x9207 => metadata.metering_mode = exif_u16_value(tiff, entry, endian),
+            0x9208 => metadata.light_source = exif_u16_value(tiff, entry, endian),
             0x9209 => metadata.flash = exif_u16_value(tiff, entry, endian),
             0x920A => metadata.focal_length = exif_rational_value(tiff, entry, endian),
+            0x9000 => metadata.exif_version = exif_version(tiff, entry, endian),
             0xA001 => metadata.color_space = exif_u16_value(tiff, entry, endian),
             0xA002 => metadata.width = exif_u32_or_u16_value(tiff, entry, endian),
             0xA003 => metadata.height = exif_u32_or_u16_value(tiff, entry, endian),
+            0xA402 => metadata.exposure_mode = exif_u16_value(tiff, entry, endian),
             0xA403 => metadata.white_balance = exif_u16_value(tiff, entry, endian),
+            0xA404 => metadata.digital_zoom_ratio = exif_rational_value(tiff, entry, endian),
+            0xA405 => metadata.focal_length_in_35mm_film = exif_u32_or_u16_value(tiff, entry, endian),
+            0xA407 => metadata.gain_control = exif_u16_value(tiff, entry, endian),
+            0xA408 => metadata.contrast = exif_u16_value(tiff, entry, endian),
+            0xA409 => metadata.saturation = exif_u16_value(tiff, entry, endian),
+            0xA40A => metadata.sharpness = exif_u16_value(tiff, entry, endian),
+            0xA431 => metadata.camera_serial = exif_ascii(tiff, entry, endian),
             0xA433 => metadata.lens_make = exif_ascii(tiff, entry, endian),
             0xA434 => metadata.lens_model = exif_ascii(tiff, entry, endian),
+            0xA435 => metadata.lens_serial = exif_ascii(tiff, entry, endian),
             _ => {}
         }
     }
@@ -423,6 +451,15 @@ fn exif_ascii(tiff: &[u8], entry: usize, endian: u8) -> Option<String> {
         .trim_matches('\0')
         .trim()
         .to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn exif_version(tiff: &[u8], entry: usize, endian: u8) -> Option<String> {
+    let bytes = exif_value_bytes(tiff, entry, endian)?;
+    let text: String = bytes
+        .iter()
+        .filter_map(|b| b.is_ascii_graphic().then_some(*b as char))
+        .collect();
     (!text.is_empty()).then_some(text)
 }
 
@@ -6183,14 +6220,28 @@ mod tests {
         assert_eq!(metadata.lens_model.as_deref(), Some("24mm Prime"));
         assert_eq!(metadata.software.as_deref(), Some("QuickCamOS"));
         assert!((metadata.f_number.unwrap() - 1.8).abs() < 0.001);
+        assert!((metadata.max_aperture.unwrap() - 2.0).abs() < 0.001);
         assert!((metadata.exposure_time.unwrap() - 0.005).abs() < 0.0001);
         assert_eq!(metadata.iso, Some(100));
         assert!((metadata.focal_length.unwrap() - 24.0).abs() < 0.001);
+        assert_eq!(metadata.focal_length_in_35mm_film, Some(36));
         assert!((metadata.exposure_bias.unwrap() + 0.3333).abs() < 0.001);
+        assert_eq!(metadata.exposure_program, Some(3));
+        assert_eq!(metadata.exposure_mode, Some(0));
         assert_eq!(metadata.metering_mode, Some(5));
+        assert_eq!(metadata.light_source, Some(10));
         assert_eq!(metadata.flash, Some(16));
         assert_eq!(metadata.white_balance, Some(1));
+        assert!((metadata.digital_zoom_ratio.unwrap() - 1.5).abs() < 0.001);
+        assert!((metadata.subject_distance.unwrap() - 3.25).abs() < 0.001);
+        assert_eq!(metadata.contrast, Some(1));
+        assert_eq!(metadata.saturation, Some(2));
+        assert_eq!(metadata.sharpness, Some(0));
+        assert_eq!(metadata.gain_control, Some(1));
         assert_eq!(metadata.color_space, Some(1));
+        assert_eq!(metadata.exif_version.as_deref(), Some("0231"));
+        assert_eq!(metadata.camera_serial.as_deref(), Some("BODY-42"));
+        assert_eq!(metadata.lens_serial.as_deref(), Some("LENS-24"));
         assert!((metadata.latitude.unwrap() - 31.2304).abs() < 0.0001);
         assert!((metadata.longitude.unwrap() - 121.4737).abs() < 0.0001);
         assert!((metadata.altitude.unwrap() - 12.5).abs() < 0.001);
@@ -6205,8 +6256,8 @@ mod tests {
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {
         let offset = tiff.len();
-        tiff.resize(offset + 2 + 16 * 12 + 4, 0);
-        write_le_u16(tiff, offset, 16);
+        tiff.resize(offset + 2 + 30 * 12 + 4, 0);
+        write_le_u16(tiff, offset, 30);
         let entries = offset + 2;
         write_ascii_entry(tiff, entries, 0, 0x9003, "2026:07:05 13:04:47");
         write_rational_entry(tiff, entries, 1, 0x829A, 1, 200);
@@ -6222,6 +6273,20 @@ mod tests {
         write_short_entry(tiff, entries, 11, 0xA403, 1);
         write_ascii_entry(tiff, entries, 12, 0xA433, "Acme Lens");
         write_ascii_entry(tiff, entries, 13, 0xA434, "24mm Prime");
+        write_rational_entry(tiff, entries, 14, 0x9205, 2, 1);
+        write_rational_entry(tiff, entries, 15, 0x9206, 13, 4);
+        write_short_entry(tiff, entries, 16, 0x8822, 3);
+        write_short_entry(tiff, entries, 17, 0xA402, 0);
+        write_short_entry(tiff, entries, 18, 0x9208, 10);
+        write_rational_entry(tiff, entries, 19, 0xA404, 3, 2);
+        write_short_entry(tiff, entries, 20, 0xA405, 36);
+        write_short_entry(tiff, entries, 21, 0xA407, 1);
+        write_short_entry(tiff, entries, 22, 0xA408, 1);
+        write_short_entry(tiff, entries, 23, 0xA409, 2);
+        write_short_entry(tiff, entries, 24, 0xA40A, 0);
+        write_undefined_entry(tiff, entries, 25, 0x9000, b"0231");
+        write_ascii_entry(tiff, entries, 26, 0xA431, "BODY-42");
+        write_ascii_entry(tiff, entries, 27, 0xA435, "LENS-24");
     }
 
     fn append_gps_ifd(tiff: &mut Vec<u8>) {
@@ -6294,6 +6359,14 @@ mod tests {
         tiff.resize(offset + 8, 0);
         write_le_u32(tiff, offset, numerator);
         write_le_u32(tiff, offset + 4, denominator);
+    }
+
+    fn write_undefined_entry(tiff: &mut [u8], entries: usize, index: usize, tag: u16, value: &[u8]) {
+        let entry = entries + index * 12;
+        write_le_u16(tiff, entry, tag);
+        write_le_u16(tiff, entry + 2, 7);
+        write_le_u32(tiff, entry + 4, value.len() as u32);
+        tiff[entry + 8..entry + 8 + value.len().min(4)].copy_from_slice(&value[..value.len().min(4)]);
     }
 
     fn write_signed_rational_entry(tiff: &mut Vec<u8>, entries: usize, index: usize, tag: u16, numerator: i32, denominator: i32) {

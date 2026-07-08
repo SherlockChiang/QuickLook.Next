@@ -1425,19 +1425,33 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
         AddIfValue(rows, "Lens", JoinNonEmpty(metadata.LensMake, metadata.LensModel));
         AddIfValue(rows, "Focal length", FormatDoubleWithUnit(metadata.FocalLength, "mm"));
+        AddIfValue(rows, "35mm equivalent", FormatDoubleWithUnit(metadata.FocalLengthIn35mmFilm, "mm"));
         AddIfValue(rows, "Aperture", metadata.FNumber is > 0 ? $"f/{metadata.FNumber.Value:0.0}" : null);
+        AddIfValue(rows, "Max aperture", metadata.MaxAperture is > 0 ? $"f/{metadata.MaxAperture.Value:0.0}" : null);
         AddIfValue(rows, "Shutter speed", FormatExposureSeconds(metadata.ExposureTime));
         AddIfValue(rows, "ISO", metadata.Iso?.ToString(CultureInfo.InvariantCulture));
         AddIfValue(rows, "Exposure bias", FormatDoubleWithUnit(metadata.ExposureBias, "EV"));
+        AddIfValue(rows, "Exposure program", FormatExifEnum(metadata.ExposureProgram, ExposureProgramNames));
+        AddIfValue(rows, "Exposure mode", FormatExifEnum(metadata.ExposureMode, ExposureModeNames));
         AddIfValue(rows, "Metering", FormatExifEnum(metadata.MeteringMode, MeteringModeNames));
         AddIfValue(rows, "White balance", FormatExifEnum(metadata.WhiteBalance, WhiteBalanceNames));
+        AddIfValue(rows, "Light source", FormatExifEnum(metadata.LightSource, LightSourceNames));
         AddIfValue(rows, "Flash", FormatFlash(metadata.Flash));
+        AddIfValue(rows, "Digital zoom", FormatDoubleWithUnit(metadata.DigitalZoomRatio, "x"));
+        AddIfValue(rows, "Subject distance", FormatDoubleWithUnit(metadata.SubjectDistance, "m"));
         AddIfValue(rows, "Orientation", metadata.Orientation?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Contrast", FormatExifEnum(metadata.Contrast, NormalHardSoftNames));
+        AddIfValue(rows, "Saturation", FormatExifEnum(metadata.Saturation, NormalHardSoftNames));
+        AddIfValue(rows, "Sharpness", FormatExifEnum(metadata.Sharpness, NormalHardSoftNames));
+        AddIfValue(rows, "Gain control", FormatExifEnum(metadata.GainControl, GainControlNames));
         AddIfValue(rows, "Color space", FormatExifEnum(metadata.ColorSpace, ColorSpaceNames));
         AddIfValue(rows, "Location", FormatLocation(metadata.Latitude, metadata.Longitude));
         AddIfValue(rows, "Altitude", FormatDoubleWithUnit(metadata.Altitude, "m"));
         AddIfValue(rows, "Direction", FormatDoubleWithUnit(metadata.Direction, "deg"));
         AddIfValue(rows, "Software", metadata.Software);
+        AddIfValue(rows, "Camera serial", metadata.CameraSerial);
+        AddIfValue(rows, "Lens serial", metadata.LensSerial);
+        AddIfValue(rows, "EXIF version", metadata.ExifVersion);
 
         if (rows.Count == 0)
             return false;

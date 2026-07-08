@@ -131,14 +131,28 @@ public sealed record ImageMetadata
     public string? LensModel { get; init; }
     public string? Software { get; init; }
     public double? FNumber { get; init; }
+    public double? MaxAperture { get; init; }
     public double? ExposureTime { get; init; }
     public uint? Iso { get; init; }
     public double? FocalLength { get; init; }
+    public uint? FocalLengthIn35mmFilm { get; init; }
     public double? ExposureBias { get; init; }
+    public ushort? ExposureProgram { get; init; }
+    public ushort? ExposureMode { get; init; }
     public ushort? MeteringMode { get; init; }
     public ushort? Flash { get; init; }
     public ushort? WhiteBalance { get; init; }
+    public ushort? LightSource { get; init; }
+    public double? DigitalZoomRatio { get; init; }
+    public double? SubjectDistance { get; init; }
+    public ushort? Contrast { get; init; }
+    public ushort? Saturation { get; init; }
+    public ushort? Sharpness { get; init; }
+    public ushort? GainControl { get; init; }
     public ushort? ColorSpace { get; init; }
+    public string? ExifVersion { get; init; }
+    public string? CameraSerial { get; init; }
+    public string? LensSerial { get; init; }
     public double? Latitude { get; init; }
     public double? Longitude { get; init; }
     public double? Altitude { get; init; }
