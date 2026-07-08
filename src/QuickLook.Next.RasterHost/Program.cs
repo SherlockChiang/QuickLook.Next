@@ -311,11 +311,12 @@ static bool PreferSystemImageDecoder(string path)
 async Task HandlePageOpenAsync(PreviewPageOpen page)
 {
     var key = (page.RequestId, page.PageIndex);
-    if (pdfPageRenderCts.Remove(key, out var previousCts))
+    if (pdfPageRenderCts.ContainsKey(key))
     {
-        try { previousCts.Cancel(); } catch (ObjectDisposedException) { }
-        previousCts.Dispose();
+        DiagLog.Write("RasterHost", $"page render coalesced: request={page.RequestId} page={page.PageIndex}");
+        return;
     }
+
     var pageCts = new CancellationTokenSource();
     pdfPageRenderCts[key] = pageCts;
 
