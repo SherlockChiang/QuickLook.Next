@@ -572,6 +572,26 @@ public sealed partial class MainWindow : Window
                 if (animatedPlan.PlaybackMode == AnimatedImagePlaybackMode.NativeFirstFrameRaster)
                 {
                     DiagLog.Write("App", $"preview animated image using native first-frame raster gen={generation}; {animatedPlan.Width}x{animatedPlan.Height}");
+                    if (System.IO.Path.GetExtension(path).Equals(".gif", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var animatedTargetSize = GetRasterDecodeTargetSize();
+                        NativeAnimationFrames? frames = await Task.Run(() => _native.TryDecodeGifFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken);
+                        if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+                        if (frames is not null)
+                        {
+                            var gifReady = new PreviewReady(
+                                $"gif-native-{generation}",
+                                "image",
+                                System.IO.Path.GetFileName(path),
+                                animatedPlan.Width,
+                                animatedPlan.Height);
+                            _previewSession.CommitPath(path);
+                            _previewSession.SetRequestId(null);
+                            StatusText.Text = ShowNativeAnimatedImagePreview(gifReady, path, frames);
+                            RevealPreviewWindow(ShouldActivatePreview(gifReady));
+                            return;
+                        }
+                    }
                     forceAnimatedFirstFrameRaster = true;
                 }
                 else
@@ -1025,6 +1045,19 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        ScheduleAnimatedImageLayoutUpdate();
+        ScheduleImageSidecarLoads(ready);
+        return result.Status;
+    }
+
+    private string ShowNativeAnimatedImagePreview(PreviewReady ready, string path, NativeAnimationFrames frames)
+    {
+        UpdatePreviewChrome(ready, showRasterTools: true);
+        _panelController.ShowAnimatedImage();
+        _rasterPresenter?.Clear();
+
+        AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         ScheduleAnimatedImageLayoutUpdate();
         ScheduleImageSidecarLoads(ready);

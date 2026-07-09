@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -31,6 +32,9 @@ internal sealed class AnimatedImagePreviewPresenter
     private double _panStartX;
     private double _panStartY;
     private int _layoutVersion;
+    private DispatcherTimer? _nativeFrameTimer;
+    private NativeAnimationFrames? _nativeFrames;
+    private int _nativeFrameIndex;
     private Stopwatch? _openWatch;
     private string _currentPath = "";
 
@@ -59,6 +63,7 @@ internal sealed class AnimatedImagePreviewPresenter
 
     public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
     {
+        StopNativePlayback();
         _layoutVersion++;
         _currentPath = path;
         _openWatch = Stopwatch.StartNew();
@@ -84,9 +89,42 @@ internal sealed class AnimatedImagePreviewPresenter
         return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
     }
 
+    public AnimatedImagePreviewResult RenderNativeFrames(string path, PreviewReady ready, NativeAnimationFrames frames, (double Width, double Height) maxContent)
+    {
+        StopNativePlayback();
+        _layoutVersion++;
+        _currentPath = path;
+        _openWatch = null;
+        _nativeFrames = frames;
+        _nativeFrameIndex = 0;
+        _sourceWidth = Math.Max(1, frames.Width);
+        _sourceHeight = Math.Max(1, frames.Height);
+        _image.Width = frames.Width;
+        _image.Height = frames.Height;
+        double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
+        double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
+        double scale = Math.Min(1.0, Math.Min(imageMaxWidth / frames.Width, imageMaxHeight / frames.Height));
+        PresentNativeFrame(0);
+        ResetView();
+        ScheduleLayoutUpdate();
+
+        if (frames.Frames.Count > 1)
+        {
+            _nativeFrameTimer = new DispatcherTimer();
+            _nativeFrameTimer.Tick += (_, _) => AdvanceNativeFrame();
+            _nativeFrameTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(20, frames.Frames[0].DelayMilliseconds));
+            _nativeFrameTimer.Start();
+        }
+
+        double width = frames.Width * scale + InfoRailWidth;
+        double height = frames.Height * scale + ToolbarHeight;
+        return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
+    }
+
     public void Clear()
     {
         _layoutVersion++;
+        StopNativePlayback();
         _openWatch = null;
         _currentPath = "";
         _image.Source = null;
@@ -124,6 +162,40 @@ internal sealed class AnimatedImagePreviewPresenter
         _transform.TranslateX = Math.Round(_panX);
         _transform.TranslateY = Math.Round(_panY);
         UpdateZoomLabel();
+    }
+
+    private void AdvanceNativeFrame()
+    {
+        if (_nativeFrames is null || _nativeFrames.Frames.Count == 0)
+            return;
+
+        _nativeFrameIndex = (_nativeFrameIndex + 1) % _nativeFrames.Frames.Count;
+        PresentNativeFrame(_nativeFrameIndex);
+        _nativeFrameTimer!.Interval = TimeSpan.FromMilliseconds(Math.Max(20, _nativeFrames.Frames[_nativeFrameIndex].DelayMilliseconds));
+    }
+
+    private void PresentNativeFrame(int index)
+    {
+        if (_nativeFrames is null || index < 0 || index >= _nativeFrames.Frames.Count)
+            return;
+
+        var bitmap = new WriteableBitmap(_nativeFrames.Width, _nativeFrames.Height);
+        using var stream = bitmap.PixelBuffer.AsStream();
+        byte[] bgra = _nativeFrames.Frames[index].Bgra;
+        stream.Write(bgra, 0, bgra.Length);
+        bitmap.Invalidate();
+        _image.Source = bitmap;
+    }
+
+    private void StopNativePlayback()
+    {
+        if (_nativeFrameTimer is not null)
+        {
+            _nativeFrameTimer.Stop();
+            _nativeFrameTimer = null;
+        }
+        _nativeFrames = null;
+        _nativeFrameIndex = 0;
     }
 
     public void ScheduleLayoutUpdate()

@@ -76,12 +76,21 @@ internal sealed class NativeBridge
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_gif_frames_sized(
+        byte[] pathUtf8,
+        nuint pathLen,
+        uint targetWidth,
+        uint targetHeight,
+        byte[] outBuf,
+        nuint outCap);
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
+    private const int MaxNativeAnimationBytes = 80 * 1024 * 1024;
 
     private NativeCallback? _callback; // keep alive: native stores the function pointer
     private Action<NativeIntent>? _onIntent;
@@ -208,6 +217,57 @@ internal sealed class NativeBridge
 
     public NativeRasterImage? TryExtractOfficeImage(string path)
         => CallRaster(ql_extract_office_image, path);
+
+    public NativeAnimationFrames? TryDecodeGifFrames(string path, uint targetWidth, uint targetHeight)
+    {
+        try
+        {
+            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            int cap = 8 * 1024 * 1024;
+            while (cap <= MaxNativeAnimationBytes)
+            {
+                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
+                try
+                {
+                    int n = ql_decode_gif_frames_sized(pathBytes, (nuint)pathBytes.Length, targetWidth, targetHeight, outBuf, (nuint)outBuf.Length);
+                    if (n < 0)
+                    {
+                        int needed = -n;
+                        if (needed <= cap || needed > MaxNativeAnimationBytes)
+                            return null;
+                        cap = needed;
+                        continue;
+                    }
+                    if (n <= 12)
+                        return null;
+
+                    int frameCount = checked((int)BitConverter.ToUInt32(outBuf, 0));
+                    int width = checked((int)BitConverter.ToUInt32(outBuf, 4));
+                    int height = checked((int)BitConverter.ToUInt32(outBuf, 8));
+                    int frameBytes = checked(width * height * 4);
+                    if (frameCount <= 0 || width <= 0 || height <= 0 || 12 + frameCount * (4 + frameBytes) != n)
+                        return null;
+
+                    var frames = new List<NativeAnimationFrame>(frameCount);
+                    int offset = 12;
+                    for (int i = 0; i < frameCount; i++)
+                    {
+                        int delayMs = checked((int)BitConverter.ToUInt32(outBuf, offset));
+                        offset += 4;
+                        var bgra = new byte[frameBytes];
+                        Buffer.BlockCopy(outBuf, offset, bgra, 0, frameBytes);
+                        offset += frameBytes;
+                        frames.Add(new NativeAnimationFrame(delayMs, bgra));
+                    }
+                    return new NativeAnimationFrames(width, height, frames);
+                }
+                finally { ArrayPool<byte>.Shared.Return(outBuf); }
+            }
+        }
+        catch { }
+
+        return null;
+    }
 
     public string? TryExtractArchiveEntry(string archivePath, string entryPath)
     {
@@ -566,3 +626,5 @@ internal sealed class NativeBridge
 }
 
 internal sealed record NativeRasterImage(byte[] Bgra, int Width, int Height);
+internal sealed record NativeAnimationFrame(int DelayMilliseconds, byte[] Bgra);
+internal sealed record NativeAnimationFrames(int Width, int Height, IReadOnlyList<NativeAnimationFrame> Frames);
