@@ -80,6 +80,18 @@ boundary.
 
 ## Verification
 
+Use the long-cycle harness for repeatable improvement loops:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\harness-long-cycle.ps1 -AllowDirty
+powershell -ExecutionPolicy Bypass -File tools\harness-long-cycle.ps1 -Mode full -AllowDirty
+```
+
+See `docs/long-cycle-harness.md` for the workflow and dirty-worktree policy.
+
+The harness wraps the main checks below; focused commands are still useful while
+developing a single parser or smoke case.
+
 Run focused checks after each relevant change:
 
 ```powershell
