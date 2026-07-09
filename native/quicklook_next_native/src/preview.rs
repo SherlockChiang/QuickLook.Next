@@ -6037,6 +6037,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !sections.is_empty() {
         text.push_str(&format!("\nSection names: {}", sections.join(", ")));
     }
+    let symbols = elf_symbol_summary(bytes, class, endian);
+    if !symbols.is_empty() {
+        text.push_str(&format!("\nSymbols: {}", symbols.join(", ")));
+    }
 }
 
 fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
@@ -6230,6 +6234,24 @@ fn elf_vaddr_to_file_offset(headers: &[ElfProgramHeader], vaddr: u64) -> Option<
 }
 
 fn elf_section_names(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    elf_sections(bytes, class, endian)
+        .into_iter()
+        .filter_map(|section| (!section.name.is_empty()).then_some(section.name))
+        .take(24)
+        .collect()
+}
+
+#[derive(Clone)]
+struct ElfSection {
+    name: String,
+    typ: u32,
+    offset: usize,
+    size: usize,
+    link: usize,
+    entsize: usize,
+}
+
+fn elf_sections(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfSection> {
     let shoff = if class == 2 {
         read_u64_endian(bytes, 40, endian).unwrap_or(0) as usize
     } else {
@@ -6261,26 +6283,78 @@ fn elf_section_names(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     if str_offset == 0 || str_offset.saturating_add(str_size) > bytes.len() {
         return Vec::new();
     }
-    let mut names = Vec::new();
+    let mut sections = Vec::new();
     for index in 0..shnum {
         let Some(header) = shoff.checked_add(index.saturating_mul(shentsize)) else {
             break;
         };
-        if header + 4 > bytes.len() {
+        if header + shentsize > bytes.len() {
             break;
         }
         let name_offset = read_u32_endian(bytes, header, endian).unwrap_or(0) as usize;
-        if name_offset == 0 || name_offset >= str_size {
+        let name = if name_offset == 0 || name_offset >= str_size {
+            String::new()
+        } else {
+            read_c_string(bytes, str_offset + name_offset, 96).unwrap_or_default()
+        };
+        let typ = read_u32_endian(bytes, header + 4, endian).unwrap_or(0);
+        let (offset, size, link, entsize) = if class == 2 {
+            (
+                read_u64_endian(bytes, header + 24, endian).unwrap_or(0) as usize,
+                read_u64_endian(bytes, header + 32, endian).unwrap_or(0) as usize,
+                read_u32_endian(bytes, header + 40, endian).unwrap_or(0) as usize,
+                read_u64_endian(bytes, header + 56, endian).unwrap_or(0) as usize,
+            )
+        } else {
+            (
+                read_u32_endian(bytes, header + 16, endian).unwrap_or(0) as usize,
+                read_u32_endian(bytes, header + 20, endian).unwrap_or(0) as usize,
+                read_u32_endian(bytes, header + 24, endian).unwrap_or(0) as usize,
+                read_u32_endian(bytes, header + 36, endian).unwrap_or(0) as usize,
+            )
+        };
+        sections.push(ElfSection { name, typ, offset, size, link, entsize });
+    }
+    sections
+}
+
+fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let sections = elf_sections(bytes, class, endian);
+    let mut symbols = Vec::new();
+    for section in sections.iter().filter(|section| section.typ == 2 || section.typ == 11) {
+        let entry_size = if section.entsize > 0 { section.entsize } else if class == 2 { 24 } else { 16 };
+        if entry_size == 0 || section.offset.saturating_add(section.size) > bytes.len() {
             continue;
         }
-        if let Some(name) = read_c_string(bytes, str_offset + name_offset, 96).filter(|name| !name.is_empty()) {
-            names.push(name);
-            if names.len() >= 24 {
+        let Some(strtab) = sections.get(section.link) else {
+            continue;
+        };
+        if strtab.offset.saturating_add(strtab.size) > bytes.len() {
+            continue;
+        }
+        let count = section.size / entry_size;
+        let mut named = Vec::new();
+        for index in 0..count.min(64) {
+            let offset = section.offset + index * entry_size;
+            if offset + entry_size > bytes.len() {
                 break;
             }
+            let name_offset = read_u32_endian(bytes, offset, endian).unwrap_or(0) as usize;
+            if name_offset == 0 || name_offset >= strtab.size {
+                continue;
+            }
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 128).filter(|name| !name.is_empty()) {
+                named.push(name);
+                if named.len() >= 8 {
+                    break;
+                }
+            }
+        }
+        if !named.is_empty() {
+            symbols.push(format!("{} {} entries ({})", section.name, count, named.join(", ")));
         }
     }
-    names
+    symbols
 }
 
 fn elf_type_name(value: u16) -> &'static str {
@@ -13154,7 +13228,7 @@ mod tests {
         bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
         bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
-        bytes[60..62].copy_from_slice(&3u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&5u16.to_le_bytes());
         bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x48..0x50].copy_from_slice(&0x300u64.to_le_bytes());
@@ -13183,8 +13257,22 @@ mod tests {
         bytes[0x540..0x544].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x580..0x584].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x598..0x5A0].copy_from_slice(&0x700u64.to_le_bytes());
-        bytes[0x5A0..0x5A8].copy_from_slice(&17u64.to_le_bytes());
-        bytes[0x700..0x711].copy_from_slice(b"\0.text\0.shstrtab\0");
+        bytes[0x5A0..0x5A8].copy_from_slice(&33u64.to_le_bytes());
+        bytes[0x5C0..0x5C4].copy_from_slice(&17u32.to_le_bytes());
+        bytes[0x5C4..0x5C8].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x5D8..0x5E0].copy_from_slice(&0x740u64.to_le_bytes());
+        bytes[0x5E0..0x5E8].copy_from_slice(&48u64.to_le_bytes());
+        bytes[0x5E8..0x5EC].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x5F8..0x600].copy_from_slice(&24u64.to_le_bytes());
+        bytes[0x600..0x604].copy_from_slice(&25u32.to_le_bytes());
+        bytes[0x604..0x608].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x618..0x620].copy_from_slice(&0x780u64.to_le_bytes());
+        bytes[0x620..0x628].copy_from_slice(&13u64.to_le_bytes());
+        bytes[0x700..0x721].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0");
+        bytes[0x740..0x744].copy_from_slice(&0u32.to_le_bytes());
+        bytes[0x758..0x75C].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x75C] = 0x12;
+        bytes[0x780..0x78D].copy_from_slice(b"\0main\0helper\0");
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -13193,13 +13281,14 @@ mod tests {
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
         assert!(text.contains("Program headers: 3"));
-        assert!(text.contains("Section headers: 3"));
+        assert!(text.contains("Section headers: 5"));
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x500"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
         assert!(text.contains("Needed libraries: libc.so.6"));
         assert!(text.contains("SONAME: libdemo.so"));
         assert!(text.contains("RUNPATH: $ORIGIN"));
-        assert!(text.contains("Section names: .text, .shstrtab"));
+        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab"));
+        assert!(text.contains("Symbols: .symtab 2 entries (main)"));
     }
 }
