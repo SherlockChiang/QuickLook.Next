@@ -5785,6 +5785,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut thread_names_info = None;
     let mut handle_info = None;
     let mut unloaded_module_info = None;
+    let mut misc_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5819,6 +5820,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             handle_info = parse_minidump_handle_data(bytes, rva as usize, data_size as usize);
         } else if stream_type == 11 {
             unloaded_module_info = parse_minidump_unloaded_module_list(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 12 {
+            misc_info = parse_minidump_misc_info(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5851,6 +5854,45 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(unloaded_module_info) = unloaded_module_info {
         text.push_str(&unloaded_module_info);
     }
+    if let Some(misc_info) = misc_info {
+        text.push_str(&misc_info);
+    }
+}
+
+fn parse_minidump_misc_info(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 8 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let size_of_info = read_u32(bytes, offset).unwrap_or(0) as usize;
+    let available = size.min(size_of_info).min(bytes.len().saturating_sub(offset));
+    if available < 8 {
+        return None;
+    }
+    let flags = read_u32(bytes, offset + 4).unwrap_or(0);
+    let mut lines = vec![format!("\nMiscInfo flags: 0x{flags:08X}")];
+    if flags & 0x1 != 0 && available >= 12 {
+        let process_id = read_u32(bytes, offset + 8).unwrap_or(0);
+        lines.push(format!("Process ID: {process_id}"));
+    }
+    if flags & 0x2 != 0 && available >= 24 {
+        let create_time = read_u32(bytes, offset + 12).unwrap_or(0);
+        let user_time = read_u32(bytes, offset + 16).unwrap_or(0);
+        let kernel_time = read_u32(bytes, offset + 20).unwrap_or(0);
+        lines.push(format!("Process create time: {create_time}"));
+        lines.push(format!("Process user time: {user_time}s"));
+        lines.push(format!("Process kernel time: {kernel_time}s"));
+    }
+    if flags & 0x4 != 0 && available >= 44 {
+        let max_mhz = read_u32(bytes, offset + 24).unwrap_or(0);
+        let current_mhz = read_u32(bytes, offset + 28).unwrap_or(0);
+        let mhz_limit = read_u32(bytes, offset + 32).unwrap_or(0);
+        let max_idle_state = read_u32(bytes, offset + 36).unwrap_or(0);
+        let current_idle_state = read_u32(bytes, offset + 40).unwrap_or(0);
+        lines.push(format!(
+            "Processor power: max {max_mhz} MHz; current {current_mhz} MHz; limit {mhz_limit} MHz; idle {current_idle_state}/{max_idle_state}"
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_unloaded_module_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -14529,6 +14571,31 @@ mod tests {
 
         assert!(text.contains("Unloaded modules: 1"));
         assert!(text.contains("Unloaded module old.dll: range 0x00007FF610000000-0x00007FF610005000; timestamp 0x65432100; checksum 0x1234ABCD"));
+    }
+
+    #[test]
+    fn minidump_misc_info_summarizes_process_and_power_fields() {
+        let mut bytes = vec![0u8; 128];
+        bytes[0x20..0x24].copy_from_slice(&44u32.to_le_bytes());
+        bytes[0x24..0x28].copy_from_slice(&0x7u32.to_le_bytes());
+        bytes[0x28..0x2C].copy_from_slice(&4242u32.to_le_bytes());
+        bytes[0x2C..0x30].copy_from_slice(&1_700_000_000u32.to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&12u32.to_le_bytes());
+        bytes[0x34..0x38].copy_from_slice(&34u32.to_le_bytes());
+        bytes[0x38..0x3C].copy_from_slice(&4800u32.to_le_bytes());
+        bytes[0x3C..0x40].copy_from_slice(&3600u32.to_le_bytes());
+        bytes[0x40..0x44].copy_from_slice(&4200u32.to_le_bytes());
+        bytes[0x44..0x48].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&1u32.to_le_bytes());
+
+        let text = parse_minidump_misc_info(&bytes, 0x20, 44).expect("misc info");
+
+        assert!(text.contains("MiscInfo flags: 0x00000007"));
+        assert!(text.contains("Process ID: 4242"));
+        assert!(text.contains("Process create time: 1700000000"));
+        assert!(text.contains("Process user time: 12s"));
+        assert!(text.contains("Process kernel time: 34s"));
+        assert!(text.contains("Processor power: max 4800 MHz; current 3600 MHz; limit 4200 MHz; idle 1/3"));
     }
 
     #[test]
