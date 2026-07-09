@@ -4677,7 +4677,7 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
 
 fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
-    let bytes = read_file_prefix(path, 128).unwrap_or_default();
+    let bytes = read_file_prefix(path, 8192).unwrap_or_default();
     let mut text = base_info_text(filename, "chm", size, modified_unix);
     if bytes.starts_with(b"ITSF") {
         text.push_str("\nFormat: Microsoft Compiled HTML Help");
@@ -4705,10 +4705,30 @@ fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
                 format_bytes(dir_len as i64)
             ));
         }
+        append_chm_itsp_summary(&mut text, &bytes);
     } else {
         text.push_str("\nFormat: CHM-like help file");
     }
     generic_info_json(path, "chm", size, modified_unix, Some(text))
+}
+
+fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
+    let Some(dir_offset) = read_u64(bytes, 40).map(|value| value as usize).filter(|value| *value > 0) else {
+        return;
+    };
+    if dir_offset + 56 > bytes.len() || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP") {
+        return;
+    }
+    let version = read_u32(bytes, dir_offset + 4).unwrap_or(0);
+    let header_len = read_u32(bytes, dir_offset + 8).unwrap_or(0);
+    let block_len = read_u32(bytes, dir_offset + 16).unwrap_or(0);
+    let index_depth = read_u32(bytes, dir_offset + 24).unwrap_or(0);
+    let index_root = read_u32(bytes, dir_offset + 28).unwrap_or(0);
+    let index_head = read_u32(bytes, dir_offset + 32).unwrap_or(0);
+    let block_count = read_u32(bytes, dir_offset + 40).unwrap_or(0);
+    text.push_str(&format!(
+        "\nITSP version: {version}\nITSP header length: {header_len} bytes\nDirectory block length: {block_len} bytes\nDirectory block count: {block_count}\nDirectory index depth/root/head: {index_depth}/{index_root}/{index_head}"
+    ));
 }
 
 fn render_dump_info(path: &str, size: i64, modified_unix: i64) -> String {
@@ -14633,6 +14653,30 @@ mod tests {
         assert!(text.contains("Process user time: 12s"));
         assert!(text.contains("Process kernel time: 34s"));
         assert!(text.contains("Processor power: max 4800 MHz; current 3600 MHz; limit 4200 MHz; idle 1/3"));
+    }
+
+    #[test]
+    fn chm_itsp_summary_reads_directory_header() {
+        let mut bytes = vec![0u8; 512];
+        bytes[0..4].copy_from_slice(b"ITSF");
+        bytes[40..48].copy_from_slice(&0x100u64.to_le_bytes());
+        bytes[0x100..0x104].copy_from_slice(b"ITSP");
+        bytes[0x104..0x108].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x108..0x10C].copy_from_slice(&84u32.to_le_bytes());
+        bytes[0x110..0x114].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[0x118..0x11C].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x11C..0x120].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x120..0x124].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x128..0x12C].copy_from_slice(&7u32.to_le_bytes());
+        let mut text = String::new();
+
+        append_chm_itsp_summary(&mut text, &bytes);
+
+        assert!(text.contains("ITSP version: 1"));
+        assert!(text.contains("ITSP header length: 84 bytes"));
+        assert!(text.contains("Directory block length: 4096 bytes"));
+        assert!(text.contains("Directory block count: 7"));
+        assert!(text.contains("Directory index depth/root/head: 2/3/4"));
     }
 
     #[test]
