@@ -7961,6 +7961,9 @@ fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     if let Some(arrays) = parse_hvcc_array_summary(payload) {
         parts.push(arrays);
     }
+    if let Some(vps) = parse_hvcc_vps_summary(payload) {
+        parts.push(vps);
+    }
     if let Some(sps) = parse_hvcc_sps_summary(payload) {
         parts.push(sps);
     }
@@ -7970,6 +7973,29 @@ fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
 fn parse_hvcc_sps_summary(payload: &[u8]) -> Option<String> {
     let sps = find_hvcc_nal(payload, 33)?;
     parse_hevc_sps_summary(sps)
+}
+
+fn parse_hvcc_vps_summary(payload: &[u8]) -> Option<String> {
+    let vps = find_hvcc_nal(payload, 32)?;
+    parse_hevc_vps_summary(vps)
+}
+
+fn parse_hevc_vps_summary(vps: &[u8]) -> Option<String> {
+    let rbsp = h264_ebsp_to_rbsp(vps.get(2..)?);
+    let mut bits = BitReader::new(&rbsp);
+    let vps_id = bits.read_bits(4)?;
+    bits.read_bits(2)?;
+    let max_layers_minus1 = bits.read_bits(6)?;
+    let max_sub_layers_minus1 = bits.read_bits(3)?.min(7) as usize;
+    let temporal_id_nesting = bits.read_bits(1)? != 0;
+    bits.read_bits(16)?;
+    skip_hevc_profile_tier_level(&mut bits, max_sub_layers_minus1)?;
+    Some(format!(
+        "VPS id {vps_id}, layers {}, sub-layers {}, temporal nesting {}",
+        max_layers_minus1 + 1,
+        max_sub_layers_minus1 + 1,
+        if temporal_id_nesting { "yes" } else { "no" }
+    ))
 }
 
 fn find_hvcc_nal(payload: &[u8], target_type: u8) -> Option<&[u8]> {
@@ -14368,6 +14394,23 @@ mod tests {
             }
         }
 
+        let mut vps_writer = Writer::new();
+        vps_writer.bits(3, 4);
+        vps_writer.bits(3, 2);
+        vps_writer.bits(1, 6);
+        vps_writer.bits(0, 3);
+        vps_writer.bit(true);
+        vps_writer.bits(0xFFFF, 16);
+        vps_writer.bits(0, 2);
+        vps_writer.bit(false);
+        vps_writer.bits(1, 5);
+        vps_writer.bits(0, 32);
+        vps_writer.bits(0, 32);
+        vps_writer.bits(0, 16);
+        vps_writer.bits(120, 8);
+        let mut vps = vec![0x40, 0x01];
+        vps.extend_from_slice(&vps_writer.finish());
+
         let mut writer = Writer::new();
         writer.bits(0, 4);
         writer.bits(0, 3);
@@ -14401,7 +14444,9 @@ mod tests {
         hvcc[18] = 2;
         hvcc[21] = 3;
         hvcc[22] = 3;
-        hvcc.extend_from_slice(&[0xA0, 0, 1, 0, 1, 0xAA]);
+        hvcc.extend_from_slice(&[0xA0, 0, 1]);
+        hvcc.extend_from_slice(&(vps.len() as u16).to_be_bytes());
+        hvcc.extend_from_slice(&vps);
         hvcc.extend_from_slice(&[0xA1, 0, 1]);
         hvcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
         hvcc.extend_from_slice(&sps);
@@ -14413,6 +14458,7 @@ mod tests {
         assert!(detail.contains("HEVC profile 1"));
         assert!(detail.contains("4-byte NAL length"));
         assert!(detail.contains("VPS 1, SPS 1, PPS 1"));
+        assert!(detail.contains("VPS id 3, layers 2, sub-layers 1, temporal nesting yes"));
         assert_eq!(sps_summary, "SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma");
         assert!(detail.contains("SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma"));
     }
