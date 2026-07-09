@@ -23,7 +23,8 @@ function Test-Magic([string]$Path, [string]$Id) {
         "avif-still" { return [Text.Encoding]::ASCII.GetString($bytes) -match 'ftyp(?:avif|avis)' }
         "heic-still" { return [Text.Encoding]::ASCII.GetString($bytes) -match 'ftyp(?:heic|heix|hevc|hevx|mif1|msf1)' }
         "jxl-still" { return ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0x0A) -or ([Text.Encoding]::ASCII.GetString($bytes) -match 'JXL ' ) }
-        "webp-animated" {
+        { $_ -like "gif-*" } { return [Text.Encoding]::ASCII.GetString($bytes).StartsWith("GIF8") }
+        { $_ -like "webp-animated*" } {
             $all = [System.IO.File]::ReadAllBytes($Path)
             $text = [Text.Encoding]::ASCII.GetString($all)
             return $text.StartsWith("RIFF") -and $text.Contains("WEBP") -and $text.Contains("ANIM")

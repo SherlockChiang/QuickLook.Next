@@ -30,6 +30,26 @@
       "id": "webp-animated",
       "file": "webp-animated.webp",
       "purpose": "Animated WebP metadata and fallback behavior coverage"
+    },
+    {
+      "id": "gif-disposal-background",
+      "file": "gif-disposal-background.gif",
+      "purpose": "GIF restore-to-background disposal behavior coverage"
+    },
+    {
+      "id": "gif-disposal-previous",
+      "file": "gif-disposal-previous.gif",
+      "purpose": "GIF restore-to-previous disposal behavior coverage"
+    },
+    {
+      "id": "webp-animated-alpha",
+      "file": "webp-animated-alpha.webp",
+      "purpose": "Animated WebP alpha blending coverage"
+    },
+    {
+      "id": "webp-animated-blend",
+      "file": "webp-animated-blend.webp",
+      "purpose": "Animated WebP blend/dispose semantics coverage"
     }
   ]
 }
