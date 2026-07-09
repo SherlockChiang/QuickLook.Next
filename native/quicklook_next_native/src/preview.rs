@@ -4637,6 +4637,11 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
         if let Some(content_type) = header_value(&headers, "Content-Type") {
             if let Some(boundary) = mail_header_parameter(content_type, "boundary") {
                 text.push_str(&format!("\nMIME boundary: {boundary}"));
+                let parts = mail_mime_part_summaries(&content, &boundary);
+                if !parts.is_empty() {
+                    text.push_str(&format!("\nMIME parts: {}", parts.len()));
+                    text.push_str(&format!("\nMIME part details: {}", parts.join("; ")));
+                }
             }
         }
         let attachments = content
@@ -5655,6 +5660,44 @@ fn mail_attachment_filenames(content: &str) -> Vec<String> {
         .filter_map(mail_attachment_filename_from_disposition)
         .map(|name| decode_mail_header_value(&name))
         .take(5)
+        .collect()
+}
+
+fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
+    let marker = format!("--{boundary}");
+    content
+        .split(&marker)
+        .skip(1)
+        .take(32)
+        .filter_map(|part| {
+            let trimmed = part.trim_start_matches(|ch| ch == '\r' || ch == '\n');
+            if trimmed.starts_with("--") || trimmed.trim().is_empty() {
+                return None;
+            }
+            let header_text = trimmed
+                .split_once("\r\n\r\n")
+                .or_else(|| trimmed.split_once("\n\n"))
+                .map(|(headers, _)| headers)
+                .unwrap_or(trimmed);
+            let headers = parse_mail_headers(header_text);
+            let content_type = header_value(&headers, "Content-Type")
+                .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "text/plain".to_string());
+            let disposition = header_value(&headers, "Content-Disposition")
+                .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+                .filter(|value| !value.is_empty());
+            let filename = header_value(&headers, "Content-Disposition")
+                .and_then(mail_attachment_filename_from_disposition);
+            let mut summary = content_type;
+            if let Some(disposition) = disposition {
+                summary.push_str(&format!(" ({disposition})"));
+            }
+            if let Some(filename) = filename {
+                summary.push_str(&format!(" filename={filename}"));
+            }
+            Some(summary)
+        })
         .collect()
 }
 
@@ -12957,6 +13000,19 @@ mod tests {
             "Content-Disposition: attachment; filename*0*=UTF-8''quarterly%20; filename*1*=summary.pdf\r\n",
         );
         assert_eq!(names, vec!["quarterly summary.pdf".to_string()]);
+    }
+
+    #[test]
+    fn mail_mime_part_summaries_list_types_and_attachments() {
+        let content = "Content-Type: multipart/mixed; boundary=abc\r\n\r\n--abc\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello\r\n--abc\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\n%PDF\r\n--abc--\r\n";
+
+        assert_eq!(
+            mail_mime_part_summaries(content, "abc"),
+            vec![
+                "text/plain".to_string(),
+                "application/pdf (attachment) filename=report.pdf".to_string(),
+            ]
+        );
     }
 
     #[test]
