@@ -1496,7 +1496,13 @@ mod tests {
             let path = corpus_dir.join(file);
             if path.exists() {
                 let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external webp sample");
-                assert!(!frames.2.is_empty());
+                assert!(frames.2.len() > 1, "animated WebP sample should decode multiple frames: {file}");
+            }
+        }
+        for file in ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"] {
+            let path = corpus_dir.join(file);
+            if path.exists() {
+                assert!(decode_image_bgra(path.to_str().unwrap(), 512, 512, None).is_none(), "modern format unexpectedly gained Rust native decode: {file}");
             }
         }
     }
