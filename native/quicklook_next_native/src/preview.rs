@@ -8892,6 +8892,9 @@ pub fn render_executable(path: &str) -> String {
         if !certificate.signature_algorithms.is_empty() {
             text.push_str(&format!("Certificate signature algorithms: {}\n", certificate.signature_algorithms.join(", ")));
         }
+        if !certificate.names.is_empty() {
+            text.push_str(&format!("Certificate names: {}\n", certificate.names.join(", ")));
+        }
     }
     if let Some(clr) = &pe.clr {
         text.push_str(&format!(
@@ -8986,6 +8989,7 @@ struct PeCertificateSummary {
     typ: u16,
     digest_algorithms: Vec<String>,
     signature_algorithms: Vec<String>,
+    names: Vec<String>,
 }
 
 struct PeFixedVersion {
@@ -9597,6 +9601,7 @@ fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateS
         typ: read_u16(bytes, offset + 6)?,
         digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
         signature_algorithms: parse_authenticode_signature_algorithms(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
+        names: parse_authenticode_certificate_names(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
     })
 }
 
@@ -9618,6 +9623,50 @@ fn parse_authenticode_digest_algorithms(bytes: &[u8], offset: usize, length: usi
         }
     }
     algorithms
+}
+
+fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
+    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
+        return Vec::new();
+    };
+    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
+    let name_oids: [(&str, &[u8]); 3] = [
+        ("CN", &[0x06, 0x03, 0x55, 0x04, 0x03]),
+        ("O", &[0x06, 0x03, 0x55, 0x04, 0x0A]),
+        ("OU", &[0x06, 0x03, 0x55, 0x04, 0x0B]),
+    ];
+    let mut names = Vec::new();
+    for (label, oid) in name_oids {
+        let mut search = 0usize;
+        while search + oid.len() + 2 <= payload.len() && names.len() < 12 {
+            let Some(position) = payload[search..].windows(oid.len()).position(|window| window == oid) else {
+                break;
+            };
+            let value_offset = search + position + oid.len();
+            if let Some(value) = read_der_string(payload, value_offset) {
+                let entry = format!("{label}={value}");
+                if !names.iter().any(|existing| existing == &entry) {
+                    names.push(entry);
+                }
+            }
+            search = value_offset.saturating_add(1);
+        }
+    }
+    names
+}
+
+fn read_der_string(bytes: &[u8], offset: usize) -> Option<String> {
+    let tag = *bytes.get(offset)?;
+    if !matches!(tag, 0x0C | 0x13 | 0x14 | 0x16) {
+        return None;
+    }
+    let len = *bytes.get(offset + 1)? as usize;
+    if len & 0x80 != 0 || len > 128 {
+        return None;
+    }
+    let raw = bytes.get(offset + 2..offset + 2 + len)?;
+    let value = String::from_utf8_lossy(raw).trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 fn parse_authenticode_signature_algorithms(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
@@ -14496,6 +14545,8 @@ mod tests {
         bytes[0x1806..0x1808].copy_from_slice(&0x0002u16.to_le_bytes());
         bytes[0x1808..0x1813].copy_from_slice(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
         bytes[0x1818..0x1823].copy_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]);
+        bytes[0x1828..0x182D].copy_from_slice(&[0x06, 0x03, 0x55, 0x04, 0x03]);
+        bytes[0x182D..0x183D].copy_from_slice(b"\x0C\x0EQuickLook Test");
 
         let pe = parse_pe_headers(&bytes).expect("pe summary");
 
@@ -14536,6 +14587,10 @@ mod tests {
         assert_eq!(
             pe.certificate.as_ref().map(|cert| cert.signature_algorithms.clone()).unwrap_or_default(),
             vec!["SHA-256 with RSA".to_string()]
+        );
+        assert_eq!(
+            pe.certificate.as_ref().map(|cert| cert.names.clone()).unwrap_or_default(),
+            vec!["CN=QuickLook Test".to_string()]
         );
         assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
         let clr = pe.clr.as_ref().expect("clr summary");
