@@ -32,8 +32,8 @@ then commit that item by itself.
 - [x] Add bounded per-chunk / per-sample byte mapping details from `stsc`,
   `stsz`, and `stco` / `co64`.
 - [x] Parse AVC SPS for coded size, crop, and VUI summary.
-- [ ] Extend `ctts` / `elst` into the bounded sample timeline summary.
-- [ ] Parse AVC SPS color details from VUI when present.
+- [x] Extend `ctts` / `elst` into the bounded sample timeline summary.
+- [x] Parse AVC SPS color details from VUI when present.
 - [ ] Parse HEVC SPS/VPS for coded size, profile, level, bit depth, chroma, and
   HDR-adjacent metadata when present.
 
