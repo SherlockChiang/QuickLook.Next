@@ -1033,11 +1033,11 @@ fn decode_image_bgra(
 
 fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     let file = std::fs::File::open(path).ok()?;
-    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).ok()?;
-    let frames = decoder.into_frames().collect_frames().ok()?;
-    let first = frames.first()?;
-    let original_width = first.buffer().width();
-    let original_height = first.buffer().height();
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    let mut reader = options.read_info(BufReader::new(file)).ok()?;
+    let original_width = u32::from(reader.width());
+    let original_height = u32::from(reader.height());
     if should_skip_native_image_decode(original_width, original_height) {
         return None;
     }
@@ -1059,11 +1059,26 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
 
     let mut decoded = Vec::new();
     let mut canvas = vec![0u8; (original_width as usize).checked_mul(original_height as usize)?.checked_mul(4)?];
-    for frame in frames.into_iter().take(max_frames) {
-        let (num, den) = frame.delay().numer_denom_ms();
-        let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
-        let rgba = frame.into_buffer();
-        composite_rgba_over(&mut canvas, &rgba, original_width, original_height);
+    let mut previous_disposal = gif::DisposalMethod::Keep;
+    let mut previous_rect = (0u16, 0u16, 0u16, 0u16);
+    let mut previous_canvas: Option<Vec<u8>> = None;
+    while decoded.len() < max_frames {
+        apply_gif_disposal(&mut canvas, previous_disposal, previous_rect, previous_canvas.take(), original_width);
+        let frame = match reader.read_next_frame().ok()? {
+            Some(frame) => frame,
+            None => break,
+        };
+        let delay_ms = u32::from(frame.delay).saturating_mul(10).clamp(20, 1_000);
+        let saved_canvas = if frame.dispose == gif::DisposalMethod::Previous { Some(canvas.clone()) } else { None };
+        composite_rgba_over_at(
+            &mut canvas,
+            &frame.buffer,
+            original_width,
+            original_height,
+            u32::from(frame.left),
+            u32::from(frame.top),
+            u32::from(frame.width),
+            u32::from(frame.height));
         let rgba = image::RgbaImage::from_raw(original_width, original_height, canvas.clone())?;
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
@@ -1083,6 +1098,9 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
             bgra.push(a as u8);
         }
         decoded.push((delay_ms, bgra));
+        previous_disposal = frame.dispose;
+        previous_rect = (frame.left, frame.top, frame.width, frame.height);
+        previous_canvas = saved_canvas;
     }
     Some((width, height, decoded))
 }
@@ -1175,27 +1193,51 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
     Some((width, height, decoded))
 }
 
-fn composite_rgba_over(canvas: &mut [u8], frame: &image::RgbaImage, width: u32, height: u32) {
-    let copy_width = width.min(frame.width()) as usize;
-    let copy_height = height.min(frame.height()) as usize;
-    let canvas_stride = width as usize * 4;
-    let frame_stride = frame.width() as usize * 4;
-    let frame_bytes = frame.as_raw();
+fn apply_gif_disposal(canvas: &mut [u8], disposal: gif::DisposalMethod, rect: (u16, u16, u16, u16), previous_canvas: Option<Vec<u8>>, canvas_width: u32) {
+    match disposal {
+        gif::DisposalMethod::Background => {
+            let (left, top, width, height) = rect;
+            let canvas_stride = canvas_width as usize * 4;
+            for y in top as usize..(top as usize + height as usize) {
+                for x in left as usize..(left as usize + width as usize) {
+                    let offset = y * canvas_stride + x * 4;
+                    if offset + 4 <= canvas.len() {
+                        canvas[offset..offset + 4].fill(0);
+                    }
+                }
+            }
+        }
+        gif::DisposalMethod::Previous => {
+            if let Some(previous_canvas) = previous_canvas {
+                if previous_canvas.len() == canvas.len() {
+                    canvas.copy_from_slice(&previous_canvas);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn composite_rgba_over_at(canvas: &mut [u8], frame: &[u8], canvas_width: u32, canvas_height: u32, left: u32, top: u32, frame_width: u32, frame_height: u32) {
+    let copy_width = frame_width.min(canvas_width.saturating_sub(left)) as usize;
+    let copy_height = frame_height.min(canvas_height.saturating_sub(top)) as usize;
+    let canvas_stride = canvas_width as usize * 4;
+    let frame_stride = frame_width as usize * 4;
     for y in 0..copy_height {
         for x in 0..copy_width {
             let src = y * frame_stride + x * 4;
-            let dst = y * canvas_stride + x * 4;
-            let a = frame_bytes[src + 3] as u32;
+            let dst = (top as usize + y) * canvas_stride + (left as usize + x) * 4;
+            let a = frame[src + 3] as u32;
             if a == 0 {
                 continue;
             }
             if a == 255 {
-                canvas[dst..dst + 4].copy_from_slice(&frame_bytes[src..src + 4]);
+                canvas[dst..dst + 4].copy_from_slice(&frame[src..src + 4]);
                 continue;
             }
             let inv_a = 255 - a;
             for channel in 0..3 {
-                let blended = (frame_bytes[src + channel] as u32 * a + canvas[dst + channel] as u32 * inv_a + 127) / 255;
+                let blended = (frame[src + channel] as u32 * a + canvas[dst + channel] as u32 * inv_a + 127) / 255;
                 canvas[dst + channel] = blended as u8;
             }
             canvas[dst + 3] = (a + canvas[dst + 3] as u32 * inv_a / 255).min(255) as u8;
@@ -1470,32 +1512,25 @@ mod tests {
     }
 
     #[test]
-    fn native_gif_frame_extraction_uses_composited_partial_frames() {
-        use image::Delay;
-        use image::codecs::gif::{GifEncoder, Repeat};
-
-        let path = temp_image_path("gif");
-        let first = image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 255, 255, 0, 0, 255]).unwrap();
-        let second = image::RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap();
-        let file = std::fs::File::create(&path).expect("create gif");
-        let mut encoder = GifEncoder::new(file);
-        encoder.set_repeat(Repeat::Infinite).expect("set repeat");
-        encoder
-            .encode_frame(image::Frame::from_parts(first, 0, 0, Delay::from_numer_denom_ms(100, 1)))
-            .expect("write first frame");
-        encoder
-            .encode_frame(image::Frame::from_parts(second, 1, 0, Delay::from_numer_denom_ms(100, 1)))
-            .expect("write partial frame");
-        drop(encoder);
+    fn native_gif_frame_extraction_honors_background_disposal() {
+        let path = write_disposal_gif(gif::DisposalMethod::Background);
 
         let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
-        assert_eq!(decoded.0, 2);
-        assert_eq!(decoded.1, 1);
-        assert_eq!(decoded.2.len(), 2);
-        assert_eq!(decoded.2[0].1, vec![0, 0, 255, 255, 0, 0, 255, 255]);
-        assert_eq!(decoded.2[1].1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+        assert_eq!(decoded.2.len(), 3);
+        assert_eq!(decoded.2[2].1, vec![0, 255, 0, 255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn native_gif_frame_extraction_honors_previous_disposal() {
+        let path = write_disposal_gif(gif::DisposalMethod::Previous);
+
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1).expect("decode gif frames");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.2.len(), 3);
+        assert_eq!(decoded.2[2].1, vec![0, 255, 0, 255, 0, 0, 255, 255]);
     }
 
     fn temp_image_path(ext: &str) -> std::path::PathBuf {
@@ -1521,6 +1556,34 @@ mod tests {
         encoder
             .encode_frame(image::Frame::new(second))
             .expect("write second frame");
+        path
+    }
+
+    fn write_disposal_gif(disposal: gif::DisposalMethod) -> std::path::PathBuf {
+        let path = temp_image_path("gif");
+        let file = std::fs::File::create(&path).expect("create gif");
+        let mut encoder = gif::Encoder::new(file, 2, 1, &[]).expect("gif encoder");
+        encoder.set_repeat(gif::Repeat::Infinite).expect("set repeat");
+
+        let mut first_pixels = vec![255, 0, 0, 255, 255, 0, 0, 255];
+        let mut first = gif::Frame::from_rgba_speed(2, 1, &mut first_pixels, 10);
+        first.delay = 10;
+        first.dispose = gif::DisposalMethod::Keep;
+        encoder.write_frame(&first).expect("write first frame");
+
+        let mut second_pixels = vec![0, 0, 255, 255];
+        let mut second = gif::Frame::from_rgba_speed(1, 1, &mut second_pixels, 10);
+        second.left = 1;
+        second.delay = 10;
+        second.dispose = disposal;
+        encoder.write_frame(&second).expect("write second frame");
+
+        let mut third_pixels = vec![0, 255, 0, 255];
+        let mut third = gif::Frame::from_rgba_speed(1, 1, &mut third_pixels, 10);
+        third.left = 0;
+        third.delay = 10;
+        third.dispose = gif::DisposalMethod::Keep;
+        encoder.write_frame(&third).expect("write third frame");
         path
     }
 
