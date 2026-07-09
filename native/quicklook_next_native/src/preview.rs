@@ -5772,6 +5772,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut module_info = None;
     let mut memory_info = None;
     let mut memory64_info = None;
+    let mut thread_names_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5800,6 +5801,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             memory_info = parse_minidump_memory_list(bytes, rva as usize, data_size as usize);
         } else if stream_type == 9 {
             memory64_info = parse_minidump_memory64_list(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 24 {
+            thread_names_info = parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5823,6 +5826,30 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(memory64_info) = memory64_info {
         text.push_str(&memory64_info);
     }
+    if let Some(thread_names_info) = thread_names_info {
+        text.push_str(&thread_names_info);
+    }
+}
+
+fn parse_minidump_thread_names(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 4 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let count = read_u32(bytes, offset)? as usize;
+    let mut lines = vec![format!("\nThread names: {count}")];
+    let mut entry_offset = offset + 4;
+    for _ in 0..count.min(12) {
+        if entry_offset + 16 > offset + size || entry_offset + 16 > bytes.len() {
+            break;
+        }
+        let id = read_u32(bytes, entry_offset).unwrap_or(0);
+        let name_rva = read_u64(bytes, entry_offset + 8).unwrap_or(0) as usize;
+        if let Some(name) = read_minidump_utf16_string(bytes, name_rva) {
+            lines.push(format!("Thread {id} name: {name}"));
+        }
+        entry_offset += 16;
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -13060,9 +13087,9 @@ mod tests {
 
     #[test]
     fn minidump_stream_summary_lists_known_streams() {
-        let mut bytes = vec![0u8; 1280];
+        let mut bytes = vec![0u8; 1536];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&7u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
@@ -13085,6 +13112,9 @@ mod tests {
         bytes[104..108].copy_from_slice(&9u32.to_le_bytes());
         bytes[108..112].copy_from_slice(&48u32.to_le_bytes());
         bytes[112..116].copy_from_slice(&0x400u32.to_le_bytes());
+        bytes[116..120].copy_from_slice(&24u32.to_le_bytes());
+        bytes[120..124].copy_from_slice(&36u32.to_le_bytes());
+        bytes[124..128].copy_from_slice(&0x440u32.to_le_bytes());
         bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
         bytes[0x86] = 8;
         bytes[0x87] = 1;
@@ -13133,6 +13163,17 @@ mod tests {
         bytes[0x418..0x420].copy_from_slice(&0x3000u64.to_le_bytes());
         bytes[0x420..0x428].copy_from_slice(&0x0040_0000u64.to_le_bytes());
         bytes[0x428..0x430].copy_from_slice(&0x1000u64.to_le_bytes());
+        bytes[0x440..0x444].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x444..0x448].copy_from_slice(&42u32.to_le_bytes());
+        bytes[0x44C..0x454].copy_from_slice(&0x480u64.to_le_bytes());
+        bytes[0x454..0x458].copy_from_slice(&99u32.to_le_bytes());
+        bytes[0x45C..0x464].copy_from_slice(&0x4A0u64.to_le_bytes());
+        let worker: Vec<u8> = "worker".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x480..0x484].copy_from_slice(&(worker.len() as u32).to_le_bytes());
+        bytes[0x484..0x484 + worker.len()].copy_from_slice(&worker);
+        let io_thread: Vec<u8> = "io thread".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x4A0..0x4A4].copy_from_slice(&(io_thread.len() as u32).to_le_bytes());
+        bytes[0x4A4..0x4A4 + io_thread.len()].copy_from_slice(&io_thread);
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -13158,6 +13199,9 @@ mod tests {
         assert!(text.contains("Memory64 base RVA: 0x500"));
         assert!(text.contains("Memory64 bytes listed: 16384"));
         assert!(text.contains("Memory64 0x0000000000300000-0x0000000000303000 (12288 bytes)"));
+        assert!(text.contains("Thread names: 2"));
+        assert!(text.contains("Thread 42 name: worker"));
+        assert!(text.contains("Thread 99 name: io thread"));
     }
 
     #[test]
