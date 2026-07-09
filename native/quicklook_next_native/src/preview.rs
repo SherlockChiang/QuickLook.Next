@@ -6479,6 +6479,7 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
 
 fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let sections = elf_sections(bytes, class, endian);
+    let machine = read_u16_endian(bytes, 18, endian).unwrap_or(0);
     sections
         .iter()
         .filter(|section| section.typ == 4 || section.typ == 9)
@@ -6497,9 +6498,52 @@ fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             if entry_size == 0 || section.size == 0 || section.offset.saturating_add(section.size) > bytes.len() {
                 return None;
             }
-            Some(format!("{} {} entries", section.name, section.size / entry_size))
+            let count = section.size / entry_size;
+            let mut types = Vec::new();
+            for index in 0..count.min(8) {
+                let offset = section.offset + index * entry_size;
+                let rel_type = if class == 2 {
+                    (read_u64_endian(bytes, offset + 8, endian).unwrap_or(0) & 0xFFFF_FFFF) as u32
+                } else {
+                    read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) & 0xFF
+                };
+                let name = elf_relocation_type_name(machine, rel_type);
+                if !types.contains(&name) {
+                    types.push(name);
+                }
+            }
+            if types.is_empty() {
+                Some(format!("{} {} entries", section.name, count))
+            } else {
+                Some(format!("{} {} entries ({})", section.name, count, types.join(", ")))
+            }
         })
         .collect()
+}
+
+fn elf_relocation_type_name(machine: u16, typ: u32) -> String {
+    match machine {
+        62 => match typ {
+            0 => "R_X86_64_NONE".to_string(),
+            1 => "R_X86_64_64".to_string(),
+            2 => "R_X86_64_PC32".to_string(),
+            6 => "R_X86_64_GLOB_DAT".to_string(),
+            7 => "R_X86_64_JUMP_SLOT".to_string(),
+            8 => "R_X86_64_RELATIVE".to_string(),
+            10 => "R_X86_64_32".to_string(),
+            11 => "R_X86_64_32S".to_string(),
+            _ => format!("x86-64:{typ}"),
+        },
+        183 => match typ {
+            0 => "R_AARCH64_NONE".to_string(),
+            257 => "R_AARCH64_ABS64".to_string(),
+            1025 => "R_AARCH64_GLOB_DAT".to_string(),
+            1026 => "R_AARCH64_JUMP_SLOT".to_string(),
+            1027 => "R_AARCH64_RELATIVE".to_string(),
+            _ => format!("AArch64:{typ}"),
+        },
+        _ => format!("type {typ}"),
+    }
 }
 
 fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
@@ -13514,6 +13558,7 @@ mod tests {
         bytes[0x7B8..0x7BC].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x7BC..0x7C0].copy_from_slice(b"GNU\0");
         bytes[0x7C0..0x7C4].copy_from_slice(&[1, 2, 3, 4]);
+        bytes[0x798..0x7A0].copy_from_slice(&8u64.to_le_bytes());
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -13531,7 +13576,7 @@ mod tests {
         assert!(text.contains("RUNPATH: $ORIGIN"));
         assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn, .note.gnu.build-id"));
         assert!(text.contains("Symbols: .symtab 2 entries (main)"));
-        assert!(text.contains("Relocations: .rela.dyn 1 entries"));
+        assert!(text.contains("Relocations: .rela.dyn 1 entries (R_X86_64_RELATIVE)"));
         assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
     }
 }
