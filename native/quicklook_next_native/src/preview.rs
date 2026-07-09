@@ -9722,6 +9722,12 @@ pub fn render_executable(path: &str) -> String {
         if !certificate.names.is_empty() {
             text.push_str(&format!("Certificate names: {}\n", certificate.names.join(", ")));
         }
+        if !certificate.issuers.is_empty() {
+            text.push_str(&format!("Certificate issuers: {}\n", certificate.issuers.join(", ")));
+        }
+        if !certificate.subjects.is_empty() {
+            text.push_str(&format!("Certificate subjects: {}\n", certificate.subjects.join(", ")));
+        }
     }
     if let Some(clr) = &pe.clr {
         text.push_str(&format!(
@@ -9817,6 +9823,8 @@ struct PeCertificateSummary {
     digest_algorithms: Vec<String>,
     signature_algorithms: Vec<String>,
     names: Vec<String>,
+    issuers: Vec<String>,
+    subjects: Vec<String>,
 }
 
 struct PeFixedVersion {
@@ -10422,13 +10430,17 @@ fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateS
     if offset + 8 > bytes.len() {
         return None;
     }
+    let length = read_u32(bytes, offset).unwrap_or(0) as usize;
+    let (issuers, subjects) = parse_authenticode_certificate_subjects(bytes, offset, length);
     Some(PeCertificateSummary {
         length: read_u32(bytes, offset)?,
         revision: read_u16(bytes, offset + 4)?,
         typ: read_u16(bytes, offset + 6)?,
-        digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
-        signature_algorithms: parse_authenticode_signature_algorithms(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
-        names: parse_authenticode_certificate_names(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
+        digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, length),
+        signature_algorithms: parse_authenticode_signature_algorithms(bytes, offset, length),
+        names: parse_authenticode_certificate_names(bytes, offset, length),
+        issuers,
+        subjects,
     })
 }
 
@@ -10480,6 +10492,117 @@ fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usi
         }
     }
     names
+}
+
+fn parse_authenticode_certificate_subjects(bytes: &[u8], offset: usize, length: usize) -> (Vec<String>, Vec<String>) {
+    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
+        return (Vec::new(), Vec::new());
+    };
+    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
+    let mut issuers = Vec::new();
+    let mut subjects = Vec::new();
+    let mut search = 0usize;
+    while search + 4 < payload.len() && subjects.len() < 4 {
+        let Some(position) = payload[search..].iter().position(|byte| *byte == 0x30) else {
+            break;
+        };
+        let cert_offset = search + position;
+        if let Some((issuer, subject, cert_end)) = parse_x509_certificate_names(payload, cert_offset) {
+            if !issuer.is_empty() && !issuers.contains(&issuer) {
+                issuers.push(issuer);
+            }
+            if !subject.is_empty() && !subjects.contains(&subject) {
+                subjects.push(subject);
+            }
+            search = cert_end.max(cert_offset + 1);
+        } else {
+            search = cert_offset + 1;
+        }
+    }
+    (issuers, subjects)
+}
+
+fn parse_x509_certificate_names(bytes: &[u8], offset: usize) -> Option<(String, String, usize)> {
+    let (cert_content, cert_end) = der_tlv_content(bytes, offset, 0x30)?;
+    let cert = bytes.get(cert_content..cert_end)?;
+    let (tbs_content, tbs_end_rel) = der_tlv_content(cert, 0, 0x30)?;
+    let tbs = cert.get(tbs_content..tbs_end_rel)?;
+    let mut cursor = 0usize;
+    if tbs.get(cursor) == Some(&0xA0) {
+        let (_, next) = der_tlv_content(tbs, cursor, 0xA0)?;
+        cursor = next;
+    }
+    for _ in 0..2 {
+        let (_, next) = der_any_tlv_content(tbs, cursor)?;
+        cursor = next;
+    }
+    let (issuer_content, issuer_end) = der_tlv_content(tbs, cursor, 0x30)?;
+    let issuer = parse_x509_name(&tbs[issuer_content..issuer_end]);
+    cursor = issuer_end;
+    let (_, next) = der_tlv_content(tbs, cursor, 0x30)?;
+    cursor = next;
+    let (subject_content, subject_end) = der_tlv_content(tbs, cursor, 0x30)?;
+    let subject = parse_x509_name(&tbs[subject_content..subject_end]);
+    Some((issuer, subject, cert_end))
+}
+
+fn parse_x509_name(bytes: &[u8]) -> String {
+    let name_oids: [(&str, &[u8]); 3] = [
+        ("CN", &[0x06, 0x03, 0x55, 0x04, 0x03]),
+        ("O", &[0x06, 0x03, 0x55, 0x04, 0x0A]),
+        ("OU", &[0x06, 0x03, 0x55, 0x04, 0x0B]),
+    ];
+    let mut parts = Vec::new();
+    for (label, oid) in name_oids {
+        let mut search = 0usize;
+        while search + oid.len() + 2 <= bytes.len() && parts.len() < 8 {
+            let Some(position) = bytes[search..].windows(oid.len()).position(|window| window == oid) else {
+                break;
+            };
+            let value_offset = search + position + oid.len();
+            if let Some(value) = read_der_string(bytes, value_offset) {
+                let entry = format!("{label}={value}");
+                if !parts.contains(&entry) {
+                    parts.push(entry);
+                }
+            }
+            search = value_offset.saturating_add(1);
+        }
+    }
+    parts.join("/")
+}
+
+fn der_any_tlv_content(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let _tag = *bytes.get(offset)?;
+    der_tlv_bounds(bytes, offset).map(|(content, end)| (content, end))
+}
+
+fn der_tlv_content(bytes: &[u8], offset: usize, tag: u8) -> Option<(usize, usize)> {
+    (*bytes.get(offset)? == tag).then_some(())?;
+    der_tlv_bounds(bytes, offset)
+}
+
+fn der_tlv_bounds(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let len_byte = *bytes.get(offset + 1)?;
+    if len_byte & 0x80 == 0 {
+        let content = offset + 2;
+        let end = content.checked_add(len_byte as usize)?;
+        return (end <= bytes.len()).then_some((content, end));
+    }
+    let len_len = (len_byte & 0x7F) as usize;
+    if len_len == 0 || len_len > 2 || offset + 2 + len_len > bytes.len() {
+        return None;
+    }
+    let mut len = 0usize;
+    for byte in &bytes[offset + 2..offset + 2 + len_len] {
+        len = (len << 8) | *byte as usize;
+    }
+    if len > 4096 {
+        return None;
+    }
+    let content = offset + 2 + len_len;
+    let end = content.checked_add(len)?;
+    (end <= bytes.len()).then_some((content, end))
 }
 
 fn read_der_string(bytes: &[u8], offset: usize) -> Option<String> {
@@ -15162,6 +15285,46 @@ mod tests {
         assert!(text.contains("Recipients display: Bob Example; Carol Example"));
         assert!(text.contains("Sent time:"));
         assert!(text.contains("Body available: yes"));
+    }
+
+    #[test]
+    fn authenticode_certificate_subjects_reads_x509_names() {
+        fn der(tag: u8, content: Vec<u8>) -> Vec<u8> {
+            let mut bytes = vec![tag];
+            if content.len() < 128 {
+                bytes.push(content.len() as u8);
+            } else {
+                bytes.push(0x82);
+                bytes.extend_from_slice(&(content.len() as u16).to_be_bytes());
+            }
+            bytes.extend_from_slice(&content);
+            bytes
+        }
+        fn seq(children: Vec<Vec<u8>>) -> Vec<u8> {
+            der(0x30, children.concat())
+        }
+        fn name(value: &str) -> Vec<u8> {
+            seq(vec![der(0x31, seq(vec![vec![0x06, 0x03, 0x55, 0x04, 0x03], der(0x0C, value.as_bytes().to_vec())]))])
+        }
+
+        let tbs = seq(vec![
+            der(0xA0, der(0x02, vec![2])),
+            der(0x02, vec![1]),
+            seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x04]]),
+            name("Issuer Test"),
+            seq(vec![der(0x17, b"260101000000Z".to_vec()), der(0x17, b"270101000000Z".to_vec())]),
+            name("Subject Test"),
+            seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x05]]),
+        ]);
+        let cert = seq(vec![tbs, seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x04]]), der(0x03, vec![0])]);
+        let mut win_cert = vec![0u8; 8];
+        win_cert.extend_from_slice(&cert);
+        let cert_len = win_cert.len() as u32;
+        win_cert[0..4].copy_from_slice(&cert_len.to_le_bytes());
+        let (issuers, subjects) = parse_authenticode_certificate_subjects(&win_cert, 0, win_cert.len());
+
+        assert_eq!(issuers, vec!["CN=Issuer Test".to_string()]);
+        assert_eq!(subjects, vec!["CN=Subject Test".to_string()]);
     }
 
     #[test]
