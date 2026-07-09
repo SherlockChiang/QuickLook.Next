@@ -5903,6 +5903,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if let Some(interpreter) = elf_interpreter(bytes, class, endian) {
         text.push_str(&format!("\nInterpreter: {interpreter}"));
     }
+    let needed = elf_needed_libraries(bytes, class, endian);
+    if !needed.is_empty() {
+        text.push_str(&format!("\nNeeded libraries: {}", needed.join(", ")));
+    }
 }
 
 fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
@@ -5942,6 +5946,107 @@ fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
             .to_string();
         if !value.is_empty() {
             return Some(value);
+        }
+    }
+    None
+}
+
+fn elf_needed_libraries(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let headers = elf_program_headers(bytes, class, endian);
+    let Some(dynamic) = headers.iter().find(|header| header.typ == 2) else {
+        return Vec::new();
+    };
+    let mut strtab_vaddr = 0u64;
+    let mut needed_offsets = Vec::new();
+    let entry_size = if class == 2 { 16usize } else { 8usize };
+    let mut offset = dynamic.file_offset as usize;
+    let end = offset.saturating_add(dynamic.file_size as usize).min(bytes.len());
+    while offset + entry_size <= end && needed_offsets.len() < 32 {
+        let tag = if class == 2 {
+            read_u64_endian(bytes, offset, endian).unwrap_or(0)
+        } else {
+            read_u32_endian(bytes, offset, endian).unwrap_or(0) as u64
+        };
+        let value = if class == 2 {
+            read_u64_endian(bytes, offset + 8, endian).unwrap_or(0)
+        } else {
+            read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as u64
+        };
+        match tag {
+            0 => break,
+            1 => needed_offsets.push(value),
+            5 => strtab_vaddr = value,
+            _ => {}
+        }
+        offset += entry_size;
+    }
+    if strtab_vaddr == 0 {
+        return Vec::new();
+    }
+    let Some(strtab_offset) = elf_vaddr_to_file_offset(&headers, strtab_vaddr) else {
+        return Vec::new();
+    };
+    needed_offsets
+        .into_iter()
+        .filter_map(|name_offset| read_c_string(bytes, strtab_offset + name_offset as usize, 260))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct ElfProgramHeader {
+    typ: u32,
+    file_offset: u64,
+    virtual_address: u64,
+    file_size: u64,
+    memory_size: u64,
+}
+
+fn elf_program_headers(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfProgramHeader> {
+    let phoff = if class == 2 {
+        read_u64_endian(bytes, 32, endian).unwrap_or(0) as usize
+    } else {
+        read_u32_endian(bytes, 28, endian).unwrap_or(0) as usize
+    };
+    let phentsize = read_u16_endian(bytes, if class == 2 { 54 } else { 42 }, endian).unwrap_or(0) as usize;
+    let phnum = read_u16_endian(bytes, if class == 2 { 56 } else { 44 }, endian).unwrap_or(0).min(64) as usize;
+    let mut headers = Vec::new();
+    if phoff == 0 || phentsize == 0 {
+        return headers;
+    }
+    for index in 0..phnum {
+        let offset = phoff + index * phentsize;
+        if offset + phentsize > bytes.len() {
+            break;
+        }
+        let typ = read_u32_endian(bytes, offset, endian).unwrap_or(0);
+        let header = if class == 2 {
+            ElfProgramHeader {
+                typ,
+                file_offset: read_u64_endian(bytes, offset + 8, endian).unwrap_or(0),
+                virtual_address: read_u64_endian(bytes, offset + 16, endian).unwrap_or(0),
+                file_size: read_u64_endian(bytes, offset + 32, endian).unwrap_or(0),
+                memory_size: read_u64_endian(bytes, offset + 40, endian).unwrap_or(0),
+            }
+        } else {
+            ElfProgramHeader {
+                typ,
+                file_offset: read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as u64,
+                virtual_address: read_u32_endian(bytes, offset + 8, endian).unwrap_or(0) as u64,
+                file_size: read_u32_endian(bytes, offset + 16, endian).unwrap_or(0) as u64,
+                memory_size: read_u32_endian(bytes, offset + 20, endian).unwrap_or(0) as u64,
+            }
+        };
+        headers.push(header);
+    }
+    headers
+}
+
+fn elf_vaddr_to_file_offset(headers: &[ElfProgramHeader], vaddr: u64) -> Option<usize> {
+    for header in headers.iter().filter(|header| header.typ == 1) {
+        let span = header.memory_size.max(header.file_size).max(1);
+        if vaddr >= header.virtual_address && vaddr < header.virtual_address.saturating_add(span) {
+            return Some((header.file_offset + (vaddr - header.virtual_address)) as usize);
         }
     }
     None
@@ -11739,7 +11844,7 @@ mod tests {
 
     #[test]
     fn elf_summary_detects_64_bit_little_endian() {
-        let mut bytes = vec![0u8; 256];
+        let mut bytes = vec![0u8; 1024];
         bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
         bytes[4] = 2;
         bytes[5] = 1;
@@ -11752,9 +11857,23 @@ mod tests {
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
         bytes[60..62].copy_from_slice(&12u16.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
-        bytes[0x48..0x50].copy_from_slice(&0xC0u64.to_le_bytes());
+        bytes[0x48..0x50].copy_from_slice(&0x300u64.to_le_bytes());
         bytes[0x60..0x68].copy_from_slice(&28u64.to_le_bytes());
-        bytes[0xC0..0xDB].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2");
+        bytes[0x78..0x7C].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x80..0x88].copy_from_slice(&0u64.to_le_bytes());
+        bytes[0x88..0x90].copy_from_slice(&0x400000u64.to_le_bytes());
+        bytes[0x98..0xA0].copy_from_slice(&0x400u64.to_le_bytes());
+        bytes[0xA0..0xA8].copy_from_slice(&0x400u64.to_le_bytes());
+        bytes[0xB0..0xB4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0xB8..0xC0].copy_from_slice(&0x200u64.to_le_bytes());
+        bytes[0xD0..0xD8].copy_from_slice(&48u64.to_le_bytes());
+        bytes[0x200..0x208].copy_from_slice(&5u64.to_le_bytes());
+        bytes[0x208..0x210].copy_from_slice(&0x400280u64.to_le_bytes());
+        bytes[0x210..0x218].copy_from_slice(&1u64.to_le_bytes());
+        bytes[0x218..0x220].copy_from_slice(&0u64.to_le_bytes());
+        bytes[0x220..0x228].copy_from_slice(&0u64.to_le_bytes());
+        bytes[0x280..0x28A].copy_from_slice(b"libc.so.6\0");
+        bytes[0x300..0x31B].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2");
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -11767,5 +11886,6 @@ mod tests {
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x200"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
+        assert!(text.contains("Needed libraries: libc.so.6"));
     }
 }
