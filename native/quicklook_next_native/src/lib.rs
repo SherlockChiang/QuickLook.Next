@@ -1497,6 +1497,7 @@ mod tests {
             if path.exists() {
                 let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external webp sample");
                 assert!(frames.2.len() > 1, "animated WebP sample should decode multiple frames: {file}");
+                assert_eq!(webp_external_golden(file), Some((frames.0, frames.1, frames.2.len(), fnv1a64(&frames.2[0].1), fnv1a64(&frames.2.last().unwrap().1))));
             }
         }
         for file in ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"] {
@@ -1504,6 +1505,24 @@ mod tests {
             if path.exists() {
                 assert!(decode_image_bgra(path.to_str().unwrap(), 512, 512, None).is_none(), "modern format unexpectedly gained Rust native decode: {file}");
             }
+        }
+    }
+
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    fn webp_external_golden(file: &str) -> Option<(u32, u32, usize, u64, u64)> {
+        match file {
+            "webp-animated.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
+            "webp-animated-alpha.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
+            "webp-animated-blend.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
+            _ => None,
         }
     }
 
