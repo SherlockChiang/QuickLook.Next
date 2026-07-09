@@ -34,13 +34,14 @@ then commit that item by itself.
 - [x] Parse AVC SPS for coded size, crop, and VUI summary.
 - [x] Extend `ctts` / `elst` into the bounded sample timeline summary.
 - [x] Parse AVC SPS color details from VUI when present.
-- [ ] Parse HEVC SPS/VPS for coded size, profile, level, bit depth, chroma, and
+- [x] Summarize HEVC `hvcC` parameter set arrays and profile-level fields.
+- [ ] Parse HEVC SPS/VPS for coded size, bit depth, chroma, and
   HDR-adjacent metadata when present.
 
 ### PE / CLR
 
-- [ ] Parse Authenticode PKCS#7 signer, certificate subject/issuer, and digest
-  algorithms from the certificate table.
+- [x] Detect Authenticode digest algorithms from certificate table OIDs.
+- [ ] Parse Authenticode PKCS#7 signer and certificate subject/issuer.
 - [x] Decode CLR metadata table stream row counts.
 - [x] Summarize CLR assembly references.
 - [x] Summarize CLR type definitions and custom attributes with strict caps.
