@@ -2,6 +2,12 @@
 
 QuickLook.Next currently treats image preview decode as a bounded rasterization step. The native path validates that JPEG files with CMYK data or ICC markers can be decoded, but it does not apply ICC color transforms.
 
+Runtime fallback policy:
+
+- JPEGs with ICC (`APP2`) or Adobe (`APP14`) markers prefer Windows system decode because `SystemImageDecoder` requests `ColorManagementMode.ColorManageToSRgb`.
+- If system decode fails for those color-managed JPEGs, RasterHost skips the Rust fallback rather than showing a potentially wrong-color preview.
+- AVIF, HEIC/HEIF, and JXL are treated as system-required formats. If the platform codec is unavailable, Rust fallback is skipped.
+
 Covered by corpus smoke:
 
 - `testdata/image-corpus/external/jpeg-cmyk.jpg`: decoded by Rust native image path.
