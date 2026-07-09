@@ -4631,7 +4631,7 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
                 .iter()
                 .find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v))
             {
-                text.push_str(&format!("\n{key}: {}", value.trim()));
+                text.push_str(&format!("\n{key}: {}", decode_mail_header_value(value).trim()));
             }
         }
         if let Some(content_type) = header_value(&headers, "Content-Type") {
@@ -4651,6 +4651,10 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
                 "\nAttachments observed: {}",
                 format_number(attachments as i64)
             ));
+            let filenames = mail_attachment_filenames(&content);
+            if !filenames.is_empty() {
+                text.push_str(&format!("\nAttachment names: {}", filenames.join(", ")));
+            }
         }
         if filename.to_ascii_lowercase().ends_with(".mbox") {
             let count = content
@@ -5530,6 +5534,86 @@ fn mail_header_parameter(value: &str, name: &str) -> Option<String> {
                 .then(|| raw_value.trim().trim_matches('"').trim().to_string())
         })
         .filter(|value| !value.is_empty())
+}
+
+fn decode_mail_header_value(value: &str) -> String {
+    let mut output = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("=?") {
+        output.push_str(&rest[..start]);
+        let encoded = &rest[start + 2..];
+        let Some(charset_end) = encoded.find('?') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let charset = &encoded[..charset_end];
+        let encoded = &encoded[charset_end + 1..];
+        let Some(encoding_end) = encoded.find('?') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let encoding = &encoded[..encoding_end];
+        let encoded = &encoded[encoding_end + 1..];
+        let Some(value_end) = encoded.find("?=") else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let encoded_value = &encoded[..value_end];
+        if let Some(decoded) = decode_rfc2047_word(charset, encoding, encoded_value) {
+            output.push_str(&decoded);
+        } else {
+            output.push_str(&rest[start..start + 2 + charset_end + 1 + encoding_end + 1 + value_end + 2]);
+        }
+        rest = &encoded[value_end + 2..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn decode_rfc2047_word(charset: &str, encoding: &str, encoded: &str) -> Option<String> {
+    if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("us-ascii") {
+        return None;
+    }
+    if !encoding.eq_ignore_ascii_case("q") {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    let mut chars = encoded.as_bytes().iter().copied();
+    while let Some(byte) = chars.next() {
+        match byte {
+            b'_' => bytes.push(b' '),
+            b'=' => {
+                let hi = chars.next()?;
+                let lo = chars.next()?;
+                bytes.push((hex_nibble(hi)? << 4) | hex_nibble(lo)?);
+            }
+            _ => bytes.push(byte),
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn mail_attachment_filenames(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            line.to_ascii_lowercase()
+                .contains("content-disposition: attachment")
+                .then_some(line)
+        })
+        .filter_map(|line| mail_header_parameter(line, "filename"))
+        .map(|name| decode_mail_header_value(&name))
+        .take(5)
+        .collect()
 }
 
 fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
@@ -11130,6 +11214,22 @@ mod tests {
             mail_header_parameter(value, "boundary").as_deref(),
             Some("abc-123")
         );
+    }
+
+    #[test]
+    fn mail_header_decoder_reads_q_encoded_words_and_filenames() {
+        assert_eq!(
+            decode_mail_header_value("=?UTF-8?Q?Quarterly_Report?="),
+            "Quarterly Report"
+        );
+        assert_eq!(
+            decode_mail_header_value("=?UTF-8?Q?caf=C3=A9?="),
+            "café"
+        );
+        let names = mail_attachment_filenames(
+            "Content-Disposition: attachment; filename=\"=?UTF-8?Q?report_Q1.pdf?=\"\r\n",
+        );
+        assert_eq!(names, vec!["report Q1.pdf".to_string()]);
     }
 
     #[test]
