@@ -5674,11 +5674,10 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
             if trimmed.starts_with("--") || trimmed.trim().is_empty() {
                 return None;
             }
-            let header_text = trimmed
+            let (header_text, body) = trimmed
                 .split_once("\r\n\r\n")
                 .or_else(|| trimmed.split_once("\n\n"))
-                .map(|(headers, _)| headers)
-                .unwrap_or(trimmed);
+                .unwrap_or((trimmed, ""));
             let headers = parse_mail_headers(header_text);
             let content_type = header_value(&headers, "Content-Type")
                 .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
@@ -5689,6 +5688,9 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
                 .filter(|value| !value.is_empty());
             let filename = header_value(&headers, "Content-Disposition")
                 .and_then(mail_attachment_filename_from_disposition);
+            let encoding = header_value(&headers, "Content-Transfer-Encoding")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             let mut summary = content_type;
             if let Some(disposition) = disposition {
                 summary.push_str(&format!(" ({disposition})"));
@@ -5696,6 +5698,14 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
             if let Some(filename) = filename {
                 summary.push_str(&format!(" filename={filename}"));
             }
+            if let Some(encoding) = encoding {
+                summary.push_str(&format!(" encoding={encoding}"));
+            }
+            let body_len = body
+                .trim_matches(|ch| ch == '\r' || ch == '\n')
+                .as_bytes()
+                .len();
+            summary.push_str(&format!(" body={body_len} bytes"));
             Some(summary)
         })
         .collect()
@@ -13074,13 +13084,13 @@ mod tests {
 
     #[test]
     fn mail_mime_part_summaries_list_types_and_attachments() {
-        let content = "Content-Type: multipart/mixed; boundary=abc\r\n\r\n--abc\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello\r\n--abc\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\n%PDF\r\n--abc--\r\n";
+        let content = "Content-Type: multipart/mixed; boundary=abc\r\n\r\n--abc\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nHello\r\n--abc\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERg==\r\n--abc--\r\n";
 
         assert_eq!(
             mail_mime_part_summaries(content, "abc"),
             vec![
-                "text/plain".to_string(),
-                "application/pdf (attachment) filename=report.pdf".to_string(),
+                "text/plain encoding=quoted-printable body=5 bytes".to_string(),
+                "application/pdf (attachment) filename=report.pdf encoding=base64 body=8 bytes".to_string(),
             ]
         );
     }
