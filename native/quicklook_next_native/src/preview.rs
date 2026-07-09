@@ -6678,6 +6678,9 @@ struct Mp4TrackSummary {
     duration_seconds: Option<f64>,
     data_bytes: Option<u64>,
     timing_entries: Option<u32>,
+    samples: Option<u64>,
+    decode_ticks: Option<u64>,
+    first_sample_delta: Option<u32>,
     composition_entries: Option<u32>,
     edit_entries: Option<u32>,
     chunks: Option<u32>,
@@ -6751,6 +6754,15 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
         if let Some(entries) = track.timing_entries {
             text.push_str(&format!("\n{} timing entries: {}", track.kind, entries));
         }
+        if let Some(samples) = track.samples {
+            text.push_str(&format!("\n{} samples: {}", track.kind, format_number(samples as i64)));
+        }
+        if let Some(decode_ticks) = track.decode_ticks {
+            text.push_str(&format!("\n{} decode ticks: {}", track.kind, format_number(decode_ticks as i64)));
+        }
+        if let Some(delta) = track.first_sample_delta {
+            text.push_str(&format!("\n{} first sample delta: {}", track.kind, delta));
+        }
         if let Some(entries) = track.composition_entries {
             text.push_str(&format!("\n{} composition offsets: {}", track.kind, entries));
         }
@@ -6800,7 +6812,14 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
     if let Some(stsz) = find_mp4_atom_payload(trak, b"stsz") {
         summary.data_bytes = parse_stsz_total_bytes(stsz);
     }
-    summary.timing_entries = find_mp4_atom_payload(trak, b"stts").and_then(parse_mp4_entry_count);
+    if let Some(stts) = find_mp4_atom_payload(trak, b"stts") {
+        summary.timing_entries = parse_mp4_entry_count(stts);
+        if let Some(timeline) = parse_stts_timeline(stts) {
+            summary.samples = Some(timeline.samples);
+            summary.decode_ticks = Some(timeline.decode_ticks);
+            summary.first_sample_delta = timeline.first_delta;
+        }
+    }
     summary.composition_entries = find_mp4_atom_payload(trak, b"ctts").and_then(parse_mp4_entry_count);
     summary.edit_entries = find_mp4_atom_payload(trak, b"elst").and_then(parse_mp4_entry_count);
     if let Some(chunk_summary) = parse_mp4_chunk_summary(trak) {
@@ -7298,6 +7317,31 @@ fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
 
 fn parse_mp4_entry_count(payload: &[u8]) -> Option<u32> {
     read_u32_be(payload, 4)
+}
+
+struct Mp4SttsTimeline {
+    samples: u64,
+    decode_ticks: u64,
+    first_delta: Option<u32>,
+}
+
+fn parse_stts_timeline(payload: &[u8]) -> Option<Mp4SttsTimeline> {
+    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
+    let mut offset = 8usize;
+    let mut samples = 0u64;
+    let mut decode_ticks = 0u64;
+    let mut first_delta = None;
+    for _ in 0..entries {
+        let sample_count = read_u32_be(payload, offset)? as u64;
+        let sample_delta = read_u32_be(payload, offset + 4)?;
+        if first_delta.is_none() {
+            first_delta = Some(sample_delta);
+        }
+        samples = samples.checked_add(sample_count)?;
+        decode_ticks = decode_ticks.checked_add(sample_count.checked_mul(sample_delta as u64)?)?;
+        offset = offset.checked_add(8)?;
+    }
+    Some(Mp4SttsTimeline { samples, decode_ticks, first_delta })
 }
 
 struct Mp4ChunkSummary {
@@ -13104,8 +13148,10 @@ mod tests {
         stco_payload[12..16].copy_from_slice(&2000u32.to_be_bytes());
         let stco = atom(b"stco", &stco_payload);
 
-        let mut stts_payload = vec![0u8; 8];
+        let mut stts_payload = vec![0u8; 16];
         stts_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        stts_payload[8..12].copy_from_slice(&90u32.to_be_bytes());
+        stts_payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
         let stts = atom(b"stts", &stts_payload);
         let mut ctts_payload = vec![0u8; 8];
         ctts_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
@@ -13142,6 +13188,9 @@ mod tests {
         assert_eq!(summary.tracks[0].duration_seconds, Some(90.0));
         assert_eq!(summary.tracks[0].data_bytes, Some(1_300_000));
         assert_eq!(summary.tracks[0].timing_entries, Some(1));
+        assert_eq!(summary.tracks[0].samples, Some(90));
+        assert_eq!(summary.tracks[0].decode_ticks, Some(90_000));
+        assert_eq!(summary.tracks[0].first_sample_delta, Some(1000));
         assert_eq!(summary.tracks[0].composition_entries, Some(1));
         assert_eq!(summary.tracks[0].edit_entries, Some(1));
         assert_eq!(summary.tracks[0].chunks, Some(2));
