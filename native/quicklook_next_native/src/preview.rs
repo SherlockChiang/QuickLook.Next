@@ -5726,6 +5726,8 @@ struct Mp4Summary {
 struct Mp4TrackSummary {
     kind: &'static str,
     codec: String,
+    codec_detail: String,
+    language: String,
     width: Option<u32>,
     height: Option<u32>,
     channels: Option<u16>,
@@ -5761,6 +5763,12 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
         text.push_str(&format!("\n{} track {}", track.kind, index + 1));
         if !track.codec.is_empty() {
             text.push_str(&format!(": {}", media_codec_label(&track.codec)));
+        }
+        if !track.codec_detail.is_empty() {
+            text.push_str(&format!(" ({})", track.codec_detail));
+        }
+        if !track.language.is_empty() {
+            text.push_str(&format!("\n{} language: {}", track.kind, track.language));
         }
         if let (Some(width), Some(height)) = (track.width, track.height) {
             text.push_str(&format!("\n{} size: {}x{}", track.kind, width, height));
@@ -5820,6 +5828,7 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
     }
     if let Some(mdhd) = find_mp4_atom_payload(trak, b"mdhd") {
         summary.duration_seconds = parse_mdhd_duration_seconds(mdhd);
+        summary.language = parse_mdhd_language(mdhd).unwrap_or_default();
     }
     if let Some(stsd) = find_mp4_atom_payload(trak, b"stsd") {
         parse_stsd_summary(stsd, &mut summary);
@@ -5830,6 +5839,8 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
 
     (!summary.codec.is_empty()
         || summary.width.is_some()
+        || !summary.codec_detail.is_empty()
+        || !summary.language.is_empty()
         || summary.height.is_some()
         || summary.channels.is_some()
         || summary.sample_rate.is_some()
@@ -5850,6 +5861,25 @@ fn parse_mdhd_duration_seconds(payload: &[u8]) -> Option<f64> {
         1 => duration_from_timescale(read_u64_be(payload, 24)?, read_u32_be(payload, 20)?),
         _ => None,
     }
+}
+
+fn parse_mdhd_language(payload: &[u8]) -> Option<String> {
+    let version = *payload.first()?;
+    let offset = match version {
+        0 => 20,
+        1 => 32,
+        _ => return None,
+    };
+    let packed = read_u16_be(payload, offset)?;
+    let mut language = String::new();
+    for shift in [10, 5, 0] {
+        let value = ((packed >> shift) & 0x1F) as u8;
+        if value == 0 {
+            return None;
+        }
+        language.push((value + 0x60) as char);
+    }
+    (language != "und").then_some(language)
 }
 
 fn parse_tkhd_dimensions(payload: &[u8]) -> Option<(u32, u32)> {
@@ -5883,11 +5913,17 @@ fn parse_stsd_summary(payload: &[u8], summary: &mut Mp4TrackSummary) -> Option<(
             summary.height = read_u16_be(payload, offset + 34)
                 .map(u32::from)
                 .filter(|value| *value > 0);
+            if let Some(detail) = parse_video_codec_detail(payload, offset, entry_size) {
+                summary.codec_detail = detail;
+            }
         } else if summary.kind == "Audio" && entry_size >= 32 {
             summary.channels = read_u16_be(payload, offset + 16).filter(|value| *value > 0);
             summary.sample_rate = read_u32_be(payload, offset + 24)
                 .map(|value| value >> 16)
                 .filter(|value| *value > 0);
+            if let Some(detail) = parse_audio_codec_detail(payload, offset, entry_size) {
+                summary.codec_detail = detail;
+            }
         }
 
         offset = offset.checked_add(entry_size)?;
@@ -5896,6 +5932,37 @@ fn parse_stsd_summary(payload: &[u8], summary: &mut Mp4TrackSummary) -> Option<(
         }
     }
     Some(())
+}
+
+fn parse_video_codec_detail(payload: &[u8], entry_offset: usize, entry_size: usize) -> Option<String> {
+    let start = entry_offset.checked_add(86)?;
+    let end = entry_offset.checked_add(entry_size)?.min(payload.len());
+    if let Some(avcc) = find_mp4_atom_payload_in_range(payload, start, end, b"avcC", 0) {
+        return parse_avcc_detail(avcc);
+    }
+    if let Some(hvcc) = find_mp4_atom_payload_in_range(payload, start, end, b"hvcC", 0) {
+        return parse_hvcc_detail(hvcc);
+    }
+    None
+}
+
+fn parse_audio_codec_detail(payload: &[u8], entry_offset: usize, entry_size: usize) -> Option<String> {
+    let start = entry_offset.checked_add(36)?;
+    let end = entry_offset.checked_add(entry_size)?.min(payload.len());
+    find_mp4_atom_payload_in_range(payload, start, end, b"esds", 0)
+        .map(|esds| format!("ES descriptor {}", format_bytes(esds.len() as i64)))
+}
+
+fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
+    let profile = *payload.get(1)?;
+    let level = *payload.get(3)?;
+    Some(format!("AVC profile 0x{profile:02X}, level {}.{}", level / 10, level % 10))
+}
+
+fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
+    let profile = payload.get(1).map(|value| value & 0x1F)?;
+    let level = *payload.get(12)?;
+    Some(format!("HEVC profile {profile}, level {}.{}", level / 30, level % 30))
 }
 
 fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
@@ -10614,21 +10681,25 @@ mod tests {
         tkhd_payload[80..84].copy_from_slice(&(1080u32 << 16).to_be_bytes());
         let tkhd = atom(b"tkhd", &tkhd_payload);
 
-        let mut mdhd_payload = vec![0u8; 20];
+        let mut mdhd_payload = vec![0u8; 24];
         mdhd_payload[12..16].copy_from_slice(&30_000u32.to_be_bytes());
         mdhd_payload[16..20].copy_from_slice(&2_700_000u32.to_be_bytes());
+        mdhd_payload[20..22].copy_from_slice(&0x15C7u16.to_be_bytes());
         let mdhd = atom(b"mdhd", &mdhd_payload);
 
         let mut hdlr_payload = vec![0u8; 12];
         hdlr_payload[8..12].copy_from_slice(b"vide");
         let hdlr = atom(b"hdlr", &hdlr_payload);
 
-        let mut stsd_payload = vec![0u8; 8 + 86];
+        let avcc = atom(b"avcC", &[1, 0x64, 0, 31]);
+        let entry_size = 86 + avcc.len();
+        let mut stsd_payload = vec![0u8; 8 + entry_size];
         stsd_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
-        stsd_payload[8..12].copy_from_slice(&86u32.to_be_bytes());
+        stsd_payload[8..12].copy_from_slice(&(entry_size as u32).to_be_bytes());
         stsd_payload[12..16].copy_from_slice(b"avc1");
         stsd_payload[40..42].copy_from_slice(&1920u16.to_be_bytes());
         stsd_payload[42..44].copy_from_slice(&1080u16.to_be_bytes());
+        stsd_payload[94..94 + avcc.len()].copy_from_slice(&avcc);
         let stsd = atom(b"stsd", &stsd_payload);
 
         let mut stsz_payload = vec![0u8; 12 + 8];
@@ -10654,6 +10725,8 @@ mod tests {
         assert_eq!(summary.tracks.len(), 1);
         assert_eq!(summary.tracks[0].kind, "Video");
         assert_eq!(summary.tracks[0].codec, "avc1");
+        assert_eq!(summary.tracks[0].codec_detail, "AVC profile 0x64, level 3.1");
+        assert_eq!(summary.tracks[0].language, "eng");
         assert_eq!(summary.tracks[0].width, Some(1920));
         assert_eq!(summary.tracks[0].height, Some(1080));
         assert_eq!(summary.tracks[0].duration_seconds, Some(90.0));
