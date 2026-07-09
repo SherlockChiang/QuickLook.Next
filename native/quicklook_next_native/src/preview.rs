@@ -4731,11 +4731,37 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
     ));
     let entries = chm_directory_entries(bytes, dir_offset, header_len as usize, block_len as usize);
     if !entries.is_empty() {
-        text.push_str(&format!("\nDirectory entries: {}", entries.join(", ")));
+        text.push_str(&format!(
+            "\nDirectory entries: {}",
+            entries.iter().map(ChmDirectoryEntry::summary).collect::<Vec<_>>().join(", ")
+        ));
+        let compressed = chm_compressed_stream_summary(&entries);
+        if !compressed.is_empty() {
+            text.push_str(&format!("\nCompressed streams: {}", compressed.join(", ")));
+        }
     }
 }
 
-fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, block_len: usize) -> Vec<String> {
+struct ChmDirectoryEntry {
+    name: String,
+    section: usize,
+    offset: usize,
+    len: usize,
+}
+
+impl ChmDirectoryEntry {
+    fn summary(&self) -> String {
+        format!(
+            "{} [section {}, offset {}, {}]",
+            self.name,
+            self.section,
+            self.offset,
+            format_bytes(self.len as i64)
+        )
+    }
+}
+
+fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, block_len: usize) -> Vec<ChmDirectoryEntry> {
     if header_len == 0 || block_len < 32 {
         return Vec::new();
     }
@@ -4772,10 +4798,26 @@ fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, blo
         };
         offset = next;
         if !name.is_empty() {
-            entries.push(format!("{name} [section {section}, offset {file_offset}, {}]", format_bytes(file_len as i64)));
+            entries.push(ChmDirectoryEntry { name, section, offset: file_offset, len: file_len });
         }
     }
     entries
+}
+
+fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
+    let mut summary = Vec::new();
+    for entry in entries.iter().take(32) {
+        let lower = entry.name.to_ascii_lowercase();
+        if lower.contains("::dataspace/storage/") || lower.contains("::dataspace/namelist") {
+            summary.push(format!("{} ({})", entry.name, format_bytes(entry.len as i64)));
+        } else if lower.ends_with("/content") && lower.contains("mscompressed") {
+            summary.push(format!("compressed content {}", format_bytes(entry.len as i64)));
+        }
+        if summary.len() >= 8 {
+            break;
+        }
+    }
+    summary
 }
 
 fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, usize)> {
@@ -15017,28 +15059,35 @@ mod tests {
         bytes[0x100..0x104].copy_from_slice(b"ITSP");
         bytes[0x104..0x108].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x108..0x10C].copy_from_slice(&84u32.to_le_bytes());
-        bytes[0x110..0x114].copy_from_slice(&64u32.to_le_bytes());
+        bytes[0x110..0x114].copy_from_slice(&128u32.to_le_bytes());
         bytes[0x118..0x11C].copy_from_slice(&2u32.to_le_bytes());
         bytes[0x11C..0x120].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x120..0x124].copy_from_slice(&4u32.to_le_bytes());
         bytes[0x128..0x12C].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x154..0x158].copy_from_slice(b"PMGL");
-        bytes[0x158..0x15C].copy_from_slice(&30u32.to_le_bytes());
+        bytes[0x158..0x15C].copy_from_slice(&49u32.to_le_bytes());
         bytes[0x168] = 10;
         bytes[0x169..0x173].copy_from_slice(b"/index.htm");
         bytes[0x173] = 0;
         bytes[0x174] = 123;
         bytes[0x175] = 45;
+        bytes[0x176] = 40;
+        bytes[0x177..0x19F].copy_from_slice(b"::DataSpace/Storage/MSCompressed/Content");
+        bytes[0x19F] = 1;
+        bytes[0x1A0] = 0;
+        bytes[0x1A1] = 0x81;
+        bytes[0x1A2] = 0x48;
         let mut text = String::new();
 
         append_chm_itsp_summary(&mut text, &bytes);
 
         assert!(text.contains("ITSP version: 1"));
         assert!(text.contains("ITSP header length: 84 bytes"));
-        assert!(text.contains("Directory block length: 64 bytes"));
+        assert!(text.contains("Directory block length: 128 bytes"));
         assert!(text.contains("Directory block count: 7"));
         assert!(text.contains("Directory index depth/root/head: 2/3/4"));
         assert!(text.contains("Directory entries: /index.htm [section 0, offset 123, 45 B]"));
+        assert!(text.contains("Compressed streams: ::DataSpace/Storage/MSCompressed/Content (200 B)"));
     }
 
     #[test]

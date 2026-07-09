@@ -72,7 +72,7 @@ then commit that item by itself.
 - [x] List bounded directory entries when the directory chunk format is safe to
   parse.
 - [ ] Extract title and default topic from system/control files when present.
-- [ ] Summarize compressed stream metadata without decompressing unbounded data.
+- [x] Summarize compressed stream metadata without decompressing unbounded data.
 
 ### Mail / MSG
 
@@ -93,7 +93,8 @@ then commit that item by itself.
 - Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList with fixed
   version fields, MemoryList, Memory64List, HandleData, UnloadedModuleList, and
   MiscInfo.
-- CHM ITSF metadata, ITSP directory header, and bounded PMGL directory entries.
+- CHM ITSF metadata, ITSP directory header, bounded PMGL directory entries, and
+  compressed stream metadata.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, body byte sizes, decoded transfer sizes, and bounded
   text/plain previews, plus nested MIME parts.
