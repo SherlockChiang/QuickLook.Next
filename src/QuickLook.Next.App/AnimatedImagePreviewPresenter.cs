@@ -34,6 +34,7 @@ internal sealed class AnimatedImagePreviewPresenter
     private int _layoutVersion;
     private DispatcherTimer? _nativeFrameTimer;
     private NativeAnimationFrames? _nativeFrames;
+    private WriteableBitmap? _nativeFrameBitmap;
     private int _nativeFrameIndex;
     private Stopwatch? _openWatch;
     private string _currentPath = "";
@@ -96,6 +97,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _currentPath = path;
         _openWatch = null;
         _nativeFrames = frames;
+        _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
         _nativeFrameIndex = 0;
         _sourceWidth = Math.Max(1, frames.Width);
         _sourceHeight = Math.Max(1, frames.Height);
@@ -179,12 +181,15 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_nativeFrames is null || index < 0 || index >= _nativeFrames.Frames.Count)
             return;
 
-        var bitmap = new WriteableBitmap(_nativeFrames.Width, _nativeFrames.Height);
-        using var stream = bitmap.PixelBuffer.AsStream();
+        if (_nativeFrameBitmap is null)
+            _nativeFrameBitmap = new WriteableBitmap(_nativeFrames.Width, _nativeFrames.Height);
+
+        using var stream = _nativeFrameBitmap.PixelBuffer.AsStream();
+        stream.SetLength(0);
         byte[] bgra = _nativeFrames.Frames[index].Bgra;
         stream.Write(bgra, 0, bgra.Length);
-        bitmap.Invalidate();
-        _image.Source = bitmap;
+        _nativeFrameBitmap.Invalidate();
+        _image.Source = _nativeFrameBitmap;
     }
 
     private void StopNativePlayback()
@@ -195,6 +200,7 @@ internal sealed class AnimatedImagePreviewPresenter
             _nativeFrameTimer = null;
         }
         _nativeFrames = null;
+        _nativeFrameBitmap = null;
         _nativeFrameIndex = 0;
     }
 
