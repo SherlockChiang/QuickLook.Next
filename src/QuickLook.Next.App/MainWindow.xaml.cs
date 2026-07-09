@@ -265,12 +265,12 @@ public sealed partial class MainWindow : Window
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
         PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
         RootGrid.KeyDown += OnRootGridKeyDown;
-        GetAppWindow().Closing += (_, args) =>
+        GetAppWindow().Closing += (appWindow, args) =>
         {
             // Intercept the close (X button / Alt+F4 / taskbar close): hide the window instead of
             // destroying it. The app stays alive in the tray; Escape or tray "Exit" truly quits.
             args.Cancel = true;
-            HidePreviewWindow();
+            _ = ClosePreviewImmediatelyAsync();
         };
         ImageFilmstripList.Loaded += OnImageFilmstripListLoaded;
         ImageFilmstripList.PointerPressed += OnImageFilmstripPointerPressed;

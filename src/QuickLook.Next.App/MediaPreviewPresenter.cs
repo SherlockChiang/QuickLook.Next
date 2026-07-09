@@ -37,13 +37,11 @@ internal sealed class MediaPreviewPresenter
 
     public void Clear()
     {
-        if (_mediaElement.Source is null)
-            return;
-
         _mediaElement.MediaPlayer?.Pause();
-        if (_mediaElement.Source is IDisposable disposableSource)
-            disposableSource.Dispose();
+        var source = _mediaElement.Source;
         _mediaElement.Source = null;
+        if (source is IDisposable disposableSource)
+            disposableSource.Dispose();
     }
 
     public static bool IsMediaProbe(FileProbe probe)
