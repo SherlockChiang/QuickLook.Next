@@ -7754,6 +7754,9 @@ pub fn render_executable(path: &str) -> String {
     if pe.has_version_resource {
         text.push_str("Version resource: present\n");
     }
+    for (name, value) in &pe.version_strings {
+        text.push_str(&format!("Version {name}: {value}\n"));
+    }
     if let Some(certificate) = &pe.certificate {
         text.push_str(&format!(
             "Certificate table: {}, revision 0x{:04X}, type 0x{:04X}\n",
@@ -7809,6 +7812,7 @@ struct PeSummary {
     exports: Vec<String>,
     export_details: Vec<String>,
     has_version_resource: bool,
+    version_strings: Vec<(String, String)>,
     certificate: Option<PeCertificateSummary>,
     clr: Option<PeClrSummary>,
 }
@@ -7900,12 +7904,17 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
             parse_pe_export_details(bytes, &section_summaries, directory.address, directory.size)
         })
         .unwrap_or_default();
-    let has_version_resource = directories
+    let version_resource = directories
         .iter()
         .find(|directory| directory.name == "Resource")
-        .and_then(|directory| pe_rva_to_file_offset(&section_summaries, directory.address))
-        .map(|offset| pe_resource_has_type(bytes, offset, 16))
-        .unwrap_or(false);
+        .and_then(|directory| {
+            pe_rva_to_file_offset(&section_summaries, directory.address)
+                .and_then(|offset| pe_find_resource_data(bytes, &section_summaries, offset, 16))
+        });
+    let version_strings = version_resource
+        .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)).map(parse_pe_version_strings))
+        .unwrap_or_default();
+    let has_version_resource = version_resource.is_some();
     let certificate = directories
         .iter()
         .find(|directory| directory.name == "Certificate")
@@ -7941,6 +7950,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         exports,
         export_details,
         has_version_resource,
+        version_strings,
         certificate,
         clr,
     })
@@ -8208,24 +8218,147 @@ fn parse_pe_export_details(
     details
 }
 
-fn pe_resource_has_type(bytes: &[u8], offset: usize, typ: u16) -> bool {
-    if offset + 16 > bytes.len() {
-        return false;
+fn pe_find_resource_data(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    resource_root: usize,
+    typ: u16,
+) -> Option<(usize, usize)> {
+    pe_find_resource_data_in_directory(bytes, sections, resource_root, resource_root, typ, 0)
+}
+
+fn pe_find_resource_data_in_directory(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    root: usize,
+    directory: usize,
+    typ: u16,
+    depth: usize,
+) -> Option<(usize, usize)> {
+    if depth > 2 || directory + 16 > bytes.len() {
+        return None;
     }
-    let named = read_u16(bytes, offset + 12).unwrap_or(0) as usize;
-    let ids = read_u16(bytes, offset + 14).unwrap_or(0) as usize;
+    let named = read_u16(bytes, directory + 12).unwrap_or(0) as usize;
+    let ids = read_u16(bytes, directory + 14).unwrap_or(0) as usize;
     let entries = named.saturating_add(ids).min(256);
     for index in 0..entries {
-        let entry = offset + 16 + index * 8;
+        let entry = directory + 16 + index * 8;
         if entry + 8 > bytes.len() {
             break;
         }
         let id = read_u32(bytes, entry).unwrap_or(0);
-        if id & 0x8000_0000 == 0 && (id & 0xFFFF) as u16 == typ {
-            return true;
+        if depth == 0 && (id & 0x8000_0000 != 0 || (id & 0xFFFF) as u16 != typ) {
+            continue;
+        }
+        let target = read_u32(bytes, entry + 4).unwrap_or(0);
+        if target & 0x8000_0000 != 0 {
+            let child = root + (target & 0x7FFF_FFFF) as usize;
+            if let Some(found) = pe_find_resource_data_in_directory(bytes, sections, root, child, typ, depth + 1) {
+                return Some(found);
+            }
+        } else {
+            let data_entry = root + target as usize;
+            if data_entry + 16 > bytes.len() {
+                continue;
+            }
+            let data_rva = read_u32(bytes, data_entry).unwrap_or(0);
+            let size = read_u32(bytes, data_entry + 4).unwrap_or(0) as usize;
+            if let Some(data_offset) = pe_rva_to_file_offset(sections, data_rva) {
+                return Some((data_offset, size));
+            }
         }
     }
-    false
+    None
+}
+
+fn parse_pe_version_strings(bytes: &[u8]) -> Vec<(String, String)> {
+    let mut strings = Vec::new();
+    parse_pe_version_node(bytes, 0, bytes.len(), &mut strings);
+    strings.sort_by(|a, b| a.0.cmp(&b.0));
+    strings.dedup_by(|a, b| a.0 == b.0);
+    strings
+}
+
+fn parse_pe_version_node(
+    bytes: &[u8],
+    offset: usize,
+    limit: usize,
+    strings: &mut Vec<(String, String)>,
+) -> Option<usize> {
+    if offset + 6 > limit || offset + 6 > bytes.len() {
+        return None;
+    }
+    let length = read_u16(bytes, offset)? as usize;
+    if length == 0 || offset + length > limit || offset + length > bytes.len() {
+        return None;
+    }
+    let value_len = read_u16(bytes, offset + 2)? as usize;
+    let typ = read_u16(bytes, offset + 4).unwrap_or(0);
+    let (key, key_end) = read_utf16_z(bytes, offset + 6, offset + length)?;
+    let value_offset = align4(key_end);
+    let value_bytes = if typ == 1 { value_len.saturating_mul(2) } else { value_len };
+    if typ == 1 && value_len > 0 && is_version_string_key(&key) {
+        let value_end = value_offset.saturating_add(value_bytes).min(offset + length);
+        if let Some(raw) = bytes.get(value_offset..value_end) {
+            let value = decode_utf16le_string(raw);
+            if !value.is_empty() {
+                strings.push((key.clone(), value));
+            }
+        }
+    }
+    let mut child = align4(value_offset.saturating_add(value_bytes));
+    while child + 6 <= offset + length {
+        let Some(next) = parse_pe_version_node(bytes, child, offset + length, strings) else {
+            break;
+        };
+        if next <= child {
+            break;
+        }
+        child = next;
+    }
+    Some(align4(offset + length))
+}
+
+fn is_version_string_key(key: &str) -> bool {
+    matches!(
+        key,
+        "CompanyName"
+            | "FileDescription"
+            | "FileVersion"
+            | "InternalName"
+            | "OriginalFilename"
+            | "ProductName"
+            | "ProductVersion"
+    )
+}
+
+fn read_utf16_z(bytes: &[u8], offset: usize, limit: usize) -> Option<(String, usize)> {
+    let mut pos = offset;
+    let mut units = Vec::new();
+    while pos + 2 <= limit && pos + 2 <= bytes.len() {
+        let unit = read_u16(bytes, pos)?;
+        pos += 2;
+        if unit == 0 {
+            return Some((String::from_utf16_lossy(&units), pos));
+        }
+        units.push(unit);
+    }
+    None
+}
+
+fn decode_utf16le_string(bytes: &[u8]) -> String {
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
+        .trim_matches('\0')
+        .trim()
+        .to_string()
+}
+
+fn align4(value: usize) -> usize {
+    (value + 3) & !3
 }
 
 fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateSummary> {
@@ -12313,6 +12446,39 @@ mod tests {
 
     #[test]
     fn pe_summary_reads_optional_headers_and_sections() {
+        fn utf16z(value: &str) -> Vec<u8> {
+            value
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        }
+
+        fn align_vec(bytes: &mut Vec<u8>) {
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+
+        fn version_node(key: &str, value: Option<&str>, children: Vec<Vec<u8>>) -> Vec<u8> {
+            let mut bytes = vec![0, 0];
+            let value_units = value.map(|v| v.encode_utf16().count() + 1).unwrap_or(0) as u16;
+            bytes.extend_from_slice(&value_units.to_le_bytes());
+            bytes.extend_from_slice(&1u16.to_le_bytes());
+            bytes.extend_from_slice(&utf16z(key));
+            align_vec(&mut bytes);
+            if let Some(value) = value {
+                bytes.extend_from_slice(&utf16z(value));
+                align_vec(&mut bytes);
+            }
+            for child in children {
+                bytes.extend_from_slice(&child);
+            }
+            let len = bytes.len() as u16;
+            bytes[0..2].copy_from_slice(&len.to_le_bytes());
+            bytes
+        }
+
         let mut bytes = vec![0u8; 8192];
         bytes[0..2].copy_from_slice(b"MZ");
         bytes[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
@@ -12371,6 +12537,32 @@ mod tests {
         bytes[0x780..0x784].copy_from_slice(&0x2000u32.to_le_bytes());
         bytes[0x900 + 14..0x900 + 16].copy_from_slice(&1u16.to_le_bytes());
         bytes[0x900 + 16..0x900 + 20].copy_from_slice(&16u32.to_le_bytes());
+        bytes[0x900 + 20..0x900 + 24].copy_from_slice(&0x8000_0020u32.to_le_bytes());
+        bytes[0x920 + 14..0x920 + 16].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x920 + 16..0x920 + 20].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x920 + 20..0x920 + 24].copy_from_slice(&0x8000_0040u32.to_le_bytes());
+        bytes[0x940 + 14..0x940 + 16].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x940 + 16..0x940 + 20].copy_from_slice(&1033u32.to_le_bytes());
+        bytes[0x940 + 20..0x940 + 24].copy_from_slice(&0x60u32.to_le_bytes());
+        let version = version_node(
+            "VS_VERSION_INFO",
+            None,
+            vec![version_node(
+                "StringFileInfo",
+                None,
+                vec![version_node(
+                    "040904B0",
+                    None,
+                    vec![
+                        version_node("CompanyName", Some("QuickLook Next"), Vec::new()),
+                        version_node("FileVersion", Some("1.2.3"), Vec::new()),
+                    ],
+                )],
+            )],
+        );
+        bytes[0x960..0x964].copy_from_slice(&0x3800u32.to_le_bytes());
+        bytes[0x964..0x968].copy_from_slice(&(version.len() as u32).to_le_bytes());
+        bytes[0xC00..0xC00 + version.len()].copy_from_slice(&version);
         bytes[0xA00..0xA04].copy_from_slice(&72u32.to_le_bytes());
         bytes[0xA04..0xA06].copy_from_slice(&2u16.to_le_bytes());
         bytes[0xA06..0xA08].copy_from_slice(&5u16.to_le_bytes());
@@ -12400,6 +12592,13 @@ mod tests {
         assert_eq!(pe.exports, vec!["PreviewExport".to_string()]);
         assert_eq!(pe.export_details, vec!["PreviewExport #1 @ 0x00002000".to_string()]);
         assert!(pe.has_version_resource);
+        assert_eq!(
+            pe.version_strings,
+            vec![
+                ("CompanyName".to_string(), "QuickLook Next".to_string()),
+                ("FileVersion".to_string(), "1.2.3".to_string())
+            ]
+        );
         assert_eq!(pe.certificate.as_ref().map(|cert| cert.typ), Some(2));
         assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
         assert_eq!(
