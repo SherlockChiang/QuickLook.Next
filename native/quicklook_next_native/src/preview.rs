@@ -7748,6 +7748,9 @@ pub fn render_executable(path: &str) -> String {
     if !pe.exports.is_empty() {
         text.push_str(&format!("Exports: {}\n", pe.exports.join(", ")));
     }
+    if !pe.export_details.is_empty() {
+        text.push_str(&format!("Export details: {}\n", pe.export_details.join(", ")));
+    }
     if pe.has_version_resource {
         text.push_str("Version resource: present\n");
     }
@@ -7804,6 +7807,7 @@ struct PeSummary {
     imports: Vec<String>,
     imported_functions: Vec<String>,
     exports: Vec<String>,
+    export_details: Vec<String>,
     has_version_resource: bool,
     certificate: Option<PeCertificateSummary>,
     clr: Option<PeClrSummary>,
@@ -7889,6 +7893,13 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         .find(|directory| directory.name == "Export")
         .map(|directory| parse_pe_export_names(bytes, &section_summaries, directory.address))
         .unwrap_or_default();
+    let export_details = directories
+        .iter()
+        .find(|directory| directory.name == "Export")
+        .map(|directory| {
+            parse_pe_export_details(bytes, &section_summaries, directory.address, directory.size)
+        })
+        .unwrap_or_default();
     let has_version_resource = directories
         .iter()
         .find(|directory| directory.name == "Resource")
@@ -7928,6 +7939,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         imports,
         imported_functions,
         exports,
+        export_details,
         has_version_resource,
         certificate,
         clr,
@@ -8093,6 +8105,19 @@ fn append_pe_import_thunks(
                     }
                 }
             }
+        } else {
+            let ordinal = value & 0xFFFF;
+            let qualified = if dll.is_empty() {
+                format!("#{ordinal}")
+            } else {
+                format!("{dll}!#{ordinal}")
+            };
+            if !functions
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&qualified))
+            {
+                functions.push(qualified);
+            }
         }
         offset += thunk_size;
     }
@@ -8124,6 +8149,63 @@ fn parse_pe_export_names(bytes: &[u8], sections: &[PeSectionSummary], export_rva
         }
     }
     exports
+}
+
+fn parse_pe_export_details(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    export_rva: u32,
+    export_size: u32,
+) -> Vec<String> {
+    let Some(offset) = pe_rva_to_file_offset(sections, export_rva) else {
+        return Vec::new();
+    };
+    if offset + 40 > bytes.len() {
+        return Vec::new();
+    }
+    let ordinal_base = read_u32(bytes, offset + 16).unwrap_or(0);
+    let function_count = read_u32(bytes, offset + 20).unwrap_or(0).min(4096) as usize;
+    let name_count = read_u32(bytes, offset + 24).unwrap_or(0).min(256) as usize;
+    let functions_rva = read_u32(bytes, offset + 28).unwrap_or(0);
+    let names_rva = read_u32(bytes, offset + 32).unwrap_or(0);
+    let ordinals_rva = read_u32(bytes, offset + 36).unwrap_or(0);
+    let Some(functions_offset) = pe_rva_to_file_offset(sections, functions_rva) else {
+        return Vec::new();
+    };
+    let Some(names_offset) = pe_rva_to_file_offset(sections, names_rva) else {
+        return Vec::new();
+    };
+    let Some(ordinals_offset) = pe_rva_to_file_offset(sections, ordinals_rva) else {
+        return Vec::new();
+    };
+    let mut details = Vec::new();
+    for index in 0..name_count {
+        let Some(name_rva) = read_u32(bytes, names_offset + index * 4) else {
+            break;
+        };
+        let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) else {
+            continue;
+        };
+        let Some(name) = read_c_string(bytes, name_offset, 260) else {
+            continue;
+        };
+        let ordinal_index = read_u16(bytes, ordinals_offset + index * 2).unwrap_or(0) as usize;
+        if ordinal_index >= function_count {
+            continue;
+        }
+        let function_rva = read_u32(bytes, functions_offset + ordinal_index * 4).unwrap_or(0);
+        let ordinal = ordinal_base + ordinal_index as u32;
+        if function_rva >= export_rva && function_rva < export_rva.saturating_add(export_size) {
+            if let Some(forwarder_offset) = pe_rva_to_file_offset(sections, function_rva) {
+                if let Some(forwarder) = read_c_string(bytes, forwarder_offset, 260) {
+                    details.push(format!("{name} #{ordinal} -> {forwarder}"));
+                    continue;
+                }
+            }
+        }
+        details.push(format!("{name} #{ordinal} @ 0x{function_rva:08X}"));
+    }
+    details
 }
 
 fn pe_resource_has_type(bytes: &[u8], offset: usize, typ: u16) -> bool {
@@ -12274,13 +12356,19 @@ mod tests {
         bytes[0x400 + 12..0x400 + 16].copy_from_slice(&0x3100u32.to_le_bytes());
         bytes[0x400 + 16..0x400 + 20].copy_from_slice(&0x3200u32.to_le_bytes());
         bytes[0x500..0x50C].copy_from_slice(b"KERNEL32.dll");
-        bytes[0x520..0x524].copy_from_slice(&0x3140u32.to_le_bytes());
+        bytes[0x520..0x528].copy_from_slice(&0x3140u64.to_le_bytes());
+        bytes[0x528..0x530].copy_from_slice(&0x8000_0000_0000_007Bu64.to_le_bytes());
         bytes[0x540..0x542].copy_from_slice(&0u16.to_le_bytes());
         bytes[0x542..0x54D].copy_from_slice(b"CreateFileW");
+        bytes[0x700 + 16..0x700 + 20].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x700 + 20..0x700 + 24].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x700 + 24..0x700 + 28].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x700 + 28..0x700 + 32].copy_from_slice(&0x3380u32.to_le_bytes());
         bytes[0x700 + 32..0x700 + 36].copy_from_slice(&0x3340u32.to_le_bytes());
+        bytes[0x700 + 36..0x700 + 40].copy_from_slice(&0x3390u32.to_le_bytes());
         bytes[0x740..0x744].copy_from_slice(&0x3360u32.to_le_bytes());
         bytes[0x760..0x76D].copy_from_slice(b"PreviewExport");
+        bytes[0x780..0x784].copy_from_slice(&0x2000u32.to_le_bytes());
         bytes[0x900 + 14..0x900 + 16].copy_from_slice(&1u16.to_le_bytes());
         bytes[0x900 + 16..0x900 + 20].copy_from_slice(&16u32.to_le_bytes());
         bytes[0xA00..0xA04].copy_from_slice(&72u32.to_le_bytes());
@@ -12305,8 +12393,12 @@ mod tests {
         assert_eq!(pe.directories[1].name, "Import");
         assert_eq!(pe.directories[2].name, "Resource");
         assert_eq!(pe.imports, vec!["KERNEL32.dll".to_string()]);
-        assert_eq!(pe.imported_functions, vec!["KERNEL32.dll!CreateFileW".to_string()]);
+        assert_eq!(
+            pe.imported_functions,
+            vec!["KERNEL32.dll!CreateFileW".to_string(), "KERNEL32.dll!#123".to_string()]
+        );
         assert_eq!(pe.exports, vec!["PreviewExport".to_string()]);
+        assert_eq!(pe.export_details, vec!["PreviewExport #1 @ 0x00002000".to_string()]);
         assert!(pe.has_version_resource);
         assert_eq!(pe.certificate.as_ref().map(|cert| cert.typ), Some(2));
         assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
