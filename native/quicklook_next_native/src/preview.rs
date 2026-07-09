@@ -5725,6 +5725,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut names = Vec::new();
     let mut system_info = None;
     let mut exception_info = None;
+    let mut thread_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5745,6 +5746,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             system_info = parse_minidump_system_info(bytes, rva as usize, data_size as usize);
         } else if stream_type == 6 {
             exception_info = parse_minidump_exception(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 3 {
+            thread_info = parse_minidump_thread_list(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5756,6 +5759,33 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(exception_info) = exception_info {
         text.push_str(&exception_info);
     }
+    if let Some(thread_info) = thread_info {
+        text.push_str(&thread_info);
+    }
+}
+
+fn parse_minidump_thread_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 4 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let count = read_u32(bytes, offset)? as usize;
+    let mut lines = vec![format!("\nThreads: {count}")];
+    let mut thread_offset = offset + 4;
+    for _ in 0..count.min(6) {
+        if thread_offset + 48 > offset + size || thread_offset + 48 > bytes.len() {
+            break;
+        }
+        let id = read_u32(bytes, thread_offset).unwrap_or(0);
+        let priority = read_u32(bytes, thread_offset + 12).unwrap_or(0);
+        let stack_start = read_u64(bytes, thread_offset + 24).unwrap_or(0);
+        let stack_size = read_u32(bytes, thread_offset + 32).unwrap_or(0);
+        let stack_end = stack_start.saturating_add(stack_size as u64);
+        lines.push(format!(
+            "Thread {id}: priority {priority}; stack 0x{stack_start:016X}-0x{stack_end:016X}"
+        ));
+        thread_offset += 48;
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_exception(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -12735,9 +12765,9 @@ mod tests {
 
     #[test]
     fn minidump_stream_summary_lists_known_streams() {
-        let mut bytes = vec![0u8; 512];
+        let mut bytes = vec![0u8; 640];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&3u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&4u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
@@ -12748,6 +12778,9 @@ mod tests {
         bytes[56..60].copy_from_slice(&6u32.to_le_bytes());
         bytes[60..64].copy_from_slice(&80u32.to_le_bytes());
         bytes[64..68].copy_from_slice(&0x180u32.to_le_bytes());
+        bytes[68..72].copy_from_slice(&3u32.to_le_bytes());
+        bytes[72..76].copy_from_slice(&100u32.to_le_bytes());
+        bytes[76..80].copy_from_slice(&0x1D0u32.to_le_bytes());
         bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
         bytes[0x86] = 8;
         bytes[0x87] = 1;
@@ -12765,6 +12798,15 @@ mod tests {
         bytes[0x18C..0x190].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x198..0x1A0].copy_from_slice(&0x0000_7FFF_FFFF_FFFFu64.to_le_bytes());
         bytes[0x1A0..0x1A4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x1D0..0x1D4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x1D4..0x1D8].copy_from_slice(&42u32.to_le_bytes());
+        bytes[0x1E0..0x1E4].copy_from_slice(&15u32.to_le_bytes());
+        bytes[0x1EC..0x1F4].copy_from_slice(&0x1000u64.to_le_bytes());
+        bytes[0x1F4..0x1F8].copy_from_slice(&0x4000u32.to_le_bytes());
+        bytes[0x204..0x208].copy_from_slice(&99u32.to_le_bytes());
+        bytes[0x210..0x214].copy_from_slice(&8u32.to_le_bytes());
+        bytes[0x21C..0x224].copy_from_slice(&0x9000u64.to_le_bytes());
+        bytes[0x224..0x228].copy_from_slice(&0x1000u32.to_le_bytes());
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -12778,6 +12820,9 @@ mod tests {
         assert!(text.contains("Exception thread: 42"));
         assert!(text.contains("Exception code: access violation"));
         assert!(text.contains("Exception flags: 0x00000001"));
+        assert!(text.contains("Threads: 2"));
+        assert!(text.contains("Thread 42: priority 15; stack 0x0000000000001000-0x0000000000005000"));
+        assert!(text.contains("Thread 99: priority 8; stack 0x0000000000009000-0x000000000000A000"));
     }
 
     #[test]
