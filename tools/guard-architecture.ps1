@@ -182,3 +182,8 @@ $staleCallbackGuard = Join-Path $PSScriptRoot "guard-stale-callbacks.ps1"
 if (Test-Path $staleCallbackGuard) {
     & $staleCallbackGuard -Root $Root
 }
+
+$imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
+if (Test-Path $imageCorpusGuard) {
+    & $imageCorpusGuard -Root $Root
+}

@@ -1,0 +1,35 @@
+{
+  "description": "Optional external image decode corpus. Add licensed samples here to validate decoder behavior that cannot be generated reliably in unit tests.",
+  "samples": [
+    {
+      "id": "jpeg-cmyk",
+      "file": "jpeg-cmyk.jpg",
+      "purpose": "True CMYK JPEG decode and color conversion coverage"
+    },
+    {
+      "id": "jpeg-wide-gamut-icc",
+      "file": "jpeg-wide-gamut-icc.jpg",
+      "purpose": "Wide-gamut ICC JPEG acceptance and visual regression coverage"
+    },
+    {
+      "id": "avif-still",
+      "file": "avif-still.avif",
+      "purpose": "System/WIC AVIF still-image decode coverage"
+    },
+    {
+      "id": "heic-still",
+      "file": "heic-still.heic",
+      "purpose": "System/WIC HEIC still-image decode coverage"
+    },
+    {
+      "id": "jxl-still",
+      "file": "jxl-still.jxl",
+      "purpose": "System/WIC JPEG XL still-image decode coverage when the platform codec is available"
+    },
+    {
+      "id": "webp-animated",
+      "file": "webp-animated.webp",
+      "purpose": "Animated WebP metadata and fallback behavior coverage"
+    }
+  ]
+}
