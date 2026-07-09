@@ -395,7 +395,7 @@ static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSyst
             if (image is null)
             {
                 string message = $"system codec did not decode {file}";
-                if (requireSystemCodecs) failures.Add(message);
+                if (requireSystemCodecs || file is "avif-still.avif" or "heic-still.heic") failures.Add(message);
                 else Console.WriteLine(message);
                 continue;
             }
@@ -404,7 +404,7 @@ static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSyst
         }
         catch (Exception ex)
         {
-            if (requireSystemCodecs) failures.Add($"{file}: {ex.Message}");
+            if (requireSystemCodecs || file is "avif-still.avif" or "heic-still.heic") failures.Add($"{file}: {ex.Message}");
             else Console.WriteLine($"system codec failed {file}: {ex.Message}");
         }
     }
