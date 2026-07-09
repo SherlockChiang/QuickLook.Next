@@ -8331,6 +8331,12 @@ pub fn render_executable(path: &str) -> String {
         if !clr.assembly_refs.is_empty() {
             text.push_str(&format!("CLR assembly references: {}\n", clr.assembly_refs.join(", ")));
         }
+        if !clr.type_defs.is_empty() {
+            text.push_str(&format!("CLR type definitions: {}\n", clr.type_defs.join(", ")));
+        }
+        if clr.custom_attributes > 0 {
+            text.push_str(&format!("CLR custom attributes: {}\n", clr.custom_attributes));
+        }
     }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
@@ -8412,6 +8418,8 @@ struct PeClrSummary {
     metadata_tables: Vec<String>,
     assembly: Option<String>,
     assembly_refs: Vec<String>,
+    type_defs: Vec<String>,
+    custom_attributes: u32,
 }
 
 fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
@@ -9020,6 +9028,8 @@ fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usiz
         metadata_streams: metadata.as_ref().map(|root| root.streams.clone()).unwrap_or_default(),
         metadata_tables: metadata.as_ref().map(|root| root.tables.clone()).unwrap_or_default(),
         assembly_refs: metadata.as_ref().map(|root| root.assembly_refs.clone()).unwrap_or_default(),
+        type_defs: metadata.as_ref().map(|root| root.type_defs.clone()).unwrap_or_default(),
+        custom_attributes: metadata.as_ref().map(|root| root.custom_attributes).unwrap_or(0),
         assembly: metadata.and_then(|root| root.assembly),
     })
 }
@@ -9030,6 +9040,8 @@ struct ClrMetadataRoot {
     tables: Vec<String>,
     assembly: Option<String>,
     assembly_refs: Vec<String>,
+    type_defs: Vec<String>,
+    custom_attributes: u32,
 }
 
 fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<ClrMetadataRoot> {
@@ -9046,7 +9058,7 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .to_string();
     let mut stream_offset = align4(version_end) + 4;
     if stream_offset > end {
-        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None, assembly_refs: Vec::new() });
+        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None, assembly_refs: Vec::new(), type_defs: Vec::new(), custom_attributes: 0 });
     }
     let streams = read_u16(bytes, stream_offset - 2).unwrap_or(0).min(64) as usize;
     let mut names = Vec::new();
@@ -9075,8 +9087,16 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .zip(strings_heap)
         .map(|(tables, strings)| parse_clr_assembly_refs(tables, strings))
         .unwrap_or_default();
+    let type_defs = tables_stream
+        .zip(strings_heap)
+        .map(|(tables, strings)| parse_clr_type_defs(tables, strings))
+        .unwrap_or_default();
+    let custom_attributes = tables_stream
+        .and_then(clr_tables_layout)
+        .map(|layout| layout.rows[12])
+        .unwrap_or(0);
     let tables = tables_stream.map(parse_clr_table_counts).unwrap_or_default();
-    Some(ClrMetadataRoot { version, streams: names, tables, assembly, assembly_refs })
+    Some(ClrMetadataRoot { version, streams: names, tables, assembly, assembly_refs, type_defs, custom_attributes })
 }
 
 fn parse_clr_table_counts(tables: &[u8]) -> Vec<String> {
@@ -9191,6 +9211,33 @@ fn parse_clr_assembly_refs(tables: &[u8], strings: &[u8]) -> Vec<String> {
     refs
 }
 
+fn parse_clr_type_defs(tables: &[u8], strings: &[u8]) -> Vec<String> {
+    let Some(layout) = clr_tables_layout(tables) else {
+        return Vec::new();
+    };
+    let rows = layout.rows.get(2).copied().unwrap_or(0).min(24) as usize;
+    let mut types = Vec::new();
+    let mut row = layout.offsets.get(2).copied().unwrap_or(0);
+    for _ in 0..rows {
+        if row + 4 + layout.string_index_size * 2 > tables.len() {
+            break;
+        }
+        let name_index = read_clr_index(tables, row + 4, layout.string_index_size).unwrap_or(0) as usize;
+        let namespace_index = read_clr_index(tables, row + 4 + layout.string_index_size, layout.string_index_size).unwrap_or(0) as usize;
+        let name = read_c_string(strings, name_index, 260).unwrap_or_default();
+        if !name.is_empty() {
+            let namespace = read_c_string(strings, namespace_index, 260).unwrap_or_default();
+            if namespace.is_empty() {
+                types.push(name);
+            } else {
+                types.push(format!("{namespace}.{name}"));
+            }
+        }
+        row += clr_table_row_size(2, layout.string_index_size, 2, layout.blob_index_size).unwrap_or(14);
+    }
+    types
+}
+
 struct ClrTablesLayout {
     rows: [u32; 64],
     offsets: [usize; 64],
@@ -9231,6 +9278,8 @@ fn clr_tables_layout(tables: &[u8]) -> Option<ClrTablesLayout> {
 fn clr_table_row_size(table: usize, string_index_size: usize, guid_index_size: usize, blob_index_size: usize) -> Option<usize> {
     match table {
         0 => Some(2 + string_index_size + guid_index_size * 3),
+        2 => Some(4 + string_index_size * 2 + 2 + 2 + 2),
+        12 => Some(2 + 2 + blob_index_size),
         32 => Some(16 + blob_index_size + string_index_size * 2),
         35 => Some(12 + blob_index_size + string_index_size * 2 + blob_index_size),
         _ => None,
@@ -13463,7 +13512,7 @@ mod tests {
         }
 
         fn clr_metadata_root() -> Vec<u8> {
-            let mut bytes = vec![0u8; 256];
+            let mut bytes = vec![0u8; 384];
             bytes[0..4].copy_from_slice(&0x424A_5342u32.to_le_bytes());
             bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
             bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
@@ -13471,16 +13520,22 @@ mod tests {
             bytes[16..27].copy_from_slice(b"v4.0.30319\0");
             bytes[30..32].copy_from_slice(&2u16.to_le_bytes());
             bytes[32..36].copy_from_slice(&0x80u32.to_le_bytes());
-            bytes[36..40].copy_from_slice(&0x60u32.to_le_bytes());
+            bytes[36..40].copy_from_slice(&0xA0u32.to_le_bytes());
             bytes[40..43].copy_from_slice(b"#~\0");
-            bytes[44..48].copy_from_slice(&0xE0u32.to_le_bytes());
-            bytes[48..52].copy_from_slice(&0x40u32.to_le_bytes());
+            bytes[44..48].copy_from_slice(&0x120u32.to_le_bytes());
+            bytes[48..52].copy_from_slice(&0x60u32.to_le_bytes());
             bytes[52..61].copy_from_slice(b"#Strings\0");
             bytes[0x80 + 4] = 2;
-            bytes[0x80 + 8..0x80 + 16].copy_from_slice(&((1u64 << 32) | (1u64 << 35)).to_le_bytes());
+            bytes[0x80 + 8..0x80 + 16].copy_from_slice(&((1u64 << 2) | (1u64 << 12) | (1u64 << 32) | (1u64 << 35)).to_le_bytes());
             bytes[0x80 + 24..0x80 + 28].copy_from_slice(&1u32.to_le_bytes());
             bytes[0x80 + 28..0x80 + 32].copy_from_slice(&1u32.to_le_bytes());
-            let row = 0x80 + 32;
+            bytes[0x80 + 32..0x80 + 36].copy_from_slice(&1u32.to_le_bytes());
+            bytes[0x80 + 36..0x80 + 40].copy_from_slice(&1u32.to_le_bytes());
+            let type_row = 0x80 + 40;
+            bytes[type_row + 4..type_row + 6].copy_from_slice(&17u16.to_le_bytes());
+            bytes[type_row + 6..type_row + 8].copy_from_slice(&29u16.to_le_bytes());
+            let custom_attribute_row = type_row + 14;
+            let row = custom_attribute_row + 6;
             bytes[row + 4..row + 6].copy_from_slice(&1u16.to_le_bytes());
             bytes[row + 6..row + 8].copy_from_slice(&2u16.to_le_bytes());
             bytes[row + 8..row + 10].copy_from_slice(&3u16.to_le_bytes());
@@ -13492,8 +13547,10 @@ mod tests {
             bytes[assembly_ref + 4..assembly_ref + 6].copy_from_slice(&7u16.to_le_bytes());
             bytes[assembly_ref + 6..assembly_ref + 8].copy_from_slice(&8u16.to_le_bytes());
             bytes[assembly_ref + 14..assembly_ref + 16].copy_from_slice(&10u16.to_le_bytes());
-            bytes[0xE1..0xE9].copy_from_slice(b"QuickAsm");
-            bytes[0xEA..0xF0].copy_from_slice(b"RefAsm");
+            bytes[0x121..0x129].copy_from_slice(b"QuickAsm");
+            bytes[0x12A..0x130].copy_from_slice(b"RefAsm");
+            bytes[0x131..0x13C].copy_from_slice(b"PreviewType");
+            bytes[0x13D..0x14B].copy_from_slice(b"QuickLook.Next");
             bytes
         }
 
@@ -13588,14 +13645,14 @@ mod tests {
                 )],
             )],
         );
-        bytes[0x960..0x964].copy_from_slice(&0x3800u32.to_le_bytes());
+        bytes[0x960..0x964].copy_from_slice(&0x3900u32.to_le_bytes());
         bytes[0x964..0x968].copy_from_slice(&(version.len() as u32).to_le_bytes());
-        bytes[0xC00..0xC00 + version.len()].copy_from_slice(&version);
+        bytes[0xD00..0xD00 + version.len()].copy_from_slice(&version);
         bytes[0xA00..0xA04].copy_from_slice(&72u32.to_le_bytes());
         bytes[0xA04..0xA06].copy_from_slice(&2u16.to_le_bytes());
         bytes[0xA06..0xA08].copy_from_slice(&5u16.to_le_bytes());
         bytes[0xA08..0xA0C].copy_from_slice(&0x3700u32.to_le_bytes());
-        bytes[0xA0C..0xA10].copy_from_slice(&0x140u32.to_le_bytes());
+        bytes[0xA0C..0xA10].copy_from_slice(&0x180u32.to_le_bytes());
         bytes[0xA10..0xA14].copy_from_slice(&1u32.to_le_bytes());
         let metadata = clr_metadata_root();
         bytes[0xB00..0xB00 + metadata.len()].copy_from_slice(&metadata);
@@ -13639,9 +13696,19 @@ mod tests {
         let clr = pe.clr.as_ref().expect("clr summary");
         assert_eq!(clr.metadata_version, "v4.0.30319");
         assert_eq!(clr.metadata_streams, vec!["#~".to_string(), "#Strings".to_string()]);
-        assert_eq!(clr.metadata_tables, vec!["Assembly=1".to_string(), "AssemblyRef=1".to_string()]);
+        assert_eq!(
+            clr.metadata_tables,
+            vec![
+                "TypeDef=1".to_string(),
+                "CustomAttribute=1".to_string(),
+                "Assembly=1".to_string(),
+                "AssemblyRef=1".to_string()
+            ]
+        );
         assert_eq!(clr.assembly.as_deref(), Some("QuickAsm 1.2.3.4"));
         assert_eq!(clr.assembly_refs, vec!["RefAsm 5.6.7.8".to_string()]);
+        assert_eq!(clr.type_defs, vec!["QuickLook.Next.PreviewType".to_string()]);
+        assert_eq!(clr.custom_attributes, 1);
         assert_eq!(
             pe.section_names,
             vec![".text".to_string(), ".data".to_string()]
