@@ -6,6 +6,12 @@ using QuickLook.Next.RasterHost;
 // RasterHost: the .NET surface process. It owns D3D shared-surface production plus Windows-only render
 // bridges (PDF pages and shell thumbnails). Preview business logic should live in Rust or the App UI.
 
+if (GetArg(args, "--smoke-system-image-corpus") is { } smokeCorpusDir)
+{
+    await SmokeSystemImageCorpusAsync(smokeCorpusDir, args.Contains("--require-system-codecs", StringComparer.OrdinalIgnoreCase));
+    return;
+}
+
 string pipeName = GetArg(args, "--pipe") ?? "quicklook_next";
 
 DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "raster-host.log"));
@@ -368,6 +374,49 @@ static bool IsPdf(QuickLook.Next.Contracts.FileProbe probe)
 
 static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
     => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase);
+
+static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)
+{
+    string[] files = ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"];
+    int decoded = 0;
+    var failures = new List<string>();
+    foreach (string file in files)
+    {
+        string path = Path.Combine(corpusDir, file);
+        if (!File.Exists(path))
+        {
+            failures.Add($"missing {file}");
+            continue;
+        }
+
+        try
+        {
+            NativeDecodedImage? image = await SystemImageDecoder.TryDecodeAsync(path, CancellationToken.None, 512, 512);
+            if (image is null)
+            {
+                string message = $"system codec did not decode {file}";
+                if (requireSystemCodecs) failures.Add(message);
+                else Console.WriteLine(message);
+                continue;
+            }
+            decoded++;
+            Console.WriteLine($"decoded {file}: {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}");
+        }
+        catch (Exception ex)
+        {
+            if (requireSystemCodecs) failures.Add($"{file}: {ex.Message}");
+            else Console.WriteLine($"system codec failed {file}: {ex.Message}");
+        }
+    }
+
+    Console.WriteLine($"system image corpus smoke decoded={decoded}/{files.Length}");
+    if (failures.Count > 0)
+    {
+        foreach (string failure in failures)
+            Console.Error.WriteLine(failure);
+        Environment.ExitCode = 1;
+    }
+}
 
 static string? GetArg(string[] a, string key)
 {

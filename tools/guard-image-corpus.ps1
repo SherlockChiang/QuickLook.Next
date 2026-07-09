@@ -48,3 +48,8 @@ $capabilities = Join-Path $PSScriptRoot "report-image-capabilities.ps1"
 if (Test-Path -LiteralPath $capabilities) {
     & $capabilities -Root $Root
 }
+
+$systemSmoke = Join-Path $PSScriptRoot "smoke-system-image-corpus.ps1"
+if (Test-Path -LiteralPath $systemSmoke) {
+    & $systemSmoke -Root $Root
+}
