@@ -5726,6 +5726,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut system_info = None;
     let mut exception_info = None;
     let mut thread_info = None;
+    let mut module_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5748,6 +5749,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             exception_info = parse_minidump_exception(bytes, rva as usize, data_size as usize);
         } else if stream_type == 3 {
             thread_info = parse_minidump_thread_list(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 4 {
+            module_info = parse_minidump_module_list(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5762,6 +5765,33 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(thread_info) = thread_info {
         text.push_str(&thread_info);
     }
+    if let Some(module_info) = module_info {
+        text.push_str(&module_info);
+    }
+}
+
+fn parse_minidump_module_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 4 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let count = read_u32(bytes, offset)? as usize;
+    let mut lines = vec![format!("\nModules: {count}")];
+    let mut module_offset = offset + 4;
+    for _ in 0..count.min(12) {
+        if module_offset + 108 > offset + size || module_offset + 108 > bytes.len() {
+            break;
+        }
+        let base = read_u64(bytes, module_offset).unwrap_or(0);
+        let image_size = read_u32(bytes, module_offset + 8).unwrap_or(0);
+        let timestamp = read_u32(bytes, module_offset + 16).unwrap_or(0);
+        let name_rva = read_u32(bytes, module_offset + 20).unwrap_or(0) as usize;
+        let name = read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        lines.push(format!(
+            "Module {name}: base 0x{base:016X}; size {image_size}; timestamp 0x{timestamp:08X}"
+        ));
+        module_offset += 108;
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_thread_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -12765,9 +12795,9 @@ mod tests {
 
     #[test]
     fn minidump_stream_summary_lists_known_streams() {
-        let mut bytes = vec![0u8; 640];
+        let mut bytes = vec![0u8; 1024];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&4u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&5u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
@@ -12781,6 +12811,9 @@ mod tests {
         bytes[68..72].copy_from_slice(&3u32.to_le_bytes());
         bytes[72..76].copy_from_slice(&100u32.to_le_bytes());
         bytes[76..80].copy_from_slice(&0x1D0u32.to_le_bytes());
+        bytes[80..84].copy_from_slice(&4u32.to_le_bytes());
+        bytes[84..88].copy_from_slice(&112u32.to_le_bytes());
+        bytes[88..92].copy_from_slice(&0x250u32.to_le_bytes());
         bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
         bytes[0x86] = 8;
         bytes[0x87] = 1;
@@ -12807,6 +12840,17 @@ mod tests {
         bytes[0x210..0x214].copy_from_slice(&8u32.to_le_bytes());
         bytes[0x21C..0x224].copy_from_slice(&0x9000u64.to_le_bytes());
         bytes[0x224..0x228].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[0x250..0x254].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x254..0x25C].copy_from_slice(&0x0000_7FF7_0000_0000u64.to_le_bytes());
+        bytes[0x25C..0x260].copy_from_slice(&0x12000u32.to_le_bytes());
+        bytes[0x264..0x268].copy_from_slice(&0x6543_2100u32.to_le_bytes());
+        bytes[0x268..0x26C].copy_from_slice(&0x340u32.to_le_bytes());
+        let module_name: Vec<u16> = "demo.exe".encode_utf16().collect();
+        bytes[0x340..0x344].copy_from_slice(&((module_name.len() * 2) as u32).to_le_bytes());
+        for (index, unit) in module_name.iter().enumerate() {
+            let offset = 0x344 + index * 2;
+            bytes[offset..offset + 2].copy_from_slice(&unit.to_le_bytes());
+        }
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -12823,6 +12867,8 @@ mod tests {
         assert!(text.contains("Threads: 2"));
         assert!(text.contains("Thread 42: priority 15; stack 0x0000000000001000-0x0000000000005000"));
         assert!(text.contains("Thread 99: priority 8; stack 0x0000000000009000-0x000000000000A000"));
+        assert!(text.contains("Modules: 1"));
+        assert!(text.contains("Module demo.exe: base 0x00007FF700000000; size 73728; timestamp 0x65432100"));
     }
 
     #[test]
