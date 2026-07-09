@@ -41,7 +41,9 @@ then commit that item by itself.
 ### PE / CLR
 
 - [x] Detect Authenticode digest algorithms from certificate table OIDs.
-- [ ] Parse Authenticode PKCS#7 signer and certificate subject/issuer.
+- [x] Summarize bounded Authenticode certificate name strings from common X.509
+  name OIDs.
+- [ ] Parse Authenticode PKCS#7 signer and structured certificate subject/issuer.
 - [x] Decode CLR metadata table stream row counts.
 - [x] Summarize CLR assembly references.
 - [x] Summarize CLR type definitions and custom attributes with strict caps.
