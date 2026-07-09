@@ -7260,6 +7260,9 @@ pub fn render_executable(path: &str) -> String {
     if !pe.section_names.is_empty() {
         text.push_str(&format!("Section names: {}\n", pe.section_names.join(", ")));
     }
+    if !pe.imports.is_empty() {
+        text.push_str(&format!("Imports: {}\n", pe.imports.join(", ")));
+    }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
 
@@ -7292,12 +7295,20 @@ struct PeSummary {
     data_directories: u32,
     section_names: Vec<String>,
     directories: Vec<PeDataDirectory>,
+    imports: Vec<String>,
 }
 
 struct PeDataDirectory {
     name: &'static str,
     address: u32,
     size: u32,
+}
+
+struct PeSectionSummary {
+    virtual_address: u32,
+    virtual_size: u32,
+    raw_pointer: u32,
+    raw_size: u32,
 }
 
 fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
@@ -7337,6 +7348,12 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let directories = parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
     let section_table = opt + opt_size;
     let section_names = parse_pe_section_names(bytes, section_table, sections);
+    let section_summaries = parse_pe_sections(bytes, section_table, sections);
+    let imports = directories
+        .iter()
+        .find(|directory| directory.name == "Import")
+        .map(|directory| parse_pe_import_dlls(bytes, &section_summaries, directory.address))
+        .unwrap_or_default();
 
     Some(PeSummary {
         machine: machine_name(machine),
@@ -7358,6 +7375,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         data_directories,
         section_names,
         directories,
+        imports,
     })
 }
 
@@ -7416,6 +7434,73 @@ fn parse_pe_section_names(bytes: &[u8], section_table: usize, sections: u16) -> 
         }
     }
     names
+}
+
+fn parse_pe_sections(bytes: &[u8], section_table: usize, sections: u16) -> Vec<PeSectionSummary> {
+    let mut summaries = Vec::new();
+    for index in 0..sections.min(96) as usize {
+        let offset = section_table + index * 40;
+        if offset + 40 > bytes.len() {
+            break;
+        }
+        summaries.push(PeSectionSummary {
+            virtual_size: read_u32(bytes, offset + 8).unwrap_or(0),
+            virtual_address: read_u32(bytes, offset + 12).unwrap_or(0),
+            raw_size: read_u32(bytes, offset + 16).unwrap_or(0),
+            raw_pointer: read_u32(bytes, offset + 20).unwrap_or(0),
+        });
+    }
+    summaries
+}
+
+fn parse_pe_import_dlls(bytes: &[u8], sections: &[PeSectionSummary], import_rva: u32) -> Vec<String> {
+    let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
+        return Vec::new();
+    };
+    let mut imports: Vec<String> = Vec::new();
+    for _ in 0..64 {
+        if offset + 20 > bytes.len() {
+            break;
+        }
+        let original_first_thunk = read_u32(bytes, offset).unwrap_or(0);
+        let name_rva = read_u32(bytes, offset + 12).unwrap_or(0);
+        let first_thunk = read_u32(bytes, offset + 16).unwrap_or(0);
+        if original_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
+            break;
+        }
+        if let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) {
+            if let Some(name) = read_c_string(bytes, name_offset, 260) {
+                if !name.is_empty() && !imports.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+                    imports.push(name);
+                }
+            }
+        }
+        offset += 20;
+    }
+    imports
+}
+
+fn pe_rva_to_file_offset(sections: &[PeSectionSummary], rva: u32) -> Option<usize> {
+    for section in sections {
+        let span = section.virtual_size.max(section.raw_size).max(1);
+        if rva >= section.virtual_address && rva < section.virtual_address.saturating_add(span) {
+            return Some(section.raw_pointer.saturating_add(rva - section.virtual_address) as usize);
+        }
+    }
+    None
+}
+
+fn read_c_string(bytes: &[u8], offset: usize, max_len: usize) -> Option<String> {
+    let end = bytes
+        .get(offset..offset + max_len.min(bytes.len().saturating_sub(offset)))?
+        .iter()
+        .position(|byte| *byte == 0)
+        .map(|len| offset + len)
+        .unwrap_or_else(|| offset + max_len.min(bytes.len().saturating_sub(offset)));
+    let value = String::from_utf8_lossy(bytes.get(offset..end)?)
+        .trim()
+        .to_string();
+    Some(value)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -11392,7 +11477,7 @@ mod tests {
 
     #[test]
     fn pe_summary_reads_optional_headers_and_sections() {
-        let mut bytes = vec![0u8; 512];
+        let mut bytes = vec![0u8; 1536];
         bytes[0..2].copy_from_slice(b"MZ");
         bytes[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
         bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
@@ -11416,7 +11501,18 @@ mod tests {
         bytes[opt + 132..opt + 136].copy_from_slice(&0x200u32.to_le_bytes());
         let section_table = opt + 0xF0;
         bytes[section_table..section_table + 5].copy_from_slice(b".text");
+        bytes[section_table + 8..section_table + 12].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[section_table + 12..section_table + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[section_table + 20..section_table + 24].copy_from_slice(&0x200u32.to_le_bytes());
         bytes[section_table + 40..section_table + 45].copy_from_slice(b".data");
+        bytes[section_table + 48..section_table + 52].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[section_table + 52..section_table + 56].copy_from_slice(&0x3000u32.to_le_bytes());
+        bytes[section_table + 56..section_table + 60].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[section_table + 60..section_table + 64].copy_from_slice(&0x400u32.to_le_bytes());
+        bytes[0x400 + 12..0x400 + 16].copy_from_slice(&0x3100u32.to_le_bytes());
+        bytes[0x400 + 16..0x400 + 20].copy_from_slice(&0x3200u32.to_le_bytes());
+        bytes[0x500..0x50C].copy_from_slice(b"KERNEL32.dll");
 
         let pe = parse_pe_headers(&bytes).expect("pe summary");
 
@@ -11428,6 +11524,7 @@ mod tests {
         assert_eq!(pe.directories.len(), 2);
         assert_eq!(pe.directories[0].name, "Import");
         assert_eq!(pe.directories[1].name, "Resource");
+        assert_eq!(pe.imports, vec!["KERNEL32.dll".to_string()]);
         assert_eq!(
             pe.section_names,
             vec![".text".to_string(), ".data".to_string()]
