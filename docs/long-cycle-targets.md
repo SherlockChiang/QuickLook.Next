@@ -45,7 +45,7 @@ then commit that item by itself.
 
 ### ELF
 
-- [ ] Decode relocation type names for common machines such as x86-64 and
+- [x] Decode relocation type names for common machines such as x86-64 and
   AArch64.
 - [ ] Include symbol binding/type/section metadata in symbol summaries.
 - [ ] Parse GNU version sections such as `.gnu.version`, `.gnu.version_r`, and
@@ -82,7 +82,7 @@ then commit that item by itself.
 - PE version strings, fixed version info, imports/exports, certificate header,
   and CLR metadata root summary.
 - ELF section names, dynamic string tags, symbols, relocations, notes, and GNU
-  build-id.
+  build-id, plus x86-64/AArch64 relocation type names.
 - Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList,
   MemoryList, and Memory64List.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
