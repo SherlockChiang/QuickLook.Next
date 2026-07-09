@@ -6605,35 +6605,49 @@ fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let sections = elf_sections(bytes, class, endian);
     let mut notes = Vec::new();
     for section in sections.iter().filter(|section| section.typ == 7) {
-        if section.offset.saturating_add(section.size) > bytes.len() {
-            continue;
-        }
-        let mut offset = section.offset;
-        let end = section.offset + section.size;
-        while offset + 12 <= end && notes.len() < 8 {
-            let namesz = read_u32_endian(bytes, offset, endian).unwrap_or(0) as usize;
-            let descsz = read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as usize;
-            let typ = read_u32_endian(bytes, offset + 8, endian).unwrap_or(0);
-            let name_offset = offset + 12;
-            let desc_offset = align4(name_offset.saturating_add(namesz));
-            let next = align4(desc_offset.saturating_add(descsz));
-            if namesz == 0 || desc_offset.saturating_add(descsz) > end || next <= offset {
-                break;
-            }
-            let name = bytes
-                .get(name_offset..name_offset + namesz)
-                .map(|raw| String::from_utf8_lossy(raw).trim_end_matches('\0').to_string())
-                .unwrap_or_default();
-            let desc = bytes.get(desc_offset..desc_offset + descsz).unwrap_or(&[]);
-            if name == "GNU" && typ == 3 && !desc.is_empty() {
-                notes.push(format!("{} GNU build-id {}", section.name, bytes_to_hex(desc)));
-            } else if !name.is_empty() {
-                notes.push(format!("{} {} type {} ({} bytes)", section.name, name, typ, descsz));
-            }
-            offset = next;
-        }
+        append_elf_notes(&mut notes, bytes, endian, &section.name, section.offset, section.size);
+    }
+    for header in elf_program_headers(bytes, class, endian).iter().filter(|header| header.typ == 4) {
+        append_elf_notes(
+            &mut notes,
+            bytes,
+            endian,
+            "PT_NOTE",
+            header.file_offset as usize,
+            header.file_size as usize,
+        );
     }
     notes
+}
+
+fn append_elf_notes(notes: &mut Vec<String>, bytes: &[u8], endian: u8, label: &str, file_offset: usize, size: usize) {
+    if file_offset.saturating_add(size) > bytes.len() {
+        return;
+    }
+    let mut offset = file_offset;
+    let end = file_offset + size;
+    while offset + 12 <= end && notes.len() < 8 {
+        let namesz = read_u32_endian(bytes, offset, endian).unwrap_or(0) as usize;
+        let descsz = read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as usize;
+        let typ = read_u32_endian(bytes, offset + 8, endian).unwrap_or(0);
+        let name_offset = offset + 12;
+        let desc_offset = align4(name_offset.saturating_add(namesz));
+        let next = align4(desc_offset.saturating_add(descsz));
+        if namesz == 0 || desc_offset.saturating_add(descsz) > end || next <= offset {
+            break;
+        }
+        let name = bytes
+            .get(name_offset..name_offset + namesz)
+            .map(|raw| String::from_utf8_lossy(raw).trim_end_matches('\0').to_string())
+            .unwrap_or_default();
+        let desc = bytes.get(desc_offset..desc_offset + descsz).unwrap_or(&[]);
+        if name == "GNU" && typ == 3 && !desc.is_empty() {
+            notes.push(format!("{} GNU build-id {}", label, bytes_to_hex(desc)));
+        } else if !name.is_empty() {
+            notes.push(format!("{} {} type {} ({} bytes)", label, name, typ, descsz));
+        }
+        offset = next;
+    }
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -14682,7 +14696,7 @@ mod tests {
         bytes[32..40].copy_from_slice(&0x40u64.to_le_bytes());
         bytes[40..48].copy_from_slice(&0x500u64.to_le_bytes());
         bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
-        bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
+        bytes[56..58].copy_from_slice(&4u16.to_le_bytes());
         bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
         bytes[60..62].copy_from_slice(&7u16.to_le_bytes());
         bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
@@ -14697,6 +14711,9 @@ mod tests {
         bytes[0xB0..0xB4].copy_from_slice(&2u32.to_le_bytes());
         bytes[0xB8..0xC0].copy_from_slice(&0x200u64.to_le_bytes());
         bytes[0xD0..0xD8].copy_from_slice(&80u64.to_le_bytes());
+        bytes[0xE8..0xEC].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0xF0..0xF8].copy_from_slice(&0x7C4u64.to_le_bytes());
+        bytes[0x108..0x110].copy_from_slice(&20u64.to_le_bytes());
         bytes[0x200..0x208].copy_from_slice(&5u64.to_le_bytes());
         bytes[0x208..0x210].copy_from_slice(&0x400280u64.to_le_bytes());
         bytes[0x210..0x218].copy_from_slice(&1u64.to_le_bytes());
@@ -14744,6 +14761,11 @@ mod tests {
         bytes[0x7B8..0x7BC].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x7BC..0x7C0].copy_from_slice(b"GNU\0");
         bytes[0x7C0..0x7C4].copy_from_slice(&[1, 2, 3, 4]);
+        bytes[0x7C4..0x7C8].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x7C8..0x7CC].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x7CC..0x7D0].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x7D0..0x7D4].copy_from_slice(b"GNU\0");
+        bytes[0x7D4..0x7D8].copy_from_slice(&[5, 6, 7, 8]);
         bytes[0x798..0x7A0].copy_from_slice(&8u64.to_le_bytes());
 
         let mut text = String::new();
@@ -14752,7 +14774,7 @@ mod tests {
         assert!(text.contains("ELF64"));
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
-        assert!(text.contains("Program headers: 3"));
+        assert!(text.contains("Program headers: 4"));
         assert!(text.contains("Section headers: 7"));
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x500"));
@@ -14764,5 +14786,6 @@ mod tests {
         assert!(text.contains("Symbols: .symtab 2 entries (main[global func .text])"));
         assert!(text.contains("Relocations: .rela.dyn 1 entries (R_X86_64_RELATIVE)"));
         assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
+        assert!(text.contains("PT_NOTE GNU type 1 (4 bytes)"));
     }
 }

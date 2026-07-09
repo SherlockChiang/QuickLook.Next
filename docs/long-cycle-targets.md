@@ -55,7 +55,7 @@ then commit that item by itself.
 - [x] Include symbol binding/type/section metadata in symbol summaries.
 - [ ] Parse GNU version sections such as `.gnu.version`, `.gnu.version_r`, and
   `.gnu.version_d`.
-- [ ] Parse PT_NOTE program headers in addition to note sections.
+- [x] Parse PT_NOTE program headers in addition to note sections.
 
 ### Minidump
 
@@ -87,7 +87,8 @@ then commit that item by itself.
 - PE version strings, fixed version info, imports/exports, certificate header,
   and CLR metadata root summary.
 - ELF section names, dynamic string tags, symbols with binding/type/section,
-  relocations, notes, and GNU build-id, plus x86-64/AArch64 relocation type names.
+  relocations, note sections/PT_NOTE program headers, and GNU build-id, plus
+  x86-64/AArch64 relocation type names.
 - Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList,
   MemoryList, and Memory64List.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
