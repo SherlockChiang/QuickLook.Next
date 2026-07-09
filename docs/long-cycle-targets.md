@@ -60,7 +60,7 @@ then commit that item by itself.
 ### Minidump
 
 - [x] Parse HandleData stream counts and first handles.
-- [ ] Parse UnloadedModuleList names and address ranges.
+- [x] Parse UnloadedModuleList names and address ranges.
 - [ ] Parse MiscInfo process id, process times, and processor power info when
   present.
 - [ ] Decode module fixed version fields from `MINIDUMP_MODULE.VersionInfo`.
@@ -90,6 +90,6 @@ then commit that item by itself.
   relocations, note sections/PT_NOTE program headers, and GNU build-id, plus
   x86-64/AArch64 relocation type names.
 - Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList,
-  MemoryList, Memory64List, and HandleData.
+  MemoryList, Memory64List, HandleData, and UnloadedModuleList.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, and body byte sizes.

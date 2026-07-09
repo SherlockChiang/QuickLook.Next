@@ -5784,6 +5784,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut memory64_info = None;
     let mut thread_names_info = None;
     let mut handle_info = None;
+    let mut unloaded_module_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5816,6 +5817,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             thread_names_info = parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
         } else if stream_type == 17 {
             handle_info = parse_minidump_handle_data(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 11 {
+            unloaded_module_info = parse_minidump_unloaded_module_list(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5845,6 +5848,40 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(handle_info) = handle_info {
         text.push_str(&handle_info);
     }
+    if let Some(unloaded_module_info) = unloaded_module_info {
+        text.push_str(&unloaded_module_info);
+    }
+}
+
+fn parse_minidump_unloaded_module_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 12 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let header_size = read_u32(bytes, offset).unwrap_or(0).max(12) as usize;
+    let entry_size = read_u32(bytes, offset + 4).unwrap_or(0) as usize;
+    let count = read_u32(bytes, offset + 8).unwrap_or(0) as usize;
+    if entry_size < 24 || header_size > size {
+        return None;
+    }
+    let mut lines = vec![format!("\nUnloaded modules: {count}")];
+    let mut entry_offset = offset + header_size;
+    for _ in 0..count.min(12) {
+        if entry_offset + entry_size > offset + size || entry_offset + 24 > bytes.len() {
+            break;
+        }
+        let base = read_u64(bytes, entry_offset).unwrap_or(0);
+        let image_size = read_u32(bytes, entry_offset + 8).unwrap_or(0) as u64;
+        let end = base.saturating_add(image_size);
+        let checksum = read_u32(bytes, entry_offset + 12).unwrap_or(0);
+        let timestamp = read_u32(bytes, entry_offset + 16).unwrap_or(0);
+        let name_rva = read_u32(bytes, entry_offset + 20).unwrap_or(0) as usize;
+        let name = read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        lines.push(format!(
+            "Unloaded module {name}: range 0x{base:016X}-0x{end:016X}; timestamp 0x{timestamp:08X}; checksum 0x{checksum:08X}"
+        ));
+        entry_offset += entry_size;
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_handle_data(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -14471,6 +14508,27 @@ mod tests {
         assert!(text.contains("Thread 99 name: io thread"));
         assert!(text.contains("Handles: 1"));
         assert!(text.contains(r"Handle 0x0000000000000044: File \Device\HarddiskVolume1\demo.txt; access 0x0012019F; attributes 0x00000002; handles 3; pointers 7"));
+    }
+
+    #[test]
+    fn minidump_unloaded_module_list_summarizes_names_and_ranges() {
+        let mut bytes = vec![0u8; 512];
+        bytes[0x40..0x44].copy_from_slice(&12u32.to_le_bytes());
+        bytes[0x44..0x48].copy_from_slice(&24u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x4C..0x54].copy_from_slice(&0x0000_7FF6_1000_0000u64.to_le_bytes());
+        bytes[0x54..0x58].copy_from_slice(&0x5000u32.to_le_bytes());
+        bytes[0x58..0x5C].copy_from_slice(&0x1234_ABCDu32.to_le_bytes());
+        bytes[0x5C..0x60].copy_from_slice(&0x6543_2100u32.to_le_bytes());
+        bytes[0x60..0x64].copy_from_slice(&0x100u32.to_le_bytes());
+        let module_name: Vec<u8> = "old.dll".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x100..0x104].copy_from_slice(&(module_name.len() as u32).to_le_bytes());
+        bytes[0x104..0x104 + module_name.len()].copy_from_slice(&module_name);
+
+        let text = parse_minidump_unloaded_module_list(&bytes, 0x40, 36).expect("unloaded modules");
+
+        assert!(text.contains("Unloaded modules: 1"));
+        assert!(text.contains("Unloaded module old.dll: range 0x00007FF610000000-0x00007FF610005000; timestamp 0x65432100; checksum 0x1234ABCD"));
     }
 
     #[test]
