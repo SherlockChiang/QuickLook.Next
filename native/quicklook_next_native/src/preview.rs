@@ -4616,13 +4616,41 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
         let content = String::from_utf8_lossy(&bytes);
         let headers = parse_mail_headers(&content);
         text.push_str("\nFormat: RFC 5322 message");
-        for key in ["From", "To", "Cc", "Subject", "Date", "Content-Type"] {
+        for key in [
+            "From",
+            "To",
+            "Cc",
+            "Reply-To",
+            "Subject",
+            "Date",
+            "Message-ID",
+            "MIME-Version",
+            "Content-Type",
+        ] {
             if let Some(value) = headers
                 .iter()
                 .find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v))
             {
                 text.push_str(&format!("\n{key}: {}", value.trim()));
             }
+        }
+        if let Some(content_type) = header_value(&headers, "Content-Type") {
+            if let Some(boundary) = mail_header_parameter(content_type, "boundary") {
+                text.push_str(&format!("\nMIME boundary: {boundary}"));
+            }
+        }
+        let attachments = content
+            .lines()
+            .filter(|line| {
+                line.to_ascii_lowercase()
+                    .contains("content-disposition: attachment")
+            })
+            .count();
+        if attachments > 0 {
+            text.push_str(&format!(
+                "\nAttachments observed: {}",
+                format_number(attachments as i64)
+            ));
         }
         if filename.to_ascii_lowercase().ends_with(".mbox") {
             let count = content
@@ -4652,6 +4680,21 @@ fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
         }
         if let Some(lang_id) = read_u32(&bytes, 20) {
             text.push_str(&format!("\nLanguage ID: 0x{lang_id:08X}"));
+        }
+        if let Some(timestamp) = read_u32(&bytes, 24).filter(|value| *value > 0) {
+            text.push_str(&format!(
+                "\nTimestamp: {}",
+                format_timestamp(timestamp as i64)
+            ));
+        }
+        if let Some(dir_offset) = read_u64(&bytes, 40).filter(|value| *value > 0) {
+            text.push_str(&format!("\nDirectory offset: 0x{dir_offset:016X}"));
+        }
+        if let Some(dir_len) = read_u64(&bytes, 48).filter(|value| *value > 0) {
+            text.push_str(&format!(
+                "\nDirectory length: {}",
+                format_bytes(dir_len as i64)
+            ));
         }
     } else {
         text.push_str("\nFormat: CHM-like help file");
@@ -4683,6 +4726,7 @@ fn render_dump_info(path: &str, size: i64, modified_unix: i64) -> String {
         if let Some(flags) = read_u64(&bytes, 24) {
             text.push_str(&format!("\nFlags: 0x{flags:016X}"));
         }
+        append_minidump_streams(&mut text, &bytes);
     } else if bytes.starts_with(&[0x7F, b'E', b'L', b'F']) {
         text.push_str("\nFormat: ELF core/dump");
         append_elf_summary(&mut text, &bytes);
@@ -4723,6 +4767,9 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
     }
     if let Some(rotation) = mp4.as_ref().and_then(|summary| summary.rotation_degrees) {
         text.push_str(&format!("\nRotation: {}", format_rotation(rotation)));
+    }
+    if let Some(summary) = mp4.as_ref() {
+        append_mp4_tracks(&mut text, &summary.tracks);
     }
     append_mkv_metadata(&mut text, &bytes);
     append_wav_metadata(&mut text, &bytes);
@@ -5466,6 +5513,72 @@ fn parse_mail_headers(content: &str) -> Vec<(String, String)> {
     headers
 }
 
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value.as_str()))
+}
+
+fn mail_header_parameter(value: &str, name: &str) -> Option<String> {
+    value
+        .split(';')
+        .skip(1)
+        .find_map(|part| {
+            let (key, raw_value) = part.trim().split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| raw_value.trim().trim_matches('"').trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
+    let streams = read_u32(bytes, 8).unwrap_or(0).min(64) as usize;
+    let directory_rva = read_u32(bytes, 12).unwrap_or(0) as usize;
+    if streams == 0 || directory_rva == 0 {
+        return;
+    }
+
+    let mut names = Vec::new();
+    for index in 0..streams {
+        let offset = directory_rva + index * 12;
+        let Some(stream_type) = read_u32(bytes, offset) else {
+            break;
+        };
+        let Some(data_size) = read_u32(bytes, offset + 4) else {
+            break;
+        };
+        let Some(rva) = read_u32(bytes, offset + 8) else {
+            break;
+        };
+        names.push(format!(
+            "{} ({} @ 0x{rva:08X})",
+            minidump_stream_name(stream_type),
+            format_bytes(data_size as i64)
+        ));
+    }
+    if !names.is_empty() {
+        text.push_str(&format!("\nStream summary: {}", names.join(", ")));
+    }
+}
+
+fn minidump_stream_name(value: u32) -> &'static str {
+    match value {
+        3 => "ThreadList",
+        4 => "ModuleList",
+        5 => "MemoryList",
+        6 => "Exception",
+        7 => "SystemInfo",
+        9 => "Memory64List",
+        11 => "UnloadedModuleList",
+        12 => "MiscInfo",
+        15 => "MemoryInfoList",
+        16 => "ThreadInfoList",
+        17 => "HandleData",
+        _ => "Unknown",
+    }
+}
+
 fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !bytes.starts_with(&[0x7F, b'E', b'L', b'F']) || bytes.len() < 20 {
         text.push_str("\nFormat: ELF-like binary");
@@ -5506,6 +5619,26 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     }
     if let Some(shnum) = read_u16_endian(bytes, shnum_offset, endian) {
         text.push_str(&format!("\nSection headers: {}", shnum));
+    }
+    let phoff = if class == 2 {
+        read_u64_endian(bytes, 32, endian)
+    } else {
+        read_u32_endian(bytes, 28, endian).map(u64::from)
+    };
+    if let Some(phoff) = phoff.filter(|value| *value > 0) {
+        text.push_str(&format!("\nProgram header offset: 0x{phoff:X}"));
+    }
+    let shoff = if class == 2 {
+        read_u64_endian(bytes, 40, endian)
+    } else {
+        read_u32_endian(bytes, 32, endian).map(u64::from)
+    };
+    if let Some(shoff) = shoff.filter(|value| *value > 0) {
+        text.push_str(&format!("\nSection header offset: 0x{shoff:X}"));
+    }
+    let flags_offset = if class == 2 { 48 } else { 36 };
+    if let Some(flags) = read_u32_endian(bytes, flags_offset, endian).filter(|value| *value > 0) {
+        text.push_str(&format!("\nFlags: 0x{flags:08X}"));
     }
 }
 
@@ -5586,6 +5719,19 @@ struct Mp4Summary {
     duration_seconds: Option<f64>,
     created_unix: Option<i64>,
     rotation_degrees: Option<i32>,
+    tracks: Vec<Mp4TrackSummary>,
+}
+
+#[derive(Default)]
+struct Mp4TrackSummary {
+    kind: &'static str,
+    codec: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    channels: Option<u16>,
+    sample_rate: Option<u32>,
+    duration_seconds: Option<f64>,
+    data_bytes: Option<u64>,
 }
 
 fn mp4_summary(bytes: &[u8]) -> Option<Mp4Summary> {
@@ -5594,17 +5740,178 @@ fn mp4_summary(bytes: &[u8]) -> Option<Mp4Summary> {
     let duration_seconds = mvhd.and_then(parse_mvhd_duration_seconds);
     let created_unix = mvhd.and_then(parse_mvhd_created_unix);
     let rotation_degrees = mp4_rotation_degrees(bytes);
+    let tracks = mp4_tracks(bytes);
 
     (brand.is_some()
         || duration_seconds.is_some()
         || created_unix.is_some()
-        || rotation_degrees.is_some())
+        || rotation_degrees.is_some()
+        || !tracks.is_empty())
     .then_some(Mp4Summary {
         brand,
         duration_seconds,
         created_unix,
         rotation_degrees,
+        tracks,
     })
+}
+
+fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
+    for (index, track) in tracks.iter().enumerate() {
+        text.push_str(&format!("\n{} track {}", track.kind, index + 1));
+        if !track.codec.is_empty() {
+            text.push_str(&format!(": {}", media_codec_label(&track.codec)));
+        }
+        if let (Some(width), Some(height)) = (track.width, track.height) {
+            text.push_str(&format!("\n{} size: {}x{}", track.kind, width, height));
+        }
+        if let Some(channels) = track.channels {
+            text.push_str(&format!("\n{} channels: {}", track.kind, channels));
+        }
+        if let Some(sample_rate) = track.sample_rate {
+            text.push_str(&format!(
+                "\n{} sample rate: {} Hz",
+                track.kind,
+                format_number(sample_rate as i64)
+            ));
+        }
+        if let Some(duration) = track.duration_seconds {
+            text.push_str(&format!(
+                "\n{} duration: {}",
+                track.kind,
+                format_duration(duration)
+            ));
+            if let Some(data_bytes) = track.data_bytes {
+                if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
+                    text.push_str(&format!(
+                        "\n{} bitrate: {}",
+                        track.kind,
+                        format_bitrate(bitrate)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn mp4_tracks(bytes: &[u8]) -> Vec<Mp4TrackSummary> {
+    let mut payloads = Vec::new();
+    collect_mp4_atom_payloads(bytes, b"trak", &mut payloads);
+    payloads.into_iter().filter_map(parse_mp4_track).collect()
+}
+
+fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
+    let handler = find_mp4_atom_payload(trak, b"hdlr").and_then(parse_hdlr_handler_type);
+    let mut summary = Mp4TrackSummary {
+        kind: match handler.as_deref() {
+            Some("vide") => "Video",
+            Some("soun") => "Audio",
+            _ => "Media",
+        },
+        ..Default::default()
+    };
+
+    if let Some(tkhd) = find_mp4_atom_payload(trak, b"tkhd") {
+        let (width, height) = parse_tkhd_dimensions(tkhd).unwrap_or((0, 0));
+        if width > 0 && height > 0 {
+            summary.width = Some(width);
+            summary.height = Some(height);
+        }
+    }
+    if let Some(mdhd) = find_mp4_atom_payload(trak, b"mdhd") {
+        summary.duration_seconds = parse_mdhd_duration_seconds(mdhd);
+    }
+    if let Some(stsd) = find_mp4_atom_payload(trak, b"stsd") {
+        parse_stsd_summary(stsd, &mut summary);
+    }
+    if let Some(stsz) = find_mp4_atom_payload(trak, b"stsz") {
+        summary.data_bytes = parse_stsz_total_bytes(stsz);
+    }
+
+    (!summary.codec.is_empty()
+        || summary.width.is_some()
+        || summary.height.is_some()
+        || summary.channels.is_some()
+        || summary.sample_rate.is_some()
+        || summary.duration_seconds.is_some()
+        || summary.data_bytes.is_some())
+    .then_some(summary)
+}
+
+fn parse_hdlr_handler_type(payload: &[u8]) -> Option<String> {
+    let handler = std::str::from_utf8(payload.get(8..12)?).ok()?.trim();
+    (!handler.is_empty()).then(|| handler.to_string())
+}
+
+fn parse_mdhd_duration_seconds(payload: &[u8]) -> Option<f64> {
+    let version = *payload.first()?;
+    match version {
+        0 => duration_from_timescale(read_u32_be(payload, 16)? as u64, read_u32_be(payload, 12)?),
+        1 => duration_from_timescale(read_u64_be(payload, 24)?, read_u32_be(payload, 20)?),
+        _ => None,
+    }
+}
+
+fn parse_tkhd_dimensions(payload: &[u8]) -> Option<(u32, u32)> {
+    let version = *payload.first()?;
+    let offset = match version {
+        0 => 76,
+        1 => 88,
+        _ => return None,
+    };
+    let width = read_u32_be(payload, offset)? >> 16;
+    let height = read_u32_be(payload, offset + 4)? >> 16;
+    Some((width, height))
+}
+
+fn parse_stsd_summary(payload: &[u8], summary: &mut Mp4TrackSummary) -> Option<()> {
+    let entries = read_u32_be(payload, 4)?.min(16) as usize;
+    let mut offset = 8usize;
+    for _ in 0..entries {
+        let entry_size = read_u32_be(payload, offset)? as usize;
+        let codec = std::str::from_utf8(payload.get(offset + 4..offset + 8)?)
+            .ok()?
+            .to_string();
+        if summary.codec.is_empty() {
+            summary.codec = codec;
+        }
+
+        if summary.kind == "Video" && entry_size >= 36 {
+            summary.width = read_u16_be(payload, offset + 32)
+                .map(u32::from)
+                .filter(|value| *value > 0);
+            summary.height = read_u16_be(payload, offset + 34)
+                .map(u32::from)
+                .filter(|value| *value > 0);
+        } else if summary.kind == "Audio" && entry_size >= 32 {
+            summary.channels = read_u16_be(payload, offset + 16).filter(|value| *value > 0);
+            summary.sample_rate = read_u32_be(payload, offset + 24)
+                .map(|value| value >> 16)
+                .filter(|value| *value > 0);
+        }
+
+        offset = offset.checked_add(entry_size)?;
+        if offset > payload.len() {
+            break;
+        }
+    }
+    Some(())
+}
+
+fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
+    let sample_size = read_u32_be(payload, 4)? as u64;
+    let sample_count = read_u32_be(payload, 8)? as u64;
+    if sample_size > 0 {
+        return sample_size.checked_mul(sample_count);
+    }
+    let count = sample_count.min(1_000_000) as usize;
+    let mut offset = 12usize;
+    let mut total = 0u64;
+    for _ in 0..count {
+        total = total.checked_add(read_u32_be(payload, offset)? as u64)?;
+        offset = offset.checked_add(4)?;
+    }
+    Some(total)
 }
 
 fn parse_mvhd_created_unix(payload: &[u8]) -> Option<i64> {
@@ -5899,7 +6206,8 @@ fn read_ogg_packets(bytes: &[u8], max_packets: usize) -> Vec<Vec<u8>> {
     let mut packets = Vec::new();
     let mut current = Vec::new();
     let mut offset = 0usize;
-    while offset.checked_add(27).is_some_and(|end| end <= bytes.len()) && packets.len() < max_packets
+    while offset.checked_add(27).is_some_and(|end| end <= bytes.len())
+        && packets.len() < max_packets
     {
         if bytes.get(offset..offset + 4) != Some(b"OggS") {
             break;
@@ -6475,7 +6783,14 @@ fn collect_mp4_atom_payloads_in_range<'a>(
             }
         }
         if is_mp4_container_atom(typ) {
-            collect_mp4_atom_payloads_in_range(bytes, payload_start, atom_end, atom, depth + 1, found);
+            collect_mp4_atom_payloads_in_range(
+                bytes,
+                payload_start,
+                atom_end,
+                atom,
+                depth + 1,
+                found,
+            );
         }
         pos = atom_end;
     }
@@ -6598,6 +6913,27 @@ pub fn render_executable(path: &str) -> String {
         ));
     }
     text.push_str(&format!("Characteristics: 0x{:04X}\n", pe.characteristics));
+    text.push_str(&format!("Image base: 0x{:016X}\n", pe.image_base));
+    text.push_str(&format!(
+        "Section alignment: {}\n",
+        format_bytes(pe.section_alignment as i64)
+    ));
+    text.push_str(&format!(
+        "File alignment: {}\n",
+        format_bytes(pe.file_alignment as i64)
+    ));
+    if pe.dll_characteristics > 0 {
+        text.push_str(&format!(
+            "DLL characteristics: 0x{:04X}\n",
+            pe.dll_characteristics
+        ));
+    }
+    if pe.data_directories > 0 {
+        text.push_str(&format!("Data directories: {}\n", pe.data_directories));
+    }
+    if !pe.section_names.is_empty() {
+        text.push_str(&format!("Section names: {}\n", pe.section_names.join(", ")));
+    }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
 
@@ -6623,6 +6959,12 @@ struct PeSummary {
     image_size: u32,
     link_timestamp: u32,
     characteristics: u16,
+    image_base: u64,
+    section_alignment: u32,
+    file_alignment: u32,
+    dll_characteristics: u16,
+    data_directories: u32,
+    section_names: Vec<String>,
 }
 
 fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
@@ -6647,8 +6989,20 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
 
     let magic = read_u16(bytes, opt)?;
     let entry_point = read_u32(bytes, opt + 16).unwrap_or(0);
+    let image_base = if magic == 0x20B {
+        read_u64(bytes, opt + 24).unwrap_or(0)
+    } else {
+        read_u32(bytes, opt + 28).unwrap_or(0) as u64
+    };
+    let section_alignment = read_u32(bytes, opt + 32).unwrap_or(0);
+    let file_alignment = read_u32(bytes, opt + 36).unwrap_or(0);
     let image_size = read_u32(bytes, opt + 56).unwrap_or(0);
     let subsystem = read_u16(bytes, opt + 68).unwrap_or(0);
+    let dll_characteristics = read_u16(bytes, opt + 70).unwrap_or(0);
+    let data_directories_offset = if magic == 0x20B { opt + 108 } else { opt + 92 };
+    let data_directories = read_u32(bytes, data_directories_offset).unwrap_or(0);
+    let section_table = opt + opt_size;
+    let section_names = parse_pe_section_names(bytes, section_table, sections);
 
     Some(PeSummary {
         machine: machine_name(machine),
@@ -6663,7 +7017,31 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         image_size,
         link_timestamp: timestamp,
         characteristics,
+        image_base,
+        section_alignment,
+        file_alignment,
+        dll_characteristics,
+        data_directories,
+        section_names,
     })
+}
+
+fn parse_pe_section_names(bytes: &[u8], section_table: usize, sections: u16) -> Vec<String> {
+    let mut names = Vec::new();
+    for index in 0..sections.min(12) as usize {
+        let offset = section_table + index * 40;
+        let Some(raw) = bytes.get(offset..offset + 8) else {
+            break;
+        };
+        let name = String::from_utf8_lossy(raw)
+            .trim_matches('\0')
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            names.push(name);
+        }
+    }
+    names
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -10209,6 +10587,14 @@ mod tests {
 
     #[test]
     fn media_info_reads_mp4_brand_and_duration() {
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&16u32.to_be_bytes());
         bytes.extend_from_slice(b"ftyp");
@@ -10219,25 +10605,43 @@ mod tests {
         mvhd_payload[4..8].copy_from_slice(&2_082_844_800u32.to_be_bytes());
         mvhd_payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
         mvhd_payload[16..20].copy_from_slice(&90_000u32.to_be_bytes());
-        let mvhd_size = (8 + mvhd_payload.len()) as u32;
+        let mvhd = atom(b"mvhd", &mvhd_payload);
 
-        let mut tkhd_payload = vec![0u8; 76];
+        let mut tkhd_payload = vec![0u8; 84];
         tkhd_payload[44..48].copy_from_slice(&65_536i32.to_be_bytes());
         tkhd_payload[64..68].copy_from_slice(&0x4000_0000i32.to_be_bytes());
-        let tkhd_size = (8 + tkhd_payload.len()) as u32;
+        tkhd_payload[76..80].copy_from_slice(&(1920u32 << 16).to_be_bytes());
+        tkhd_payload[80..84].copy_from_slice(&(1080u32 << 16).to_be_bytes());
+        let tkhd = atom(b"tkhd", &tkhd_payload);
 
-        let trak_size = 8 + tkhd_size;
-        let moov_size = 8 + mvhd_size + trak_size;
-        bytes.extend_from_slice(&moov_size.to_be_bytes());
-        bytes.extend_from_slice(b"moov");
-        bytes.extend_from_slice(&mvhd_size.to_be_bytes());
-        bytes.extend_from_slice(b"mvhd");
-        bytes.extend_from_slice(&mvhd_payload);
-        bytes.extend_from_slice(&trak_size.to_be_bytes());
-        bytes.extend_from_slice(b"trak");
-        bytes.extend_from_slice(&tkhd_size.to_be_bytes());
-        bytes.extend_from_slice(b"tkhd");
-        bytes.extend_from_slice(&tkhd_payload);
+        let mut mdhd_payload = vec![0u8; 20];
+        mdhd_payload[12..16].copy_from_slice(&30_000u32.to_be_bytes());
+        mdhd_payload[16..20].copy_from_slice(&2_700_000u32.to_be_bytes());
+        let mdhd = atom(b"mdhd", &mdhd_payload);
+
+        let mut hdlr_payload = vec![0u8; 12];
+        hdlr_payload[8..12].copy_from_slice(b"vide");
+        let hdlr = atom(b"hdlr", &hdlr_payload);
+
+        let mut stsd_payload = vec![0u8; 8 + 86];
+        stsd_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        stsd_payload[8..12].copy_from_slice(&86u32.to_be_bytes());
+        stsd_payload[12..16].copy_from_slice(b"avc1");
+        stsd_payload[40..42].copy_from_slice(&1920u16.to_be_bytes());
+        stsd_payload[42..44].copy_from_slice(&1080u16.to_be_bytes());
+        let stsd = atom(b"stsd", &stsd_payload);
+
+        let mut stsz_payload = vec![0u8; 12 + 8];
+        stsz_payload[8..12].copy_from_slice(&2u32.to_be_bytes());
+        stsz_payload[12..16].copy_from_slice(&600_000u32.to_be_bytes());
+        stsz_payload[16..20].copy_from_slice(&700_000u32.to_be_bytes());
+        let stsz = atom(b"stsz", &stsz_payload);
+        let stbl = atom(b"stbl", &[stsd, stsz].concat());
+        let minf = atom(b"minf", &stbl);
+        let mdia = atom(b"mdia", &[mdhd, hdlr, minf].concat());
+        let trak = atom(b"trak", &[tkhd, mdia].concat());
+
+        bytes.extend_from_slice(&atom(b"moov", &[mvhd, trak].concat()));
 
         assert_eq!(media_container_name("clip.mp4", &bytes), "ISO BMFF / MP4");
         assert_eq!(mp4_major_brand(&bytes).as_deref(), Some("isom"));
@@ -10247,6 +10651,13 @@ mod tests {
         assert_eq!(summary.duration_seconds, Some(90.0));
         assert_eq!(summary.created_unix, Some(0));
         assert_eq!(summary.rotation_degrees, Some(90));
+        assert_eq!(summary.tracks.len(), 1);
+        assert_eq!(summary.tracks[0].kind, "Video");
+        assert_eq!(summary.tracks[0].codec, "avc1");
+        assert_eq!(summary.tracks[0].width, Some(1920));
+        assert_eq!(summary.tracks[0].height, Some(1080));
+        assert_eq!(summary.tracks[0].duration_seconds, Some(90.0));
+        assert_eq!(summary.tracks[0].data_bytes, Some(1_300_000));
         assert_eq!(format_duration(90.0), "1:30");
         assert_eq!(format_bitrate(1_536_000.0), "1.54 Mbps");
     }
@@ -10538,6 +10949,73 @@ mod tests {
     }
 
     #[test]
+    fn mail_header_parameter_extracts_boundary() {
+        let value = "multipart/mixed; boundary=\"abc-123\"; charset=utf-8";
+
+        assert_eq!(
+            mail_header_parameter(value, "boundary").as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn minidump_stream_summary_lists_known_streams() {
+        let mut bytes = vec![0u8; 64];
+        bytes[0..4].copy_from_slice(b"MDMP");
+        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
+        bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
+        bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[44..48].copy_from_slice(&7u32.to_le_bytes());
+        bytes[48..52].copy_from_slice(&56u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&0x300u32.to_le_bytes());
+        let mut text = String::new();
+
+        append_minidump_streams(&mut text, &bytes);
+
+        assert!(text.contains("ModuleList"));
+        assert!(text.contains("SystemInfo"));
+    }
+
+    #[test]
+    fn pe_summary_reads_optional_headers_and_sections() {
+        let mut bytes = vec![0u8; 512];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84usize;
+        bytes[coff..coff + 2].copy_from_slice(&0x8664u16.to_le_bytes());
+        bytes[coff + 2..coff + 4].copy_from_slice(&2u16.to_le_bytes());
+        bytes[coff + 16..coff + 18].copy_from_slice(&0xF0u16.to_le_bytes());
+        let opt = coff + 20;
+        bytes[opt..opt + 2].copy_from_slice(&0x20Bu16.to_le_bytes());
+        bytes[opt + 16..opt + 20].copy_from_slice(&0x1234u32.to_le_bytes());
+        bytes[opt + 24..opt + 32].copy_from_slice(&0x1400_0000u64.to_le_bytes());
+        bytes[opt + 32..opt + 36].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[opt + 36..opt + 40].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[opt + 56..opt + 60].copy_from_slice(&0x5000u32.to_le_bytes());
+        bytes[opt + 68..opt + 70].copy_from_slice(&2u16.to_le_bytes());
+        bytes[opt + 70..opt + 72].copy_from_slice(&0x8160u16.to_le_bytes());
+        bytes[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+        let section_table = opt + 0xF0;
+        bytes[section_table..section_table + 5].copy_from_slice(b".text");
+        bytes[section_table + 40..section_table + 45].copy_from_slice(b".data");
+
+        let pe = parse_pe_headers(&bytes).expect("pe summary");
+
+        assert_eq!(pe.machine, "x64");
+        assert_eq!(pe.image_base, 0x1400_0000);
+        assert_eq!(pe.section_alignment, 0x1000);
+        assert_eq!(pe.dll_characteristics, 0x8160);
+        assert_eq!(pe.data_directories, 16);
+        assert_eq!(
+            pe.section_names,
+            vec![".text".to_string(), ".data".to_string()]
+        );
+    }
+
+    #[test]
     fn elf_summary_detects_64_bit_little_endian() {
         let mut bytes = vec![0u8; 64];
         bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
@@ -10546,6 +11024,10 @@ mod tests {
         bytes[16..18].copy_from_slice(&3u16.to_le_bytes());
         bytes[18..20].copy_from_slice(&62u16.to_le_bytes());
         bytes[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
+        bytes[32..40].copy_from_slice(&0x40u64.to_le_bytes());
+        bytes[40..48].copy_from_slice(&0x200u64.to_le_bytes());
+        bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&12u16.to_le_bytes());
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -10553,5 +11035,9 @@ mod tests {
         assert!(text.contains("ELF64"));
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
+        assert!(text.contains("Program headers: 3"));
+        assert!(text.contains("Section headers: 12"));
+        assert!(text.contains("Program header offset: 0x40"));
+        assert!(text.contains("Section header offset: 0x200"));
     }
 }
