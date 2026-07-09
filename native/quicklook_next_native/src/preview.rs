@@ -8328,6 +8328,9 @@ pub fn render_executable(path: &str) -> String {
         if let Some(assembly) = &clr.assembly {
             text.push_str(&format!("CLR assembly: {assembly}\n"));
         }
+        if !clr.assembly_refs.is_empty() {
+            text.push_str(&format!("CLR assembly references: {}\n", clr.assembly_refs.join(", ")));
+        }
     }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
@@ -8408,6 +8411,7 @@ struct PeClrSummary {
     metadata_streams: Vec<String>,
     metadata_tables: Vec<String>,
     assembly: Option<String>,
+    assembly_refs: Vec<String>,
 }
 
 fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
@@ -9015,6 +9019,7 @@ fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usiz
         metadata_version: metadata.as_ref().map(|root| root.version.clone()).unwrap_or_default(),
         metadata_streams: metadata.as_ref().map(|root| root.streams.clone()).unwrap_or_default(),
         metadata_tables: metadata.as_ref().map(|root| root.tables.clone()).unwrap_or_default(),
+        assembly_refs: metadata.as_ref().map(|root| root.assembly_refs.clone()).unwrap_or_default(),
         assembly: metadata.and_then(|root| root.assembly),
     })
 }
@@ -9024,6 +9029,7 @@ struct ClrMetadataRoot {
     streams: Vec<String>,
     tables: Vec<String>,
     assembly: Option<String>,
+    assembly_refs: Vec<String>,
 }
 
 fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<ClrMetadataRoot> {
@@ -9040,7 +9046,7 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .to_string();
     let mut stream_offset = align4(version_end) + 4;
     if stream_offset > end {
-        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None });
+        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None, assembly_refs: Vec::new() });
     }
     let streams = read_u16(bytes, stream_offset - 2).unwrap_or(0).min(64) as usize;
     let mut names = Vec::new();
@@ -9065,8 +9071,12 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
     let assembly = tables_stream
         .zip(strings_heap)
         .and_then(|(tables, strings)| parse_clr_assembly_identity(tables, strings));
+    let assembly_refs = tables_stream
+        .zip(strings_heap)
+        .map(|(tables, strings)| parse_clr_assembly_refs(tables, strings))
+        .unwrap_or_default();
     let tables = tables_stream.map(parse_clr_table_counts).unwrap_or_default();
-    Some(ClrMetadataRoot { version, streams: names, tables, assembly })
+    Some(ClrMetadataRoot { version, streams: names, tables, assembly, assembly_refs })
 }
 
 fn parse_clr_table_counts(tables: &[u8]) -> Vec<String> {
@@ -9135,21 +9145,13 @@ fn clr_table_name(index: usize) -> &'static str {
 }
 
 fn parse_clr_assembly_identity(tables: &[u8], strings: &[u8]) -> Option<String> {
-    if tables.len() < 24 {
+    let layout = clr_tables_layout(tables)?;
+    if *layout.rows.get(32)? == 0 {
         return None;
     }
-    let heap_sizes = *tables.get(6)?;
-    let valid = read_u64(tables, 8)?;
-    if valid & (1u64 << 32) == 0 || valid & ((1u64 << 32) - 1) != 0 {
-        return None;
-    }
-    let rows = read_u32(tables, 24)?;
-    if rows == 0 {
-        return None;
-    }
-    let string_index_size = if heap_sizes & 0x01 != 0 { 4 } else { 2 };
-    let blob_index_size = if heap_sizes & 0x04 != 0 { 4 } else { 2 };
-    let row = 28usize;
+    let string_index_size = layout.string_index_size;
+    let blob_index_size = layout.blob_index_size;
+    let row = *layout.offsets.get(32)?;
     let major = read_u16(tables, row + 4)?;
     let minor = read_u16(tables, row + 6)?;
     let build = read_u16(tables, row + 8)?;
@@ -9162,6 +9164,85 @@ fn parse_clr_assembly_identity(tables: &[u8], strings: &[u8]) -> Option<String> 
     };
     let name = read_c_string(strings, name_index, 260)?;
     (!name.is_empty()).then(|| format!("{name} {major}.{minor}.{build}.{revision}"))
+}
+
+fn parse_clr_assembly_refs(tables: &[u8], strings: &[u8]) -> Vec<String> {
+    let Some(layout) = clr_tables_layout(tables) else {
+        return Vec::new();
+    };
+    let rows = layout.rows.get(35).copied().unwrap_or(0).min(16) as usize;
+    let mut refs = Vec::new();
+    let mut row = layout.offsets.get(35).copied().unwrap_or(0);
+    for _ in 0..rows {
+        if row + 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size > tables.len() {
+            break;
+        }
+        let major = read_u16(tables, row).unwrap_or(0);
+        let minor = read_u16(tables, row + 2).unwrap_or(0);
+        let build = read_u16(tables, row + 4).unwrap_or(0);
+        let revision = read_u16(tables, row + 6).unwrap_or(0);
+        let name_index_offset = row + 12 + layout.blob_index_size;
+        let name_index = read_clr_index(tables, name_index_offset, layout.string_index_size).unwrap_or(0) as usize;
+        if let Some(name) = read_c_string(strings, name_index, 260).filter(|name| !name.is_empty()) {
+            refs.push(format!("{name} {major}.{minor}.{build}.{revision}"));
+        }
+        row += 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size;
+    }
+    refs
+}
+
+struct ClrTablesLayout {
+    rows: [u32; 64],
+    offsets: [usize; 64],
+    string_index_size: usize,
+    blob_index_size: usize,
+}
+
+fn clr_tables_layout(tables: &[u8]) -> Option<ClrTablesLayout> {
+    if tables.len() < 24 {
+        return None;
+    }
+    let heap_sizes = *tables.get(6)?;
+    let valid = read_u64(tables, 8)?;
+    let string_index_size = if heap_sizes & 0x01 != 0 { 4 } else { 2 };
+    let guid_index_size = if heap_sizes & 0x02 != 0 { 4 } else { 2 };
+    let blob_index_size = if heap_sizes & 0x04 != 0 { 4 } else { 2 };
+    let mut rows = [0u32; 64];
+    let mut offset = 24usize;
+    for table in 0..64 {
+        if valid & (1u64 << table) == 0 {
+            continue;
+        }
+        rows[table] = read_u32(tables, offset)?;
+        offset += 4;
+    }
+    let mut offsets = [0usize; 64];
+    for table in 0..64 {
+        if rows[table] == 0 {
+            continue;
+        }
+        offsets[table] = offset;
+        let row_size = clr_table_row_size(table, string_index_size, guid_index_size, blob_index_size)?;
+        offset = offset.checked_add(row_size.checked_mul(rows[table] as usize)?)?;
+    }
+    Some(ClrTablesLayout { rows, offsets, string_index_size, blob_index_size })
+}
+
+fn clr_table_row_size(table: usize, string_index_size: usize, guid_index_size: usize, blob_index_size: usize) -> Option<usize> {
+    match table {
+        0 => Some(2 + string_index_size + guid_index_size * 3),
+        32 => Some(16 + blob_index_size + string_index_size * 2),
+        35 => Some(12 + blob_index_size + string_index_size * 2 + blob_index_size),
+        _ => None,
+    }
+}
+
+fn read_clr_index(bytes: &[u8], offset: usize, size: usize) -> Option<u32> {
+    match size {
+        2 => read_u16(bytes, offset).map(u32::from),
+        4 => read_u32(bytes, offset),
+        _ => None,
+    }
 }
 
 fn read_ascii_z(bytes: &[u8], offset: usize, limit: usize) -> Option<(String, usize)> {
@@ -13390,21 +13471,29 @@ mod tests {
             bytes[16..27].copy_from_slice(b"v4.0.30319\0");
             bytes[30..32].copy_from_slice(&2u16.to_le_bytes());
             bytes[32..36].copy_from_slice(&0x80u32.to_le_bytes());
-            bytes[36..40].copy_from_slice(&0x40u32.to_le_bytes());
+            bytes[36..40].copy_from_slice(&0x60u32.to_le_bytes());
             bytes[40..43].copy_from_slice(b"#~\0");
-            bytes[44..48].copy_from_slice(&0xC0u32.to_le_bytes());
-            bytes[48..52].copy_from_slice(&0x20u32.to_le_bytes());
+            bytes[44..48].copy_from_slice(&0xE0u32.to_le_bytes());
+            bytes[48..52].copy_from_slice(&0x40u32.to_le_bytes());
             bytes[52..61].copy_from_slice(b"#Strings\0");
             bytes[0x80 + 4] = 2;
-            bytes[0x80 + 8..0x80 + 16].copy_from_slice(&(1u64 << 32).to_le_bytes());
+            bytes[0x80 + 8..0x80 + 16].copy_from_slice(&((1u64 << 32) | (1u64 << 35)).to_le_bytes());
             bytes[0x80 + 24..0x80 + 28].copy_from_slice(&1u32.to_le_bytes());
-            let row = 0x80 + 28;
+            bytes[0x80 + 28..0x80 + 32].copy_from_slice(&1u32.to_le_bytes());
+            let row = 0x80 + 32;
             bytes[row + 4..row + 6].copy_from_slice(&1u16.to_le_bytes());
             bytes[row + 6..row + 8].copy_from_slice(&2u16.to_le_bytes());
             bytes[row + 8..row + 10].copy_from_slice(&3u16.to_le_bytes());
             bytes[row + 10..row + 12].copy_from_slice(&4u16.to_le_bytes());
             bytes[row + 18..row + 20].copy_from_slice(&1u16.to_le_bytes());
-            bytes[0xC1..0xC9].copy_from_slice(b"QuickAsm");
+            let assembly_ref = row + 22;
+            bytes[assembly_ref..assembly_ref + 2].copy_from_slice(&5u16.to_le_bytes());
+            bytes[assembly_ref + 2..assembly_ref + 4].copy_from_slice(&6u16.to_le_bytes());
+            bytes[assembly_ref + 4..assembly_ref + 6].copy_from_slice(&7u16.to_le_bytes());
+            bytes[assembly_ref + 6..assembly_ref + 8].copy_from_slice(&8u16.to_le_bytes());
+            bytes[assembly_ref + 14..assembly_ref + 16].copy_from_slice(&10u16.to_le_bytes());
+            bytes[0xE1..0xE9].copy_from_slice(b"QuickAsm");
+            bytes[0xEA..0xF0].copy_from_slice(b"RefAsm");
             bytes
         }
 
@@ -13506,7 +13595,7 @@ mod tests {
         bytes[0xA04..0xA06].copy_from_slice(&2u16.to_le_bytes());
         bytes[0xA06..0xA08].copy_from_slice(&5u16.to_le_bytes());
         bytes[0xA08..0xA0C].copy_from_slice(&0x3700u32.to_le_bytes());
-        bytes[0xA0C..0xA10].copy_from_slice(&0x100u32.to_le_bytes());
+        bytes[0xA0C..0xA10].copy_from_slice(&0x140u32.to_le_bytes());
         bytes[0xA10..0xA14].copy_from_slice(&1u32.to_le_bytes());
         let metadata = clr_metadata_root();
         bytes[0xB00..0xB00 + metadata.len()].copy_from_slice(&metadata);
@@ -13550,8 +13639,9 @@ mod tests {
         let clr = pe.clr.as_ref().expect("clr summary");
         assert_eq!(clr.metadata_version, "v4.0.30319");
         assert_eq!(clr.metadata_streams, vec!["#~".to_string(), "#Strings".to_string()]);
-        assert_eq!(clr.metadata_tables, vec!["Assembly=1".to_string()]);
+        assert_eq!(clr.metadata_tables, vec!["Assembly=1".to_string(), "AssemblyRef=1".to_string()]);
         assert_eq!(clr.assembly.as_deref(), Some("QuickAsm 1.2.3.4"));
+        assert_eq!(clr.assembly_refs, vec!["RefAsm 5.6.7.8".to_string()]);
         assert_eq!(
             pe.section_names,
             vec![".text".to_string(), ".data".to_string()]
