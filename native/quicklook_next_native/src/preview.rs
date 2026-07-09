@@ -8241,6 +8241,7 @@ fn parse_hevc_sps_summary(sps: &[u8]) -> Option<String> {
     }
     let luma_bits = bits.read_ue()?.checked_add(8)?;
     let chroma_bits = bits.read_ue()?.checked_add(8)?;
+    let vui_summary = parse_hevc_sps_vui_summary(&mut bits, max_sub_layers_minus1);
     let (crop_x, crop_y) = hevc_crop_units(chroma_format_idc);
     let display_width = coded_width.saturating_sub((crop.0 + crop.1).saturating_mul(crop_x));
     let display_height = coded_height.saturating_sub((crop.2 + crop.3).saturating_mul(crop_y));
@@ -8251,6 +8252,72 @@ fn parse_hevc_sps_summary(sps: &[u8]) -> Option<String> {
     parts.push(format!("chroma {chroma_format_idc}"));
     parts.push(format!("{luma_bits}-bit luma"));
     parts.push(format!("{chroma_bits}-bit chroma"));
+    if let Some(vui_summary) = vui_summary {
+        parts.push(vui_summary);
+    }
+    Some(parts.join(", "))
+}
+
+fn parse_hevc_sps_vui_summary(bits: &mut BitReader<'_>, max_sub_layers_minus1: usize) -> Option<String> {
+    bits.read_ue()?;
+    let ordering_info_all_layers = bits.read_bits(1)? == 0;
+    let start_layer = if ordering_info_all_layers { max_sub_layers_minus1 } else { 0 };
+    for _ in start_layer..=max_sub_layers_minus1 {
+        bits.read_ue()?;
+        bits.read_ue()?;
+        bits.read_ue()?;
+    }
+    for _ in 0..6 {
+        bits.read_ue()?;
+    }
+    if bits.read_bits(1)? != 0 {
+        return None;
+    }
+    bits.read_bits(1)?;
+    bits.read_bits(1)?;
+    if bits.read_bits(1)? != 0 {
+        return None;
+    }
+    if bits.read_ue()? != 0 {
+        return None;
+    }
+    bits.read_bits(1)?;
+    bits.read_bits(1)?;
+    bits.read_bits(1)?;
+    if bits.read_bits(1)? == 0 {
+        return None;
+    }
+    parse_hevc_vui_summary(bits)
+}
+
+fn parse_hevc_vui_summary(bits: &mut BitReader<'_>) -> Option<String> {
+    if bits.read_bits(1)? != 0 {
+        let aspect_ratio_idc = bits.read_bits(8)?;
+        if aspect_ratio_idc == 255 {
+            bits.read_bits(16)?;
+            bits.read_bits(16)?;
+        }
+    }
+    if bits.read_bits(1)? != 0 {
+        bits.read_bits(1)?;
+    }
+    let mut parts = vec!["VUI".to_string()];
+    if bits.read_bits(1)? != 0 {
+        let video_format = bits.read_bits(3)?;
+        let full_range = bits.read_bits(1)? != 0;
+        parts.push(format!("video format {video_format}"));
+        if full_range {
+            parts.push("full range".to_string());
+        }
+        if bits.read_bits(1)? != 0 {
+            let primaries = bits.read_bits(8)? as u8;
+            let transfer = bits.read_bits(8)? as u8;
+            let matrix = bits.read_bits(8)? as u8;
+            parts.push(format!("primaries {}", h264_color_primaries_name(primaries)));
+            parts.push(format!("transfer {}", h264_transfer_name(transfer)));
+            parts.push(format!("matrix {}", h264_matrix_name(matrix)));
+        }
+    }
     Some(parts.join(", "))
 }
 
@@ -14636,6 +14703,32 @@ mod tests {
         writer.ue(4);
         writer.ue(2);
         writer.ue(2);
+        writer.ue(0);
+        writer.bit(false);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(0);
+        for _ in 0..6 {
+            writer.ue(0);
+        }
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(false);
+        writer.ue(0);
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(true);
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(true);
+        writer.bits(5, 3);
+        writer.bit(true);
+        writer.bit(true);
+        writer.bits(9, 8);
+        writer.bits(16, 8);
+        writer.bits(9, 8);
         let mut sps = vec![0x42, 0x01];
         sps.extend_from_slice(&writer.finish());
 
@@ -14662,8 +14755,8 @@ mod tests {
         assert!(detail.contains("4-byte NAL length"));
         assert!(detail.contains("VPS 1, SPS 1, PPS 1"));
         assert!(detail.contains("VPS id 3, layers 2, sub-layers 1, temporal nesting yes"));
-        assert_eq!(sps_summary, "SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma");
-        assert!(detail.contains("SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma"));
+        assert_eq!(sps_summary, "SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma, VUI, video format 5, full range, primaries BT.2020, transfer PQ, matrix BT.2020 non-constant");
+        assert!(detail.contains("SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma, VUI, video format 5, full range, primaries BT.2020, transfer PQ, matrix BT.2020 non-constant"));
     }
 
     #[test]

@@ -37,7 +37,7 @@ then commit that item by itself.
 - [x] Summarize HEVC `hvcC` parameter set arrays and profile-level fields.
 - [x] Parse HEVC SPS for coded size, crop, bit depth, and chroma.
 - [x] Parse HEVC VPS metadata when present.
-- [ ] Parse HEVC/HDR-adjacent metadata when present.
+- [x] Parse HEVC/HDR-adjacent metadata when present.
 
 ### PE / CLR
 
