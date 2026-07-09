@@ -1,6 +1,7 @@
 param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
-    [switch]$RequireSamples
+    [switch]$RequireSamples,
+    [switch]$AllowMissingSamples
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +31,7 @@ if ($missing.Count -gt 0) {
     foreach ($item in $missing) {
         Write-Host " - $item"
     }
-    if ($RequireSamples) {
+    if (-not $AllowMissingSamples) {
         exit 1
     }
 }
@@ -39,8 +40,8 @@ Write-Host "image corpus guard passed" -ForegroundColor Green
 
 $smoke = Join-Path $PSScriptRoot "smoke-image-corpus.ps1"
 if (Test-Path -LiteralPath $smoke) {
-    if ($RequireSamples) { & $smoke -Root $Root -RequireSamples }
-    else { & $smoke -Root $Root }
+    if ($AllowMissingSamples) { & $smoke -Root $Root }
+    else { & $smoke -Root $Root -RequireSamples }
 }
 
 $capabilities = Join-Path $PSScriptRoot "report-image-capabilities.ps1"
