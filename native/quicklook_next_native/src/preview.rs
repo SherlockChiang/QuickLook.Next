@@ -5939,6 +5939,9 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !needed.is_empty() {
         text.push_str(&format!("\nNeeded libraries: {}", needed.join(", ")));
     }
+    for (label, value) in elf_dynamic_string_tags(bytes, class, endian) {
+        text.push_str(&format!("\n{label}: {value}"));
+    }
     let sections = elf_section_names(bytes, class, endian);
     if !sections.is_empty() {
         text.push_str(&format!("\nSection names: {}", sections.join(", ")));
@@ -6026,6 +6029,53 @@ fn elf_needed_libraries(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
         .into_iter()
         .filter_map(|name_offset| read_c_string(bytes, strtab_offset + name_offset as usize, 260))
         .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn elf_dynamic_string_tags(bytes: &[u8], class: u8, endian: u8) -> Vec<(&'static str, String)> {
+    let headers = elf_program_headers(bytes, class, endian);
+    let Some(dynamic) = headers.iter().find(|header| header.typ == 2) else {
+        return Vec::new();
+    };
+    let mut strtab_vaddr = 0u64;
+    let mut tagged_offsets = Vec::new();
+    let entry_size = if class == 2 { 16usize } else { 8usize };
+    let mut offset = dynamic.file_offset as usize;
+    let end = offset.saturating_add(dynamic.file_size as usize).min(bytes.len());
+    while offset + entry_size <= end && tagged_offsets.len() < 16 {
+        let tag = if class == 2 {
+            read_u64_endian(bytes, offset, endian).unwrap_or(0)
+        } else {
+            read_u32_endian(bytes, offset, endian).unwrap_or(0) as u64
+        };
+        let value = if class == 2 {
+            read_u64_endian(bytes, offset + 8, endian).unwrap_or(0)
+        } else {
+            read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as u64
+        };
+        match tag {
+            0 => break,
+            5 => strtab_vaddr = value,
+            14 => tagged_offsets.push(("SONAME", value)),
+            15 => tagged_offsets.push(("RPATH", value)),
+            29 => tagged_offsets.push(("RUNPATH", value)),
+            _ => {}
+        }
+        offset += entry_size;
+    }
+    if strtab_vaddr == 0 {
+        return Vec::new();
+    }
+    let Some(strtab_offset) = elf_vaddr_to_file_offset(&headers, strtab_vaddr) else {
+        return Vec::new();
+    };
+    tagged_offsets
+        .into_iter()
+        .filter_map(|(label, name_offset)| {
+            read_c_string(bytes, strtab_offset + name_offset as usize, 260)
+                .filter(|value| !value.is_empty())
+                .map(|value| (label, value))
+        })
         .collect()
 }
 
@@ -12983,13 +13033,19 @@ mod tests {
         bytes[0xA0..0xA8].copy_from_slice(&0x400u64.to_le_bytes());
         bytes[0xB0..0xB4].copy_from_slice(&2u32.to_le_bytes());
         bytes[0xB8..0xC0].copy_from_slice(&0x200u64.to_le_bytes());
-        bytes[0xD0..0xD8].copy_from_slice(&48u64.to_le_bytes());
+        bytes[0xD0..0xD8].copy_from_slice(&80u64.to_le_bytes());
         bytes[0x200..0x208].copy_from_slice(&5u64.to_le_bytes());
         bytes[0x208..0x210].copy_from_slice(&0x400280u64.to_le_bytes());
         bytes[0x210..0x218].copy_from_slice(&1u64.to_le_bytes());
         bytes[0x218..0x220].copy_from_slice(&0u64.to_le_bytes());
-        bytes[0x220..0x228].copy_from_slice(&0u64.to_le_bytes());
+        bytes[0x220..0x228].copy_from_slice(&14u64.to_le_bytes());
+        bytes[0x228..0x230].copy_from_slice(&10u64.to_le_bytes());
+        bytes[0x230..0x238].copy_from_slice(&29u64.to_le_bytes());
+        bytes[0x238..0x240].copy_from_slice(&21u64.to_le_bytes());
+        bytes[0x240..0x248].copy_from_slice(&0u64.to_le_bytes());
         bytes[0x280..0x28A].copy_from_slice(b"libc.so.6\0");
+        bytes[0x28A..0x295].copy_from_slice(b"libdemo.so\0");
+        bytes[0x295..0x29D].copy_from_slice(b"$ORIGIN\0");
         bytes[0x300..0x31B].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2");
         bytes[0x540..0x544].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x580..0x584].copy_from_slice(&7u32.to_le_bytes());
@@ -13009,6 +13065,8 @@ mod tests {
         assert!(text.contains("Section header offset: 0x500"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
         assert!(text.contains("Needed libraries: libc.so.6"));
+        assert!(text.contains("SONAME: libdemo.so"));
+        assert!(text.contains("RUNPATH: $ORIGIN"));
         assert!(text.contains("Section names: .text, .shstrtab"));
     }
 }
