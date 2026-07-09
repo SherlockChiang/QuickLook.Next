@@ -7739,6 +7739,15 @@ pub fn render_executable(path: &str) -> String {
     if !pe.imports.is_empty() {
         text.push_str(&format!("Imports: {}\n", pe.imports.join(", ")));
     }
+    if !pe.imported_functions.is_empty() {
+        text.push_str(&format!(
+            "Imported functions: {}\n",
+            pe.imported_functions.join(", ")
+        ));
+    }
+    if !pe.exports.is_empty() {
+        text.push_str(&format!("Exports: {}\n", pe.exports.join(", ")));
+    }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
 
@@ -7772,6 +7781,8 @@ struct PeSummary {
     section_names: Vec<String>,
     directories: Vec<PeDataDirectory>,
     imports: Vec<String>,
+    imported_functions: Vec<String>,
+    exports: Vec<String>,
 }
 
 struct PeDataDirectory {
@@ -7830,6 +7841,16 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         .find(|directory| directory.name == "Import")
         .map(|directory| parse_pe_import_dlls(bytes, &section_summaries, directory.address))
         .unwrap_or_default();
+    let imported_functions = directories
+        .iter()
+        .find(|directory| directory.name == "Import")
+        .map(|directory| parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B))
+        .unwrap_or_default();
+    let exports = directories
+        .iter()
+        .find(|directory| directory.name == "Export")
+        .map(|directory| parse_pe_export_names(bytes, &section_summaries, directory.address))
+        .unwrap_or_default();
 
     Some(PeSummary {
         machine: machine_name(machine),
@@ -7852,6 +7873,8 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         section_names,
         directories,
         imports,
+        imported_functions,
+        exports,
     })
 }
 
@@ -7954,6 +7977,97 @@ fn parse_pe_import_dlls(bytes: &[u8], sections: &[PeSectionSummary], import_rva:
         offset += 20;
     }
     imports
+}
+
+fn parse_pe_import_functions(bytes: &[u8], sections: &[PeSectionSummary], import_rva: u32, pe64: bool) -> Vec<String> {
+    let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
+        return Vec::new();
+    };
+    let mut functions = Vec::new();
+    for _ in 0..64 {
+        if offset + 20 > bytes.len() {
+            break;
+        }
+        let original_first_thunk = read_u32(bytes, offset).unwrap_or(0);
+        let name_rva = read_u32(bytes, offset + 12).unwrap_or(0);
+        let first_thunk = read_u32(bytes, offset + 16).unwrap_or(0);
+        if original_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
+            break;
+        }
+        let dll = pe_rva_to_file_offset(sections, name_rva)
+            .and_then(|name_offset| read_c_string(bytes, name_offset, 260))
+            .unwrap_or_default();
+        let thunk_rva = if original_first_thunk != 0 { original_first_thunk } else { first_thunk };
+        append_pe_import_thunks(bytes, sections, thunk_rva, pe64, &dll, &mut functions);
+        offset += 20;
+    }
+    functions
+}
+
+fn append_pe_import_thunks(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    thunk_rva: u32,
+    pe64: bool,
+    dll: &str,
+    functions: &mut Vec<String>,
+) {
+    let Some(mut offset) = pe_rva_to_file_offset(sections, thunk_rva) else {
+        return;
+    };
+    let thunk_size = if pe64 { 8 } else { 4 };
+    for _ in 0..128 {
+        let value = if pe64 {
+            read_u64(bytes, offset).unwrap_or(0)
+        } else {
+            read_u32(bytes, offset).unwrap_or(0) as u64
+        };
+        if value == 0 {
+            break;
+        }
+        let ordinal_mask = if pe64 { 0x8000_0000_0000_0000 } else { 0x8000_0000 };
+        if value & ordinal_mask == 0 {
+            if let Some(name_offset) = pe_rva_to_file_offset(sections, value as u32) {
+                if let Some(name) = read_c_string(bytes, name_offset + 2, 260) {
+                    if !name.is_empty() {
+                        let qualified = if dll.is_empty() { name } else { format!("{dll}!{name}") };
+                        if !functions.iter().any(|existing| existing.eq_ignore_ascii_case(&qualified)) {
+                            functions.push(qualified);
+                        }
+                    }
+                }
+            }
+        }
+        offset += thunk_size;
+    }
+}
+
+fn parse_pe_export_names(bytes: &[u8], sections: &[PeSectionSummary], export_rva: u32) -> Vec<String> {
+    let Some(offset) = pe_rva_to_file_offset(sections, export_rva) else {
+        return Vec::new();
+    };
+    if offset + 40 > bytes.len() {
+        return Vec::new();
+    }
+    let names = read_u32(bytes, offset + 24).unwrap_or(0).min(256) as usize;
+    let names_rva = read_u32(bytes, offset + 32).unwrap_or(0);
+    let Some(names_offset) = pe_rva_to_file_offset(sections, names_rva) else {
+        return Vec::new();
+    };
+    let mut exports = Vec::new();
+    for index in 0..names {
+        let Some(name_rva) = read_u32(bytes, names_offset + index * 4) else {
+            break;
+        };
+        if let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) {
+            if let Some(name) = read_c_string(bytes, name_offset, 260) {
+                if !name.is_empty() {
+                    exports.push(name);
+                }
+            }
+        }
+    }
+    exports
 }
 
 fn pe_rva_to_file_offset(sections: &[PeSectionSummary], rva: u32) -> Option<usize> {
@@ -12016,7 +12130,7 @@ mod tests {
 
     #[test]
     fn pe_summary_reads_optional_headers_and_sections() {
-        let mut bytes = vec![0u8; 1536];
+        let mut bytes = vec![0u8; 4096];
         bytes[0..2].copy_from_slice(b"MZ");
         bytes[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
         bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
@@ -12034,6 +12148,8 @@ mod tests {
         bytes[opt + 68..opt + 70].copy_from_slice(&2u16.to_le_bytes());
         bytes[opt + 70..opt + 72].copy_from_slice(&0x8160u16.to_le_bytes());
         bytes[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+        bytes[opt + 112..opt + 116].copy_from_slice(&0x3300u32.to_le_bytes());
+        bytes[opt + 116..opt + 120].copy_from_slice(&0x80u32.to_le_bytes());
         bytes[opt + 120..opt + 124].copy_from_slice(&0x3000u32.to_le_bytes());
         bytes[opt + 124..opt + 128].copy_from_slice(&0x80u32.to_le_bytes());
         bytes[opt + 128..opt + 132].copy_from_slice(&0x4000u32.to_le_bytes());
@@ -12045,13 +12161,21 @@ mod tests {
         bytes[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
         bytes[section_table + 20..section_table + 24].copy_from_slice(&0x200u32.to_le_bytes());
         bytes[section_table + 40..section_table + 45].copy_from_slice(b".data");
-        bytes[section_table + 48..section_table + 52].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[section_table + 48..section_table + 52].copy_from_slice(&0x2000u32.to_le_bytes());
         bytes[section_table + 52..section_table + 56].copy_from_slice(&0x3000u32.to_le_bytes());
-        bytes[section_table + 56..section_table + 60].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[section_table + 56..section_table + 60].copy_from_slice(&0x1000u32.to_le_bytes());
         bytes[section_table + 60..section_table + 64].copy_from_slice(&0x400u32.to_le_bytes());
+        bytes[0x400..0x404].copy_from_slice(&0x3120u32.to_le_bytes());
         bytes[0x400 + 12..0x400 + 16].copy_from_slice(&0x3100u32.to_le_bytes());
         bytes[0x400 + 16..0x400 + 20].copy_from_slice(&0x3200u32.to_le_bytes());
         bytes[0x500..0x50C].copy_from_slice(b"KERNEL32.dll");
+        bytes[0x520..0x524].copy_from_slice(&0x3140u32.to_le_bytes());
+        bytes[0x540..0x542].copy_from_slice(&0u16.to_le_bytes());
+        bytes[0x542..0x54D].copy_from_slice(b"CreateFileW");
+        bytes[0x700 + 24..0x700 + 28].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x700 + 32..0x700 + 36].copy_from_slice(&0x3340u32.to_le_bytes());
+        bytes[0x740..0x744].copy_from_slice(&0x3360u32.to_le_bytes());
+        bytes[0x760..0x76D].copy_from_slice(b"PreviewExport");
 
         let pe = parse_pe_headers(&bytes).expect("pe summary");
 
@@ -12060,10 +12184,13 @@ mod tests {
         assert_eq!(pe.section_alignment, 0x1000);
         assert_eq!(pe.dll_characteristics, 0x8160);
         assert_eq!(pe.data_directories, 16);
-        assert_eq!(pe.directories.len(), 2);
-        assert_eq!(pe.directories[0].name, "Import");
-        assert_eq!(pe.directories[1].name, "Resource");
+        assert_eq!(pe.directories.len(), 3);
+        assert_eq!(pe.directories[0].name, "Export");
+        assert_eq!(pe.directories[1].name, "Import");
+        assert_eq!(pe.directories[2].name, "Resource");
         assert_eq!(pe.imports, vec!["KERNEL32.dll".to_string()]);
+        assert_eq!(pe.imported_functions, vec!["KERNEL32.dll!CreateFileW".to_string()]);
+        assert_eq!(pe.exports, vec!["PreviewExport".to_string()]);
         assert_eq!(
             pe.section_names,
             vec![".text".to_string(), ".data".to_string()]
