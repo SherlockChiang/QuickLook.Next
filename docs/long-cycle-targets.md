@@ -28,10 +28,12 @@ then commit that item by itself.
 
 ### MP4 / MOV
 
-- [ ] Expand `stts` / `ctts` / `elst` into a bounded sample timeline summary.
-- [ ] Add bounded per-chunk / per-sample byte mapping details from `stsc`,
+- [x] Expand `stts` into a bounded sample timeline summary.
+- [x] Add bounded per-chunk / per-sample byte mapping details from `stsc`,
   `stsz`, and `stco` / `co64`.
-- [ ] Parse AVC SPS for coded size, crop, color, and VUI summary.
+- [x] Parse AVC SPS for coded size, crop, and VUI summary.
+- [ ] Extend `ctts` / `elst` into the bounded sample timeline summary.
+- [ ] Parse AVC SPS color details from VUI when present.
 - [ ] Parse HEVC SPS/VPS for coded size, profile, level, bit depth, chroma, and
   HDR-adjacent metadata when present.
 
@@ -39,9 +41,9 @@ then commit that item by itself.
 
 - [ ] Parse Authenticode PKCS#7 signer, certificate subject/issuer, and digest
   algorithms from the certificate table.
-- [ ] Decode CLR metadata table stream row counts.
-- [ ] Summarize CLR assembly references.
-- [ ] Summarize CLR type definitions and custom attributes with strict caps.
+- [x] Decode CLR metadata table stream row counts.
+- [x] Summarize CLR assembly references.
+- [x] Summarize CLR type definitions and custom attributes with strict caps.
 
 ### ELF
 
