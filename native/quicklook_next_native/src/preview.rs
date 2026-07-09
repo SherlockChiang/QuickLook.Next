@@ -6682,6 +6682,9 @@ struct Mp4TrackSummary {
     decode_ticks: Option<u64>,
     first_sample_delta: Option<u32>,
     composition_entries: Option<u32>,
+    composition_samples: Option<u64>,
+    first_composition_offset: Option<i64>,
+    composition_offset_range: Option<(i64, i64)>,
     edit_entries: Option<u32>,
     chunks: Option<u32>,
     first_chunk_offset: Option<u64>,
@@ -6769,6 +6772,15 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
         if let Some(entries) = track.composition_entries {
             text.push_str(&format!("\n{} composition offsets: {}", track.kind, entries));
         }
+        if let Some(samples) = track.composition_samples {
+            text.push_str(&format!("\n{} composition samples: {}", track.kind, format_number(samples as i64)));
+        }
+        if let Some(offset) = track.first_composition_offset {
+            text.push_str(&format!("\n{} first composition offset: {}", track.kind, offset));
+        }
+        if let Some((min, max)) = track.composition_offset_range {
+            text.push_str(&format!("\n{} composition offset range: {}..{}", track.kind, min, max));
+        }
         if let Some(entries) = track.edit_entries {
             text.push_str(&format!("\n{} edit list entries: {}", track.kind, entries));
         }
@@ -6832,7 +6844,14 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
             summary.first_sample_delta = timeline.first_delta;
         }
     }
-    summary.composition_entries = find_mp4_atom_payload(trak, b"ctts").and_then(parse_mp4_entry_count);
+    if let Some(ctts) = find_mp4_atom_payload(trak, b"ctts") {
+        summary.composition_entries = parse_mp4_entry_count(ctts);
+        if let Some(composition) = parse_ctts_summary(ctts) {
+            summary.composition_samples = Some(composition.samples);
+            summary.first_composition_offset = composition.first_offset;
+            summary.composition_offset_range = composition.offset_range;
+        }
+    }
     summary.edit_entries = find_mp4_atom_payload(trak, b"elst").and_then(parse_mp4_entry_count);
     if let Some(chunk_summary) = parse_mp4_chunk_summary(trak) {
         summary.chunks = Some(chunk_summary.chunks);
@@ -7338,6 +7357,42 @@ struct Mp4SttsTimeline {
     samples: u64,
     decode_ticks: u64,
     first_delta: Option<u32>,
+}
+
+struct Mp4CttsSummary {
+    samples: u64,
+    first_offset: Option<i64>,
+    offset_range: Option<(i64, i64)>,
+}
+
+fn parse_ctts_summary(payload: &[u8]) -> Option<Mp4CttsSummary> {
+    let version = *payload.first()?;
+    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
+    let mut offset = 8usize;
+    let mut samples = 0u64;
+    let mut first_offset = None;
+    let mut min_offset = i64::MAX;
+    let mut max_offset = i64::MIN;
+    for _ in 0..entries {
+        let sample_count = read_u32_be(payload, offset)? as u64;
+        let composition_offset = if version == 1 {
+            read_i32_be(payload, offset + 4)? as i64
+        } else {
+            read_u32_be(payload, offset + 4)? as i64
+        };
+        if first_offset.is_none() {
+            first_offset = Some(composition_offset);
+        }
+        min_offset = min_offset.min(composition_offset);
+        max_offset = max_offset.max(composition_offset);
+        samples = samples.checked_add(sample_count)?;
+        offset = offset.checked_add(8)?;
+    }
+    Some(Mp4CttsSummary {
+        samples,
+        first_offset,
+        offset_range: first_offset.map(|_| (min_offset, max_offset)),
+    })
 }
 
 fn parse_stts_timeline(payload: &[u8]) -> Option<Mp4SttsTimeline> {
@@ -13180,8 +13235,10 @@ mod tests {
         stts_payload[8..12].copy_from_slice(&90u32.to_be_bytes());
         stts_payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
         let stts = atom(b"stts", &stts_payload);
-        let mut ctts_payload = vec![0u8; 8];
+        let mut ctts_payload = vec![0u8; 16];
         ctts_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        ctts_payload[8..12].copy_from_slice(&90u32.to_be_bytes());
+        ctts_payload[12..16].copy_from_slice(&40u32.to_be_bytes());
         let ctts = atom(b"ctts", &ctts_payload);
         let mut elst_payload = vec![0u8; 8];
         elst_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
@@ -13219,6 +13276,9 @@ mod tests {
         assert_eq!(summary.tracks[0].decode_ticks, Some(90_000));
         assert_eq!(summary.tracks[0].first_sample_delta, Some(1000));
         assert_eq!(summary.tracks[0].composition_entries, Some(1));
+        assert_eq!(summary.tracks[0].composition_samples, Some(90));
+        assert_eq!(summary.tracks[0].first_composition_offset, Some(40));
+        assert_eq!(summary.tracks[0].composition_offset_range, Some((40, 40)));
         assert_eq!(summary.tracks[0].edit_entries, Some(1));
         assert_eq!(summary.tracks[0].chunks, Some(2));
         assert_eq!(summary.tracks[0].first_chunk_offset, Some(1000));
