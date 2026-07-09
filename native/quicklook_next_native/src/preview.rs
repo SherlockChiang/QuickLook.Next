@@ -7427,7 +7427,47 @@ fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     if let Some(chroma_bits) = chroma_bits {
         parts.push(format!("{}-bit chroma", chroma_bits));
     }
+    if let Some(arrays) = parse_hvcc_array_summary(payload) {
+        parts.push(arrays);
+    }
     Some(parts.join(", "))
+}
+
+fn parse_hvcc_array_summary(payload: &[u8]) -> Option<String> {
+    let arrays = *payload.get(22)? as usize;
+    let mut offset = 23usize;
+    let mut vps = 0u32;
+    let mut sps = 0u32;
+    let mut pps = 0u32;
+    for _ in 0..arrays.min(32) {
+        let nal_type = *payload.get(offset)? & 0x3F;
+        let nal_count = read_u16_be(payload, offset + 1)? as usize;
+        offset += 3;
+        match nal_type {
+            32 => vps = vps.saturating_add(nal_count as u32),
+            33 => sps = sps.saturating_add(nal_count as u32),
+            34 => pps = pps.saturating_add(nal_count as u32),
+            _ => {}
+        }
+        for _ in 0..nal_count.min(256) {
+            let len = read_u16_be(payload, offset)? as usize;
+            offset = offset.checked_add(2 + len)?;
+            if offset > payload.len() {
+                return None;
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if vps > 0 {
+        parts.push(format!("VPS {vps}"));
+    }
+    if sps > 0 {
+        parts.push(format!("SPS {sps}"));
+    }
+    if pps > 0 {
+        parts.push(format!("PPS {pps}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
@@ -13576,6 +13616,27 @@ mod tests {
         avcc.push(0);
         let detail = parse_avcc_detail(&avcc).expect("avcC detail");
         assert!(detail.contains("SPS coded 640x368, crop display 640x360, VUI, video format 5, full range, primaries BT.709, transfer BT.709, matrix BT.709"));
+    }
+
+    #[test]
+    fn hevc_config_summary_reads_parameter_set_arrays() {
+        let mut hvcc = vec![0u8; 23];
+        hvcc[1] = 1;
+        hvcc[12] = 120;
+        hvcc[16] = 1;
+        hvcc[17] = 2;
+        hvcc[18] = 2;
+        hvcc[21] = 3;
+        hvcc[22] = 3;
+        hvcc.extend_from_slice(&[0xA0, 0, 1, 0, 1, 0xAA]);
+        hvcc.extend_from_slice(&[0xA1, 0, 1, 0, 1, 0xBB]);
+        hvcc.extend_from_slice(&[0xA2, 0, 1, 0, 1, 0xCC]);
+
+        let detail = parse_hvcc_detail(&hvcc).expect("hvcC detail");
+
+        assert!(detail.contains("HEVC profile 1"));
+        assert!(detail.contains("4-byte NAL length"));
+        assert!(detail.contains("VPS 1, SPS 1, PPS 1"));
     }
 
     #[test]
