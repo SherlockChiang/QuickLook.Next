@@ -5718,7 +5718,7 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
             if let Some(filename) = filename {
                 summary.push_str(&format!(" filename={filename}"));
             }
-            if let Some(encoding) = encoding {
+            if let Some(encoding) = &encoding {
                 summary.push_str(&format!(" encoding={encoding}"));
             }
             let body_len = body
@@ -5726,9 +5726,54 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
                 .as_bytes()
                 .len();
             summary.push_str(&format!(" body={body_len} bytes"));
+            if let Some(decoded_len) = encoding
+                .as_deref()
+                .and_then(|encoding| mail_decoded_body_len(body, encoding))
+            {
+                summary.push_str(&format!(" decoded={decoded_len} bytes"));
+            }
             Some(summary)
         })
         .collect()
+}
+
+fn mail_decoded_body_len(body: &str, encoding: &str) -> Option<usize> {
+    let trimmed = body.trim_matches(|ch| ch == '\r' || ch == '\n');
+    if trimmed.len() > 1024 * 1024 {
+        return None;
+    }
+    if encoding.eq_ignore_ascii_case("base64") {
+        decode_base64(trimmed).map(|bytes| bytes.len())
+    } else if encoding.eq_ignore_ascii_case("quoted-printable") {
+        quoted_printable_decoded_len(trimmed.as_bytes())
+    } else {
+        None
+    }
+}
+
+fn quoted_printable_decoded_len(bytes: &[u8]) -> Option<usize> {
+    let mut len = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'=' {
+            if bytes.get(index + 1) == Some(&b'\r') && bytes.get(index + 2) == Some(&b'\n') {
+                index += 3;
+                continue;
+            }
+            if bytes.get(index + 1) == Some(&b'\n') {
+                index += 2;
+                continue;
+            }
+            if index + 2 < bytes.len() && hex_nibble(bytes[index + 1]).is_some() && hex_nibble(bytes[index + 2]).is_some() {
+                len += 1;
+                index += 3;
+                continue;
+            }
+        }
+        len += 1;
+        index += 1;
+    }
+    Some(len)
 }
 
 fn mail_attachment_filename_from_disposition(line: &str) -> Option<String> {
@@ -14455,8 +14500,8 @@ mod tests {
         assert_eq!(
             mail_mime_part_summaries(content, "abc"),
             vec![
-                "text/plain encoding=quoted-printable body=5 bytes".to_string(),
-                "application/pdf (attachment) filename=report.pdf encoding=base64 body=8 bytes".to_string(),
+                "text/plain encoding=quoted-printable body=5 bytes decoded=5 bytes".to_string(),
+                "application/pdf (attachment) filename=report.pdf encoding=base64 body=8 bytes decoded=4 bytes".to_string(),
             ]
         );
     }

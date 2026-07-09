@@ -76,7 +76,7 @@ then commit that item by itself.
 ### Mail / MSG
 
 - [ ] Build a nested MIME tree instead of a flat boundary summary.
-- [ ] Decode transfer-encoded body sizes for base64 and quoted-printable with
+- [x] Decode transfer-encoded body sizes for base64 and quoted-printable with
   strict caps.
 - [ ] Add bounded body preview for text/plain parts.
 - [ ] Parse Outlook MSG compound-file properties for sender, recipients, subject,
@@ -94,4 +94,4 @@ then commit that item by itself.
   MiscInfo.
 - CHM ITSF metadata and ITSP directory header.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
-  transfer encoding, and body byte sizes.
+  transfer encoding, body byte sizes, and decoded transfer sizes.
