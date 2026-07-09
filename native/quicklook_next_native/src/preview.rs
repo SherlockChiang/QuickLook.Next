@@ -6464,7 +6464,24 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
                 continue;
             }
             if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 128).filter(|name| !name.is_empty()) {
-                named.push(name);
+                let (info, shndx) = if class == 2 {
+                    (
+                        bytes.get(offset + 4).copied().unwrap_or(0),
+                        read_u16_endian(bytes, offset + 6, endian).unwrap_or(0),
+                    )
+                } else {
+                    (
+                        bytes.get(offset + 12).copied().unwrap_or(0),
+                        read_u16_endian(bytes, offset + 14, endian).unwrap_or(0),
+                    )
+                };
+                named.push(format!(
+                    "{}[{} {} {}]",
+                    name,
+                    elf_symbol_binding_name(info >> 4),
+                    elf_symbol_type_name(info & 0x0F),
+                    elf_symbol_section_name(&sections, shndx)
+                ));
                 if named.len() >= 8 {
                     break;
                 }
@@ -6475,6 +6492,44 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
         }
     }
     symbols
+}
+
+fn elf_symbol_binding_name(value: u8) -> &'static str {
+    match value {
+        0 => "local",
+        1 => "global",
+        2 => "weak",
+        10..=12 => "os",
+        13..=15 => "proc",
+        _ => "unknown",
+    }
+}
+
+fn elf_symbol_type_name(value: u8) -> &'static str {
+    match value {
+        0 => "notype",
+        1 => "object",
+        2 => "func",
+        3 => "section",
+        4 => "file",
+        5 => "common",
+        6 => "tls",
+        10..=12 => "os",
+        13..=15 => "proc",
+        _ => "unknown",
+    }
+}
+
+fn elf_symbol_section_name(sections: &[ElfSection], shndx: u16) -> String {
+    match shndx {
+        0 => "UND".to_string(),
+        0xFFF1 => "ABS".to_string(),
+        0xFFF2 => "COMMON".to_string(),
+        value => sections
+            .get(value as usize)
+            .and_then(|section| (!section.name.is_empty()).then_some(section.name.clone()))
+            .unwrap_or_else(|| format!("section {value}")),
+    }
 }
 
 fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
@@ -14682,6 +14737,7 @@ mod tests {
         bytes[0x740..0x744].copy_from_slice(&0u32.to_le_bytes());
         bytes[0x758..0x75C].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x75C] = 0x12;
+        bytes[0x75E..0x760].copy_from_slice(&1u16.to_le_bytes());
         bytes[0x780..0x78D].copy_from_slice(b"\0main\0helper\0");
         bytes[0x7B0..0x7B4].copy_from_slice(&4u32.to_le_bytes());
         bytes[0x7B4..0x7B8].copy_from_slice(&4u32.to_le_bytes());
@@ -14705,7 +14761,7 @@ mod tests {
         assert!(text.contains("SONAME: libdemo.so"));
         assert!(text.contains("RUNPATH: $ORIGIN"));
         assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn, .note.gnu.build-id"));
-        assert!(text.contains("Symbols: .symtab 2 entries (main)"));
+        assert!(text.contains("Symbols: .symtab 2 entries (main[global func .text])"));
         assert!(text.contains("Relocations: .rela.dyn 1 entries (R_X86_64_RELATIVE)"));
         assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
     }
