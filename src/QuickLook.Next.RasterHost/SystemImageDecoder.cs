@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using QuickLook.Next.Core;
@@ -9,6 +10,7 @@ internal static class SystemImageDecoder
     private const uint MaxPreviewRasterDimension = 2048;
     private const int MaxDecodedImageBytes = (int)(MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
     private const long MaxInputImageBytes = 512L * 1024 * 1024;
+    private static readonly ConcurrentDictionary<string, byte> UnsupportedSystemCodecs = new(StringComparer.OrdinalIgnoreCase);
 
     public static async Task<NativeDecodedImage?> TryDecodeAsync(
         string path,
@@ -18,6 +20,13 @@ internal static class SystemImageDecoder
     {
         try
         {
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (UnsupportedSystemCodecs.ContainsKey(ext))
+            {
+                DiagLog.Write("RasterHost", $"system image decode skipped unsupported ext={ext}; path={path}");
+                return null;
+            }
+
             if (IsTooLarge(path))
                 return null;
 
@@ -68,7 +77,7 @@ internal static class SystemImageDecoder
 
             DiagLog.Write(
                 "RasterHost",
-                $"system image decoded ext={Path.GetExtension(path).ToLowerInvariant()}; target={targetWidth}x{targetHeight}; " +
+                $"system image decoded ext={ext}; target={targetWidth}x{targetHeight}; " +
                 $"original={originalWidth}x{originalHeight}; output={width}x{height}; bytes={bgra.Length}");
 
             return new NativeDecodedImage(bgra, width, height, checked((int)originalWidth), checked((int)originalHeight));
@@ -79,9 +88,17 @@ internal static class SystemImageDecoder
         }
         catch (Exception ex)
         {
+            CacheUnsupportedSystemCodec(path);
             DiagLog.Write("RasterHost", $"system image decode failed: {ex.Message}");
             return null;
         }
+    }
+
+    private static void CacheUnsupportedSystemCodec(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".avif" or ".heic" or ".heif" or ".jxl")
+            UnsupportedSystemCodecs.TryAdd(ext, 0);
     }
 
     private static bool IsTooLarge(string path)
