@@ -4708,11 +4708,21 @@ fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> S
         "\nContainer: {}",
         media_container_name(path, &bytes)
     ));
-    if let Some(brand) = mp4_major_brand(&bytes) {
+    let mp4 = mp4_summary(&bytes);
+    if let Some(brand) = mp4.as_ref().and_then(|summary| summary.brand.as_deref()) {
         text.push_str(&format!("\nBrand: {brand}"));
     }
-    if let Some(duration) = mp4_duration_seconds(&bytes) {
+    if let Some(duration) = mp4.as_ref().and_then(|summary| summary.duration_seconds) {
         text.push_str(&format!("\nDuration: {}", format_duration(duration)));
+        if let Some(bitrate) = estimate_bitrate(size, duration) {
+            text.push_str(&format!("\nBitrate: {}", format_bitrate(bitrate)));
+        }
+    }
+    if let Some(created_unix) = mp4.as_ref().and_then(|summary| summary.created_unix) {
+        text.push_str(&format!("\nCreated: {}", format_timestamp(created_unix)));
+    }
+    if let Some(rotation) = mp4.as_ref().and_then(|summary| summary.rotation_degrees) {
+        text.push_str(&format!("\nRotation: {}", format_rotation(rotation)));
     }
     append_mkv_metadata(&mut text, &bytes);
     append_wav_metadata(&mut text, &bytes);
@@ -5570,6 +5580,89 @@ fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
     find_mp4_atom_payload(bytes, b"mvhd").and_then(parse_mvhd_duration_seconds)
 }
 
+#[derive(Default)]
+struct Mp4Summary {
+    brand: Option<String>,
+    duration_seconds: Option<f64>,
+    created_unix: Option<i64>,
+    rotation_degrees: Option<i32>,
+}
+
+fn mp4_summary(bytes: &[u8]) -> Option<Mp4Summary> {
+    let brand = mp4_major_brand(bytes);
+    let mvhd = find_mp4_atom_payload(bytes, b"mvhd");
+    let duration_seconds = mvhd.and_then(parse_mvhd_duration_seconds);
+    let created_unix = mvhd.and_then(parse_mvhd_created_unix);
+    let rotation_degrees = mp4_rotation_degrees(bytes);
+
+    (brand.is_some()
+        || duration_seconds.is_some()
+        || created_unix.is_some()
+        || rotation_degrees.is_some())
+    .then_some(Mp4Summary {
+        brand,
+        duration_seconds,
+        created_unix,
+        rotation_degrees,
+    })
+}
+
+fn parse_mvhd_created_unix(payload: &[u8]) -> Option<i64> {
+    let version = *payload.first()?;
+    let mac_time = match version {
+        0 => read_u32_be(payload, 4)? as u64,
+        1 => read_u64_be(payload, 4)?,
+        _ => return None,
+    };
+    mp4_time_to_unix(mac_time)
+}
+
+fn mp4_time_to_unix(mac_time: u64) -> Option<i64> {
+    const MP4_TO_UNIX_SECONDS: u64 = 2_082_844_800;
+    (mac_time >= MP4_TO_UNIX_SECONDS).then_some((mac_time - MP4_TO_UNIX_SECONDS) as i64)
+}
+
+fn mp4_rotation_degrees(bytes: &[u8]) -> Option<i32> {
+    let mut rotations = Vec::new();
+    collect_mp4_atom_payloads(bytes, b"tkhd", &mut rotations);
+    rotations
+        .into_iter()
+        .filter_map(parse_tkhd_rotation_degrees)
+        .find(|degrees| *degrees != 0)
+}
+
+fn parse_tkhd_rotation_degrees(payload: &[u8]) -> Option<i32> {
+    let version = *payload.first()?;
+    let matrix_offset = match version {
+        0 => 40,
+        1 => 52,
+        _ => return None,
+    };
+    let a = read_i32_be(payload, matrix_offset)? as f64 / 65_536.0;
+    let b = read_i32_be(payload, matrix_offset + 4)? as f64 / 65_536.0;
+    let mut degrees = b.atan2(a).to_degrees().round() as i32;
+    degrees = ((degrees % 360) + 360) % 360;
+    Some(degrees)
+}
+
+fn estimate_bitrate(size: i64, duration_seconds: f64) -> Option<f64> {
+    (size > 0 && duration_seconds > 0.0).then(|| size as f64 * 8.0 / duration_seconds)
+}
+
+fn format_bitrate(bits_per_second: f64) -> String {
+    if bits_per_second >= 1_000_000.0 {
+        format!("{:.2} Mbps", bits_per_second / 1_000_000.0)
+    } else if bits_per_second >= 1_000.0 {
+        format!("{:.0} kbps", bits_per_second / 1_000.0)
+    } else {
+        format!("{:.0} bps", bits_per_second)
+    }
+}
+
+fn format_rotation(degrees: i32) -> String {
+    format!("{degrees}°")
+}
+
 struct WavSummary {
     audio_format: u16,
     channels: u16,
@@ -6333,6 +6426,61 @@ fn find_mp4_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]
     find_mp4_atom_payload_in_range(bytes, 0, bytes.len(), atom, 0)
 }
 
+fn collect_mp4_atom_payloads<'a>(bytes: &'a [u8], atom: &[u8; 4], found: &mut Vec<&'a [u8]>) {
+    collect_mp4_atom_payloads_in_range(bytes, 0, bytes.len(), atom, 0, found);
+}
+
+fn collect_mp4_atom_payloads_in_range<'a>(
+    bytes: &'a [u8],
+    start: usize,
+    end: usize,
+    atom: &[u8; 4],
+    depth: usize,
+    found: &mut Vec<&'a [u8]>,
+) {
+    if depth > 4 || start >= end || end > bytes.len() {
+        return;
+    }
+    let mut pos = start;
+    while pos + 8 <= end {
+        let Some(size32) = read_u32_be(bytes, pos).map(|size| size as usize) else {
+            return;
+        };
+        let Some(typ) = bytes.get(pos + 4..pos + 8) else {
+            return;
+        };
+        let (header, atom_end) = if size32 == 1 {
+            let Some(size64) = read_u64_be(bytes, pos + 8).map(|size| size as usize) else {
+                return;
+            };
+            let Some(end) = pos.checked_add(size64) else {
+                return;
+            };
+            (16usize, end)
+        } else if size32 == 0 {
+            (8usize, end)
+        } else {
+            let Some(end) = pos.checked_add(size32) else {
+                return;
+            };
+            (8usize, end)
+        };
+        if atom_end > end || atom_end <= pos + header {
+            return;
+        }
+        let payload_start = pos + header;
+        if typ == atom {
+            if let Some(payload) = bytes.get(payload_start..atom_end) {
+                found.push(payload);
+            }
+        }
+        if is_mp4_container_atom(typ) {
+            collect_mp4_atom_payloads_in_range(bytes, payload_start, atom_end, atom, depth + 1, found);
+        }
+        pos = atom_end;
+    }
+}
+
 fn find_mp4_atom_payload_in_range<'a>(
     bytes: &'a [u8],
     start: usize,
@@ -6546,6 +6694,11 @@ fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
 fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
     let end = offset.checked_add(8)?;
     Some(u64::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_i32_be(bytes: &[u8], offset: usize) -> Option<i32> {
+    let end = offset.checked_add(4)?;
+    Some(i32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
 }
 
 fn read_i32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<i32> {
@@ -10063,20 +10216,39 @@ mod tests {
         bytes.extend_from_slice(&0u32.to_be_bytes());
 
         let mut mvhd_payload = vec![0u8; 20];
+        mvhd_payload[4..8].copy_from_slice(&2_082_844_800u32.to_be_bytes());
         mvhd_payload[12..16].copy_from_slice(&1000u32.to_be_bytes());
         mvhd_payload[16..20].copy_from_slice(&90_000u32.to_be_bytes());
         let mvhd_size = (8 + mvhd_payload.len()) as u32;
-        let moov_size = 8 + mvhd_size;
+
+        let mut tkhd_payload = vec![0u8; 76];
+        tkhd_payload[44..48].copy_from_slice(&65_536i32.to_be_bytes());
+        tkhd_payload[64..68].copy_from_slice(&0x4000_0000i32.to_be_bytes());
+        let tkhd_size = (8 + tkhd_payload.len()) as u32;
+
+        let trak_size = 8 + tkhd_size;
+        let moov_size = 8 + mvhd_size + trak_size;
         bytes.extend_from_slice(&moov_size.to_be_bytes());
         bytes.extend_from_slice(b"moov");
         bytes.extend_from_slice(&mvhd_size.to_be_bytes());
         bytes.extend_from_slice(b"mvhd");
         bytes.extend_from_slice(&mvhd_payload);
+        bytes.extend_from_slice(&trak_size.to_be_bytes());
+        bytes.extend_from_slice(b"trak");
+        bytes.extend_from_slice(&tkhd_size.to_be_bytes());
+        bytes.extend_from_slice(b"tkhd");
+        bytes.extend_from_slice(&tkhd_payload);
 
         assert_eq!(media_container_name("clip.mp4", &bytes), "ISO BMFF / MP4");
         assert_eq!(mp4_major_brand(&bytes).as_deref(), Some("isom"));
         assert_eq!(mp4_duration_seconds(&bytes), Some(90.0));
+        let summary = mp4_summary(&bytes).expect("summary");
+        assert_eq!(summary.brand.as_deref(), Some("isom"));
+        assert_eq!(summary.duration_seconds, Some(90.0));
+        assert_eq!(summary.created_unix, Some(0));
+        assert_eq!(summary.rotation_degrees, Some(90));
         assert_eq!(format_duration(90.0), "1:30");
+        assert_eq!(format_bitrate(1_536_000.0), "1.54 Mbps");
     }
 
     #[test]
