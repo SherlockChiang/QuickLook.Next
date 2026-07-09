@@ -5,7 +5,8 @@ QuickLook.Next currently treats image preview decode as a bounded rasterization 
 Runtime fallback policy:
 
 - JPEGs with ICC (`APP2`) or Adobe (`APP14`) markers prefer Windows system decode because `SystemImageDecoder` requests `ColorManagementMode.ColorManageToSRgb`.
-- If system decode fails for those color-managed JPEGs, RasterHost skips the Rust fallback rather than showing a potentially wrong-color preview.
+- If an embedded ICC profile is recognized as sRGB, the Rust fallback is allowed because source-to-sRGB is an identity transform.
+- If system decode fails for non-sRGB ICC or Adobe (`APP14`) JPEGs, RasterHost skips the Rust fallback rather than showing a potentially wrong-color preview.
 - AVIF, HEIC/HEIF, and JXL are treated as system-required formats. If the platform codec is unavailable, Rust fallback is skipped.
 
 Covered by corpus smoke:
@@ -26,6 +27,6 @@ Current blocker:
 
 - The native Rust image path has decoded pixels but no bounded ICC color engine.
 - Adding a partial transform without profile/TRC/matrix support would risk wrong-color output.
-- Until a reproducible Rust-side ICC transform is selected and tested, RasterHost must continue to prefer WIC `ColorManageToSRgb` and skip Rust fallback for color-managed JPEGs after WIC failure.
+- Until a reproducible Rust-side ICC transform is selected and tested, RasterHost must continue to prefer WIC `ColorManageToSRgb` and skip Rust fallback for non-sRGB color-managed JPEGs after WIC failure.
 
 Design note: keep native decode bounded and predictable. If ICC conversion is added, prefer a Rust-side transform before BGRA conversion so App/RasterHost continue to consume the same premultiplied BGRA surface format.
