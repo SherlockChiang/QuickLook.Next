@@ -8741,6 +8741,9 @@ pub fn render_executable(path: &str) -> String {
             certificate.revision,
             certificate.typ
         ));
+        if !certificate.digest_algorithms.is_empty() {
+            text.push_str(&format!("Certificate digest algorithms: {}\n", certificate.digest_algorithms.join(", ")));
+        }
     }
     if let Some(clr) = &pe.clr {
         text.push_str(&format!(
@@ -8833,6 +8836,7 @@ struct PeCertificateSummary {
     length: u32,
     revision: u16,
     typ: u16,
+    digest_algorithms: Vec<String>,
 }
 
 struct PeFixedVersion {
@@ -9442,7 +9446,28 @@ fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateS
         length: read_u32(bytes, offset)?,
         revision: read_u16(bytes, offset + 4)?,
         typ: read_u16(bytes, offset + 6)?,
+        digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, read_u32(bytes, offset).unwrap_or(0) as usize),
     })
+}
+
+fn parse_authenticode_digest_algorithms(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
+    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
+        return Vec::new();
+    };
+    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
+    let oid_patterns: [(&str, &[u8]); 4] = [
+        ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]),
+        ("SHA-256", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]),
+        ("SHA-384", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02]),
+        ("SHA-512", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03]),
+    ];
+    let mut algorithms = Vec::new();
+    for (name, pattern) in oid_patterns {
+        if payload.windows(pattern.len()).any(|window| window == pattern) {
+            algorithms.push(name.to_string());
+        }
+    }
+    algorithms
 }
 
 fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usize) -> Option<PeClrSummary> {
@@ -14210,6 +14235,7 @@ mod tests {
         bytes[0x1800..0x1804].copy_from_slice(&0x40u32.to_le_bytes());
         bytes[0x1804..0x1806].copy_from_slice(&0x0200u16.to_le_bytes());
         bytes[0x1806..0x1808].copy_from_slice(&0x0002u16.to_le_bytes());
+        bytes[0x1808..0x1813].copy_from_slice(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
 
         let pe = parse_pe_headers(&bytes).expect("pe summary");
 
@@ -14243,6 +14269,10 @@ mod tests {
         assert_eq!(fixed.flags, 2);
         assert_eq!(fixed.file_type, "DLL");
         assert_eq!(pe.certificate.as_ref().map(|cert| cert.typ), Some(2));
+        assert_eq!(
+            pe.certificate.as_ref().map(|cert| cert.digest_algorithms.clone()).unwrap_or_default(),
+            vec!["SHA-256".to_string()]
+        );
         assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
         let clr = pe.clr.as_ref().expect("clr summary");
         assert_eq!(clr.metadata_version, "v4.0.30319");
