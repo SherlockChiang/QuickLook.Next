@@ -5640,6 +5640,51 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if let Some(flags) = read_u32_endian(bytes, flags_offset, endian).filter(|value| *value > 0) {
         text.push_str(&format!("\nFlags: 0x{flags:08X}"));
     }
+    if let Some(interpreter) = elf_interpreter(bytes, class, endian) {
+        text.push_str(&format!("\nInterpreter: {interpreter}"));
+    }
+}
+
+fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
+    let phoff = if class == 2 {
+        read_u64_endian(bytes, 32, endian)? as usize
+    } else {
+        read_u32_endian(bytes, 28, endian)? as usize
+    };
+    let phentsize = read_u16_endian(bytes, if class == 2 { 54 } else { 42 }, endian)? as usize;
+    let phnum = read_u16_endian(bytes, if class == 2 { 56 } else { 44 }, endian)?.min(64) as usize;
+    if phoff == 0 || phentsize == 0 {
+        return None;
+    }
+
+    for index in 0..phnum {
+        let offset = phoff.checked_add(index.checked_mul(phentsize)?)?;
+        let typ = read_u32_endian(bytes, offset, endian)?;
+        if typ != 3 {
+            continue;
+        }
+        let (file_offset, file_size) = if class == 2 {
+            (
+                read_u64_endian(bytes, offset + 8, endian)? as usize,
+                read_u64_endian(bytes, offset + 32, endian)? as usize,
+            )
+        } else {
+            (
+                read_u32_endian(bytes, offset + 4, endian)? as usize,
+                read_u32_endian(bytes, offset + 16, endian)? as usize,
+            )
+        };
+        let end = file_offset.checked_add(file_size)?;
+        let raw = bytes.get(file_offset..end)?;
+        let value = String::from_utf8_lossy(raw)
+            .trim_matches('\0')
+            .trim()
+            .to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn elf_type_name(value: u16) -> &'static str {
@@ -6998,6 +7043,14 @@ pub fn render_executable(path: &str) -> String {
     if pe.data_directories > 0 {
         text.push_str(&format!("Data directories: {}\n", pe.data_directories));
     }
+    for directory in &pe.directories {
+        text.push_str(&format!(
+            "{} directory: 0x{:08X}, {}\n",
+            directory.name,
+            directory.address,
+            format_bytes(directory.size as i64)
+        ));
+    }
     if !pe.section_names.is_empty() {
         text.push_str(&format!("Section names: {}\n", pe.section_names.join(", ")));
     }
@@ -7032,6 +7085,13 @@ struct PeSummary {
     dll_characteristics: u16,
     data_directories: u32,
     section_names: Vec<String>,
+    directories: Vec<PeDataDirectory>,
+}
+
+struct PeDataDirectory {
+    name: &'static str,
+    address: u32,
+    size: u32,
 }
 
 fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
@@ -7068,6 +7128,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let dll_characteristics = read_u16(bytes, opt + 70).unwrap_or(0);
     let data_directories_offset = if magic == 0x20B { opt + 108 } else { opt + 92 };
     let data_directories = read_u32(bytes, data_directories_offset).unwrap_or(0);
+    let directories = parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
     let section_table = opt + opt_size;
     let section_names = parse_pe_section_names(bytes, section_table, sections);
 
@@ -7090,7 +7151,47 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         dll_characteristics,
         data_directories,
         section_names,
+        directories,
     })
+}
+
+fn parse_pe_data_directories(bytes: &[u8], offset: usize, count: u32) -> Vec<PeDataDirectory> {
+    let names = [
+        "Export",
+        "Import",
+        "Resource",
+        "Exception",
+        "Certificate",
+        "Base relocation",
+        "Debug",
+        "Architecture",
+        "Global pointer",
+        "TLS",
+        "Load config",
+        "Bound import",
+        "IAT",
+        "Delay import",
+        "CLR",
+        "Reserved",
+    ];
+    let mut directories = Vec::new();
+    for index in 0..count.min(names.len() as u32) as usize {
+        let entry = offset + index * 8;
+        let Some(address) = read_u32(bytes, entry) else {
+            break;
+        };
+        let Some(size) = read_u32(bytes, entry + 4) else {
+            break;
+        };
+        if address != 0 || size != 0 {
+            directories.push(PeDataDirectory {
+                name: names[index],
+                address,
+                size,
+            });
+        }
+    }
+    directories
 }
 
 fn parse_pe_section_names(bytes: &[u8], section_table: usize, sections: u16) -> Vec<String> {
@@ -11071,6 +11172,10 @@ mod tests {
         bytes[opt + 68..opt + 70].copy_from_slice(&2u16.to_le_bytes());
         bytes[opt + 70..opt + 72].copy_from_slice(&0x8160u16.to_le_bytes());
         bytes[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+        bytes[opt + 120..opt + 124].copy_from_slice(&0x3000u32.to_le_bytes());
+        bytes[opt + 124..opt + 128].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[opt + 128..opt + 132].copy_from_slice(&0x4000u32.to_le_bytes());
+        bytes[opt + 132..opt + 136].copy_from_slice(&0x200u32.to_le_bytes());
         let section_table = opt + 0xF0;
         bytes[section_table..section_table + 5].copy_from_slice(b".text");
         bytes[section_table + 40..section_table + 45].copy_from_slice(b".data");
@@ -11082,6 +11187,9 @@ mod tests {
         assert_eq!(pe.section_alignment, 0x1000);
         assert_eq!(pe.dll_characteristics, 0x8160);
         assert_eq!(pe.data_directories, 16);
+        assert_eq!(pe.directories.len(), 2);
+        assert_eq!(pe.directories[0].name, "Import");
+        assert_eq!(pe.directories[1].name, "Resource");
         assert_eq!(
             pe.section_names,
             vec![".text".to_string(), ".data".to_string()]
@@ -11090,7 +11198,7 @@ mod tests {
 
     #[test]
     fn elf_summary_detects_64_bit_little_endian() {
-        let mut bytes = vec![0u8; 64];
+        let mut bytes = vec![0u8; 256];
         bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
         bytes[4] = 2;
         bytes[5] = 1;
@@ -11099,8 +11207,13 @@ mod tests {
         bytes[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
         bytes[32..40].copy_from_slice(&0x40u64.to_le_bytes());
         bytes[40..48].copy_from_slice(&0x200u64.to_le_bytes());
+        bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
         bytes[60..62].copy_from_slice(&12u16.to_le_bytes());
+        bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x48..0x50].copy_from_slice(&0xC0u64.to_le_bytes());
+        bytes[0x60..0x68].copy_from_slice(&28u64.to_le_bytes());
+        bytes[0xC0..0xDB].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2");
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -11112,5 +11225,6 @@ mod tests {
         assert!(text.contains("Section headers: 12"));
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x200"));
+        assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
     }
 }
