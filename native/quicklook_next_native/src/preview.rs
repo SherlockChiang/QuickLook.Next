@@ -6041,6 +6041,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !symbols.is_empty() {
         text.push_str(&format!("\nSymbols: {}", symbols.join(", ")));
     }
+    let relocations = elf_relocation_summary(bytes, class, endian);
+    if !relocations.is_empty() {
+        text.push_str(&format!("\nRelocations: {}", relocations.join(", ")));
+    }
 }
 
 fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
@@ -6355,6 +6359,31 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
         }
     }
     symbols
+}
+
+fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let sections = elf_sections(bytes, class, endian);
+    sections
+        .iter()
+        .filter(|section| section.typ == 4 || section.typ == 9)
+        .filter_map(|section| {
+            let entry_size = if section.entsize > 0 {
+                section.entsize
+            } else if section.typ == 4 && class == 2 {
+                24
+            } else if section.typ == 4 {
+                12
+            } else if class == 2 {
+                16
+            } else {
+                8
+            };
+            if entry_size == 0 || section.size == 0 || section.offset.saturating_add(section.size) > bytes.len() {
+                return None;
+            }
+            Some(format!("{} {} entries", section.name, section.size / entry_size))
+        })
+        .collect()
 }
 
 fn elf_type_name(value: u16) -> &'static str {
@@ -13228,7 +13257,7 @@ mod tests {
         bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
         bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
-        bytes[60..62].copy_from_slice(&5u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&6u16.to_le_bytes());
         bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x48..0x50].copy_from_slice(&0x300u64.to_le_bytes());
@@ -13257,7 +13286,7 @@ mod tests {
         bytes[0x540..0x544].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x580..0x584].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x598..0x5A0].copy_from_slice(&0x700u64.to_le_bytes());
-        bytes[0x5A0..0x5A8].copy_from_slice(&33u64.to_le_bytes());
+        bytes[0x5A0..0x5A8].copy_from_slice(&43u64.to_le_bytes());
         bytes[0x5C0..0x5C4].copy_from_slice(&17u32.to_le_bytes());
         bytes[0x5C4..0x5C8].copy_from_slice(&2u32.to_le_bytes());
         bytes[0x5D8..0x5E0].copy_from_slice(&0x740u64.to_le_bytes());
@@ -13268,7 +13297,12 @@ mod tests {
         bytes[0x604..0x608].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x618..0x620].copy_from_slice(&0x780u64.to_le_bytes());
         bytes[0x620..0x628].copy_from_slice(&13u64.to_le_bytes());
-        bytes[0x700..0x721].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0");
+        bytes[0x640..0x644].copy_from_slice(&33u32.to_le_bytes());
+        bytes[0x644..0x648].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x658..0x660].copy_from_slice(&0x790u64.to_le_bytes());
+        bytes[0x660..0x668].copy_from_slice(&24u64.to_le_bytes());
+        bytes[0x678..0x680].copy_from_slice(&24u64.to_le_bytes());
+        bytes[0x700..0x72B].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0.rela.dyn\0");
         bytes[0x740..0x744].copy_from_slice(&0u32.to_le_bytes());
         bytes[0x758..0x75C].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x75C] = 0x12;
@@ -13281,14 +13315,15 @@ mod tests {
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
         assert!(text.contains("Program headers: 3"));
-        assert!(text.contains("Section headers: 5"));
+        assert!(text.contains("Section headers: 6"));
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x500"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
         assert!(text.contains("Needed libraries: libc.so.6"));
         assert!(text.contains("SONAME: libdemo.so"));
         assert!(text.contains("RUNPATH: $ORIGIN"));
-        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab"));
+        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn"));
         assert!(text.contains("Symbols: .symtab 2 entries (main)"));
+        assert!(text.contains("Relocations: .rela.dyn 1 entries"));
     }
 }
