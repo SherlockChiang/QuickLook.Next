@@ -6144,6 +6144,12 @@ struct Mp4TrackSummary {
     sample_rate: Option<u32>,
     duration_seconds: Option<f64>,
     data_bytes: Option<u64>,
+    timing_entries: Option<u32>,
+    composition_entries: Option<u32>,
+    edit_entries: Option<u32>,
+    chunks: Option<u32>,
+    first_chunk_offset: Option<u64>,
+    last_chunk_end: Option<u64>,
 }
 
 fn mp4_summary(bytes: &[u8]) -> Option<Mp4Summary> {
@@ -6199,14 +6205,29 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
                 track.kind,
                 format_duration(duration)
             ));
-            if let Some(data_bytes) = track.data_bytes {
-                if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
+        if let Some(data_bytes) = track.data_bytes {
+            if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
                     text.push_str(&format!(
                         "\n{} bitrate: {}",
                         track.kind,
                         format_bitrate(bitrate)
                     ));
                 }
+            }
+        }
+        if let Some(entries) = track.timing_entries {
+            text.push_str(&format!("\n{} timing entries: {}", track.kind, entries));
+        }
+        if let Some(entries) = track.composition_entries {
+            text.push_str(&format!("\n{} composition offsets: {}", track.kind, entries));
+        }
+        if let Some(entries) = track.edit_entries {
+            text.push_str(&format!("\n{} edit list entries: {}", track.kind, entries));
+        }
+        if let Some(chunks) = track.chunks {
+            text.push_str(&format!("\n{} chunks: {}", track.kind, chunks));
+            if let (Some(first), Some(last)) = (track.first_chunk_offset, track.last_chunk_end) {
+                text.push_str(&format!(" (0x{first:X}-0x{last:X})"));
             }
         }
     }
@@ -6246,6 +6267,15 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
     if let Some(stsz) = find_mp4_atom_payload(trak, b"stsz") {
         summary.data_bytes = parse_stsz_total_bytes(stsz);
     }
+    summary.timing_entries = find_mp4_atom_payload(trak, b"stts").and_then(parse_mp4_entry_count);
+    summary.composition_entries = find_mp4_atom_payload(trak, b"ctts").and_then(parse_mp4_entry_count);
+    summary.edit_entries = find_mp4_atom_payload(trak, b"elst").and_then(parse_mp4_entry_count);
+    if let Some(chunk_summary) = parse_mp4_chunk_summary(trak) {
+        summary.chunks = Some(chunk_summary.chunks);
+        summary.first_chunk_offset = Some(chunk_summary.first_offset);
+        summary.last_chunk_end = Some(chunk_summary.last_end);
+        summary.data_bytes = Some(chunk_summary.data_bytes);
+    }
 
     (!summary.codec.is_empty()
         || summary.width.is_some()
@@ -6255,7 +6285,11 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
         || summary.channels.is_some()
         || summary.sample_rate.is_some()
         || summary.duration_seconds.is_some()
-        || summary.data_bytes.is_some())
+        || summary.data_bytes.is_some()
+        || summary.timing_entries.is_some()
+        || summary.composition_entries.is_some()
+        || summary.edit_entries.is_some()
+        || summary.chunks.is_some())
     .then_some(summary)
 }
 
@@ -6562,6 +6596,116 @@ fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
         offset = offset.checked_add(4)?;
     }
     Some(total)
+}
+
+fn parse_mp4_entry_count(payload: &[u8]) -> Option<u32> {
+    read_u32_be(payload, 4)
+}
+
+struct Mp4ChunkSummary {
+    chunks: u32,
+    first_offset: u64,
+    last_end: u64,
+    data_bytes: u64,
+}
+
+fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
+    let chunk_offsets = find_mp4_atom_payload(trak, b"co64")
+        .and_then(parse_co64_offsets)
+        .or_else(|| find_mp4_atom_payload(trak, b"stco").and_then(parse_stco_offsets))?;
+    let sample_sizes = find_mp4_atom_payload(trak, b"stsz").and_then(parse_stsz_sample_sizes)?;
+    let sample_to_chunks = find_mp4_atom_payload(trak, b"stsc").and_then(parse_stsc_entries)?;
+    if chunk_offsets.is_empty() || sample_sizes.is_empty() || sample_to_chunks.is_empty() {
+        return None;
+    }
+
+    let mut sample_index = 0usize;
+    let mut data_bytes = 0u64;
+    let mut last_end = 0u64;
+    for (chunk_index, chunk_offset) in chunk_offsets.iter().enumerate() {
+        let samples_per_chunk = samples_per_chunk_for_chunk(&sample_to_chunks, (chunk_index + 1) as u32)? as usize;
+        let mut chunk_bytes = 0u64;
+        for _ in 0..samples_per_chunk {
+            let Some(size) = sample_sizes.get(sample_index) else {
+                break;
+            };
+            chunk_bytes = chunk_bytes.checked_add(*size as u64)?;
+            sample_index += 1;
+        }
+        data_bytes = data_bytes.checked_add(chunk_bytes)?;
+        last_end = last_end.max(chunk_offset.saturating_add(chunk_bytes));
+        if sample_index >= sample_sizes.len() {
+            break;
+        }
+    }
+
+    Some(Mp4ChunkSummary {
+        chunks: chunk_offsets.len() as u32,
+        first_offset: *chunk_offsets.first()?,
+        last_end,
+        data_bytes,
+    })
+}
+
+fn parse_stco_offsets(payload: &[u8]) -> Option<Vec<u64>> {
+    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
+    let mut offsets = Vec::with_capacity(count.min(1024));
+    let mut offset = 8usize;
+    for _ in 0..count {
+        offsets.push(read_u32_be(payload, offset)? as u64);
+        offset += 4;
+    }
+    Some(offsets)
+}
+
+fn parse_co64_offsets(payload: &[u8]) -> Option<Vec<u64>> {
+    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
+    let mut offsets = Vec::with_capacity(count.min(1024));
+    let mut offset = 8usize;
+    for _ in 0..count {
+        offsets.push(read_u64_be(payload, offset)?);
+        offset += 8;
+    }
+    Some(offsets)
+}
+
+fn parse_stsz_sample_sizes(payload: &[u8]) -> Option<Vec<u32>> {
+    let sample_size = read_u32_be(payload, 4)?;
+    let sample_count = read_u32_be(payload, 8)?.min(1_000_000) as usize;
+    if sample_size > 0 {
+        return Some(vec![sample_size; sample_count]);
+    }
+    let mut sizes = Vec::with_capacity(sample_count.min(1024));
+    let mut offset = 12usize;
+    for _ in 0..sample_count {
+        sizes.push(read_u32_be(payload, offset)?);
+        offset += 4;
+    }
+    Some(sizes)
+}
+
+fn parse_stsc_entries(payload: &[u8]) -> Option<Vec<(u32, u32)>> {
+    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
+    let mut entries = Vec::with_capacity(count.min(1024));
+    let mut offset = 8usize;
+    for _ in 0..count {
+        let first_chunk = read_u32_be(payload, offset)?;
+        let samples_per_chunk = read_u32_be(payload, offset + 4)?;
+        entries.push((first_chunk, samples_per_chunk));
+        offset += 12;
+    }
+    Some(entries)
+}
+
+fn samples_per_chunk_for_chunk(entries: &[(u32, u32)], chunk: u32) -> Option<u32> {
+    let mut current = None;
+    for (first_chunk, samples_per_chunk) in entries {
+        if chunk < *first_chunk {
+            break;
+        }
+        current = Some(*samples_per_chunk);
+    }
+    current.filter(|value| *value > 0)
 }
 
 fn parse_mvhd_created_unix(payload: &[u8]) -> Option<i64> {
@@ -11431,10 +11575,34 @@ mod tests {
         stsz_payload[12..16].copy_from_slice(&600_000u32.to_be_bytes());
         stsz_payload[16..20].copy_from_slice(&700_000u32.to_be_bytes());
         let stsz = atom(b"stsz", &stsz_payload);
-        let stbl = atom(b"stbl", &[stsd, stsz].concat());
+
+        let mut stsc_payload = vec![0u8; 20];
+        stsc_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        stsc_payload[8..12].copy_from_slice(&1u32.to_be_bytes());
+        stsc_payload[12..16].copy_from_slice(&1u32.to_be_bytes());
+        stsc_payload[16..20].copy_from_slice(&1u32.to_be_bytes());
+        let stsc = atom(b"stsc", &stsc_payload);
+
+        let mut stco_payload = vec![0u8; 16];
+        stco_payload[4..8].copy_from_slice(&2u32.to_be_bytes());
+        stco_payload[8..12].copy_from_slice(&1000u32.to_be_bytes());
+        stco_payload[12..16].copy_from_slice(&2000u32.to_be_bytes());
+        let stco = atom(b"stco", &stco_payload);
+
+        let mut stts_payload = vec![0u8; 8];
+        stts_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        let stts = atom(b"stts", &stts_payload);
+        let mut ctts_payload = vec![0u8; 8];
+        ctts_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        let ctts = atom(b"ctts", &ctts_payload);
+        let mut elst_payload = vec![0u8; 8];
+        elst_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        let edts = atom(b"edts", &atom(b"elst", &elst_payload));
+
+        let stbl = atom(b"stbl", &[stsd, stsz, stsc, stco, stts, ctts].concat());
         let minf = atom(b"minf", &stbl);
         let mdia = atom(b"mdia", &[mdhd, hdlr, minf].concat());
-        let trak = atom(b"trak", &[tkhd, mdia].concat());
+        let trak = atom(b"trak", &[tkhd, edts, mdia].concat());
 
         bytes.extend_from_slice(&atom(b"moov", &[mvhd, trak].concat()));
 
@@ -11458,6 +11626,12 @@ mod tests {
         assert_eq!(summary.tracks[0].height, Some(1080));
         assert_eq!(summary.tracks[0].duration_seconds, Some(90.0));
         assert_eq!(summary.tracks[0].data_bytes, Some(1_300_000));
+        assert_eq!(summary.tracks[0].timing_entries, Some(1));
+        assert_eq!(summary.tracks[0].composition_entries, Some(1));
+        assert_eq!(summary.tracks[0].edit_entries, Some(1));
+        assert_eq!(summary.tracks[0].chunks, Some(2));
+        assert_eq!(summary.tracks[0].first_chunk_offset, Some(1000));
+        assert_eq!(summary.tracks[0].last_chunk_end, Some(702_000));
         assert_eq!(format_duration(90.0), "1:30");
         assert_eq!(format_bitrate(1_536_000.0), "1.54 Mbps");
     }
