@@ -70,6 +70,11 @@ internal static class NativeImageDecoder
             if (systemImage is not null)
                 return systemImage;
             DiagLog.Write("RasterHost", $"system image preferred decode failed; falling back to native path={path}");
+            if (ShouldRequireSystemDecoder(path))
+            {
+                DiagLog.Write("RasterHost", $"native fallback skipped for system-required image path={path}");
+                return null;
+            }
             if (ShouldSkipNativeFallbackAfterSystemFailure(path))
             {
                 DiagLog.Write("RasterHost", $"native fallback skipped after system decode failure; path={path}");
@@ -223,6 +228,51 @@ internal static class NativeImageDecoder
             or ".heic" or ".heif"
             or ".avif"
             or ".jxl";
+    }
+
+    private static bool ShouldRequireSystemDecoder(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".avif" or ".heic" or ".heif" or ".jxl")
+            return true;
+        if (ext is ".jpg" or ".jpeg" or ".jpe")
+            return JpegRequiresColorManagedDecode(path);
+        return false;
+    }
+
+    private static bool JpegRequiresColorManagedDecode(string path)
+    {
+        try
+        {
+            using FileStream stream = File.OpenRead(path);
+            if (stream.ReadByte() != 0xFF || stream.ReadByte() != 0xD8)
+                return false;
+
+            while (stream.Position + 4 <= stream.Length)
+            {
+                if (stream.ReadByte() != 0xFF)
+                    return false;
+                int marker = stream.ReadByte();
+                if (marker is 0xDA or 0xD9 || marker < 0)
+                    return false;
+
+                int hi = stream.ReadByte();
+                int lo = stream.ReadByte();
+                if (hi < 0 || lo < 0)
+                    return false;
+                int length = (hi << 8) | lo;
+                if (length < 2 || stream.Position + length - 2 > stream.Length)
+                    return false;
+
+                if (marker is 0xE2 or 0xEE)
+                    return true;
+
+                stream.Position += length - 2;
+            }
+        }
+        catch { }
+
+        return false;
     }
 
     private static bool ShouldSkipNativeFallbackAfterSystemFailure(string path)
