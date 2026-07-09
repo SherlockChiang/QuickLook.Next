@@ -243,7 +243,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         {
             await channel.SendAsync(new PreviewError(
                 open.RequestId,
-                $"Missing Windows image codec for {open.Probe.Extension}. Install the platform codec or use a supported image format."));
+                MissingSystemCodecMessage(open.Probe.Extension)));
             return;
         }
 
@@ -386,6 +386,19 @@ static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
 static bool IsSystemRequiredImage(QuickLook.Next.Contracts.FileProbe probe)
     => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
        && probe.Extension.ToLowerInvariant() is ".avif" or ".heic" or ".heif" or ".jxl";
+
+static string MissingSystemCodecMessage(string extension)
+{
+    string ext = extension.ToLowerInvariant();
+    string format = ext switch
+    {
+        ".avif" => "AVIF",
+        ".heic" or ".heif" => "HEIC/HEIF",
+        ".jxl" => "JPEG XL",
+        _ => extension.TrimStart('.').ToUpperInvariant(),
+    };
+    return $"{format} image recognized, but no Windows image codec could decode it. Install the {format} platform codec or convert the image to PNG/JPEG/WebP.";
+}
 
 static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)
 {
