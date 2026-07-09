@@ -13,6 +13,9 @@ wraps existing project checks instead of introducing a new test framework.
 5. Fix failures, rerun, then commit that one improvement.
 6. Run full mode at phase boundaries or before review.
 
+Use `docs\long-cycle-targets.md` as the shared queue for long-running parser and
+preview coverage work.
+
 ## Quick Mode
 
 Quick mode is the default per-commit loop:
