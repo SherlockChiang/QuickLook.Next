@@ -5723,6 +5723,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     }
 
     let mut names = Vec::new();
+    let mut system_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5739,9 +5740,85 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             minidump_stream_name(stream_type),
             format_bytes(data_size as i64)
         ));
+        if stream_type == 7 {
+            system_info = parse_minidump_system_info(bytes, rva as usize, data_size as usize);
+        }
     }
     if !names.is_empty() {
         text.push_str(&format!("\nStream summary: {}", names.join(", ")));
+    }
+    if let Some(system_info) = system_info {
+        text.push_str(&system_info);
+    }
+}
+
+fn parse_minidump_system_info(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 32 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let arch = read_u16(bytes, offset)?;
+    let processors = *bytes.get(offset + 6)?;
+    let product_type = *bytes.get(offset + 7)?;
+    let major = read_u32(bytes, offset + 8)?;
+    let minor = read_u32(bytes, offset + 12)?;
+    let build = read_u32(bytes, offset + 16)?;
+    let platform = read_u32(bytes, offset + 20)?;
+    let csd_rva = read_u32(bytes, offset + 24).unwrap_or(0);
+    let suite_mask = read_u16(bytes, offset + 28).unwrap_or(0);
+    let mut text = format!(
+        "\nSystem architecture: {}\nProcessors: {}\nWindows version: {}.{}.{}\nProduct type: {}\nPlatform ID: {}",
+        minidump_processor_architecture(arch),
+        processors,
+        major,
+        minor,
+        build,
+        minidump_product_type(product_type),
+        platform
+    );
+    if suite_mask > 0 {
+        text.push_str(&format!("\nSuite mask: 0x{suite_mask:04X}"));
+    }
+    if let Some(csd) = read_minidump_utf16_string(bytes, csd_rva as usize) {
+        text.push_str(&format!("\nService pack: {csd}"));
+    }
+    Some(text)
+}
+
+fn read_minidump_utf16_string(bytes: &[u8], offset: usize) -> Option<String> {
+    if offset == 0 || offset + 4 > bytes.len() {
+        return None;
+    }
+    let len = read_u32(bytes, offset)? as usize;
+    let start = offset + 4;
+    let end = start.checked_add(len)?;
+    let raw = bytes.get(start..end)?;
+    let units = raw
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    let value = String::from_utf16_lossy(&units)
+        .trim_matches('\0')
+        .trim()
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn minidump_processor_architecture(value: u16) -> &'static str {
+    match value {
+        0 => "x86",
+        5 => "ARM",
+        9 => "x64",
+        12 => "ARM64",
+        _ => "unknown",
+    }
+}
+
+fn minidump_product_type(value: u8) -> &'static str {
+    match value {
+        1 => "workstation",
+        2 => "domain controller",
+        3 => "server",
+        _ => "unknown",
     }
 }
 
@@ -11570,7 +11647,7 @@ mod tests {
 
     #[test]
     fn minidump_stream_summary_lists_known_streams() {
-        let mut bytes = vec![0u8; 64];
+        let mut bytes = vec![0u8; 320];
         bytes[0..4].copy_from_slice(b"MDMP");
         bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
@@ -11579,13 +11656,29 @@ mod tests {
         bytes[40..44].copy_from_slice(&0x200u32.to_le_bytes());
         bytes[44..48].copy_from_slice(&7u32.to_le_bytes());
         bytes[48..52].copy_from_slice(&56u32.to_le_bytes());
-        bytes[52..56].copy_from_slice(&0x300u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
+        bytes[0x86] = 8;
+        bytes[0x87] = 1;
+        bytes[0x88..0x8C].copy_from_slice(&10u32.to_le_bytes());
+        bytes[0x8C..0x90].copy_from_slice(&0u32.to_le_bytes());
+        bytes[0x90..0x94].copy_from_slice(&22631u32.to_le_bytes());
+        bytes[0x94..0x98].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x98..0x9C].copy_from_slice(&0x120u32.to_le_bytes());
+        bytes[0x9C..0x9E].copy_from_slice(&0x0100u16.to_le_bytes());
+        let csd: Vec<u8> = "Service Pack 1".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x120..0x124].copy_from_slice(&(csd.len() as u32).to_le_bytes());
+        bytes[0x124..0x124 + csd.len()].copy_from_slice(&csd);
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
 
         assert!(text.contains("ModuleList"));
         assert!(text.contains("SystemInfo"));
+        assert!(text.contains("System architecture: x64"));
+        assert!(text.contains("Processors: 8"));
+        assert!(text.contains("Windows version: 10.0.22631"));
+        assert!(text.contains("Service pack: Service Pack 1"));
     }
 
     #[test]
