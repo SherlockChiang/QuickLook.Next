@@ -1482,7 +1482,8 @@ mod tests {
         for file in ["jpeg-cmyk.jpg", "jpeg-wide-gamut-icc.jpg"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                decode_image_bgra(path.to_str().unwrap(), 1024, 1024, None).expect("decode external jpeg sample");
+                let decoded = decode_image_bgra(path.to_str().unwrap(), 1024, 1024, None).expect("decode external jpeg sample");
+                assert_eq!(jpeg_external_golden(file), Some((decoded.0, decoded.1, decoded.7.len(), fnv1a64(&decoded.7))));
             }
         }
         for file in ["gif-disposal-background.gif", "gif-disposal-previous.gif"] {
@@ -1522,6 +1523,14 @@ mod tests {
             "webp-animated.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
             "webp-animated-alpha.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
             "webp-animated-blend.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
+            _ => None,
+        }
+    }
+
+    fn jpeg_external_golden(file: &str) -> Option<(u32, u32, usize, u64)> {
+        match file {
+            "jpeg-cmyk.jpg" => Some((200, 133, 106400, 8550377178255403641)),
+            "jpeg-wide-gamut-icc.jpg" => Some((864, 576, 1990656, 3104830790765744668)),
             _ => None,
         }
     }
