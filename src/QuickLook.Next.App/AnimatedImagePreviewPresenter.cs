@@ -365,18 +365,19 @@ internal sealed class AnimatedImagePreviewPresenter
         if (TryReadAnimatedSize(path) is not { } size)
             return null;
 
+        string ext = System.IO.Path.GetExtension(path);
         long pixels = Math.Max(0, size.Width) * (long)Math.Max(0, size.Height);
-        bool useNativeFirstFrame = pixels > MaxWinUiDecodePixels;
-        if (!useNativeFirstFrame)
+        bool useNativePlayback = ext.Equals(".webp", StringComparison.OrdinalIgnoreCase) || pixels > MaxWinUiDecodePixels;
+        if (!useNativePlayback)
         {
-            try { useNativeFirstFrame = new System.IO.FileInfo(path).Length > MaxWinUiDecodeBytes; }
+            try { useNativePlayback = new System.IO.FileInfo(path).Length > MaxWinUiDecodeBytes; }
             catch { }
         }
 
         return new AnimatedImageRenderPlan(
             size.Width,
             size.Height,
-            useNativeFirstFrame ? AnimatedImagePlaybackMode.NativeFirstFrameRaster : AnimatedImagePlaybackMode.WinUiAnimatedPlayback);
+            useNativePlayback ? AnimatedImagePlaybackMode.NativeFramePlayback : AnimatedImagePlaybackMode.WinUiAnimatedPlayback);
     }
 
     private static (int Width, int Height)? TryReadAnimatedWebPSize(string path)
@@ -523,7 +524,7 @@ internal readonly record struct AnimatedImagePreviewResult(string Status, double
 internal enum AnimatedImagePlaybackMode
 {
     WinUiAnimatedPlayback,
-    NativeFirstFrameRaster,
+    NativeFramePlayback,
 }
 
 internal readonly record struct AnimatedImageRenderPlan(int Width, int Height, AnimatedImagePlaybackMode PlaybackMode);

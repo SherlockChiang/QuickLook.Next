@@ -84,10 +84,19 @@ internal sealed class NativeBridge
         uint targetHeight,
         byte[] outBuf,
         nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_webp_frames_sized(
+        byte[] pathUtf8,
+        nuint pathLen,
+        uint targetWidth,
+        uint targetHeight,
+        byte[] outBuf,
+        nuint outCap);
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private delegate int NativeAnimationCall(byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
     private const int MaxNativeAnimationBytes = 80 * 1024 * 1024;
@@ -219,6 +228,12 @@ internal sealed class NativeBridge
         => CallRaster(ql_extract_office_image, path);
 
     public NativeAnimationFrames? TryDecodeGifFrames(string path, uint targetWidth, uint targetHeight)
+        => TryDecodeAnimationFrames(ql_decode_gif_frames_sized, path, targetWidth, targetHeight);
+
+    public NativeAnimationFrames? TryDecodeWebPFrames(string path, uint targetWidth, uint targetHeight)
+        => TryDecodeAnimationFrames(ql_decode_webp_frames_sized, path, targetWidth, targetHeight);
+
+    private static NativeAnimationFrames? TryDecodeAnimationFrames(NativeAnimationCall call, string path, uint targetWidth, uint targetHeight)
     {
         try
         {
@@ -229,7 +244,7 @@ internal sealed class NativeBridge
                 byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
                 try
                 {
-                    int n = ql_decode_gif_frames_sized(pathBytes, (nuint)pathBytes.Length, targetWidth, targetHeight, outBuf, (nuint)outBuf.Length);
+                    int n = call(pathBytes, (nuint)pathBytes.Length, targetWidth, targetHeight, outBuf, (nuint)outBuf.Length);
                     if (n < 0)
                     {
                         int needed = -n;

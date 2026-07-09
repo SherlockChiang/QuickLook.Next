@@ -569,13 +569,16 @@ public sealed partial class MainWindow : Window
             if (AnimatedImagePreviewPresenter.CreateRenderPlan(path) is { } animatedPlan)
             {
                 DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={animatedPlan.PlaybackMode}; {animatedPlan.Width}x{animatedPlan.Height}");
-                if (animatedPlan.PlaybackMode == AnimatedImagePlaybackMode.NativeFirstFrameRaster)
+                if (animatedPlan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
                 {
-                    DiagLog.Write("App", $"preview animated image using native first-frame raster gen={generation}; {animatedPlan.Width}x{animatedPlan.Height}");
-                    if (System.IO.Path.GetExtension(path).Equals(".gif", StringComparison.OrdinalIgnoreCase))
+                    DiagLog.Write("App", $"preview animated image using native frame playback gen={generation}; {animatedPlan.Width}x{animatedPlan.Height}");
+                    string animatedExt = System.IO.Path.GetExtension(path);
+                    if (animatedExt.Equals(".gif", StringComparison.OrdinalIgnoreCase) || animatedExt.Equals(".webp", StringComparison.OrdinalIgnoreCase))
                     {
                         var animatedTargetSize = GetRasterDecodeTargetSize();
-                        NativeAnimationFrames? frames = await Task.Run(() => _native.TryDecodeGifFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken);
+                        NativeAnimationFrames? frames = animatedExt.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+                            ? await Task.Run(() => _native.TryDecodeWebPFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken)
+                            : await Task.Run(() => _native.TryDecodeGifFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken);
                         if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                         if (frames is not null)
                         {

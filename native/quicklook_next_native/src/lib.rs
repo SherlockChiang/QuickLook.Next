@@ -916,6 +916,26 @@ pub extern "C" fn ql_decode_gif_frames_sized(
     total as i32
 }
 
+#[no_mangle]
+pub extern "C" fn ql_decode_webp_frames_sized(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let (width, height, frames) = match decode_webp_frames_bgra(path, target_width, target_height) {
+        Some(decoded) => decoded,
+        None => return -2,
+    };
+    write_animation_frames(width, height, frames, out, out_cap)
+}
+
 fn decode_image_bgra(
     path: &str,
     target_width: u32,
@@ -1045,6 +1065,94 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
         let rgba = frame.into_buffer();
         composite_rgba_over(&mut canvas, &rgba, original_width, original_height);
         let rgba = image::RgbaImage::from_raw(original_width, original_height, canvas.clone())?;
+        let raster = if width == original_width && height == original_height {
+            image::DynamicImage::ImageRgba8(rgba)
+        } else {
+            image::DynamicImage::ImageRgba8(rgba).resize_exact(width, height, image::imageops::FilterType::Triangle)
+        };
+        let rgba = raster.to_rgba8();
+        let mut bgra = Vec::with_capacity(frame_bytes);
+        for px in rgba.chunks_exact(4) {
+            let r = px[0] as u32;
+            let g = px[1] as u32;
+            let b = px[2] as u32;
+            let a = px[3] as u32;
+            bgra.push(((b * a + 127) / 255) as u8);
+            bgra.push(((g * a + 127) / 255) as u8);
+            bgra.push(((r * a + 127) / 255) as u8);
+            bgra.push(a as u8);
+        }
+        decoded.push((delay_ms, bgra));
+    }
+    Some((width, height, decoded))
+}
+
+fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    let file = std::fs::File::open(path).ok()?;
+    let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(file)).ok()?;
+    let frames = match decoder.into_frames().collect_frames() {
+        Ok(frames) if !frames.is_empty() => frames,
+        _ => {
+            let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, None)?;
+            return Some((width, height, vec![(100, bgra)]));
+        }
+    };
+    decode_animation_frames_bgra(frames, target_width, target_height)
+}
+
+fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
+    let frame_bytes = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let total = 12usize.saturating_add(frames.len().saturating_mul(4usize.saturating_add(frame_bytes)));
+    if total > i32::MAX as usize {
+        return -2;
+    }
+    if out.is_null() || out_cap < total {
+        return -(total as i32);
+    }
+
+    unsafe {
+        std::ptr::copy_nonoverlapping((frames.len() as u32).to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(8), 4);
+        let mut offset = 12usize;
+        for (delay_ms, bgra) in frames {
+            std::ptr::copy_nonoverlapping(delay_ms.to_le_bytes().as_ptr(), out.add(offset), 4);
+            offset += 4;
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(offset), bgra.len());
+            offset += bgra.len();
+        }
+    }
+    total as i32
+}
+
+fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    let first = frames.first()?;
+    let original_width = first.buffer().width();
+    let original_height = first.buffer().height();
+    if should_skip_native_image_decode(original_width, original_height) {
+        return None;
+    }
+
+    let target_width = if target_width > 0 { target_width } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_height = if target_height > 0 { target_height } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_width = target_width.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
+    let target_height = target_height.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
+    let scale = if original_width > target_width || original_height > target_height {
+        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
+    } else {
+        1.0
+    };
+    let width = ((original_width as f64 * scale).round() as u32).max(1);
+    let height = ((original_height as f64 * scale).round() as u32).max(1);
+    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let max_frames_by_bytes = (MAX_ANIMATED_FRAME_BYTES / (frame_bytes + 4)).max(1);
+    let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
+
+    let mut decoded = Vec::new();
+    for frame in frames.into_iter().take(max_frames) {
+        let (num, den) = frame.delay().numer_denom_ms();
+        let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
+        let rgba = frame.into_buffer();
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
         } else {
@@ -1304,6 +1412,21 @@ mod tests {
         assert_eq!(decoded.0, 2);
         assert_eq!(decoded.1, 1);
         assert_eq!(decoded.7, vec![30, 20, 10, 255, 220, 210, 200, 255]);
+    }
+
+    #[test]
+    fn native_webp_frame_extraction_accepts_static_corpus() {
+        let path = temp_image_path("webp");
+        let pixels = [10u8, 20, 30, 255, 200, 210, 220, 255];
+        image::save_buffer(&path, &pixels, 2, 1, image::ColorType::Rgba8).expect("write webp");
+
+        let decoded = decode_webp_frames_bgra(path.to_str().unwrap(), 0, 0).expect("decode webp frames");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.2.len(), 1);
+        assert_eq!(decoded.2[0].1, vec![30, 20, 10, 255, 220, 210, 200, 255]);
     }
 
     #[test]
