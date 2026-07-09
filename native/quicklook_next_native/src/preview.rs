@@ -6487,14 +6487,65 @@ fn aac_sample_rate(index: u8) -> Option<u32> {
 
 fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
     let profile = *payload.get(1)?;
+    let compatibility = *payload.get(2)?;
     let level = *payload.get(3)?;
-    Some(format!("AVC profile 0x{profile:02X}, level {}.{}", level / 10, level % 10))
+    let nal_length = usize::from(payload.get(4).map(|value| (value & 0x03) + 1).unwrap_or(0));
+    let mut parts = vec![format!(
+        "AVC profile 0x{profile:02X}, compat 0x{compatibility:02X}, level {}.{}",
+        level / 10,
+        level % 10
+    )];
+    if nal_length > 0 {
+        parts.push(format!("{}-byte NAL length", nal_length));
+    }
+    if let Some((chroma, luma_bits, chroma_bits)) = parse_avcc_extension(payload) {
+        parts.push(format!("chroma {chroma}"));
+        parts.push(format!("{}-bit luma", luma_bits));
+        parts.push(format!("{}-bit chroma", chroma_bits));
+    }
+    Some(parts.join(", "))
+}
+
+fn parse_avcc_extension(payload: &[u8]) -> Option<(u8, u8, u8)> {
+    let sps_count = (*payload.get(5)? & 0x1F) as usize;
+    let mut offset = 6usize;
+    for _ in 0..sps_count {
+        let len = read_u16_be(payload, offset)? as usize;
+        offset = offset.checked_add(2 + len)?;
+    }
+    let pps_count = *payload.get(offset)? as usize;
+    offset += 1;
+    for _ in 0..pps_count {
+        let len = read_u16_be(payload, offset)? as usize;
+        offset = offset.checked_add(2 + len)?;
+    }
+    let chroma = *payload.get(offset)? & 0x03;
+    let luma_bits = (*payload.get(offset + 1)? & 0x07) + 8;
+    let chroma_bits = (*payload.get(offset + 2)? & 0x07) + 8;
+    Some((chroma, luma_bits, chroma_bits))
 }
 
 fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     let profile = payload.get(1).map(|value| value & 0x1F)?;
     let level = *payload.get(12)?;
-    Some(format!("HEVC profile {profile}, level {}.{}", level / 30, level % 30))
+    let chroma = payload.get(16).map(|value| value & 0x03);
+    let luma_bits = payload.get(17).map(|value| (value & 0x07) + 8);
+    let chroma_bits = payload.get(18).map(|value| (value & 0x07) + 8);
+    let nal_length = payload.get(21).map(|value| (value & 0x03) + 1);
+    let mut parts = vec![format!("HEVC profile {profile}, level {}.{}", level / 30, level % 30)];
+    if let Some(nal_length) = nal_length {
+        parts.push(format!("{}-byte NAL length", nal_length));
+    }
+    if let Some(chroma) = chroma {
+        parts.push(format!("chroma {chroma}"));
+    }
+    if let Some(luma_bits) = luma_bits {
+        parts.push(format!("{}-bit luma", luma_bits));
+    }
+    if let Some(chroma_bits) = chroma_bits {
+        parts.push(format!("{}-bit chroma", chroma_bits));
+    }
+    Some(parts.join(", "))
 }
 
 fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
@@ -11364,7 +11415,7 @@ mod tests {
         hdlr_payload[8..12].copy_from_slice(b"vide");
         let hdlr = atom(b"hdlr", &hdlr_payload);
 
-        let avcc = atom(b"avcC", &[1, 0x64, 0, 31]);
+        let avcc = atom(b"avcC", &[1, 0x64, 0, 31, 0xFF, 0, 0, 0xFE, 0xFE, 0xFE]);
         let entry_size = 86 + avcc.len();
         let mut stsd_payload = vec![0u8; 8 + entry_size];
         stsd_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
@@ -11398,7 +11449,10 @@ mod tests {
         assert_eq!(summary.tracks.len(), 1);
         assert_eq!(summary.tracks[0].kind, "Video");
         assert_eq!(summary.tracks[0].codec, "avc1");
-        assert_eq!(summary.tracks[0].codec_detail, "AVC profile 0x64, level 3.1");
+        assert_eq!(
+            summary.tracks[0].codec_detail,
+            "AVC profile 0x64, compat 0x00, level 3.1, 4-byte NAL length, chroma 2, 14-bit luma, 14-bit chroma"
+        );
         assert_eq!(summary.tracks[0].language, "eng");
         assert_eq!(summary.tracks[0].width, Some(1920));
         assert_eq!(summary.tracks[0].height, Some(1080));
