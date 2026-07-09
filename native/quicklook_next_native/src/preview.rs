@@ -5783,6 +5783,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut memory_info = None;
     let mut memory64_info = None;
     let mut thread_names_info = None;
+    let mut handle_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5813,6 +5814,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             memory64_info = parse_minidump_memory64_list(bytes, rva as usize, data_size as usize);
         } else if stream_type == 24 {
             thread_names_info = parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 17 {
+            handle_info = parse_minidump_handle_data(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5839,6 +5842,42 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(thread_names_info) = thread_names_info {
         text.push_str(&thread_names_info);
     }
+    if let Some(handle_info) = handle_info {
+        text.push_str(&handle_info);
+    }
+}
+
+fn parse_minidump_handle_data(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 16 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let header_size = read_u32(bytes, offset).unwrap_or(0).max(16) as usize;
+    let descriptor_size = read_u32(bytes, offset + 4).unwrap_or(0) as usize;
+    let count = read_u32(bytes, offset + 8).unwrap_or(0) as usize;
+    if descriptor_size < 32 || header_size > size {
+        return None;
+    }
+    let mut lines = vec![format!("\nHandles: {count}")];
+    let mut descriptor_offset = offset + header_size;
+    for _ in 0..count.min(8) {
+        if descriptor_offset + descriptor_size > offset + size || descriptor_offset + 32 > bytes.len() {
+            break;
+        }
+        let handle = read_u64(bytes, descriptor_offset).unwrap_or(0);
+        let type_name_rva = read_u32(bytes, descriptor_offset + 8).unwrap_or(0) as usize;
+        let object_name_rva = read_u32(bytes, descriptor_offset + 12).unwrap_or(0) as usize;
+        let attributes = read_u32(bytes, descriptor_offset + 16).unwrap_or(0);
+        let granted_access = read_u32(bytes, descriptor_offset + 20).unwrap_or(0);
+        let handle_count = read_u32(bytes, descriptor_offset + 24).unwrap_or(0);
+        let pointer_count = read_u32(bytes, descriptor_offset + 28).unwrap_or(0);
+        let type_name = read_minidump_utf16_string(bytes, type_name_rva).unwrap_or_else(|| "<unknown>".to_string());
+        let object_name = read_minidump_utf16_string(bytes, object_name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        lines.push(format!(
+            "Handle 0x{handle:016X}: {type_name} {object_name}; access 0x{granted_access:08X}; attributes 0x{attributes:08X}; handles {handle_count}; pointers {pointer_count}"
+        ));
+        descriptor_offset += descriptor_size;
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_thread_names(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -14298,14 +14337,14 @@ mod tests {
     fn minidump_stream_summary_lists_known_streams() {
         let mut bytes = vec![0u8; 1536];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&9u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
         bytes[40..44].copy_from_slice(&0x200u32.to_le_bytes());
         bytes[44..48].copy_from_slice(&7u32.to_le_bytes());
         bytes[48..52].copy_from_slice(&56u32.to_le_bytes());
-        bytes[52..56].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&0x90u32.to_le_bytes());
         bytes[56..60].copy_from_slice(&6u32.to_le_bytes());
         bytes[60..64].copy_from_slice(&80u32.to_le_bytes());
         bytes[64..68].copy_from_slice(&0x180u32.to_le_bytes());
@@ -14324,15 +14363,18 @@ mod tests {
         bytes[116..120].copy_from_slice(&24u32.to_le_bytes());
         bytes[120..124].copy_from_slice(&36u32.to_le_bytes());
         bytes[124..128].copy_from_slice(&0x440u32.to_le_bytes());
-        bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
-        bytes[0x86] = 8;
-        bytes[0x87] = 1;
-        bytes[0x88..0x8C].copy_from_slice(&10u32.to_le_bytes());
-        bytes[0x8C..0x90].copy_from_slice(&0u32.to_le_bytes());
-        bytes[0x90..0x94].copy_from_slice(&22631u32.to_le_bytes());
-        bytes[0x94..0x98].copy_from_slice(&2u32.to_le_bytes());
-        bytes[0x98..0x9C].copy_from_slice(&0x120u32.to_le_bytes());
-        bytes[0x9C..0x9E].copy_from_slice(&0x0100u16.to_le_bytes());
+        bytes[128..132].copy_from_slice(&17u32.to_le_bytes());
+        bytes[132..136].copy_from_slice(&48u32.to_le_bytes());
+        bytes[136..140].copy_from_slice(&0x4C0u32.to_le_bytes());
+        bytes[0x90..0x92].copy_from_slice(&9u16.to_le_bytes());
+        bytes[0x96] = 8;
+        bytes[0x97] = 1;
+        bytes[0x98..0x9C].copy_from_slice(&10u32.to_le_bytes());
+        bytes[0x9C..0xA0].copy_from_slice(&0u32.to_le_bytes());
+        bytes[0xA0..0xA4].copy_from_slice(&22631u32.to_le_bytes());
+        bytes[0xA4..0xA8].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0xA8..0xAC].copy_from_slice(&0x120u32.to_le_bytes());
+        bytes[0xAC..0xAE].copy_from_slice(&0x0100u16.to_le_bytes());
         let csd: Vec<u8> = "Service Pack 1".encode_utf16().flat_map(u16::to_le_bytes).collect();
         bytes[0x120..0x124].copy_from_slice(&(csd.len() as u32).to_le_bytes());
         bytes[0x124..0x124 + csd.len()].copy_from_slice(&csd);
@@ -14383,6 +14425,22 @@ mod tests {
         let io_thread: Vec<u8> = "io thread".encode_utf16().flat_map(u16::to_le_bytes).collect();
         bytes[0x4A0..0x4A4].copy_from_slice(&(io_thread.len() as u32).to_le_bytes());
         bytes[0x4A4..0x4A4 + io_thread.len()].copy_from_slice(&io_thread);
+        bytes[0x4C0..0x4C4].copy_from_slice(&16u32.to_le_bytes());
+        bytes[0x4C4..0x4C8].copy_from_slice(&32u32.to_le_bytes());
+        bytes[0x4C8..0x4CC].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x4D0..0x4D8].copy_from_slice(&0x44u64.to_le_bytes());
+        bytes[0x4D8..0x4DC].copy_from_slice(&0x520u32.to_le_bytes());
+        bytes[0x4DC..0x4E0].copy_from_slice(&0x540u32.to_le_bytes());
+        bytes[0x4E0..0x4E4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x4E4..0x4E8].copy_from_slice(&0x0012_019Fu32.to_le_bytes());
+        bytes[0x4E8..0x4EC].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x4EC..0x4F0].copy_from_slice(&7u32.to_le_bytes());
+        let file_type: Vec<u8> = "File".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x520..0x524].copy_from_slice(&(file_type.len() as u32).to_le_bytes());
+        bytes[0x524..0x524 + file_type.len()].copy_from_slice(&file_type);
+        let object_name: Vec<u8> = r"\Device\HarddiskVolume1\demo.txt".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes[0x540..0x544].copy_from_slice(&(object_name.len() as u32).to_le_bytes());
+        bytes[0x544..0x544 + object_name.len()].copy_from_slice(&object_name);
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -14411,6 +14469,8 @@ mod tests {
         assert!(text.contains("Thread names: 2"));
         assert!(text.contains("Thread 42 name: worker"));
         assert!(text.contains("Thread 99 name: io thread"));
+        assert!(text.contains("Handles: 1"));
+        assert!(text.contains(r"Handle 0x0000000000000044: File \Device\HarddiskVolume1\demo.txt; access 0x0012019F; attributes 0x00000002; handles 3; pointers 7"));
     }
 
     #[test]
