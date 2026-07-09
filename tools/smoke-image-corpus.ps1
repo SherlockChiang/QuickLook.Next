@@ -66,4 +66,15 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
+if ($checked -gt 0) {
+    $env:QL_IMAGE_CORPUS_DIR = $corpusDir
+    try {
+        & cargo test --manifest-path (Join-Path $Root "native/quicklook_next_native/Cargo.toml") external_image_corpus_smoke -- --ignored
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    finally {
+        Remove-Item Env:\QL_IMAGE_CORPUS_DIR -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "image corpus smoke passed; checked=$checked" -ForegroundColor Green

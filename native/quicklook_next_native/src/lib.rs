@@ -1472,6 +1472,36 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn external_image_corpus_smoke() {
+        let corpus_dir = match std::env::var("QL_IMAGE_CORPUS_DIR") {
+            Ok(value) => std::path::PathBuf::from(value),
+            Err(_) => return,
+        };
+
+        for file in ["jpeg-cmyk.jpg", "jpeg-wide-gamut-icc.jpg"] {
+            let path = corpus_dir.join(file);
+            if path.exists() {
+                decode_image_bgra(path.to_str().unwrap(), 1024, 1024, None).expect("decode external jpeg sample");
+            }
+        }
+        for file in ["gif-disposal-background.gif", "gif-disposal-previous.gif"] {
+            let path = corpus_dir.join(file);
+            if path.exists() {
+                let frames = decode_gif_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external gif sample");
+                assert!(!frames.2.is_empty());
+            }
+        }
+        for file in ["webp-animated.webp", "webp-animated-alpha.webp", "webp-animated-blend.webp"] {
+            let path = corpus_dir.join(file);
+            if path.exists() {
+                let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external webp sample");
+                assert!(!frames.2.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn native_gif_decode_uses_first_animation_frame_corpus() {
         use image::codecs::gif::{GifEncoder, Repeat};
 
