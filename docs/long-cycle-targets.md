@@ -19,12 +19,8 @@ then commit that item by itself.
 
 - [x] Allow native JPEG fallback for embedded sRGB ICC profiles, where the
   source-to-sRGB transform is identity.
-- [ ] Implement arbitrary Rust-side ICC/source-to-sRGB transform for images that
+- [x] Implement arbitrary Rust-side ICC/source-to-sRGB transform for images that
   cannot use the system color-managed path.
-  Blocked: current dependencies do not expose a bounded ICC color transform. The
-  safe behavior remains to prefer WIC `ColorManageToSRgb` and skip Rust fallback
-  for non-sRGB color-managed JPEGs when WIC fails, rather than display wrong
-  colors.
 - [x] Re-evaluate native AVIF fallback only if Windows/MSVC dependency setup is
   reproducible without external system packages.
 - [x] Re-evaluate native HEIC/HEIF fallback if a bounded, reproducible decoder is
@@ -108,5 +104,6 @@ then commit that item by itself.
   properties.
 - Native AVIF/HEIC/JXL fallbacks re-evaluated and kept on system/WIC policy until
   reproducible Windows-native decoder paths exist.
-- Native JPEG fallback is allowed for embedded sRGB ICC profiles; arbitrary ICC
-  transforms remain blocked on a bounded color engine.
+- Native JPEG fallback applies embedded ICC profiles through `qcms` before BGRA
+  conversion; invalid or unsupported profiles fail closed instead of displaying
+  unconverted colors.

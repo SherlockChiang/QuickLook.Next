@@ -236,11 +236,11 @@ internal static class NativeImageDecoder
         if (ext is ".avif" or ".heic" or ".heif" or ".jxl")
             return true;
         if (ext is ".jpg" or ".jpeg" or ".jpe")
-            return JpegRequiresColorManagedDecode(path);
+            return JpegRequiresSystemDecoder(path);
         return false;
     }
 
-    private static bool JpegRequiresColorManagedDecode(string path)
+    private static bool JpegRequiresSystemDecoder(string path)
     {
         try
         {
@@ -267,45 +267,12 @@ internal static class NativeImageDecoder
                 if (marker is 0xEE)
                     return true;
 
-                if (marker is 0xE2)
-                {
-                    byte[] segment = new byte[length - 2];
-                    int read = stream.Read(segment, 0, segment.Length);
-                    if (read != segment.Length)
-                        return false;
-                    if (IsIccProfileSegment(segment) && !IsSrgbIccProfileSegment(segment))
-                        return true;
-                    continue;
-                }
-
                 stream.Position += length - 2;
             }
         }
         catch { }
 
         return false;
-    }
-
-    private static bool IsIccProfileSegment(ReadOnlySpan<byte> segment)
-    {
-        ReadOnlySpan<byte> prefix = "ICC_PROFILE\0"u8;
-        return segment.Length > prefix.Length + 2 && segment[..prefix.Length].SequenceEqual(prefix);
-    }
-
-    private static bool IsSrgbIccProfileSegment(ReadOnlySpan<byte> segment)
-    {
-        ReadOnlySpan<byte> prefix = "ICC_PROFILE\0"u8;
-        ReadOnlySpan<byte> profile = segment[(prefix.Length + 2)..];
-        if (profile.Length < 128)
-            return false;
-        if (!profile.Slice(36, 4).SequenceEqual("acsp"u8))
-            return false;
-        if (!profile.Slice(16, 4).SequenceEqual("RGB "u8))
-            return false;
-
-        string ascii = Encoding.ASCII.GetString(profile);
-        return ascii.Contains("sRGB", StringComparison.OrdinalIgnoreCase)
-            || ascii.Contains("IEC 61966-2.1", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldSkipNativeFallbackAfterSystemFailure(string path)

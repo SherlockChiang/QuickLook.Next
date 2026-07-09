@@ -1008,7 +1008,12 @@ fn decode_image_bgra(
     }
 
     let convert_start = Instant::now();
-    let rgba = raster.to_rgba8();
+    let mut rgba = raster.to_rgba8();
+    if let Some(profile) = jpeg_icc_profile(path).ok()? {
+        if !apply_icc_to_srgb_rgba(rgba.as_mut(), &profile) {
+            return None;
+        }
+    }
     let mut bgra = Vec::with_capacity((width * height * 4) as usize);
     for (index, px) in rgba.chunks_exact(4).enumerate() {
         if index % 65_536 == 0 && cancel_requested(cancel_cb) {
@@ -1191,6 +1196,91 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
         decoded.push((delay_ms, bgra));
     }
     Some((width, height, decoded))
+}
+
+fn jpeg_icc_profile(path: &str) -> std::result::Result<Option<Vec<u8>>, ()> {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
+        return Ok(None);
+    }
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|_| ())?;
+    jpeg_icc_profile_from_bytes(&bytes)
+}
+
+fn jpeg_icc_profile_from_bytes(bytes: &[u8]) -> std::result::Result<Option<Vec<u8>>, ()> {
+    if bytes.len() < 4 || bytes.get(0..2) != Some(&[0xFF, 0xD8]) {
+        return Ok(None);
+    }
+    let mut pos = 2usize;
+    let mut chunks: Vec<(u8, Vec<u8>)> = Vec::new();
+    let mut expected_count = 0u8;
+    while pos + 4 <= bytes.len() {
+        if bytes[pos] != 0xFF {
+            return Ok(None);
+        }
+        while pos < bytes.len() && bytes[pos] == 0xFF {
+            pos += 1;
+        }
+        let marker = *bytes.get(pos).ok_or(())?;
+        pos += 1;
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        let len = u16::from_be_bytes(bytes.get(pos..pos + 2).ok_or(())?.try_into().map_err(|_| ())?) as usize;
+        pos += 2;
+        if len < 2 || pos + len - 2 > bytes.len() {
+            return Err(());
+        }
+        let segment = &bytes[pos..pos + len - 2];
+        if marker == 0xE2 && segment.len() > 14 && segment.starts_with(b"ICC_PROFILE\0") {
+            let sequence = segment[12];
+            let count = segment[13];
+            if sequence == 0 || count == 0 || sequence > count || count > 16 {
+                return Err(());
+            }
+            expected_count = expected_count.max(count);
+            chunks.push((sequence, segment[14..].to_vec()));
+        }
+        pos += len - 2;
+    }
+    if expected_count == 0 || chunks.len() != expected_count as usize {
+        return Ok(None);
+    }
+    chunks.sort_by_key(|(sequence, _)| *sequence);
+    for (index, (sequence, _)) in chunks.iter().enumerate() {
+        if *sequence as usize != index + 1 {
+            return Err(());
+        }
+    }
+    let total = chunks.iter().map(|(_, chunk)| chunk.len()).sum::<usize>();
+    if total == 0 || total > 4 * 1024 * 1024 {
+        return Err(());
+    }
+    let mut profile = Vec::with_capacity(total);
+    for (_, chunk) in chunks {
+        profile.extend_from_slice(&chunk);
+    }
+    Ok(Some(profile))
+}
+
+fn apply_icc_to_srgb_rgba(rgba: &mut [u8], profile: &[u8]) -> bool {
+    if rgba.is_empty() || rgba.len() % 4 != 0 || profile.len() > 4 * 1024 * 1024 {
+        return false;
+    }
+    let Some(input) = qcms::Profile::new_from_slice(profile, false) else {
+        return false;
+    };
+    if input.is_sRGB() {
+        return true;
+    }
+    let output = qcms::Profile::new_sRGB();
+    let Some(transform) = qcms::Transform::new_to(&input, &output, qcms::DataType::RGBA8, qcms::DataType::RGBA8, qcms::Intent::Perceptual) else {
+        return false;
+    };
+    transform.apply(rgba);
+    true
 }
 
 fn apply_gif_disposal(canvas: &mut [u8], disposal: gif::DisposalMethod, rect: (u16, u16, u16, u16), previous_canvas: Option<Vec<u8>>, canvas_width: u32) {
@@ -1401,17 +1491,23 @@ mod tests {
     }
 
     #[test]
-    fn native_jpeg_decode_accepts_icc_profile_corpus() {
+    fn native_jpeg_decode_rejects_invalid_icc_profile_corpus() {
         let path = temp_image_path("jpg");
         let jpeg = jpeg_with_icc_segment();
         std::fs::write(&path, jpeg).expect("write jpeg");
 
-        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode icc jpeg");
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None);
         let _ = std::fs::remove_file(path);
 
-        assert_eq!(decoded.0, 2);
-        assert_eq!(decoded.1, 1);
-        assert_eq!(decoded.7.len(), 2 * 1 * 4);
+        assert!(decoded.is_none());
+    }
+
+    #[test]
+    fn jpeg_icc_profile_from_bytes_reassembles_segments() {
+        let jpeg = jpeg_with_split_icc_segments();
+        let profile = jpeg_icc_profile_from_bytes(&jpeg).expect("parse jpeg").expect("icc profile");
+
+        assert_eq!(profile, b"quicklook-next-test-icc");
     }
 
     #[test]
@@ -1686,6 +1782,14 @@ mod tests {
     }
 
     fn jpeg_with_icc_segment() -> Vec<u8> {
+        jpeg_with_icc_chunks(&[b"quicklook-next-test-icc".as_slice()])
+    }
+
+    fn jpeg_with_split_icc_segments() -> Vec<u8> {
+        jpeg_with_icc_chunks(&[b"quicklook-next-".as_slice(), b"test-icc".as_slice()])
+    }
+
+    fn jpeg_with_icc_chunks(chunks: &[&[u8]]) -> Vec<u8> {
         let mut jpeg = Vec::new();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
         encoder
@@ -1693,18 +1797,19 @@ mod tests {
             .expect("encode jpeg");
         drop(encoder);
 
-        let mut app2 = Vec::new();
-        app2.extend_from_slice(b"ICC_PROFILE\0");
-        app2.push(1);
-        app2.push(1);
-        app2.extend_from_slice(b"quicklook-next-test-icc");
-        let len = (app2.len() + 2) as u16;
-
-        let mut output = Vec::with_capacity(jpeg.len() + app2.len() + 4);
+        let mut output = Vec::new();
         output.extend_from_slice(&jpeg[..2]);
-        output.extend_from_slice(&[0xFF, 0xE2]);
-        output.extend_from_slice(&len.to_be_bytes());
-        output.extend_from_slice(&app2);
+        for (index, chunk) in chunks.iter().enumerate() {
+            let mut app2 = Vec::new();
+            app2.extend_from_slice(b"ICC_PROFILE\0");
+            app2.push((index + 1) as u8);
+            app2.push(chunks.len() as u8);
+            app2.extend_from_slice(chunk);
+            let len = (app2.len() + 2) as u16;
+            output.extend_from_slice(&[0xFF, 0xE2]);
+            output.extend_from_slice(&len.to_be_bytes());
+            output.extend_from_slice(&app2);
+        }
         output.extend_from_slice(&jpeg[2..]);
         output
     }
