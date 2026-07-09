@@ -5724,6 +5724,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
 
     let mut names = Vec::new();
     let mut system_info = None;
+    let mut exception_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5742,6 +5743,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
         ));
         if stream_type == 7 {
             system_info = parse_minidump_system_info(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 6 {
+            exception_info = parse_minidump_exception(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5749,6 +5752,35 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     }
     if let Some(system_info) = system_info {
         text.push_str(&system_info);
+    }
+    if let Some(exception_info) = exception_info {
+        text.push_str(&exception_info);
+    }
+}
+
+fn parse_minidump_exception(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 32 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let thread_id = read_u32(bytes, offset)?;
+    let code = read_u32(bytes, offset + 8)?;
+    let flags = read_u32(bytes, offset + 12)?;
+    let address = read_u64(bytes, offset + 24)?;
+    let parameters = read_u32(bytes, offset + 32).unwrap_or(0);
+    Some(format!(
+        "\nException thread: {thread_id}\nException code: {}\nException flags: 0x{flags:08X}\nException address: 0x{address:016X}\nException parameters: {parameters}",
+        minidump_exception_name(code)
+    ))
+}
+
+fn minidump_exception_name(code: u32) -> String {
+    match code {
+        0x8000_0003 => "breakpoint".to_string(),
+        0xC000_0005 => "access violation".to_string(),
+        0xC000_001D => "illegal instruction".to_string(),
+        0xC000_0094 => "integer divide by zero".to_string(),
+        0xC000_00FD => "stack overflow".to_string(),
+        _ => format!("0x{code:08X}"),
     }
 }
 
@@ -12595,9 +12627,9 @@ mod tests {
 
     #[test]
     fn minidump_stream_summary_lists_known_streams() {
-        let mut bytes = vec![0u8; 320];
+        let mut bytes = vec![0u8; 512];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&3u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
@@ -12605,6 +12637,9 @@ mod tests {
         bytes[44..48].copy_from_slice(&7u32.to_le_bytes());
         bytes[48..52].copy_from_slice(&56u32.to_le_bytes());
         bytes[52..56].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[56..60].copy_from_slice(&6u32.to_le_bytes());
+        bytes[60..64].copy_from_slice(&80u32.to_le_bytes());
+        bytes[64..68].copy_from_slice(&0x180u32.to_le_bytes());
         bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
         bytes[0x86] = 8;
         bytes[0x87] = 1;
@@ -12617,6 +12652,11 @@ mod tests {
         let csd: Vec<u8> = "Service Pack 1".encode_utf16().flat_map(u16::to_le_bytes).collect();
         bytes[0x120..0x124].copy_from_slice(&(csd.len() as u32).to_le_bytes());
         bytes[0x124..0x124 + csd.len()].copy_from_slice(&csd);
+        bytes[0x180..0x184].copy_from_slice(&42u32.to_le_bytes());
+        bytes[0x188..0x18C].copy_from_slice(&0xC000_0005u32.to_le_bytes());
+        bytes[0x18C..0x190].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x198..0x1A0].copy_from_slice(&0x0000_7FFF_FFFF_FFFFu64.to_le_bytes());
+        bytes[0x1A0..0x1A4].copy_from_slice(&2u32.to_le_bytes());
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -12627,6 +12667,9 @@ mod tests {
         assert!(text.contains("Processors: 8"));
         assert!(text.contains("Windows version: 10.0.22631"));
         assert!(text.contains("Service pack: Service Pack 1"));
+        assert!(text.contains("Exception thread: 42"));
+        assert!(text.contains("Exception code: access violation"));
+        assert!(text.contains("Exception flags: 0x00000001"));
     }
 
     #[test]
