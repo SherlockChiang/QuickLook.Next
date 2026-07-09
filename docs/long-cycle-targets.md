@@ -80,7 +80,7 @@ then commit that item by itself.
 - [x] Decode transfer-encoded body sizes for base64 and quoted-printable with
   strict caps.
 - [x] Add bounded body preview for text/plain parts.
-- [ ] Parse Outlook MSG compound-file properties for sender, recipients, subject,
+- [x] Parse Outlook MSG compound-file properties for sender, recipients, subject,
   sent time, attachments, and body availability.
 
 ## Done Recently
@@ -97,4 +97,5 @@ then commit that item by itself.
   compressed stream metadata, and #SYSTEM title/default topic.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, body byte sizes, decoded transfer sizes, and bounded
-  text/plain previews, plus nested MIME parts.
+  text/plain previews, nested MIME parts, and bounded MSG compound-file
+  properties.

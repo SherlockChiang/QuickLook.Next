@@ -4612,6 +4612,7 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
     let mut text = base_info_text(filename, "mail", size, modified_unix);
     if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Outlook MSG / Compound File");
+        append_msg_compound_summary(&mut text, &bytes);
     } else {
         let content = String::from_utf8_lossy(&bytes);
         let headers = parse_mail_headers(&content);
@@ -5997,6 +5998,132 @@ fn mail_attachment_filename_from_disposition(line: &str) -> Option<String> {
     }
     (!joined.is_empty())
         .then(|| decode_rfc2231_value(&joined).unwrap_or(joined))
+}
+
+#[derive(Clone)]
+struct CfbDirectoryEntry {
+    name: String,
+    object_type: u8,
+    start_sector: u32,
+    size: u64,
+}
+
+fn append_msg_compound_summary(text: &mut String, bytes: &[u8]) {
+    let entries = cfb_directory_entries(bytes);
+    if entries.is_empty() {
+        return;
+    }
+    let attachments = entries
+        .iter()
+        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__attach_version1.0_"))
+        .count();
+    let recipients = entries
+        .iter()
+        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__recip_version1.0_"))
+        .count();
+    if recipients > 0 {
+        text.push_str(&format!("\nRecipients: {recipients}"));
+    }
+    if attachments > 0 {
+        text.push_str(&format!("\nAttachments: {attachments}"));
+    }
+    for (label, property) in [
+        ("Subject", "0037001F"),
+        ("Sender", "0C1A001F"),
+        ("Recipients display", "0E04001F"),
+    ] {
+        if let Some(value) = msg_unicode_property(bytes, &entries, property) {
+            text.push_str(&format!("\n{label}: {value}"));
+        }
+    }
+    if let Some(sent_time) = msg_filetime_property(bytes, &entries, "0E060040") {
+        text.push_str(&format!("\nSent time: {sent_time}"));
+    }
+    let has_body = entries.iter().any(|entry| {
+        entry.object_type == 2
+            && (entry.name.eq_ignore_ascii_case("__substg1.0_1000001F")
+                || entry.name.eq_ignore_ascii_case("__substg1.0_10090102"))
+    });
+    if has_body {
+        text.push_str("\nBody available: yes");
+    }
+}
+
+fn cfb_directory_entries(bytes: &[u8]) -> Vec<CfbDirectoryEntry> {
+    if !bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        return Vec::new();
+    }
+    let sector_shift = read_u16(bytes, 30).unwrap_or(9).min(12);
+    let sector_size = 1usize << sector_shift;
+    let first_directory_sector = read_u32(bytes, 48).unwrap_or(0xFFFF_FFFF);
+    if first_directory_sector == 0xFFFF_FFFF {
+        return Vec::new();
+    }
+    let Some(directory_offset) = cfb_sector_offset(first_directory_sector, sector_size) else {
+        return Vec::new();
+    };
+    if directory_offset.saturating_add(sector_size) > bytes.len() {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for chunk in bytes[directory_offset..directory_offset + sector_size].chunks_exact(128).take(64) {
+        let name_len = u16::from_le_bytes([chunk[64], chunk[65]]) as usize;
+        if !(2..=64).contains(&name_len) {
+            continue;
+        }
+        let name_bytes = &chunk[..name_len.saturating_sub(2).min(64)];
+        let units = name_bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        let name = String::from_utf16_lossy(&units);
+        let object_type = chunk[66];
+        if name.is_empty() || object_type == 0 {
+            continue;
+        }
+        let start_sector = u32::from_le_bytes([chunk[116], chunk[117], chunk[118], chunk[119]]);
+        let size = u64::from_le_bytes(chunk[120..128].try_into().ok().unwrap_or([0; 8]));
+        entries.push(CfbDirectoryEntry { name, object_type, start_sector, size });
+    }
+    entries
+}
+
+fn cfb_sector_offset(sector: u32, sector_size: usize) -> Option<usize> {
+    (sector as usize).checked_add(1)?.checked_mul(sector_size)
+}
+
+fn msg_property_stream<'a>(bytes: &'a [u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<&'a [u8]> {
+    let entry = entries.iter().find(|entry| {
+        entry.object_type == 2 && entry.name.eq_ignore_ascii_case(&format!("__substg1.0_{property}"))
+    })?;
+    let sector_size = 1usize << read_u16(bytes, 30).unwrap_or(9).min(12);
+    let offset = cfb_sector_offset(entry.start_sector, sector_size)?;
+    let len = (entry.size as usize).min(4096);
+    bytes.get(offset..offset.checked_add(len)?)
+}
+
+fn msg_unicode_property(bytes: &[u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<String> {
+    let stream = msg_property_stream(bytes, entries, property)?;
+    let units = stream
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .take(512)
+        .collect::<Vec<_>>();
+    let value = String::from_utf16_lossy(&units)
+        .trim_matches('\0')
+        .trim()
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn msg_filetime_property(bytes: &[u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<String> {
+    let stream = msg_property_stream(bytes, entries, property)?;
+    let filetime = u64::from_le_bytes(stream.get(0..8)?.try_into().ok()?);
+    if filetime < 116_444_736_000_000_000 {
+        return None;
+    }
+    let unix = ((filetime - 116_444_736_000_000_000) / 10_000_000) as i64;
+    Some(format_timestamp(unix))
 }
 
 fn decode_rfc2231_value(value: &str) -> Option<String> {
@@ -14889,6 +15016,59 @@ mod tests {
                 ">text/plain body=12 bytes preview=\"Nested hello\"".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn msg_compound_summary_reads_common_property_streams() {
+        fn write_entry(bytes: &mut [u8], index: usize, name: &str, object_type: u8, start_sector: u32, size: u64) {
+            let offset = 1024 + index * 128;
+            let mut units = name.encode_utf16().collect::<Vec<_>>();
+            units.push(0);
+            for (unit_index, unit) in units.iter().enumerate() {
+                let pos = offset + unit_index * 2;
+                bytes[pos..pos + 2].copy_from_slice(&unit.to_le_bytes());
+            }
+            bytes[offset + 64..offset + 66].copy_from_slice(&((units.len() * 2) as u16).to_le_bytes());
+            bytes[offset + 66] = object_type;
+            bytes[offset + 116..offset + 120].copy_from_slice(&start_sector.to_le_bytes());
+            bytes[offset + 120..offset + 128].copy_from_slice(&size.to_le_bytes());
+        }
+
+        fn write_utf16_stream(bytes: &mut [u8], sector: u32, value: &str) -> u64 {
+            let offset = (sector as usize + 1) * 1024;
+            let data = value.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+            bytes[offset..offset + data.len()].copy_from_slice(&data);
+            data.len() as u64
+        }
+
+        let mut bytes = vec![0u8; 8192];
+        bytes[0..8].copy_from_slice(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+        bytes[30..32].copy_from_slice(&10u16.to_le_bytes());
+        bytes[48..52].copy_from_slice(&0u32.to_le_bytes());
+        let subject_len = write_utf16_stream(&mut bytes, 1, "Quarterly Update");
+        let sender_len = write_utf16_stream(&mut bytes, 2, "Alice Example");
+        let recipients_len = write_utf16_stream(&mut bytes, 3, "Bob Example; Carol Example");
+        let sent_filetime = 116_444_736_000_000_000u64 + 1_700_000_000u64 * 10_000_000;
+        bytes[5 * 1024..5 * 1024 + 8].copy_from_slice(&sent_filetime.to_le_bytes());
+        write_entry(&mut bytes, 0, "Root Entry", 5, 0, 0);
+        write_entry(&mut bytes, 1, "__substg1.0_0037001F", 2, 1, subject_len);
+        write_entry(&mut bytes, 2, "__substg1.0_0C1A001F", 2, 2, sender_len);
+        write_entry(&mut bytes, 3, "__substg1.0_0E04001F", 2, 3, recipients_len);
+        write_entry(&mut bytes, 4, "__substg1.0_0E060040", 2, 4, 8);
+        write_entry(&mut bytes, 5, "__substg1.0_1000001F", 2, 5, 12);
+        write_entry(&mut bytes, 6, "__attach_version1.0_#00000000", 1, 0xFFFF_FFFF, 0);
+        write_entry(&mut bytes, 7, "__recip_version1.0_#00000000", 1, 0xFFFF_FFFF, 0);
+        let mut text = String::new();
+
+        append_msg_compound_summary(&mut text, &bytes);
+
+        assert!(text.contains("Recipients: 1"));
+        assert!(text.contains("Attachments: 1"));
+        assert!(text.contains("Subject: Quarterly Update"));
+        assert!(text.contains("Sender: Alice Example"));
+        assert!(text.contains("Recipients display: Bob Example; Carol Example"));
+        assert!(text.contains("Sent time:"));
+        assert!(text.contains("Body available: yes"));
     }
 
     #[test]
