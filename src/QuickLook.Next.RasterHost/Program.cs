@@ -239,6 +239,14 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             return;
         }
 
+        if (IsSystemRequiredImage(open.Probe))
+        {
+            await channel.SendAsync(new PreviewError(
+                open.RequestId,
+                $"Missing Windows image codec for {open.Probe.Extension}. Install the platform codec or use a supported image format."));
+            return;
+        }
+
         await channel.SendAsync(new PreviewError(open.RequestId, "no raster provider handled the file"));
     }
     catch (OperationCanceledException)
@@ -374,6 +382,10 @@ static bool IsPdf(QuickLook.Next.Contracts.FileProbe probe)
 
 static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
     => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase);
+
+static bool IsSystemRequiredImage(QuickLook.Next.Contracts.FileProbe probe)
+    => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+       && probe.Extension.ToLowerInvariant() is ".avif" or ".heic" or ".heif" or ".jxl";
 
 static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)
 {
