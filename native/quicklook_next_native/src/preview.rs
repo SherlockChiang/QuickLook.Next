@@ -7070,7 +7070,172 @@ fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
         parts.push(format!("{}-bit luma", luma_bits));
         parts.push(format!("{}-bit chroma", chroma_bits));
     }
+    if let Some(sps) = parse_avcc_sps_summary(payload) {
+        parts.push(sps);
+    }
     Some(parts.join(", "))
+}
+
+fn parse_avcc_sps_summary(payload: &[u8]) -> Option<String> {
+    let sps_count = (*payload.get(5)? & 0x1F) as usize;
+    let mut offset = 6usize;
+    for _ in 0..sps_count.min(1) {
+        let len = read_u16_be(payload, offset)? as usize;
+        offset += 2;
+        let sps = payload.get(offset..offset.checked_add(len)?)?;
+        let summary = parse_h264_sps_summary(sps)?;
+        return Some(summary);
+    }
+    None
+}
+
+fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
+    let rbsp = h264_ebsp_to_rbsp(sps.get(1..)?);
+    let mut bits = BitReader::new(&rbsp);
+    let profile_idc = bits.read_bits(8)? as u8;
+    bits.read_bits(8)?;
+    bits.read_bits(8)?;
+    bits.read_ue()?;
+    let mut chroma_format_idc = 1u32;
+    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135) {
+        chroma_format_idc = bits.read_ue()?;
+        if chroma_format_idc == 3 {
+            bits.read_bits(1)?;
+        }
+        bits.read_ue()?;
+        bits.read_ue()?;
+        bits.read_bits(1)?;
+        if bits.read_bits(1)? != 0 {
+            let lists = if chroma_format_idc == 3 { 12 } else { 8 };
+            for index in 0..lists {
+                if bits.read_bits(1)? != 0 {
+                    skip_h264_scaling_list(&mut bits, if index < 6 { 16 } else { 64 })?;
+                }
+            }
+        }
+    }
+    bits.read_ue()?;
+    let pic_order_cnt_type = bits.read_ue()?;
+    if pic_order_cnt_type == 0 {
+        bits.read_ue()?;
+    } else if pic_order_cnt_type == 1 {
+        bits.read_bits(1)?;
+        bits.read_se()?;
+        bits.read_se()?;
+        let cycle = bits.read_ue()?.min(256);
+        for _ in 0..cycle {
+            bits.read_se()?;
+        }
+    }
+    bits.read_ue()?;
+    bits.read_bits(1)?;
+    let width_mbs = bits.read_ue()?.checked_add(1)?;
+    let height_map_units = bits.read_ue()?.checked_add(1)?;
+    let frame_mbs_only = bits.read_bits(1)? != 0;
+    if !frame_mbs_only {
+        bits.read_bits(1)?;
+    }
+    bits.read_bits(1)?;
+    let mut crop = (0u32, 0u32, 0u32, 0u32);
+    if bits.read_bits(1)? != 0 {
+        crop = (bits.read_ue()?, bits.read_ue()?, bits.read_ue()?, bits.read_ue()?);
+    }
+    let vui = bits.read_bits(1).unwrap_or(0) != 0;
+    let coded_width = width_mbs.checked_mul(16)?;
+    let coded_height = height_map_units.checked_mul(16)?.checked_mul(if frame_mbs_only { 1 } else { 2 })?;
+    let (crop_x, crop_y) = h264_crop_units(chroma_format_idc, frame_mbs_only);
+    let display_width = coded_width.saturating_sub((crop.0 + crop.1).saturating_mul(crop_x));
+    let display_height = coded_height.saturating_sub((crop.2 + crop.3).saturating_mul(crop_y));
+    let mut parts = vec![format!("SPS coded {coded_width}x{coded_height}")];
+    if display_width != coded_width || display_height != coded_height {
+        parts.push(format!("crop display {display_width}x{display_height}"));
+    }
+    if vui {
+        parts.push("VUI".to_string());
+    }
+    Some(parts.join(", "))
+}
+
+fn h264_ebsp_to_rbsp(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut zeros = 0;
+    for &byte in bytes {
+        if zeros >= 2 && byte == 0x03 {
+            zeros = 0;
+            continue;
+        }
+        if byte == 0 {
+            zeros += 1;
+        } else {
+            zeros = 0;
+        }
+        out.push(byte);
+    }
+    out
+}
+
+fn h264_crop_units(chroma_format_idc: u32, frame_mbs_only: bool) -> (u32, u32) {
+    let frame_factor = if frame_mbs_only { 1 } else { 2 };
+    match chroma_format_idc {
+        0 => (1, frame_factor),
+        1 => (2, 2 * frame_factor),
+        2 => (2, frame_factor),
+        _ => (1, frame_factor),
+    }
+}
+
+fn skip_h264_scaling_list(bits: &mut BitReader<'_>, size: usize) -> Option<()> {
+    let mut last_scale = 8i32;
+    let mut next_scale = 8i32;
+    for _ in 0..size {
+        if next_scale != 0 {
+            let delta_scale = bits.read_se()?;
+            next_scale = (last_scale + delta_scale + 256) % 256;
+        }
+        last_scale = if next_scale == 0 { last_scale } else { next_scale };
+    }
+    Some(())
+}
+
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    bit: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, bit: 0 }
+    }
+
+    fn read_bits(&mut self, count: usize) -> Option<u32> {
+        if count > 32 || self.bit.checked_add(count)? > self.bytes.len() * 8 {
+            return None;
+        }
+        let mut value = 0u32;
+        for _ in 0..count {
+            let byte = *self.bytes.get(self.bit / 8)?;
+            value = (value << 1) | u32::from((byte >> (7 - (self.bit % 8))) & 1);
+            self.bit += 1;
+        }
+        Some(value)
+    }
+
+    fn read_ue(&mut self) -> Option<u32> {
+        let mut zeros = 0usize;
+        while self.read_bits(1)? == 0 {
+            zeros += 1;
+            if zeros > 31 {
+                return None;
+            }
+        }
+        let suffix = if zeros == 0 { 0 } else { self.read_bits(zeros)? };
+        Some((1u32 << zeros) - 1 + suffix)
+    }
+
+    fn read_se(&mut self) -> Option<i32> {
+        let value = self.read_ue()? as i32;
+        Some(if value & 1 == 0 { -(value / 2) } else { (value + 1) / 2 })
+    }
 }
 
 fn parse_avcc_extension(payload: &[u8]) -> Option<(u8, u8, u8)> {
@@ -13000,6 +13165,77 @@ mod tests {
         assert!(detail.contains("AAC LC"));
         assert!(detail.contains("44,100 Hz"));
         assert!(detail.contains("2 ch"));
+    }
+
+    #[test]
+    fn h264_sps_summary_reads_dimensions_crop_and_vui() {
+        struct Writer {
+            bits: Vec<u8>,
+        }
+        impl Writer {
+            fn new() -> Self {
+                Self { bits: Vec::new() }
+            }
+            fn bit(&mut self, value: bool) {
+                self.bits.push(u8::from(value));
+            }
+            fn bits(&mut self, value: u32, count: usize) {
+                for shift in (0..count).rev() {
+                    self.bit(((value >> shift) & 1) != 0);
+                }
+            }
+            fn ue(&mut self, value: u32) {
+                let code_num = value + 1;
+                let bits = 32 - code_num.leading_zeros();
+                for _ in 0..bits - 1 {
+                    self.bit(false);
+                }
+                self.bits(code_num, bits as usize);
+            }
+            fn finish(mut self) -> Vec<u8> {
+                self.bit(true);
+                while self.bits.len() % 8 != 0 {
+                    self.bit(false);
+                }
+                self.bits
+                    .chunks(8)
+                    .map(|chunk| chunk.iter().fold(0u8, |acc, bit| (acc << 1) | bit))
+                    .collect()
+            }
+        }
+
+        let mut writer = Writer::new();
+        writer.bits(66, 8);
+        writer.bits(0, 8);
+        writer.bits(30, 8);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(1);
+        writer.bit(false);
+        writer.ue(39);
+        writer.ue(22);
+        writer.bit(true);
+        writer.bit(true);
+        writer.bit(true);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(4);
+        writer.bit(true);
+        let mut sps = vec![0x67];
+        sps.extend_from_slice(&writer.finish());
+
+        let summary = parse_h264_sps_summary(&sps).expect("sps summary");
+
+        assert_eq!(summary, "SPS coded 640x368, crop display 640x360, VUI");
+        let mut avcc = vec![1, 66, 0, 30, 0xFF, 0xE1];
+        avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        avcc.extend_from_slice(&sps);
+        avcc.push(0);
+        let detail = parse_avcc_detail(&avcc).expect("avcC detail");
+        assert!(detail.contains("SPS coded 640x368, crop display 640x360, VUI"));
     }
 
     #[test]
