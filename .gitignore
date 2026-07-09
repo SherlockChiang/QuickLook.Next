@@ -25,6 +25,7 @@ artifacts/
 out/
 dist/
 dist*/
+agent.md
 
 *.pdb
 *.ilk

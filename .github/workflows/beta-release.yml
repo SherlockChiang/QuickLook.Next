@@ -1,0 +1,88 @@
+name: Beta Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  beta-release:
+    name: Build beta release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve beta version
+        shell: pwsh
+        run: |
+          $baseVersion = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION must use semantic X.Y.Z format. Current value: '$baseVersion'"
+          }
+
+          $betaVersion = "$baseVersion-beta.${{ github.run_number }}"
+          "BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "BETA_VERSION=$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=v$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build release package
+        shell: pwsh
+        run: |
+          dotnet restore QuickLook.Next.slnx
+          ./tools/pack-release.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}"
+
+      - name: Write release metadata
+        shell: pwsh
+        run: |
+          @"
+          QuickLook Next $env:BETA_VERSION
+          Commit: $env:GITHUB_SHA
+          Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          "@.Trim() | Set-Content -LiteralPath dist/BETA_VERSION.txt -Encoding UTF8
+
+      - name: Archive package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $zipPath = "artifacts/QuickLook.Next-$env:BETA_VERSION-win-x64.zip"
+          Compress-Archive -Path dist/* -DestinationPath $zipPath -Force
+          "RELEASE_ASSET=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickLook.Next-${{ env.BETA_VERSION }}-win-x64
+          path: ${{ env.RELEASE_ASSET }}
+          if-no-files-found: error
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          Automated beta build from commit $env:GITHUB_SHA.
+
+          Version: $env:BETA_VERSION
+          Base version: $env:BASE_VERSION
+          "@
+
+          gh release create $env:RELEASE_TAG $env:RELEASE_ASSET `
+            --target $env:GITHUB_SHA `
+            --title "QuickLook Next $env:BETA_VERSION" `
+            --notes $notes `
+            --prerelease
