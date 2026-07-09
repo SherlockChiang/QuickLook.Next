@@ -6120,6 +6120,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !relocations.is_empty() {
         text.push_str(&format!("\nRelocations: {}", relocations.join(", ")));
     }
+    let notes = elf_note_summary(bytes, class, endian);
+    if !notes.is_empty() {
+        text.push_str(&format!("\nNotes: {}", notes.join(", ")));
+    }
 }
 
 fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
@@ -6459,6 +6463,45 @@ fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             Some(format!("{} {} entries", section.name, section.size / entry_size))
         })
         .collect()
+}
+
+fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let sections = elf_sections(bytes, class, endian);
+    let mut notes = Vec::new();
+    for section in sections.iter().filter(|section| section.typ == 7) {
+        if section.offset.saturating_add(section.size) > bytes.len() {
+            continue;
+        }
+        let mut offset = section.offset;
+        let end = section.offset + section.size;
+        while offset + 12 <= end && notes.len() < 8 {
+            let namesz = read_u32_endian(bytes, offset, endian).unwrap_or(0) as usize;
+            let descsz = read_u32_endian(bytes, offset + 4, endian).unwrap_or(0) as usize;
+            let typ = read_u32_endian(bytes, offset + 8, endian).unwrap_or(0);
+            let name_offset = offset + 12;
+            let desc_offset = align4(name_offset.saturating_add(namesz));
+            let next = align4(desc_offset.saturating_add(descsz));
+            if namesz == 0 || desc_offset.saturating_add(descsz) > end || next <= offset {
+                break;
+            }
+            let name = bytes
+                .get(name_offset..name_offset + namesz)
+                .map(|raw| String::from_utf8_lossy(raw).trim_end_matches('\0').to_string())
+                .unwrap_or_default();
+            let desc = bytes.get(desc_offset..desc_offset + descsz).unwrap_or(&[]);
+            if name == "GNU" && typ == 3 && !desc.is_empty() {
+                notes.push(format!("{} GNU build-id {}", section.name, bytes_to_hex(desc)));
+            } else if !name.is_empty() {
+                notes.push(format!("{} {} type {} ({} bytes)", section.name, name, typ, descsz));
+            }
+            offset = next;
+        }
+    }
+    notes
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn elf_type_name(value: u16) -> &'static str {
@@ -13358,7 +13401,7 @@ mod tests {
         bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
         bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
-        bytes[60..62].copy_from_slice(&6u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&7u16.to_le_bytes());
         bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x48..0x50].copy_from_slice(&0x300u64.to_le_bytes());
@@ -13387,7 +13430,7 @@ mod tests {
         bytes[0x540..0x544].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x580..0x584].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x598..0x5A0].copy_from_slice(&0x700u64.to_le_bytes());
-        bytes[0x5A0..0x5A8].copy_from_slice(&43u64.to_le_bytes());
+        bytes[0x5A0..0x5A8].copy_from_slice(&62u64.to_le_bytes());
         bytes[0x5C0..0x5C4].copy_from_slice(&17u32.to_le_bytes());
         bytes[0x5C4..0x5C8].copy_from_slice(&2u32.to_le_bytes());
         bytes[0x5D8..0x5E0].copy_from_slice(&0x740u64.to_le_bytes());
@@ -13403,11 +13446,20 @@ mod tests {
         bytes[0x658..0x660].copy_from_slice(&0x790u64.to_le_bytes());
         bytes[0x660..0x668].copy_from_slice(&24u64.to_le_bytes());
         bytes[0x678..0x680].copy_from_slice(&24u64.to_le_bytes());
-        bytes[0x700..0x72B].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0.rela.dyn\0");
+        bytes[0x680..0x684].copy_from_slice(&43u32.to_le_bytes());
+        bytes[0x684..0x688].copy_from_slice(&7u32.to_le_bytes());
+        bytes[0x698..0x6A0].copy_from_slice(&0x7B0u64.to_le_bytes());
+        bytes[0x6A0..0x6A8].copy_from_slice(&20u64.to_le_bytes());
+        bytes[0x700..0x73E].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0.rela.dyn\0.note.gnu.build-id\0");
         bytes[0x740..0x744].copy_from_slice(&0u32.to_le_bytes());
         bytes[0x758..0x75C].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x75C] = 0x12;
         bytes[0x780..0x78D].copy_from_slice(b"\0main\0helper\0");
+        bytes[0x7B0..0x7B4].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x7B4..0x7B8].copy_from_slice(&4u32.to_le_bytes());
+        bytes[0x7B8..0x7BC].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x7BC..0x7C0].copy_from_slice(b"GNU\0");
+        bytes[0x7C0..0x7C4].copy_from_slice(&[1, 2, 3, 4]);
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -13416,15 +13468,16 @@ mod tests {
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
         assert!(text.contains("Program headers: 3"));
-        assert!(text.contains("Section headers: 6"));
+        assert!(text.contains("Section headers: 7"));
         assert!(text.contains("Program header offset: 0x40"));
         assert!(text.contains("Section header offset: 0x500"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
         assert!(text.contains("Needed libraries: libc.so.6"));
         assert!(text.contains("SONAME: libdemo.so"));
         assert!(text.contains("RUNPATH: $ORIGIN"));
-        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn"));
+        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn, .note.gnu.build-id"));
         assert!(text.contains("Symbols: .symtab 2 entries (main)"));
         assert!(text.contains("Relocations: .rela.dyn 1 entries"));
+        assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
     }
 }
