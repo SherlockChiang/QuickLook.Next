@@ -1038,10 +1038,13 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
+    let mut canvas = vec![0u8; (original_width as usize).checked_mul(original_height as usize)?.checked_mul(4)?];
     for frame in frames.into_iter().take(max_frames) {
         let (num, den) = frame.delay().numer_denom_ms();
         let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
         let rgba = frame.into_buffer();
+        composite_rgba_over(&mut canvas, &rgba, original_width, original_height);
+        let rgba = image::RgbaImage::from_raw(original_width, original_height, canvas.clone())?;
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
         } else {
@@ -1062,6 +1065,34 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
         decoded.push((delay_ms, bgra));
     }
     Some((width, height, decoded))
+}
+
+fn composite_rgba_over(canvas: &mut [u8], frame: &image::RgbaImage, width: u32, height: u32) {
+    let copy_width = width.min(frame.width()) as usize;
+    let copy_height = height.min(frame.height()) as usize;
+    let canvas_stride = width as usize * 4;
+    let frame_stride = frame.width() as usize * 4;
+    let frame_bytes = frame.as_raw();
+    for y in 0..copy_height {
+        for x in 0..copy_width {
+            let src = y * frame_stride + x * 4;
+            let dst = y * canvas_stride + x * 4;
+            let a = frame_bytes[src + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            if a == 255 {
+                canvas[dst..dst + 4].copy_from_slice(&frame_bytes[src..src + 4]);
+                continue;
+            }
+            let inv_a = 255 - a;
+            for channel in 0..3 {
+                let blended = (frame_bytes[src + channel] as u32 * a + canvas[dst + channel] as u32 * inv_a + 127) / 255;
+                canvas[dst + channel] = blended as u8;
+            }
+            canvas[dst + 3] = (a + canvas[dst + 3] as u32 * inv_a / 255).min(255) as u8;
+        }
+    }
 }
 
 fn apply_exif_orientation(image: image::DynamicImage, orientation: u16) -> image::DynamicImage {
@@ -1313,6 +1344,35 @@ mod tests {
         assert_eq!(decoded.2.len(), 2);
         assert_eq!(decoded.2[0].1, vec![0, 0, 255, 255]);
         assert_eq!(decoded.2[1].1, vec![255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn native_gif_frame_extraction_uses_composited_partial_frames() {
+        use image::Delay;
+        use image::codecs::gif::{GifEncoder, Repeat};
+
+        let path = temp_image_path("gif");
+        let first = image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 255, 255, 0, 0, 255]).unwrap();
+        let second = image::RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap();
+        let file = std::fs::File::create(&path).expect("create gif");
+        let mut encoder = GifEncoder::new(file);
+        encoder.set_repeat(Repeat::Infinite).expect("set repeat");
+        encoder
+            .encode_frame(image::Frame::from_parts(first, 0, 0, Delay::from_numer_denom_ms(100, 1)))
+            .expect("write first frame");
+        encoder
+            .encode_frame(image::Frame::from_parts(second, 1, 0, Delay::from_numer_denom_ms(100, 1)))
+            .expect("write partial frame");
+        drop(encoder);
+
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1).expect("decode gif frames");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 2);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.2.len(), 2);
+        assert_eq!(decoded.2[0].1, vec![0, 0, 255, 255, 0, 0, 255, 255]);
+        assert_eq!(decoded.2[1].1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
     }
 
     fn temp_image_path(ext: &str) -> std::path::PathBuf {
