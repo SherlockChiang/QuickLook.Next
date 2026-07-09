@@ -4729,6 +4729,67 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
     text.push_str(&format!(
         "\nITSP version: {version}\nITSP header length: {header_len} bytes\nDirectory block length: {block_len} bytes\nDirectory block count: {block_count}\nDirectory index depth/root/head: {index_depth}/{index_root}/{index_head}"
     ));
+    let entries = chm_directory_entries(bytes, dir_offset, header_len as usize, block_len as usize);
+    if !entries.is_empty() {
+        text.push_str(&format!("\nDirectory entries: {}", entries.join(", ")));
+    }
+}
+
+fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, block_len: usize) -> Vec<String> {
+    if header_len == 0 || block_len < 32 {
+        return Vec::new();
+    }
+    let block_offset = dir_offset.saturating_add(header_len);
+    if block_offset.saturating_add(block_len) > bytes.len() || bytes.get(block_offset..block_offset + 4) != Some(b"PMGL") {
+        return Vec::new();
+    }
+    let free_space = read_u32(bytes, block_offset + 4).unwrap_or(0) as usize;
+    let entries_end = block_offset
+        .saturating_add(block_len)
+        .saturating_sub(free_space.min(block_len));
+    let mut offset = block_offset + 20;
+    let mut entries = Vec::new();
+    while offset < entries_end && entries.len() < 12 {
+        let Some((name_len, next)) = read_chm_encint(bytes, offset, entries_end) else {
+            break;
+        };
+        offset = next;
+        if name_len == 0 || name_len > 260 || offset.saturating_add(name_len) > entries_end {
+            break;
+        }
+        let name = String::from_utf8_lossy(&bytes[offset..offset + name_len]).to_string();
+        offset += name_len;
+        let Some((section, next)) = read_chm_encint(bytes, offset, entries_end) else {
+            break;
+        };
+        offset = next;
+        let Some((file_offset, next)) = read_chm_encint(bytes, offset, entries_end) else {
+            break;
+        };
+        offset = next;
+        let Some((file_len, next)) = read_chm_encint(bytes, offset, entries_end) else {
+            break;
+        };
+        offset = next;
+        if !name.is_empty() {
+            entries.push(format!("{name} [section {section}, offset {file_offset}, {}]", format_bytes(file_len as i64)));
+        }
+    }
+    entries
+}
+
+fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, usize)> {
+    let mut value = 0usize;
+    let mut current = offset;
+    for _ in 0..8 {
+        let byte = *bytes.get(current).filter(|_| current < limit)?;
+        current += 1;
+        value = value.checked_shl(7)?.checked_add((byte & 0x7F) as usize)?;
+        if byte & 0x80 == 0 {
+            return Some((value, current));
+        }
+    }
+    None
 }
 
 fn render_dump_info(path: &str, size: i64, modified_unix: i64) -> String {
@@ -14910,20 +14971,28 @@ mod tests {
         bytes[0x100..0x104].copy_from_slice(b"ITSP");
         bytes[0x104..0x108].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x108..0x10C].copy_from_slice(&84u32.to_le_bytes());
-        bytes[0x110..0x114].copy_from_slice(&4096u32.to_le_bytes());
+        bytes[0x110..0x114].copy_from_slice(&64u32.to_le_bytes());
         bytes[0x118..0x11C].copy_from_slice(&2u32.to_le_bytes());
         bytes[0x11C..0x120].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x120..0x124].copy_from_slice(&4u32.to_le_bytes());
         bytes[0x128..0x12C].copy_from_slice(&7u32.to_le_bytes());
+        bytes[0x154..0x158].copy_from_slice(b"PMGL");
+        bytes[0x158..0x15C].copy_from_slice(&30u32.to_le_bytes());
+        bytes[0x168] = 10;
+        bytes[0x169..0x173].copy_from_slice(b"/index.htm");
+        bytes[0x173] = 0;
+        bytes[0x174] = 123;
+        bytes[0x175] = 45;
         let mut text = String::new();
 
         append_chm_itsp_summary(&mut text, &bytes);
 
         assert!(text.contains("ITSP version: 1"));
         assert!(text.contains("ITSP header length: 84 bytes"));
-        assert!(text.contains("Directory block length: 4096 bytes"));
+        assert!(text.contains("Directory block length: 64 bytes"));
         assert!(text.contains("Directory block count: 7"));
         assert!(text.contains("Directory index depth/root/head: 2/3/4"));
+        assert!(text.contains("Directory entries: /index.htm [section 0, offset 123, 45 B]"));
     }
 
     #[test]

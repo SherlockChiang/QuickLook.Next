@@ -68,7 +68,7 @@ then commit that item by itself.
 ### CHM
 
 - [x] Parse ITSP directory header from the CHM directory offset.
-- [ ] List bounded directory entries when the directory chunk format is safe to
+- [x] List bounded directory entries when the directory chunk format is safe to
   parse.
 - [ ] Extract title and default topic from system/control files when present.
 - [ ] Summarize compressed stream metadata without decompressing unbounded data.
@@ -92,7 +92,7 @@ then commit that item by itself.
 - Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList with fixed
   version fields, MemoryList, Memory64List, HandleData, UnloadedModuleList, and
   MiscInfo.
-- CHM ITSF metadata and ITSP directory header.
+- CHM ITSF metadata, ITSP directory header, and bounded PMGL directory entries.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, body byte sizes, decoded transfer sizes, and bounded
   text/plain previews, plus nested MIME parts.
