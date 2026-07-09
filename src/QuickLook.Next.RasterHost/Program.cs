@@ -377,7 +377,7 @@ static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
 
 static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)
 {
-    string[] files = ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"];
+    string[] files = ["jpeg-cmyk.jpg", "jpeg-wide-gamut-icc.jpg", "avif-still.avif", "heic-still.heic", "jxl-still.jxl"];
     int decoded = 0;
     var failures = new List<string>();
     foreach (string file in files)
@@ -395,7 +395,7 @@ static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSyst
             if (image is null)
             {
                 string message = $"system codec did not decode {file}";
-                if (requireSystemCodecs || file is "avif-still.avif" or "heic-still.heic") failures.Add(message);
+                if (requireSystemCodecs || file is "jpeg-cmyk.jpg" or "jpeg-wide-gamut-icc.jpg" or "avif-still.avif" or "heic-still.heic") failures.Add(message);
                 else Console.WriteLine(message);
                 continue;
             }
@@ -404,7 +404,7 @@ static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSyst
         }
         catch (Exception ex)
         {
-            if (requireSystemCodecs || file is "avif-still.avif" or "heic-still.heic") failures.Add($"{file}: {ex.Message}");
+            if (requireSystemCodecs || file is "jpeg-cmyk.jpg" or "jpeg-wide-gamut-icc.jpg" or "avif-still.avif" or "heic-still.heic") failures.Add($"{file}: {ex.Message}");
             else Console.WriteLine($"system codec failed {file}: {ex.Message}");
         }
     }
