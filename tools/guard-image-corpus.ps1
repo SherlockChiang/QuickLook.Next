@@ -42,3 +42,8 @@ if (Test-Path -LiteralPath $smoke) {
     if ($RequireSamples) { & $smoke -Root $Root -RequireSamples }
     else { & $smoke -Root $Root }
 }
+
+$capabilities = Join-Path $PSScriptRoot "report-image-capabilities.ps1"
+if (Test-Path -LiteralPath $capabilities) {
+    & $capabilities -Root $Root
+}
