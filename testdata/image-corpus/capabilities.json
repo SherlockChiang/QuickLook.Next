@@ -7,6 +7,6 @@
     { "extension": ".tiff", "nativeDecode": true, "nativeAnimation": false, "systemDecode": true, "notes": "Native static decode includes 16-bit luma corpus." },
     { "extension": ".avif", "nativeDecode": false, "nativeAnimation": false, "systemDecode": true, "notes": "System/WIC required; Rust fallback is skipped. image avif-native was not enabled because dav1d/pkg-config is not reproducible in the current Windows build." },
     { "extension": ".heic", "nativeDecode": false, "nativeAnimation": false, "systemDecode": true, "notes": "System/WIC required; Rust fallback is skipped. No reproducible Rust HEIC path is enabled." },
-    { "extension": ".jxl", "nativeDecode": false, "nativeAnimation": false, "systemDecode": true, "notes": "System/WIC required when a JPEG XL codec is installed; Rust fallback is skipped. No reproducible Rust JXL path is enabled." }
+    { "extension": ".jxl", "nativeDecode": false, "nativeAnimation": false, "systemDecode": true, "notes": "System/WIC required when a JPEG XL codec is installed; Rust fallback is skipped. Missing codec is reported explicitly if no thumbnail is available." }
   ]
 }

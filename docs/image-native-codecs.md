@@ -22,3 +22,4 @@ Policy:
 
 - Do not enable native codec features that require machine-global libraries unless the build scripts and CI image install those dependencies explicitly.
 - Prefer system decode for AVIF/HEIC/JXL until a reproducible Rust decoder path is available.
+- If system decode and shell thumbnail fallback both fail for AVIF/HEIC/JXL, RasterHost returns an explicit missing Windows image codec error instead of a generic unsupported message.
