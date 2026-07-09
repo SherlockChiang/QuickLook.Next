@@ -75,7 +75,7 @@ then commit that item by itself.
 
 ### Mail / MSG
 
-- [ ] Build a nested MIME tree instead of a flat boundary summary.
+- [x] Build a nested MIME tree instead of a flat boundary summary.
 - [x] Decode transfer-encoded body sizes for base64 and quoted-printable with
   strict caps.
 - [x] Add bounded body preview for text/plain parts.
@@ -95,4 +95,4 @@ then commit that item by itself.
 - CHM ITSF metadata and ITSP directory header.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, body byte sizes, decoded transfer sizes, and bounded
-  text/plain previews.
+  text/plain previews, plus nested MIME parts.

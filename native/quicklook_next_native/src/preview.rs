@@ -5684,63 +5684,82 @@ fn mail_attachment_filenames(content: &str) -> Vec<String> {
 }
 
 fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
+    let mut summaries = Vec::new();
+    mail_mime_part_summaries_inner(content, boundary, 0, &mut summaries);
+    summaries
+}
+
+fn mail_mime_part_summaries_inner(content: &str, boundary: &str, depth: usize, summaries: &mut Vec<String>) {
+    if depth > 4 || summaries.len() >= 32 {
+        return;
+    }
     let marker = format!("--{boundary}");
-    content
+    for part in content
         .split(&marker)
         .skip(1)
         .take(32)
-        .filter_map(|part| {
-            let trimmed = part.trim_start_matches(|ch| ch == '\r' || ch == '\n');
-            if trimmed.starts_with("--") || trimmed.trim().is_empty() {
-                return None;
+    {
+        let trimmed = part.trim_start_matches(|ch| ch == '\r' || ch == '\n');
+        if summaries.len() >= 32 || trimmed.starts_with("--") || trimmed.trim().is_empty() {
+            continue;
+        }
+        let (header_text, body) = trimmed
+            .split_once("\r\n\r\n")
+            .or_else(|| trimmed.split_once("\n\n"))
+            .unwrap_or((trimmed, ""));
+        let headers = parse_mail_headers(header_text);
+        let content_type_header = header_value(&headers, "Content-Type");
+        let content_type = content_type_header
+            .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "text/plain".to_string());
+        let disposition = header_value(&headers, "Content-Disposition")
+            .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+            .filter(|value| !value.is_empty());
+        let filename = header_value(&headers, "Content-Disposition")
+            .and_then(mail_attachment_filename_from_disposition);
+        let encoding = header_value(&headers, "Content-Transfer-Encoding")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let is_text_plain = content_type.eq_ignore_ascii_case("text/plain");
+        let is_multipart = content_type.to_ascii_lowercase().starts_with("multipart/");
+        let mut summary = if depth == 0 {
+            content_type
+        } else {
+            format!("{}{}", ">".repeat(depth), content_type)
+        };
+        if let Some(disposition) = disposition {
+            summary.push_str(&format!(" ({disposition})"));
+        }
+        if let Some(filename) = filename {
+            summary.push_str(&format!(" filename={filename}"));
+        }
+        if let Some(encoding) = &encoding {
+            summary.push_str(&format!(" encoding={encoding}"));
+        }
+        let body_len = body
+            .trim_matches(|ch| ch == '\r' || ch == '\n')
+            .as_bytes()
+            .len();
+        summary.push_str(&format!(" body={body_len} bytes"));
+        if let Some(decoded_len) = encoding
+            .as_deref()
+            .and_then(|encoding| mail_decoded_body_len(body, encoding))
+        {
+            summary.push_str(&format!(" decoded={decoded_len} bytes"));
+        }
+        if is_text_plain {
+            if let Some(preview) = mail_text_body_preview(body, encoding.as_deref()) {
+                summary.push_str(&format!(" preview=\"{preview}\""));
             }
-            let (header_text, body) = trimmed
-                .split_once("\r\n\r\n")
-                .or_else(|| trimmed.split_once("\n\n"))
-                .unwrap_or((trimmed, ""));
-            let headers = parse_mail_headers(header_text);
-            let content_type = header_value(&headers, "Content-Type")
-                .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "text/plain".to_string());
-            let disposition = header_value(&headers, "Content-Disposition")
-                .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
-                .filter(|value| !value.is_empty());
-            let filename = header_value(&headers, "Content-Disposition")
-                .and_then(mail_attachment_filename_from_disposition);
-            let encoding = header_value(&headers, "Content-Transfer-Encoding")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-            let is_text_plain = content_type.eq_ignore_ascii_case("text/plain");
-            let mut summary = content_type;
-            if let Some(disposition) = disposition {
-                summary.push_str(&format!(" ({disposition})"));
+        }
+        summaries.push(summary);
+        if is_multipart {
+            if let Some(child_boundary) = content_type_header.and_then(|value| mail_header_parameter(value, "boundary")) {
+                mail_mime_part_summaries_inner(body, &child_boundary, depth + 1, summaries);
             }
-            if let Some(filename) = filename {
-                summary.push_str(&format!(" filename={filename}"));
-            }
-            if let Some(encoding) = &encoding {
-                summary.push_str(&format!(" encoding={encoding}"));
-            }
-            let body_len = body
-                .trim_matches(|ch| ch == '\r' || ch == '\n')
-                .as_bytes()
-                .len();
-            summary.push_str(&format!(" body={body_len} bytes"));
-            if let Some(decoded_len) = encoding
-                .as_deref()
-                .and_then(|encoding| mail_decoded_body_len(body, encoding))
-            {
-                summary.push_str(&format!(" decoded={decoded_len} bytes"));
-            }
-            if is_text_plain {
-                if let Some(preview) = mail_text_body_preview(body, encoding.as_deref()) {
-                    summary.push_str(&format!(" preview=\"{preview}\""));
-                }
-            }
-            Some(summary)
-        })
-        .collect()
+        }
+    }
 }
 
 fn mail_text_body_preview(body: &str, encoding: Option<&str>) -> Option<String> {
@@ -14672,6 +14691,19 @@ mod tests {
             vec![
                 "text/plain encoding=quoted-printable body=5 bytes decoded=5 bytes preview=\"Hello\"".to_string(),
                 "application/pdf (attachment) filename=report.pdf encoding=base64 body=8 bytes decoded=4 bytes".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mail_mime_part_summaries_include_nested_parts() {
+        let content = "Content-Type: multipart/mixed; boundary=outer\r\n\r\n--outer\r\nContent-Type: multipart/alternative; boundary=inner\r\n\r\n--inner\r\nContent-Type: text/plain\r\n\r\nNested hello\r\n--inner--\r\n--outer--\r\n";
+
+        assert_eq!(
+            mail_mime_part_summaries(content, "outer"),
+            vec![
+                "multipart/alternative body=60 bytes".to_string(),
+                ">text/plain body=12 bytes preview=\"Nested hello\"".to_string(),
             ]
         );
     }
