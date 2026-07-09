@@ -7430,7 +7430,112 @@ fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     if let Some(arrays) = parse_hvcc_array_summary(payload) {
         parts.push(arrays);
     }
+    if let Some(sps) = parse_hvcc_sps_summary(payload) {
+        parts.push(sps);
+    }
     Some(parts.join(", "))
+}
+
+fn parse_hvcc_sps_summary(payload: &[u8]) -> Option<String> {
+    let sps = find_hvcc_nal(payload, 33)?;
+    parse_hevc_sps_summary(sps)
+}
+
+fn find_hvcc_nal(payload: &[u8], target_type: u8) -> Option<&[u8]> {
+    let arrays = *payload.get(22)? as usize;
+    let mut offset = 23usize;
+    for _ in 0..arrays.min(32) {
+        let nal_type = *payload.get(offset)? & 0x3F;
+        let nal_count = read_u16_be(payload, offset + 1)? as usize;
+        offset += 3;
+        for _ in 0..nal_count.min(256) {
+            let len = read_u16_be(payload, offset)? as usize;
+            offset += 2;
+            let nal = payload.get(offset..offset.checked_add(len)?)?;
+            if nal_type == target_type {
+                return Some(nal);
+            }
+            offset += len;
+        }
+    }
+    None
+}
+
+fn parse_hevc_sps_summary(sps: &[u8]) -> Option<String> {
+    let rbsp = h264_ebsp_to_rbsp(sps.get(2..)?);
+    let mut bits = BitReader::new(&rbsp);
+    bits.read_bits(4)?;
+    let max_sub_layers_minus1 = bits.read_bits(3)?.min(7) as usize;
+    bits.read_bits(1)?;
+    skip_hevc_profile_tier_level(&mut bits, max_sub_layers_minus1)?;
+    bits.read_ue()?;
+    let chroma_format_idc = bits.read_ue()?;
+    if chroma_format_idc == 3 {
+        bits.read_bits(1)?;
+    }
+    let coded_width = bits.read_ue()?;
+    let coded_height = bits.read_ue()?;
+    let mut crop = (0u32, 0u32, 0u32, 0u32);
+    if bits.read_bits(1)? != 0 {
+        crop = (bits.read_ue()?, bits.read_ue()?, bits.read_ue()?, bits.read_ue()?);
+    }
+    let luma_bits = bits.read_ue()?.checked_add(8)?;
+    let chroma_bits = bits.read_ue()?.checked_add(8)?;
+    let (crop_x, crop_y) = hevc_crop_units(chroma_format_idc);
+    let display_width = coded_width.saturating_sub((crop.0 + crop.1).saturating_mul(crop_x));
+    let display_height = coded_height.saturating_sub((crop.2 + crop.3).saturating_mul(crop_y));
+    let mut parts = vec![format!("SPS coded {coded_width}x{coded_height}")];
+    if display_width != coded_width || display_height != coded_height {
+        parts.push(format!("crop display {display_width}x{display_height}"));
+    }
+    parts.push(format!("chroma {chroma_format_idc}"));
+    parts.push(format!("{luma_bits}-bit luma"));
+    parts.push(format!("{chroma_bits}-bit chroma"));
+    Some(parts.join(", "))
+}
+
+fn skip_hevc_profile_tier_level(bits: &mut BitReader<'_>, max_sub_layers_minus1: usize) -> Option<()> {
+    bits.read_bits(2)?;
+    bits.read_bits(1)?;
+    bits.read_bits(5)?;
+    bits.read_bits(32)?;
+    bits.read_bits(32)?;
+    bits.read_bits(16)?;
+    bits.read_bits(8)?;
+    let mut sub_layer_profile_present = [false; 8];
+    let mut sub_layer_level_present = [false; 8];
+    for index in 0..max_sub_layers_minus1 {
+        sub_layer_profile_present[index] = bits.read_bits(1)? != 0;
+        sub_layer_level_present[index] = bits.read_bits(1)? != 0;
+    }
+    if max_sub_layers_minus1 > 0 {
+        for _ in max_sub_layers_minus1..8 {
+            bits.read_bits(2)?;
+        }
+    }
+    for index in 0..max_sub_layers_minus1 {
+        if sub_layer_profile_present[index] {
+            bits.read_bits(2)?;
+            bits.read_bits(1)?;
+            bits.read_bits(5)?;
+            bits.read_bits(32)?;
+            bits.read_bits(32)?;
+            bits.read_bits(16)?;
+        }
+        if sub_layer_level_present[index] {
+            bits.read_bits(8)?;
+        }
+    }
+    Some(())
+}
+
+fn hevc_crop_units(chroma_format_idc: u32) -> (u32, u32) {
+    match chroma_format_idc {
+        1 => (2, 2),
+        2 => (2, 1),
+        3 => (1, 1),
+        _ => (1, 1),
+    }
 }
 
 fn parse_hvcc_array_summary(payload: &[u8]) -> Option<String> {
@@ -13620,6 +13725,66 @@ mod tests {
 
     #[test]
     fn hevc_config_summary_reads_parameter_set_arrays() {
+        struct Writer {
+            bits: Vec<u8>,
+        }
+        impl Writer {
+            fn new() -> Self {
+                Self { bits: Vec::new() }
+            }
+            fn bit(&mut self, value: bool) {
+                self.bits.push(u8::from(value));
+            }
+            fn bits(&mut self, value: u32, count: usize) {
+                for shift in (0..count).rev() {
+                    self.bit(((value >> shift) & 1) != 0);
+                }
+            }
+            fn ue(&mut self, value: u32) {
+                let code_num = value + 1;
+                let bits = 32 - code_num.leading_zeros();
+                for _ in 0..bits - 1 {
+                    self.bit(false);
+                }
+                self.bits(code_num, bits as usize);
+            }
+            fn finish(mut self) -> Vec<u8> {
+                self.bit(true);
+                while self.bits.len() % 8 != 0 {
+                    self.bit(false);
+                }
+                self.bits
+                    .chunks(8)
+                    .map(|chunk| chunk.iter().fold(0u8, |acc, bit| (acc << 1) | bit))
+                    .collect()
+            }
+        }
+
+        let mut writer = Writer::new();
+        writer.bits(0, 4);
+        writer.bits(0, 3);
+        writer.bit(true);
+        writer.bits(0, 2);
+        writer.bit(false);
+        writer.bits(1, 5);
+        writer.bits(0, 32);
+        writer.bits(0, 32);
+        writer.bits(0, 16);
+        writer.bits(120, 8);
+        writer.ue(0);
+        writer.ue(1);
+        writer.ue(1920);
+        writer.ue(1088);
+        writer.bit(true);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(0);
+        writer.ue(4);
+        writer.ue(2);
+        writer.ue(2);
+        let mut sps = vec![0x42, 0x01];
+        sps.extend_from_slice(&writer.finish());
+
         let mut hvcc = vec![0u8; 23];
         hvcc[1] = 1;
         hvcc[12] = 120;
@@ -13629,14 +13794,19 @@ mod tests {
         hvcc[21] = 3;
         hvcc[22] = 3;
         hvcc.extend_from_slice(&[0xA0, 0, 1, 0, 1, 0xAA]);
-        hvcc.extend_from_slice(&[0xA1, 0, 1, 0, 1, 0xBB]);
+        hvcc.extend_from_slice(&[0xA1, 0, 1]);
+        hvcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+        hvcc.extend_from_slice(&sps);
         hvcc.extend_from_slice(&[0xA2, 0, 1, 0, 1, 0xCC]);
 
         let detail = parse_hvcc_detail(&hvcc).expect("hvcC detail");
+        let sps_summary = parse_hevc_sps_summary(&sps).expect("hevc sps");
 
         assert!(detail.contains("HEVC profile 1"));
         assert!(detail.contains("4-byte NAL length"));
         assert!(detail.contains("VPS 1, SPS 1, PPS 1"));
+        assert_eq!(sps_summary, "SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma");
+        assert!(detail.contains("SPS coded 1920x1088, crop display 1920x1080, chroma 1, 10-bit luma, 10-bit chroma"));
     }
 
     #[test]
