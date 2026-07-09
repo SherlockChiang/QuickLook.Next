@@ -184,6 +184,11 @@ if (Test-Path $staleCallbackGuard) {
     & $staleCallbackGuard -Root $Root
 }
 
+$thumbnailPriorityGuard = Join-Path $PSScriptRoot "guard-thumbnail-priority.ps1"
+if (Test-Path $thumbnailPriorityGuard) {
+    & $thumbnailPriorityGuard -Root $Root
+}
+
 $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
 if (Test-Path $imageCorpusGuard) {
     & $imageCorpusGuard -Root $Root

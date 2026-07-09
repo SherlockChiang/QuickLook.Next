@@ -41,6 +41,7 @@ public sealed partial class MainWindow : Window
     private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly NativeBridge _native = new();
+    private readonly NativeThumbnailScheduler _thumbnailScheduler;
     private readonly PreviewWindowController _windowController;
     private TextPreviewPresenter? _textPresenter;
     private TablePreviewPresenter? _tablePresenter;
@@ -177,6 +178,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _thumbnailScheduler = new NativeThumbnailScheduler(_native);
         _panelController = new PreviewPanelController(
             PreviewRoot,
             AnimatedImagePreviewRoot,
@@ -205,7 +207,7 @@ public sealed partial class MainWindow : Window
             path => _native.TryPreviewFolderListing(path),
             IsImagePath,
             IsImageFilmstripLoadCurrent,
-            (path, size, token) => _native.TryGetThumbnail(path, size, token),
+            (path, size, token) => _thumbnailScheduler.LoadAsync(path, size, NativeThumbnailPriority.Background, token),
             path => _native.ProbeFile(path),
             CreateBitmapSource);
         _exifPresenter = new ExifPreviewPresenter(
@@ -1175,12 +1177,7 @@ public sealed partial class MainWindow : Window
         try
         {
             CancellationToken token = CurrentPreviewToken;
-            NativeRasterImage? raster = await Task.Run(() =>
-            {
-                if (token.IsCancellationRequested)
-                    return null;
-                return _native.TryGetThumbnail(path, 32);
-            }, token);
+            NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(path, 32, NativeThumbnailPriority.Foreground, token);
 
             if (!IsPreviewGenerationCurrent(generation, token) || raster is null)
                 return null;
@@ -1233,11 +1230,11 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return null;
-            return LoadPreviewHeroRaster(ready, path);
+            return await LoadPreviewHeroRasterAsync(ready, path, token);
         }, token).ContinueWith(task =>
         {
             if (task.IsFaulted || task.IsCanceled || task.Result is null)
@@ -1269,19 +1266,20 @@ public sealed partial class MainWindow : Window
         }, TaskScheduler.Default);
     }
 
-    private NativeRasterImage? LoadPreviewHeroRaster(PreviewReady ready, string path)
+    private async Task<NativeRasterImage?> LoadPreviewHeroRasterAsync(PreviewReady ready, string path, CancellationToken token)
     {
         if (IsPackagePreview(ready, path))
-            return _native.TryExtractPackageIcon(path) ?? _native.TryGetThumbnail(path, 512);
+            return _native.TryExtractPackageIcon(path)
+                ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
 
         if (IsOfficePreviewWithImages(ready))
             return _native.TryExtractOfficeImage(path);
 
         if (IsExecutablePreview(ready, path))
-            return _native.TryGetThumbnail(path, 512);
+            return await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
 
         if (ready.Kind == "certificate")
-            return _native.TryGetThumbnail(path, 256);
+            return await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, token);
 
         return null;
     }

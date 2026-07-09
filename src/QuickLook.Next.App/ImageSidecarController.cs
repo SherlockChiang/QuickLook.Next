@@ -24,7 +24,7 @@ internal sealed class ImageSidecarController
     private readonly Func<string, PreviewListing?> _loadFolderListing;
     private readonly Func<string, bool> _isImagePath;
     private readonly Func<string, int, CancellationToken, bool> _isPathCurrent;
-    private readonly Func<string, int, CancellationToken, NativeRasterImage?> _loadThumbnail;
+    private readonly Func<string, int, CancellationToken, Task<NativeRasterImage?>> _loadThumbnail;
     private readonly Func<string, FileProbe?> _probeFile;
     private readonly Func<NativeRasterImage, ImageSource?> _createBitmapSource;
     private readonly ImageThumbnailCache _thumbnailCache = new(MaxImageThumbnailCacheItems);
@@ -37,7 +37,7 @@ internal sealed class ImageSidecarController
         Func<string, PreviewListing?> loadFolderListing,
         Func<string, bool> isImagePath,
         Func<string, int, CancellationToken, bool> isPathCurrent,
-        Func<string, int, CancellationToken, NativeRasterImage?> loadThumbnail,
+        Func<string, int, CancellationToken, Task<NativeRasterImage?>> loadThumbnail,
         Func<string, FileProbe?> probeFile,
         Func<NativeRasterImage, ImageSource?> createBitmapSource)
     {
@@ -131,7 +131,7 @@ internal sealed class ImageSidecarController
                     continue;
                 }
 
-                NativeRasterImage? raster = await Task.Run(() => _loadThumbnail(sibling, 96, token), token);
+                NativeRasterImage? raster = await _loadThumbnail(sibling, 96, token);
                 if (!_isPathCurrent(path, generation, token))
                     return;
 
@@ -261,13 +261,13 @@ internal sealed class ImageSidecarController
                 if (!_isPathCurrent(currentPath, generation, token))
                     return;
 
-                NativeRasterImage? raster = await Task.Run(() =>
+                NativeRasterImage? raster = await Task.Run(async () =>
                 {
                     if (token.IsCancellationRequested || !_isPathCurrent(currentPath, generation, token))
                         return null;
 
                     _ = _probeFile(target);
-                    return _loadThumbnail(target, 128, token);
+                    return await _loadThumbnail(target, 128, token);
                 }, token);
                 if (!_isPathCurrent(currentPath, generation, token))
                     return;
