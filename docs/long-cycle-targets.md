@@ -45,7 +45,7 @@ then commit that item by itself.
 - [x] Summarize bounded Authenticode certificate name strings from common X.509
   name OIDs.
 - [x] Parse structured certificate subject/issuer.
-- [ ] Parse Authenticode PKCS#7 signer.
+- [x] Parse Authenticode PKCS#7 signer.
 - [x] Decode CLR metadata table stream row counts.
 - [x] Summarize CLR assembly references.
 - [x] Summarize CLR type definitions and custom attributes with strict caps.

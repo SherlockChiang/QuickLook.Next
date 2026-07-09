@@ -9719,6 +9719,9 @@ pub fn render_executable(path: &str) -> String {
         if !certificate.signature_algorithms.is_empty() {
             text.push_str(&format!("Certificate signature algorithms: {}\n", certificate.signature_algorithms.join(", ")));
         }
+        if !certificate.signers.is_empty() {
+            text.push_str(&format!("Certificate signers: {}\n", certificate.signers.join(", ")));
+        }
         if !certificate.names.is_empty() {
             text.push_str(&format!("Certificate names: {}\n", certificate.names.join(", ")));
         }
@@ -9822,6 +9825,7 @@ struct PeCertificateSummary {
     typ: u16,
     digest_algorithms: Vec<String>,
     signature_algorithms: Vec<String>,
+    signers: Vec<String>,
     names: Vec<String>,
     issuers: Vec<String>,
     subjects: Vec<String>,
@@ -10438,6 +10442,7 @@ fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateS
         typ: read_u16(bytes, offset + 6)?,
         digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, length),
         signature_algorithms: parse_authenticode_signature_algorithms(bytes, offset, length),
+        signers: parse_authenticode_signers(bytes, offset, length),
         names: parse_authenticode_certificate_names(bytes, offset, length),
         issuers,
         subjects,
@@ -10462,6 +10467,50 @@ fn parse_authenticode_digest_algorithms(bytes: &[u8], offset: usize, length: usi
         }
     }
     algorithms
+}
+
+fn parse_authenticode_signers(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
+    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
+        return Vec::new();
+    };
+    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
+    let signed_data_oid = [0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
+    if !payload.windows(signed_data_oid.len()).any(|window| window == signed_data_oid) {
+        return Vec::new();
+    }
+    let digest = first_oid_name(
+        payload,
+        &[
+            ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A][..]),
+            ("SHA-256", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01][..]),
+            ("SHA-384", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02][..]),
+            ("SHA-512", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03][..]),
+        ],
+    );
+    let signature = first_oid_name(
+        payload,
+        &[
+            ("SHA-1 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05][..]),
+            ("SHA-256 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B][..]),
+            ("SHA-384 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C][..]),
+            ("SHA-512 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D][..]),
+            ("RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01][..]),
+            ("ECDSA with SHA-256", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02][..]),
+            ("ECDSA with SHA-384", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03][..]),
+        ],
+    );
+    match (digest, signature) {
+        (Some(digest), Some(signature)) => vec![format!("digest {digest}; signature {signature}")],
+        (Some(digest), None) => vec![format!("digest {digest}")],
+        (None, Some(signature)) => vec![format!("signature {signature}")],
+        (None, None) => Vec::new(),
+    }
+}
+
+fn first_oid_name(bytes: &[u8], patterns: &[(&'static str, &[u8])]) -> Option<&'static str> {
+    patterns
+        .iter()
+        .find_map(|(name, pattern)| bytes.windows(pattern.len()).any(|window| window == *pattern).then_some(*name))
 }
 
 fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
@@ -15325,6 +15374,21 @@ mod tests {
 
         assert_eq!(issuers, vec!["CN=Issuer Test".to_string()]);
         assert_eq!(subjects, vec!["CN=Subject Test".to_string()]);
+    }
+
+    #[test]
+    fn authenticode_signer_summary_reads_pkcs7_algorithms() {
+        let mut bytes = vec![0u8; 8];
+        bytes.extend_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]);
+        bytes.extend_from_slice(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
+        bytes.extend_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]);
+        let len = bytes.len() as u32;
+        bytes[0..4].copy_from_slice(&len.to_le_bytes());
+
+        assert_eq!(
+            parse_authenticode_signers(&bytes, 0, bytes.len()),
+            vec!["digest SHA-256; signature SHA-256 with RSA".to_string()]
+        );
     }
 
     #[test]
