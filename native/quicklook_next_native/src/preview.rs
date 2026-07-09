@@ -8322,6 +8322,9 @@ pub fn render_executable(path: &str) -> String {
         if !clr.metadata_streams.is_empty() {
             text.push_str(&format!("CLR metadata streams: {}\n", clr.metadata_streams.join(", ")));
         }
+        if !clr.metadata_tables.is_empty() {
+            text.push_str(&format!("CLR metadata tables: {}\n", clr.metadata_tables.join(", ")));
+        }
         if let Some(assembly) = &clr.assembly {
             text.push_str(&format!("CLR assembly: {assembly}\n"));
         }
@@ -8403,6 +8406,7 @@ struct PeClrSummary {
     flags: u32,
     metadata_version: String,
     metadata_streams: Vec<String>,
+    metadata_tables: Vec<String>,
     assembly: Option<String>,
 }
 
@@ -9010,6 +9014,7 @@ fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usiz
         flags: read_u32(bytes, offset + 16)?,
         metadata_version: metadata.as_ref().map(|root| root.version.clone()).unwrap_or_default(),
         metadata_streams: metadata.as_ref().map(|root| root.streams.clone()).unwrap_or_default(),
+        metadata_tables: metadata.as_ref().map(|root| root.tables.clone()).unwrap_or_default(),
         assembly: metadata.and_then(|root| root.assembly),
     })
 }
@@ -9017,6 +9022,7 @@ fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usiz
 struct ClrMetadataRoot {
     version: String,
     streams: Vec<String>,
+    tables: Vec<String>,
     assembly: Option<String>,
 }
 
@@ -9034,7 +9040,7 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .to_string();
     let mut stream_offset = align4(version_end) + 4;
     if stream_offset > end {
-        return Some(ClrMetadataRoot { version, streams: Vec::new(), assembly: None });
+        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None });
     }
     let streams = read_u16(bytes, stream_offset - 2).unwrap_or(0).min(64) as usize;
     let mut names = Vec::new();
@@ -9059,7 +9065,73 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
     let assembly = tables_stream
         .zip(strings_heap)
         .and_then(|(tables, strings)| parse_clr_assembly_identity(tables, strings));
-    Some(ClrMetadataRoot { version, streams: names, assembly })
+    let tables = tables_stream.map(parse_clr_table_counts).unwrap_or_default();
+    Some(ClrMetadataRoot { version, streams: names, tables, assembly })
+}
+
+fn parse_clr_table_counts(tables: &[u8]) -> Vec<String> {
+    if tables.len() < 24 {
+        return Vec::new();
+    }
+    let valid = read_u64(tables, 8).unwrap_or(0);
+    let mut offset = 24usize;
+    let mut counts = Vec::new();
+    for table in 0..64 {
+        if valid & (1u64 << table) == 0 {
+            continue;
+        }
+        if offset + 4 > tables.len() {
+            break;
+        }
+        let rows = read_u32(tables, offset).unwrap_or(0);
+        if rows > 0 {
+            counts.push(format!("{}={rows}", clr_table_name(table)));
+        }
+        offset += 4;
+        if counts.len() >= 32 {
+            break;
+        }
+    }
+    counts
+}
+
+fn clr_table_name(index: usize) -> &'static str {
+    match index {
+        0 => "Module",
+        1 => "TypeRef",
+        2 => "TypeDef",
+        4 => "Field",
+        6 => "MethodDef",
+        8 => "Param",
+        9 => "InterfaceImpl",
+        10 => "MemberRef",
+        11 => "Constant",
+        12 => "CustomAttribute",
+        13 => "FieldMarshal",
+        14 => "DeclSecurity",
+        15 => "ClassLayout",
+        16 => "FieldLayout",
+        17 => "StandAloneSig",
+        18 => "EventMap",
+        20 => "Event",
+        21 => "PropertyMap",
+        23 => "Property",
+        24 => "MethodSemantics",
+        25 => "MethodImpl",
+        26 => "ModuleRef",
+        27 => "TypeSpec",
+        28 => "ImplMap",
+        29 => "FieldRVA",
+        32 => "Assembly",
+        35 => "AssemblyRef",
+        39 => "ExportedType",
+        40 => "ManifestResource",
+        41 => "NestedClass",
+        42 => "GenericParam",
+        43 => "MethodSpec",
+        44 => "GenericParamConstraint",
+        _ => "Table",
+    }
 }
 
 fn parse_clr_assembly_identity(tables: &[u8], strings: &[u8]) -> Option<String> {
@@ -13478,6 +13550,7 @@ mod tests {
         let clr = pe.clr.as_ref().expect("clr summary");
         assert_eq!(clr.metadata_version, "v4.0.30319");
         assert_eq!(clr.metadata_streams, vec!["#~".to_string(), "#Strings".to_string()]);
+        assert_eq!(clr.metadata_tables, vec!["Assembly=1".to_string()]);
         assert_eq!(clr.assembly.as_deref(), Some("QuickAsm 1.2.3.4"));
         assert_eq!(
             pe.section_names,
