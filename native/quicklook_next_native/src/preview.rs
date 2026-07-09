@@ -7212,7 +7212,11 @@ fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
     if bits.read_bits(1)? != 0 {
         crop = (bits.read_ue()?, bits.read_ue()?, bits.read_ue()?, bits.read_ue()?);
     }
-    let vui = bits.read_bits(1).unwrap_or(0) != 0;
+    let vui_summary = if bits.read_bits(1).unwrap_or(0) != 0 {
+        parse_h264_vui_summary(&mut bits)
+    } else {
+        None
+    };
     let coded_width = width_mbs.checked_mul(16)?;
     let coded_height = height_map_units.checked_mul(16)?.checked_mul(if frame_mbs_only { 1 } else { 2 })?;
     let (crop_x, crop_y) = h264_crop_units(chroma_format_idc, frame_mbs_only);
@@ -7222,10 +7226,79 @@ fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
     if display_width != coded_width || display_height != coded_height {
         parts.push(format!("crop display {display_width}x{display_height}"));
     }
-    if vui {
-        parts.push("VUI".to_string());
+    if let Some(vui) = vui_summary {
+        parts.push(vui);
     }
     Some(parts.join(", "))
+}
+
+fn parse_h264_vui_summary(bits: &mut BitReader<'_>) -> Option<String> {
+    let mut parts = vec!["VUI".to_string()];
+    let aspect_ratio_info_present = bits.read_bits(1)? != 0;
+    if aspect_ratio_info_present {
+        let aspect_ratio_idc = bits.read_bits(8)?;
+        if aspect_ratio_idc == 255 {
+            bits.read_bits(16)?;
+            bits.read_bits(16)?;
+        }
+    }
+    let overscan_info_present = bits.read_bits(1)? != 0;
+    if overscan_info_present {
+        bits.read_bits(1)?;
+    }
+    let video_signal_type_present = bits.read_bits(1)? != 0;
+    if video_signal_type_present {
+        let video_format = bits.read_bits(3)?;
+        let full_range = bits.read_bits(1)? != 0;
+        parts.push(format!("video format {video_format}"));
+        if full_range {
+            parts.push("full range".to_string());
+        }
+        let colour_description_present = bits.read_bits(1)? != 0;
+        if colour_description_present {
+            let primaries = bits.read_bits(8)? as u8;
+            let transfer = bits.read_bits(8)? as u8;
+            let matrix = bits.read_bits(8)? as u8;
+            parts.push(format!("primaries {}", h264_color_primaries_name(primaries)));
+            parts.push(format!("transfer {}", h264_transfer_name(transfer)));
+            parts.push(format!("matrix {}", h264_matrix_name(matrix)));
+        }
+    }
+    Some(parts.join(", "))
+}
+
+fn h264_color_primaries_name(value: u8) -> String {
+    match value {
+        1 => "BT.709".to_string(),
+        4 => "BT.470M".to_string(),
+        5 => "BT.470BG".to_string(),
+        6 => "SMPTE 170M".to_string(),
+        9 => "BT.2020".to_string(),
+        _ => format!("{value}"),
+    }
+}
+
+fn h264_transfer_name(value: u8) -> String {
+    match value {
+        1 => "BT.709".to_string(),
+        6 => "SMPTE 170M".to_string(),
+        13 => "sRGB".to_string(),
+        14 => "BT.2020 10-bit".to_string(),
+        16 => "PQ".to_string(),
+        18 => "HLG".to_string(),
+        _ => format!("{value}"),
+    }
+}
+
+fn h264_matrix_name(value: u8) -> String {
+    match value {
+        0 => "GBR".to_string(),
+        1 => "BT.709".to_string(),
+        6 => "SMPTE 170M".to_string(),
+        9 => "BT.2020 non-constant".to_string(),
+        10 => "BT.2020 constant".to_string(),
+        _ => format!("{value}"),
+    }
 }
 
 fn h264_ebsp_to_rbsp(bytes: &[u8]) -> Vec<u8> {
@@ -13433,18 +13506,27 @@ mod tests {
         writer.ue(0);
         writer.ue(4);
         writer.bit(true);
+        writer.bit(false);
+        writer.bit(false);
+        writer.bit(true);
+        writer.bits(5, 3);
+        writer.bit(true);
+        writer.bit(true);
+        writer.bits(1, 8);
+        writer.bits(1, 8);
+        writer.bits(1, 8);
         let mut sps = vec![0x67];
         sps.extend_from_slice(&writer.finish());
 
         let summary = parse_h264_sps_summary(&sps).expect("sps summary");
 
-        assert_eq!(summary, "SPS coded 640x368, crop display 640x360, VUI");
+        assert_eq!(summary, "SPS coded 640x368, crop display 640x360, VUI, video format 5, full range, primaries BT.709, transfer BT.709, matrix BT.709");
         let mut avcc = vec![1, 66, 0, 30, 0xFF, 0xE1];
         avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
         avcc.extend_from_slice(&sps);
         avcc.push(0);
         let detail = parse_avcc_detail(&avcc).expect("avcC detail");
-        assert!(detail.contains("SPS coded 640x368, crop display 640x360, VUI"));
+        assert!(detail.contains("SPS coded 640x368, crop display 640x360, VUI, video format 5, full range, primaries BT.709, transfer BT.709, matrix BT.709"));
     }
 
     #[test]
