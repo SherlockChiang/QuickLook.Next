@@ -5574,23 +5574,57 @@ fn decode_rfc2047_word(charset: &str, encoding: &str, encoded: &str) -> Option<S
     if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("us-ascii") {
         return None;
     }
-    if !encoding.eq_ignore_ascii_case("q") {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    let mut chars = encoded.as_bytes().iter().copied();
-    while let Some(byte) = chars.next() {
-        match byte {
-            b'_' => bytes.push(b' '),
-            b'=' => {
-                let hi = chars.next()?;
-                let lo = chars.next()?;
-                bytes.push((hex_nibble(hi)? << 4) | hex_nibble(lo)?);
+    let bytes = if encoding.eq_ignore_ascii_case("q") {
+        let mut bytes = Vec::new();
+        let mut chars = encoded.as_bytes().iter().copied();
+        while let Some(byte) = chars.next() {
+            match byte {
+                b'_' => bytes.push(b' '),
+                b'=' => {
+                    let hi = chars.next()?;
+                    let lo = chars.next()?;
+                    bytes.push((hex_nibble(hi)? << 4) | hex_nibble(lo)?);
+                }
+                _ => bytes.push(byte),
             }
-            _ => bytes.push(byte),
+        }
+        bytes
+    } else if encoding.eq_ignore_ascii_case("b") {
+        decode_base64(encoded)?
+    } else {
+        return None;
+    };
+    String::from_utf8(bytes).ok()
+}
+
+fn decode_base64(value: &str) -> Option<Vec<u8>> {
+    let mut bits = 0u32;
+    let mut bit_count = 0u8;
+    let mut bytes = Vec::new();
+    for byte in value.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if byte == b'=' {
+            break;
+        }
+        let sextet = base64_value(byte)? as u32;
+        bits = (bits << 6) | sextet;
+        bit_count += 6;
+        while bit_count >= 8 {
+            bit_count -= 8;
+            bytes.push(((bits >> bit_count) & 0xFF) as u8);
         }
     }
-    String::from_utf8(bytes).ok()
+    Some(bytes)
+}
+
+fn base64_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'A'..=b'Z' => Some(byte - b'A'),
+        b'a'..=b'z' => Some(byte - b'a' + 26),
+        b'0'..=b'9' => Some(byte - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
 }
 
 fn hex_nibble(byte: u8) -> Option<u8> {
@@ -11448,6 +11482,10 @@ mod tests {
         assert_eq!(
             decode_mail_header_value("=?UTF-8?Q?caf=C3=A9?="),
             "café"
+        );
+        assert_eq!(
+            decode_mail_header_value("=?UTF-8?B?UmVwb3J0IEphbnVhcnk=?="),
+            "Report January"
         );
         let names = mail_attachment_filenames(
             "Content-Disposition: attachment; filename=\"=?UTF-8?Q?report_Q1.pdf?=\"\r\n",
