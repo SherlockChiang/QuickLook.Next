@@ -5939,6 +5939,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !needed.is_empty() {
         text.push_str(&format!("\nNeeded libraries: {}", needed.join(", ")));
     }
+    let sections = elf_section_names(bytes, class, endian);
+    if !sections.is_empty() {
+        text.push_str(&format!("\nSection names: {}", sections.join(", ")));
+    }
 }
 
 fn elf_interpreter(bytes: &[u8], class: u8, endian: u8) -> Option<String> {
@@ -6082,6 +6086,60 @@ fn elf_vaddr_to_file_offset(headers: &[ElfProgramHeader], vaddr: u64) -> Option<
         }
     }
     None
+}
+
+fn elf_section_names(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let shoff = if class == 2 {
+        read_u64_endian(bytes, 40, endian).unwrap_or(0) as usize
+    } else {
+        read_u32_endian(bytes, 32, endian).unwrap_or(0) as usize
+    };
+    let shentsize = read_u16_endian(bytes, if class == 2 { 58 } else { 46 }, endian).unwrap_or(0) as usize;
+    let shnum = read_u16_endian(bytes, if class == 2 { 60 } else { 48 }, endian).unwrap_or(0).min(128) as usize;
+    let shstrndx = read_u16_endian(bytes, if class == 2 { 62 } else { 50 }, endian).unwrap_or(0) as usize;
+    if shoff == 0 || shentsize == 0 || shstrndx >= shnum {
+        return Vec::new();
+    }
+    let Some(str_header) = shoff.checked_add(shstrndx.saturating_mul(shentsize)) else {
+        return Vec::new();
+    };
+    if str_header + shentsize > bytes.len() {
+        return Vec::new();
+    }
+    let (str_offset, str_size) = if class == 2 {
+        (
+            read_u64_endian(bytes, str_header + 24, endian).unwrap_or(0) as usize,
+            read_u64_endian(bytes, str_header + 32, endian).unwrap_or(0) as usize,
+        )
+    } else {
+        (
+            read_u32_endian(bytes, str_header + 16, endian).unwrap_or(0) as usize,
+            read_u32_endian(bytes, str_header + 20, endian).unwrap_or(0) as usize,
+        )
+    };
+    if str_offset == 0 || str_offset.saturating_add(str_size) > bytes.len() {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    for index in 0..shnum {
+        let Some(header) = shoff.checked_add(index.saturating_mul(shentsize)) else {
+            break;
+        };
+        if header + 4 > bytes.len() {
+            break;
+        }
+        let name_offset = read_u32_endian(bytes, header, endian).unwrap_or(0) as usize;
+        if name_offset == 0 || name_offset >= str_size {
+            continue;
+        }
+        if let Some(name) = read_c_string(bytes, str_offset + name_offset, 96).filter(|name| !name.is_empty()) {
+            names.push(name);
+            if names.len() >= 24 {
+                break;
+            }
+        }
+    }
+    names
 }
 
 fn elf_type_name(value: u16) -> &'static str {
@@ -12901,7 +12959,7 @@ mod tests {
 
     #[test]
     fn elf_summary_detects_64_bit_little_endian() {
-        let mut bytes = vec![0u8; 1024];
+        let mut bytes = vec![0u8; 2048];
         bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
         bytes[4] = 2;
         bytes[5] = 1;
@@ -12909,10 +12967,12 @@ mod tests {
         bytes[18..20].copy_from_slice(&62u16.to_le_bytes());
         bytes[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
         bytes[32..40].copy_from_slice(&0x40u64.to_le_bytes());
-        bytes[40..48].copy_from_slice(&0x200u64.to_le_bytes());
+        bytes[40..48].copy_from_slice(&0x500u64.to_le_bytes());
         bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
         bytes[56..58].copy_from_slice(&3u16.to_le_bytes());
-        bytes[60..62].copy_from_slice(&12u16.to_le_bytes());
+        bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&3u16.to_le_bytes());
+        bytes[62..64].copy_from_slice(&2u16.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(&3u32.to_le_bytes());
         bytes[0x48..0x50].copy_from_slice(&0x300u64.to_le_bytes());
         bytes[0x60..0x68].copy_from_slice(&28u64.to_le_bytes());
@@ -12931,6 +12991,11 @@ mod tests {
         bytes[0x220..0x228].copy_from_slice(&0u64.to_le_bytes());
         bytes[0x280..0x28A].copy_from_slice(b"libc.so.6\0");
         bytes[0x300..0x31B].copy_from_slice(b"/lib64/ld-linux-x86-64.so.2");
+        bytes[0x540..0x544].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x580..0x584].copy_from_slice(&7u32.to_le_bytes());
+        bytes[0x598..0x5A0].copy_from_slice(&0x700u64.to_le_bytes());
+        bytes[0x5A0..0x5A8].copy_from_slice(&17u64.to_le_bytes());
+        bytes[0x700..0x711].copy_from_slice(b"\0.text\0.shstrtab\0");
 
         let mut text = String::new();
         append_elf_summary(&mut text, &bytes);
@@ -12939,10 +13004,11 @@ mod tests {
         assert!(text.contains("x86-64"));
         assert!(text.contains("0x0000000000401000"));
         assert!(text.contains("Program headers: 3"));
-        assert!(text.contains("Section headers: 12"));
+        assert!(text.contains("Section headers: 3"));
         assert!(text.contains("Program header offset: 0x40"));
-        assert!(text.contains("Section header offset: 0x200"));
+        assert!(text.contains("Section header offset: 0x500"));
         assert!(text.contains("Interpreter: /lib64/ld-linux-x86-64.so.2"));
         assert!(text.contains("Needed libraries: libc.so.6"));
+        assert!(text.contains("Section names: .text, .shstrtab"));
     }
 }
