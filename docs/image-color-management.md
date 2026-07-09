@@ -22,4 +22,10 @@ Not implemented yet:
 - Wide-gamut visual golden comparison.
 - CMYK color transform validation beyond successful decode.
 
+Current blocker:
+
+- The native Rust image path has decoded pixels but no bounded ICC color engine.
+- Adding a partial transform without profile/TRC/matrix support would risk wrong-color output.
+- Until a reproducible Rust-side ICC transform is selected and tested, RasterHost must continue to prefer WIC `ColorManageToSRgb` and skip Rust fallback for color-managed JPEGs after WIC failure.
+
 Design note: keep native decode bounded and predictable. If ICC conversion is added, prefer a Rust-side transform before BGRA conversion so App/RasterHost continue to consume the same premultiplied BGRA surface format.

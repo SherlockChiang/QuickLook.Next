@@ -19,6 +19,9 @@ then commit that item by itself.
 
 - [ ] Implement Rust-side ICC/source-to-sRGB transform for images that cannot use
   the system color-managed path.
+  Blocked: current dependencies do not expose a bounded ICC color transform. The
+  safe behavior remains to prefer WIC `ColorManageToSRgb` and skip Rust fallback
+  for color-managed JPEGs when WIC fails, rather than display wrong colors.
 - [x] Re-evaluate native AVIF fallback only if Windows/MSVC dependency setup is
   reproducible without external system packages.
 - [x] Re-evaluate native HEIC/HEIF fallback if a bounded, reproducible decoder is
