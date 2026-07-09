@@ -2,7 +2,7 @@
   "formats": [
     { "extension": ".gif", "nativeDecode": true, "nativeAnimation": true, "systemDecode": true, "notes": "Native GIF frame extraction handles bounded frames and generated disposal background/previous tests." },
     { "extension": ".webp", "nativeDecode": true, "nativeAnimation": true, "systemDecode": true, "notes": "Native WebP frame route is wired; animated WebP correctness requires external corpus samples." },
-    { "extension": ".jpg", "nativeDecode": true, "nativeAnimation": false, "systemDecode": true, "notes": "Native JPEG honors EXIF orientation; ICC markers are accepted but not color transformed." },
+    { "extension": ".jpg", "nativeDecode": true, "nativeAnimation": false, "systemDecode": true, "notes": "Native JPEG honors EXIF orientation; CMYK/ICC corpus samples decode, but ICC/color transforms are not applied." },
     { "extension": ".png", "nativeDecode": true, "nativeAnimation": false, "systemDecode": true, "notes": "Native static decode and APNG metadata; APNG animated playback is not native." },
     { "extension": ".tiff", "nativeDecode": true, "nativeAnimation": false, "systemDecode": true, "notes": "Native static decode includes 16-bit luma corpus." },
     { "extension": ".avif", "nativeDecode": false, "nativeAnimation": false, "systemDecode": true, "notes": "System/WIC only; depends on installed Windows codec." },
