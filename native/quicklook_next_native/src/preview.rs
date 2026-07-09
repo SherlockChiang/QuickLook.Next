@@ -6047,12 +6047,41 @@ fn parse_minidump_module_list(bytes: &[u8], offset: usize, size: usize) -> Optio
         let timestamp = read_u32(bytes, module_offset + 16).unwrap_or(0);
         let name_rva = read_u32(bytes, module_offset + 20).unwrap_or(0) as usize;
         let name = read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
-        lines.push(format!(
+        let mut line = format!(
             "Module {name}: base 0x{base:016X}; size {image_size}; timestamp 0x{timestamp:08X}"
-        ));
+        );
+        if let Some(version) = parse_minidump_fixed_version(bytes, module_offset + 24) {
+            line.push_str(&format!(
+                "; file version {}; product version {}; type {}; flags 0x{:08X}",
+                version.file_version,
+                version.product_version,
+                version.file_type,
+                version.flags
+            ));
+        }
+        lines.push(line);
         module_offset += 108;
     }
     Some(lines.join("\n"))
+}
+
+fn parse_minidump_fixed_version(bytes: &[u8], offset: usize) -> Option<PeFixedVersion> {
+    if offset + 52 > bytes.len() || read_u32(bytes, offset)? != 0xFEEF_04BD {
+        return None;
+    }
+    let file_ms = read_u32(bytes, offset + 8)?;
+    let file_ls = read_u32(bytes, offset + 12)?;
+    let product_ms = read_u32(bytes, offset + 16)?;
+    let product_ls = read_u32(bytes, offset + 20)?;
+    let flags_mask = read_u32(bytes, offset + 24).unwrap_or(0);
+    let flags = read_u32(bytes, offset + 28).unwrap_or(0) & flags_mask;
+    let file_type = read_u32(bytes, offset + 36).unwrap_or(0);
+    Some(PeFixedVersion {
+        file_version: format_pe_version(file_ms, file_ls),
+        product_version: format_pe_version(product_ms, product_ls),
+        flags,
+        file_type: pe_version_file_type(file_type),
+    })
 }
 
 fn parse_minidump_thread_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -14476,6 +14505,14 @@ mod tests {
         bytes[0x25C..0x260].copy_from_slice(&0x12000u32.to_le_bytes());
         bytes[0x264..0x268].copy_from_slice(&0x6543_2100u32.to_le_bytes());
         bytes[0x268..0x26C].copy_from_slice(&0x340u32.to_le_bytes());
+        bytes[0x26C..0x270].copy_from_slice(&0xFEEF_04BDu32.to_le_bytes());
+        bytes[0x274..0x278].copy_from_slice(&0x0001_0002u32.to_le_bytes());
+        bytes[0x278..0x27C].copy_from_slice(&0x0003_0004u32.to_le_bytes());
+        bytes[0x27C..0x280].copy_from_slice(&0x0005_0006u32.to_le_bytes());
+        bytes[0x280..0x284].copy_from_slice(&0x0007_0008u32.to_le_bytes());
+        bytes[0x284..0x288].copy_from_slice(&0x0000_0003u32.to_le_bytes());
+        bytes[0x288..0x28C].copy_from_slice(&0x0000_0002u32.to_le_bytes());
+        bytes[0x290..0x294].copy_from_slice(&2u32.to_le_bytes());
         let module_name: Vec<u16> = "demo.exe".encode_utf16().collect();
         bytes[0x340..0x344].copy_from_slice(&((module_name.len() * 2) as u32).to_le_bytes());
         for (index, unit) in module_name.iter().enumerate() {
@@ -14537,7 +14574,7 @@ mod tests {
         assert!(text.contains("Thread 42: priority 15; stack 0x0000000000001000-0x0000000000005000"));
         assert!(text.contains("Thread 99: priority 8; stack 0x0000000000009000-0x000000000000A000"));
         assert!(text.contains("Modules: 1"));
-        assert!(text.contains("Module demo.exe: base 0x00007FF700000000; size 73728; timestamp 0x65432100"));
+        assert!(text.contains("Module demo.exe: base 0x00007FF700000000; size 73728; timestamp 0x65432100; file version 1.2.3.4; product version 5.6.7.8; type DLL; flags 0x00000002"));
         assert!(text.contains("Memory ranges: 2"));
         assert!(text.contains("Memory bytes listed: 12288"));
         assert!(text.contains("Memory 0x0000000000100000-0x0000000000102000 (8192 bytes)"));

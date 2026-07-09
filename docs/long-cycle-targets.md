@@ -63,7 +63,7 @@ then commit that item by itself.
 - [x] Parse UnloadedModuleList names and address ranges.
 - [x] Parse MiscInfo process id, process times, and processor power info when
   present.
-- [ ] Decode module fixed version fields from `MINIDUMP_MODULE.VersionInfo`.
+- [x] Decode module fixed version fields from `MINIDUMP_MODULE.VersionInfo`.
 
 ### CHM
 
@@ -89,7 +89,8 @@ then commit that item by itself.
 - ELF section names, dynamic string tags, symbols with binding/type/section,
   relocations, note sections/PT_NOTE program headers, and GNU build-id, plus
   x86-64/AArch64 relocation type names.
-- Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList,
-  MemoryList, Memory64List, HandleData, UnloadedModuleList, and MiscInfo.
+- Minidump SystemInfo, Exception, ThreadList, ThreadNames, ModuleList with fixed
+  version fields, MemoryList, Memory64List, HandleData, UnloadedModuleList, and
+  MiscInfo.
 - Mail top-level headers, RFC 2047/RFC 2231 filenames, MIME part summary,
   transfer encoding, and body byte sizes.
