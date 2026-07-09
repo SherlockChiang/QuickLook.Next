@@ -19,11 +19,11 @@ then commit that item by itself.
 
 - [ ] Implement Rust-side ICC/source-to-sRGB transform for images that cannot use
   the system color-managed path.
-- [ ] Re-evaluate native AVIF fallback only if Windows/MSVC dependency setup is
+- [x] Re-evaluate native AVIF fallback only if Windows/MSVC dependency setup is
   reproducible without external system packages.
-- [ ] Re-evaluate native HEIC/HEIF fallback if a bounded, reproducible decoder is
+- [x] Re-evaluate native HEIC/HEIF fallback if a bounded, reproducible decoder is
   available.
-- [ ] Keep JXL out of scope until a system codec or reproducible native decoder is
+- [x] Keep JXL out of scope until a system codec or reproducible native decoder is
   available.
 
 ### MP4 / MOV
@@ -100,3 +100,5 @@ then commit that item by itself.
   transfer encoding, body byte sizes, decoded transfer sizes, and bounded
   text/plain previews, nested MIME parts, and bounded MSG compound-file
   properties.
+- Native AVIF/HEIC/JXL fallbacks re-evaluated and kept on system/WIC policy until
+  reproducible Windows-native decoder paths exist.
