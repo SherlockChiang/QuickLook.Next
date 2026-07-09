@@ -35,8 +35,8 @@ then commit that item by itself.
 - [x] Extend `ctts` / `elst` into the bounded sample timeline summary.
 - [x] Parse AVC SPS color details from VUI when present.
 - [x] Summarize HEVC `hvcC` parameter set arrays and profile-level fields.
-- [ ] Parse HEVC SPS/VPS for coded size, bit depth, chroma, and
-  HDR-adjacent metadata when present.
+- [x] Parse HEVC SPS for coded size, crop, bit depth, and chroma.
+- [ ] Parse HEVC VPS and HDR-adjacent metadata when present.
 
 ### PE / CLR
 
