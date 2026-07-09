@@ -5524,16 +5524,24 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
 }
 
 fn mail_header_parameter(value: &str, name: &str) -> Option<String> {
+    mail_header_parameters(value)
+        .into_iter()
+        .find_map(|(key, raw_value)| key.eq_ignore_ascii_case(name).then_some(raw_value))
+        .filter(|value| !value.is_empty())
+}
+
+fn mail_header_parameters(value: &str) -> Vec<(String, String)> {
     value
         .split(';')
         .skip(1)
-        .find_map(|part| {
+        .filter_map(|part| {
             let (key, raw_value) = part.trim().split_once('=')?;
-            key.trim()
-                .eq_ignore_ascii_case(name)
-                .then(|| raw_value.trim().trim_matches('"').trim().to_string())
+            Some((
+                key.trim().to_string(),
+                raw_value.trim().trim_matches('"').trim().to_string(),
+            ))
         })
-        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn decode_mail_header_value(value: &str) -> String {
@@ -5644,10 +5652,67 @@ fn mail_attachment_filenames(content: &str) -> Vec<String> {
                 .contains("content-disposition: attachment")
                 .then_some(line)
         })
-        .filter_map(|line| mail_header_parameter(line, "filename"))
+        .filter_map(mail_attachment_filename_from_disposition)
         .map(|name| decode_mail_header_value(&name))
         .take(5)
         .collect()
+}
+
+fn mail_attachment_filename_from_disposition(line: &str) -> Option<String> {
+    if let Some(value) = mail_header_parameter(line, "filename") {
+        return Some(value);
+    }
+    let parameters = mail_header_parameters(line);
+    if let Some(value) = parameters
+        .iter()
+        .find_map(|(key, value)| key.eq_ignore_ascii_case("filename*").then_some(value))
+    {
+        return decode_rfc2231_value(value);
+    }
+
+    let mut joined = String::new();
+    for index in 0..32 {
+        let encoded_key = format!("filename*{index}*");
+        let plain_key = format!("filename*{index}");
+        if let Some(value) = parameters.iter().find_map(|(key, value)| {
+            (key.eq_ignore_ascii_case(&encoded_key) || key.eq_ignore_ascii_case(&plain_key))
+                .then_some(value)
+        }) {
+            joined.push_str(value);
+        } else {
+            break;
+        }
+    }
+    (!joined.is_empty())
+        .then(|| decode_rfc2231_value(&joined).unwrap_or(joined))
+}
+
+fn decode_rfc2231_value(value: &str) -> Option<String> {
+    let encoded = if let Some((charset, rest)) = value.split_once('\'') {
+        let (_, encoded) = rest.split_once('\'')?;
+        if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("us-ascii") {
+            return None;
+        }
+        encoded
+    } else {
+        value
+    };
+    String::from_utf8(percent_decode(encoded)?).ok()
+}
+
+fn percent_decode(value: &str) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut iter = value.as_bytes().iter().copied();
+    while let Some(byte) = iter.next() {
+        if byte == b'%' {
+            let hi = iter.next()?;
+            let lo = iter.next()?;
+            bytes.push((hex_nibble(hi)? << 4) | hex_nibble(lo)?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    Some(bytes)
 }
 
 fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
@@ -11491,6 +11556,16 @@ mod tests {
             "Content-Disposition: attachment; filename=\"=?UTF-8?Q?report_Q1.pdf?=\"\r\n",
         );
         assert_eq!(names, vec!["report Q1.pdf".to_string()]);
+
+        let names = mail_attachment_filenames(
+            "Content-Disposition: attachment; filename*=UTF-8''report%20Q2.pdf\r\n",
+        );
+        assert_eq!(names, vec!["report Q2.pdf".to_string()]);
+
+        let names = mail_attachment_filenames(
+            "Content-Disposition: attachment; filename*0*=UTF-8''quarterly%20; filename*1*=summary.pdf\r\n",
+        );
+        assert_eq!(names, vec!["quarterly summary.pdf".to_string()]);
     }
 
     #[test]
