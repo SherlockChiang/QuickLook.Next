@@ -9,14 +9,14 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use image::ImageReader;
+use image::{AnimationDecoder, ImageReader};
 
 mod preview;
 
@@ -62,6 +62,9 @@ static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 const MAX_FFI_STRING_BYTES: usize = 32 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
+const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
+const MAX_ANIMATED_FRAMES: usize = 120;
+const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
@@ -871,6 +874,48 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
     total as i32
 }
 
+#[no_mangle]
+pub extern "C" fn ql_decode_gif_frames_sized(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let (width, height, frames) = match decode_gif_frames_bgra(path, target_width, target_height) {
+        Some(decoded) => decoded,
+        None => return -2,
+    };
+
+    let frame_bytes = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let total = 12usize.saturating_add(frames.len().saturating_mul(4usize.saturating_add(frame_bytes)));
+    if total > i32::MAX as usize {
+        return -2;
+    }
+    if out.is_null() || out_cap < total {
+        return -(total as i32);
+    }
+
+    unsafe {
+        std::ptr::copy_nonoverlapping((frames.len() as u32).to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(8), 4);
+        let mut offset = 12usize;
+        for (delay_ms, bgra) in frames {
+            std::ptr::copy_nonoverlapping(delay_ms.to_le_bytes().as_ptr(), out.add(offset), 4);
+            offset += 4;
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(offset), bgra.len());
+            offset += bgra.len();
+        }
+    }
+    total as i32
+}
+
 fn decode_image_bgra(
     path: &str,
     target_width: u32,
@@ -964,6 +1009,59 @@ fn decode_image_bgra(
     let convert_ms = elapsed_ms_u32(convert_start);
 
     Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+}
+
+fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    let file = std::fs::File::open(path).ok()?;
+    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).ok()?;
+    let frames = decoder.into_frames().collect_frames().ok()?;
+    let first = frames.first()?;
+    let original_width = first.buffer().width();
+    let original_height = first.buffer().height();
+    if should_skip_native_image_decode(original_width, original_height) {
+        return None;
+    }
+
+    let target_width = if target_width > 0 { target_width } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_height = if target_height > 0 { target_height } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_width = target_width.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
+    let target_height = target_height.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
+    let scale = if original_width > target_width || original_height > target_height {
+        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
+    } else {
+        1.0
+    };
+    let width = ((original_width as f64 * scale).round() as u32).max(1);
+    let height = ((original_height as f64 * scale).round() as u32).max(1);
+    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let max_frames_by_bytes = (MAX_ANIMATED_FRAME_BYTES / (frame_bytes + 4)).max(1);
+    let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
+
+    let mut decoded = Vec::new();
+    for frame in frames.into_iter().take(max_frames) {
+        let (num, den) = frame.delay().numer_denom_ms();
+        let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
+        let rgba = frame.into_buffer();
+        let raster = if width == original_width && height == original_height {
+            image::DynamicImage::ImageRgba8(rgba)
+        } else {
+            image::DynamicImage::ImageRgba8(rgba).resize_exact(width, height, image::imageops::FilterType::Triangle)
+        };
+        let rgba = raster.to_rgba8();
+        let mut bgra = Vec::with_capacity(frame_bytes);
+        for px in rgba.chunks_exact(4) {
+            let r = px[0] as u32;
+            let g = px[1] as u32;
+            let b = px[2] as u32;
+            let a = px[3] as u32;
+            bgra.push(((b * a + 127) / 255) as u8);
+            bgra.push(((g * a + 127) / 255) as u8);
+            bgra.push(((r * a + 127) / 255) as u8);
+            bgra.push(a as u8);
+        }
+        decoded.push((delay_ms, bgra));
+    }
+    Some((width, height, decoded))
 }
 
 fn apply_exif_orientation(image: image::DynamicImage, orientation: u16) -> image::DynamicImage {
@@ -1203,12 +1301,44 @@ mod tests {
         assert_eq!(decoded.7, vec![0, 0, 255, 255]);
     }
 
+    #[test]
+    fn native_gif_frame_extraction_returns_bounded_frames() {
+        let path = write_two_frame_gif();
+
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 1, 1).expect("decode gif frames");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(decoded.0, 1);
+        assert_eq!(decoded.1, 1);
+        assert_eq!(decoded.2.len(), 2);
+        assert_eq!(decoded.2[0].1, vec![0, 0, 255, 255]);
+        assert_eq!(decoded.2[1].1, vec![255, 0, 0, 255]);
+    }
+
     fn temp_image_path(ext: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("quicklook-next-native-{nanos}.{ext}"))
+    }
+
+    fn write_two_frame_gif() -> std::path::PathBuf {
+        use image::codecs::gif::{GifEncoder, Repeat};
+
+        let path = temp_image_path("gif");
+        let first = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let second = image::RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap();
+        let file = std::fs::File::create(&path).expect("create gif");
+        let mut encoder = GifEncoder::new(file);
+        encoder.set_repeat(Repeat::Infinite).expect("set repeat");
+        encoder
+            .encode_frame(image::Frame::new(first))
+            .expect("write first frame");
+        encoder
+            .encode_frame(image::Frame::new(second))
+            .expect("write second frame");
+        path
     }
 
     fn jpeg_with_orientation_segment(orientation: u16) -> Vec<u8> {
