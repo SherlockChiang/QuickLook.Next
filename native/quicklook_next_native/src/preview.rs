@@ -6686,6 +6686,9 @@ struct Mp4TrackSummary {
     chunks: Option<u32>,
     first_chunk_offset: Option<u64>,
     last_chunk_end: Option<u64>,
+    first_chunk_samples: Option<u32>,
+    first_chunk_bytes: Option<u64>,
+    first_sample_size: Option<u32>,
 }
 
 fn mp4_summary(bytes: &[u8]) -> Option<Mp4Summary> {
@@ -6775,6 +6778,15 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
                 text.push_str(&format!(" (0x{first:X}-0x{last:X})"));
             }
         }
+        if let Some(samples) = track.first_chunk_samples {
+            text.push_str(&format!("\n{} first chunk samples: {}", track.kind, samples));
+        }
+        if let Some(bytes) = track.first_chunk_bytes {
+            text.push_str(&format!("\n{} first chunk bytes: {}", track.kind, format_number(bytes as i64)));
+        }
+        if let Some(size) = track.first_sample_size {
+            text.push_str(&format!("\n{} first sample size: {}", track.kind, format_number(size as i64)));
+        }
     }
 }
 
@@ -6827,6 +6839,9 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
         summary.first_chunk_offset = Some(chunk_summary.first_offset);
         summary.last_chunk_end = Some(chunk_summary.last_end);
         summary.data_bytes = Some(chunk_summary.data_bytes);
+        summary.first_chunk_samples = chunk_summary.first_chunk_samples;
+        summary.first_chunk_bytes = chunk_summary.first_chunk_bytes;
+        summary.first_sample_size = chunk_summary.first_sample_size;
     }
 
     (!summary.codec.is_empty()
@@ -7349,6 +7364,9 @@ struct Mp4ChunkSummary {
     first_offset: u64,
     last_end: u64,
     data_bytes: u64,
+    first_chunk_samples: Option<u32>,
+    first_chunk_bytes: Option<u64>,
+    first_sample_size: Option<u32>,
 }
 
 fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
@@ -7364,6 +7382,8 @@ fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
     let mut sample_index = 0usize;
     let mut data_bytes = 0u64;
     let mut last_end = 0u64;
+    let mut first_chunk_samples = None;
+    let mut first_chunk_bytes = None;
     for (chunk_index, chunk_offset) in chunk_offsets.iter().enumerate() {
         let samples_per_chunk = samples_per_chunk_for_chunk(&sample_to_chunks, (chunk_index + 1) as u32)? as usize;
         let mut chunk_bytes = 0u64;
@@ -7373,6 +7393,10 @@ fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
             };
             chunk_bytes = chunk_bytes.checked_add(*size as u64)?;
             sample_index += 1;
+        }
+        if chunk_index == 0 {
+            first_chunk_samples = Some(samples_per_chunk as u32);
+            first_chunk_bytes = Some(chunk_bytes);
         }
         data_bytes = data_bytes.checked_add(chunk_bytes)?;
         last_end = last_end.max(chunk_offset.saturating_add(chunk_bytes));
@@ -7386,6 +7410,9 @@ fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
         first_offset: *chunk_offsets.first()?,
         last_end,
         data_bytes,
+        first_chunk_samples,
+        first_chunk_bytes,
+        first_sample_size: sample_sizes.first().copied(),
     })
 }
 
@@ -13196,6 +13223,9 @@ mod tests {
         assert_eq!(summary.tracks[0].chunks, Some(2));
         assert_eq!(summary.tracks[0].first_chunk_offset, Some(1000));
         assert_eq!(summary.tracks[0].last_chunk_end, Some(702_000));
+        assert_eq!(summary.tracks[0].first_chunk_samples, Some(1));
+        assert_eq!(summary.tracks[0].first_chunk_bytes, Some(600_000));
+        assert_eq!(summary.tracks[0].first_sample_size, Some(600_000));
         assert_eq!(format_duration(90.0), "1:30");
         assert_eq!(format_bitrate(1_536_000.0), "1.54 Mbps");
     }
