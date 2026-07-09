@@ -4739,6 +4739,9 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
         if !compressed.is_empty() {
             text.push_str(&format!("\nCompressed streams: {}", compressed.join(", ")));
         }
+        for (label, value) in chm_system_summary(bytes, &entries) {
+            text.push_str(&format!("\n{label}: {value}"));
+        }
     }
 }
 
@@ -4818,6 +4821,37 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
         }
     }
     summary
+}
+
+fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'static str, String)> {
+    let Some(system) = entries.iter().find(|entry| entry.name.eq_ignore_ascii_case("/#SYSTEM") && entry.section == 0) else {
+        return Vec::new();
+    };
+    if system.len == 0 || system.len > 4096 || system.offset.saturating_add(system.len) > bytes.len() {
+        return Vec::new();
+    }
+    let data = &bytes[system.offset..system.offset + system.len];
+    let mut offset = 0usize;
+    let mut values = Vec::new();
+    while offset + 4 <= data.len() && values.len() < 8 {
+        let code = u16::from_le_bytes([data[offset], data[offset + 1]]);
+        let len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
+        offset += 4;
+        if len == 0 || offset.saturating_add(len) > data.len() {
+            break;
+        }
+        let value = String::from_utf8_lossy(&data[offset..offset + len])
+            .trim_matches('\0')
+            .trim()
+            .to_string();
+        match code {
+            2 if !value.is_empty() => values.push(("Default topic", value)),
+            3 if !value.is_empty() => values.push(("Title", value)),
+            _ => {}
+        }
+        offset += len;
+    }
+    values
 }
 
 fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, usize)> {
@@ -15065,7 +15099,7 @@ mod tests {
         bytes[0x120..0x124].copy_from_slice(&4u32.to_le_bytes());
         bytes[0x128..0x12C].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x154..0x158].copy_from_slice(b"PMGL");
-        bytes[0x158..0x15C].copy_from_slice(&49u32.to_le_bytes());
+        bytes[0x158..0x15C].copy_from_slice(&36u32.to_le_bytes());
         bytes[0x168] = 10;
         bytes[0x169..0x173].copy_from_slice(b"/index.htm");
         bytes[0x173] = 0;
@@ -15077,6 +15111,18 @@ mod tests {
         bytes[0x1A0] = 0;
         bytes[0x1A1] = 0x81;
         bytes[0x1A2] = 0x48;
+        bytes[0x1A3] = 8;
+        bytes[0x1A4..0x1AC].copy_from_slice(b"/#SYSTEM");
+        bytes[0x1AC] = 0;
+        bytes[0x1AD] = 0x83;
+        bytes[0x1AE] = 0x40;
+        bytes[0x1AF] = 28;
+        bytes[0x1C0..0x1C2].copy_from_slice(&3u16.to_le_bytes());
+        bytes[0x1C2..0x1C4].copy_from_slice(&10u16.to_le_bytes());
+        bytes[0x1C4..0x1CE].copy_from_slice(b"Help Title");
+        bytes[0x1CE..0x1D0].copy_from_slice(&2u16.to_le_bytes());
+        bytes[0x1D0..0x1D2].copy_from_slice(&10u16.to_le_bytes());
+        bytes[0x1D2..0x1DC].copy_from_slice(b"/index.htm");
         let mut text = String::new();
 
         append_chm_itsp_summary(&mut text, &bytes);
@@ -15088,6 +15134,8 @@ mod tests {
         assert!(text.contains("Directory index depth/root/head: 2/3/4"));
         assert!(text.contains("Directory entries: /index.htm [section 0, offset 123, 45 B]"));
         assert!(text.contains("Compressed streams: ::DataSpace/Storage/MSCompressed/Content (200 B)"));
+        assert!(text.contains("Title: Help Title"));
+        assert!(text.contains("Default topic: /index.htm"));
     }
 
     #[test]
