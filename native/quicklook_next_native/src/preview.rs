@@ -5728,6 +5728,7 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut thread_info = None;
     let mut module_info = None;
     let mut memory_info = None;
+    let mut memory64_info = None;
     for index in 0..streams {
         let offset = directory_rva + index * 12;
         let Some(stream_type) = read_u32(bytes, offset) else {
@@ -5754,6 +5755,8 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
             module_info = parse_minidump_module_list(bytes, rva as usize, data_size as usize);
         } else if stream_type == 5 {
             memory_info = parse_minidump_memory_list(bytes, rva as usize, data_size as usize);
+        } else if stream_type == 9 {
+            memory64_info = parse_minidump_memory64_list(bytes, rva as usize, data_size as usize);
         }
     }
     if !names.is_empty() {
@@ -5774,6 +5777,35 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     if let Some(memory_info) = memory_info {
         text.push_str(&memory_info);
     }
+    if let Some(memory64_info) = memory64_info {
+        text.push_str(&memory64_info);
+    }
+}
+
+fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
+    if size < 16 || offset.checked_add(size)? > bytes.len() {
+        return None;
+    }
+    let count = read_u64(bytes, offset)? as usize;
+    let base_rva = read_u64(bytes, offset + 8).unwrap_or(0);
+    let mut total = 0u64;
+    let mut lines = vec![format!("\nMemory64 ranges: {count}"), format!("Memory64 base RVA: 0x{base_rva:X}")];
+    let mut descriptor_offset = offset + 16;
+    for _ in 0..count.min(8) {
+        if descriptor_offset + 16 > offset + size || descriptor_offset + 16 > bytes.len() {
+            break;
+        }
+        let start = read_u64(bytes, descriptor_offset).unwrap_or(0);
+        let data_size = read_u64(bytes, descriptor_offset + 8).unwrap_or(0);
+        total = total.saturating_add(data_size);
+        let end = start.saturating_add(data_size);
+        lines.push(format!("Memory64 0x{start:016X}-0x{end:016X} ({data_size} bytes)"));
+        descriptor_offset += 16;
+    }
+    if count > 0 {
+        lines.insert(2, format!("Memory64 bytes listed: {total}"));
+    }
+    Some(lines.join("\n"))
 }
 
 fn parse_minidump_memory_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
@@ -12931,7 +12963,7 @@ mod tests {
     fn minidump_stream_summary_lists_known_streams() {
         let mut bytes = vec![0u8; 1280];
         bytes[0..4].copy_from_slice(b"MDMP");
-        bytes[8..12].copy_from_slice(&6u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&7u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&4u32.to_le_bytes());
         bytes[36..40].copy_from_slice(&128u32.to_le_bytes());
@@ -12951,6 +12983,9 @@ mod tests {
         bytes[92..96].copy_from_slice(&5u32.to_le_bytes());
         bytes[96..100].copy_from_slice(&36u32.to_le_bytes());
         bytes[100..104].copy_from_slice(&0x380u32.to_le_bytes());
+        bytes[104..108].copy_from_slice(&9u32.to_le_bytes());
+        bytes[108..112].copy_from_slice(&48u32.to_le_bytes());
+        bytes[112..116].copy_from_slice(&0x400u32.to_le_bytes());
         bytes[0x80..0x82].copy_from_slice(&9u16.to_le_bytes());
         bytes[0x86] = 8;
         bytes[0x87] = 1;
@@ -12993,6 +13028,12 @@ mod tests {
         bytes[0x38C..0x390].copy_from_slice(&0x2000u32.to_le_bytes());
         bytes[0x394..0x39C].copy_from_slice(&0x0020_0000u64.to_le_bytes());
         bytes[0x39C..0x3A0].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[0x400..0x408].copy_from_slice(&2u64.to_le_bytes());
+        bytes[0x408..0x410].copy_from_slice(&0x500u64.to_le_bytes());
+        bytes[0x410..0x418].copy_from_slice(&0x0030_0000u64.to_le_bytes());
+        bytes[0x418..0x420].copy_from_slice(&0x3000u64.to_le_bytes());
+        bytes[0x420..0x428].copy_from_slice(&0x0040_0000u64.to_le_bytes());
+        bytes[0x428..0x430].copy_from_slice(&0x1000u64.to_le_bytes());
         let mut text = String::new();
 
         append_minidump_streams(&mut text, &bytes);
@@ -13014,6 +13055,10 @@ mod tests {
         assert!(text.contains("Memory ranges: 2"));
         assert!(text.contains("Memory bytes listed: 12288"));
         assert!(text.contains("Memory 0x0000000000100000-0x0000000000102000 (8192 bytes)"));
+        assert!(text.contains("Memory64 ranges: 2"));
+        assert!(text.contains("Memory64 base RVA: 0x500"));
+        assert!(text.contains("Memory64 bytes listed: 16384"));
+        assert!(text.contains("Memory64 0x0000000000300000-0x0000000000303000 (12288 bytes)"));
     }
 
     #[test]
