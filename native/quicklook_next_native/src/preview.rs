@@ -6407,6 +6407,10 @@ fn append_elf_summary(text: &mut String, bytes: &[u8]) {
     if !relocations.is_empty() {
         text.push_str(&format!("\nRelocations: {}", relocations.join(", ")));
     }
+    let versions = elf_gnu_version_summary(bytes, class, endian);
+    if !versions.is_empty() {
+        text.push_str(&format!("\nGNU versions: {}", versions.join(", ")));
+    }
     let notes = elf_note_summary(bytes, class, endian);
     if !notes.is_empty() {
         text.push_str(&format!("\nNotes: {}", notes.join(", ")));
@@ -6849,6 +6853,134 @@ fn elf_relocation_type_name(machine: u16, typ: u32) -> String {
         },
         _ => format!("type {typ}"),
     }
+}
+
+fn elf_gnu_version_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
+    let sections = elf_sections(bytes, class, endian);
+    let mut versions = Vec::new();
+    for section in sections.iter().filter(|section| matches!(section.typ, 0x6FFF_FFFD..=0x6FFF_FFFF)) {
+        if section.offset.saturating_add(section.size) > bytes.len() {
+            continue;
+        }
+        match section.typ {
+            0x6FFF_FFFF => {
+                let count = section.size / 2;
+                let mut sample = Vec::new();
+                for index in 0..count.min(8) {
+                    let value = read_u16_endian(bytes, section.offset + index * 2, endian).unwrap_or(0) & 0x7FFF;
+                    if value > 1 && !sample.contains(&value) {
+                        sample.push(value);
+                    }
+                }
+                if sample.is_empty() {
+                    versions.push(format!("{} {} entries", section.name, count));
+                } else {
+                    let sample = sample.iter().map(|value| value.to_string()).collect::<Vec<_>>().join("/");
+                    versions.push(format!("{} {} entries ({sample})", section.name, count));
+                }
+            }
+            0x6FFF_FFFE => {
+                let names = elf_gnu_version_need_names(bytes, &sections, section, endian);
+                if names.is_empty() {
+                    versions.push(format!("{} need entries", section.name));
+                } else {
+                    versions.push(format!("{} needs {}", section.name, names.join("/")));
+                }
+            }
+            0x6FFF_FFFD => {
+                let names = elf_gnu_version_def_names(bytes, &sections, section, endian);
+                if names.is_empty() {
+                    versions.push(format!("{} definition entries", section.name));
+                } else {
+                    versions.push(format!("{} defines {}", section.name, names.join("/")));
+                }
+            }
+            _ => {}
+        }
+    }
+    versions
+}
+
+fn elf_gnu_version_string_table<'a>(sections: &'a [ElfSection], section: &ElfSection) -> Option<&'a ElfSection> {
+    sections.get(section.link).filter(|strtab| strtab.typ == 3)
+}
+
+fn elf_gnu_version_need_names(bytes: &[u8], sections: &[ElfSection], section: &ElfSection, endian: u8) -> Vec<String> {
+    let Some(strtab) = elf_gnu_version_string_table(sections, section) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut offset = section.offset;
+    let end = section.offset + section.size;
+    for _ in 0..16 {
+        if offset + 16 > end {
+            break;
+        }
+        let aux_count = read_u16_endian(bytes, offset + 2, endian).unwrap_or(0).min(16) as usize;
+        let aux_offset = read_u32_endian(bytes, offset + 8, endian).unwrap_or(0) as usize;
+        let next = read_u32_endian(bytes, offset + 12, endian).unwrap_or(0) as usize;
+        let mut current_aux = offset.saturating_add(aux_offset);
+        for _ in 0..aux_count {
+            if current_aux + 16 > end {
+                break;
+            }
+            let name_offset = read_u32_endian(bytes, current_aux + 8, endian).unwrap_or(0) as usize;
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96).filter(|name| !name.is_empty()) {
+                if !names.contains(&name) && names.len() < 8 {
+                    names.push(name);
+                }
+            }
+            let aux_next = read_u32_endian(bytes, current_aux + 12, endian).unwrap_or(0) as usize;
+            if aux_next == 0 {
+                break;
+            }
+            current_aux = current_aux.saturating_add(aux_next);
+        }
+        if next == 0 {
+            break;
+        }
+        offset = offset.saturating_add(next);
+    }
+    names
+}
+
+fn elf_gnu_version_def_names(bytes: &[u8], sections: &[ElfSection], section: &ElfSection, endian: u8) -> Vec<String> {
+    let Some(strtab) = elf_gnu_version_string_table(sections, section) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut offset = section.offset;
+    let end = section.offset + section.size;
+    for _ in 0..16 {
+        if offset + 20 > end {
+            break;
+        }
+        let aux_count = read_u16_endian(bytes, offset + 4, endian).unwrap_or(0).min(16) as usize;
+        let aux_offset = read_u32_endian(bytes, offset + 12, endian).unwrap_or(0) as usize;
+        let next = read_u32_endian(bytes, offset + 16, endian).unwrap_or(0) as usize;
+        let mut current_aux = offset.saturating_add(aux_offset);
+        for _ in 0..aux_count {
+            if current_aux + 8 > end {
+                break;
+            }
+            let name_offset = read_u32_endian(bytes, current_aux, endian).unwrap_or(0) as usize;
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96).filter(|name| !name.is_empty()) {
+                if !names.contains(&name) && names.len() < 8 {
+                    names.push(name);
+                }
+            }
+            let aux_next = read_u32_endian(bytes, current_aux + 4, endian).unwrap_or(0) as usize;
+            if aux_next == 0 {
+                break;
+            }
+            current_aux = current_aux.saturating_add(aux_next);
+        }
+        if next == 0 {
+            break;
+        }
+        offset = offset.saturating_add(next);
+    }
+    names
 }
 
 fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
@@ -15136,5 +15268,53 @@ mod tests {
         assert!(text.contains("Relocations: .rela.dyn 1 entries (R_X86_64_RELATIVE)"));
         assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
         assert!(text.contains("PT_NOTE GNU type 1 (4 bytes)"));
+    }
+
+    #[test]
+    fn elf_summary_reads_gnu_version_sections() {
+        fn write_sh64(bytes: &mut [u8], index: usize, name: u32, typ: u32, offset: u64, size: u64, link: u32, entsize: u64) {
+            let base = 0x100 + index * 64;
+            bytes[base..base + 4].copy_from_slice(&name.to_le_bytes());
+            bytes[base + 4..base + 8].copy_from_slice(&typ.to_le_bytes());
+            bytes[base + 24..base + 32].copy_from_slice(&offset.to_le_bytes());
+            bytes[base + 32..base + 40].copy_from_slice(&size.to_le_bytes());
+            bytes[base + 40..base + 44].copy_from_slice(&link.to_le_bytes());
+            bytes[base + 56..base + 64].copy_from_slice(&entsize.to_le_bytes());
+        }
+
+        let mut bytes = vec![0u8; 1024];
+        bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[40..48].copy_from_slice(&0x100u64.to_le_bytes());
+        bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&6u16.to_le_bytes());
+        bytes[62..64].copy_from_slice(&1u16.to_le_bytes());
+        write_sh64(&mut bytes, 1, 1, 3, 0x300, 62, 0, 0);
+        write_sh64(&mut bytes, 2, 11, 3, 0x340, 27, 0, 0);
+        write_sh64(&mut bytes, 3, 19, 0x6FFF_FFFF, 0x380, 6, 0, 2);
+        write_sh64(&mut bytes, 4, 32, 0x6FFF_FFFE, 0x390, 32, 2, 0);
+        write_sh64(&mut bytes, 5, 47, 0x6FFF_FFFD, 0x3C0, 28, 2, 0);
+        bytes[0x300..0x33E].copy_from_slice(b"\0.shstrtab\0.dynstr\0.gnu.version\0.gnu.version_r\0.gnu.version_d\0");
+        bytes[0x340..0x35B].copy_from_slice(b"\0GLIBC_2.2.5\0QUICKLOOK_1.0\0");
+        bytes[0x380..0x382].copy_from_slice(&0u16.to_le_bytes());
+        bytes[0x382..0x384].copy_from_slice(&2u16.to_le_bytes());
+        bytes[0x384..0x386].copy_from_slice(&3u16.to_le_bytes());
+        bytes[0x390..0x392].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x392..0x394].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x398..0x39C].copy_from_slice(&16u32.to_le_bytes());
+        bytes[0x3A4..0x3A6].copy_from_slice(&2u16.to_le_bytes());
+        bytes[0x3A8..0x3AC].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x3C0..0x3C2].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x3C4..0x3C6].copy_from_slice(&1u16.to_le_bytes());
+        bytes[0x3CC..0x3D0].copy_from_slice(&20u32.to_le_bytes());
+        bytes[0x3D4..0x3D8].copy_from_slice(&13u32.to_le_bytes());
+        let mut text = String::new();
+
+        append_elf_summary(&mut text, &bytes);
+
+        assert!(text.contains("GNU versions: .gnu.version 3 entries (2/3)"));
+        assert!(text.contains(".gnu.version_r needs GLIBC_2.2.5"));
+        assert!(text.contains(".gnu.version_d defines QUICKLOOK_1.0"));
     }
 }
