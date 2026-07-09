@@ -36,3 +36,9 @@ if ($missing.Count -gt 0) {
 }
 
 Write-Host "image corpus guard passed" -ForegroundColor Green
+
+$smoke = Join-Path $PSScriptRoot "smoke-image-corpus.ps1"
+if (Test-Path -LiteralPath $smoke) {
+    if ($RequireSamples) { & $smoke -Root $Root -RequireSamples }
+    else { & $smoke -Root $Root }
+}
