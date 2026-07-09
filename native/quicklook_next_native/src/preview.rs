@@ -5711,6 +5711,7 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
             let encoding = header_value(&headers, "Content-Transfer-Encoding")
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
+            let is_text_plain = content_type.eq_ignore_ascii_case("text/plain");
             let mut summary = content_type;
             if let Some(disposition) = disposition {
                 summary.push_str(&format!(" ({disposition})"));
@@ -5732,9 +5733,36 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
             {
                 summary.push_str(&format!(" decoded={decoded_len} bytes"));
             }
+            if is_text_plain {
+                if let Some(preview) = mail_text_body_preview(body, encoding.as_deref()) {
+                    summary.push_str(&format!(" preview=\"{preview}\""));
+                }
+            }
             Some(summary)
         })
         .collect()
+}
+
+fn mail_text_body_preview(body: &str, encoding: Option<&str>) -> Option<String> {
+    let trimmed = body.trim_matches(|ch| ch == '\r' || ch == '\n');
+    if trimmed.is_empty() || trimmed.len() > 1024 * 1024 {
+        return None;
+    }
+    let text = if encoding.is_some_and(|value| value.eq_ignore_ascii_case("base64")) {
+        String::from_utf8_lossy(&decode_base64(trimmed)?).to_string()
+    } else if encoding.is_some_and(|value| value.eq_ignore_ascii_case("quoted-printable")) {
+        String::from_utf8_lossy(&decode_quoted_printable(trimmed.as_bytes())?).to_string()
+    } else {
+        trimmed.to_string()
+    };
+    let preview = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect::<String>();
+    (!preview.is_empty()).then_some(preview)
 }
 
 fn mail_decoded_body_len(body: &str, encoding: &str) -> Option<usize> {
@@ -5752,7 +5780,11 @@ fn mail_decoded_body_len(body: &str, encoding: &str) -> Option<usize> {
 }
 
 fn quoted_printable_decoded_len(bytes: &[u8]) -> Option<usize> {
-    let mut len = 0usize;
+    decode_quoted_printable(bytes).map(|bytes| bytes.len())
+}
+
+fn decode_quoted_printable(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
     let mut index = 0usize;
     while index < bytes.len() {
         if bytes[index] == b'=' {
@@ -5765,15 +5797,21 @@ fn quoted_printable_decoded_len(bytes: &[u8]) -> Option<usize> {
                 continue;
             }
             if index + 2 < bytes.len() && hex_nibble(bytes[index + 1]).is_some() && hex_nibble(bytes[index + 2]).is_some() {
-                len += 1;
+                output.push((hex_nibble(bytes[index + 1])? << 4) | hex_nibble(bytes[index + 2])?);
+                if output.len() > 1024 * 1024 {
+                    return None;
+                }
                 index += 3;
                 continue;
             }
         }
-        len += 1;
+        output.push(bytes[index]);
+        if output.len() > 1024 * 1024 {
+            return None;
+        }
         index += 1;
     }
-    Some(len)
+    Some(output)
 }
 
 fn mail_attachment_filename_from_disposition(line: &str) -> Option<String> {
@@ -14500,7 +14538,7 @@ mod tests {
         assert_eq!(
             mail_mime_part_summaries(content, "abc"),
             vec![
-                "text/plain encoding=quoted-printable body=5 bytes decoded=5 bytes".to_string(),
+                "text/plain encoding=quoted-printable body=5 bytes decoded=5 bytes preview=\"Hello\"".to_string(),
                 "application/pdf (attachment) filename=report.pdf encoding=base64 body=8 bytes decoded=4 bytes".to_string(),
             ]
         );
