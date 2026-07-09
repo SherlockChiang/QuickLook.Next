@@ -7757,6 +7757,15 @@ pub fn render_executable(path: &str) -> String {
     for (name, value) in &pe.version_strings {
         text.push_str(&format!("Version {name}: {value}\n"));
     }
+    if let Some(fixed) = &pe.fixed_version {
+        text.push_str(&format!(
+            "Fixed file version: {}; product {}; flags 0x{:08X}; type {}\n",
+            fixed.file_version,
+            fixed.product_version,
+            fixed.flags,
+            fixed.file_type
+        ));
+    }
     if let Some(certificate) = &pe.certificate {
         text.push_str(&format!(
             "Certificate table: {}, revision 0x{:04X}, type 0x{:04X}\n",
@@ -7822,6 +7831,7 @@ struct PeSummary {
     export_details: Vec<String>,
     has_version_resource: bool,
     version_strings: Vec<(String, String)>,
+    fixed_version: Option<PeFixedVersion>,
     certificate: Option<PeCertificateSummary>,
     clr: Option<PeClrSummary>,
 }
@@ -7843,6 +7853,13 @@ struct PeCertificateSummary {
     length: u32,
     revision: u16,
     typ: u16,
+}
+
+struct PeFixedVersion {
+    file_version: String,
+    product_version: String,
+    flags: u32,
+    file_type: &'static str,
 }
 
 struct PeClrSummary {
@@ -7926,6 +7943,9 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let version_strings = version_resource
         .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)).map(parse_pe_version_strings))
         .unwrap_or_default();
+    let fixed_version = version_resource
+        .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)))
+        .and_then(parse_pe_fixed_version);
     let has_version_resource = version_resource.is_some();
     let certificate = directories
         .iter()
@@ -7963,6 +7983,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         export_details,
         has_version_resource,
         version_strings,
+        fixed_version,
         certificate,
         clr,
     })
@@ -8289,6 +8310,61 @@ fn parse_pe_version_strings(bytes: &[u8]) -> Vec<(String, String)> {
     strings.sort_by(|a, b| a.0.cmp(&b.0));
     strings.dedup_by(|a, b| a.0 == b.0);
     strings
+}
+
+fn parse_pe_fixed_version(bytes: &[u8]) -> Option<PeFixedVersion> {
+    if bytes.len() < 6 {
+        return None;
+    }
+    let length = read_u16(bytes, 0)? as usize;
+    let value_len = read_u16(bytes, 2)? as usize;
+    let typ = read_u16(bytes, 4).unwrap_or(0);
+    if length == 0 || length > bytes.len() || typ != 0 || value_len < 52 {
+        return None;
+    }
+    let (key, key_end) = read_utf16_z(bytes, 6, length)?;
+    if key != "VS_VERSION_INFO" {
+        return None;
+    }
+    let value_offset = align4(key_end);
+    if value_offset + 52 > length || read_u32(bytes, value_offset)? != 0xFEEF_04BD {
+        return None;
+    }
+    let file_ms = read_u32(bytes, value_offset + 8)?;
+    let file_ls = read_u32(bytes, value_offset + 12)?;
+    let product_ms = read_u32(bytes, value_offset + 16)?;
+    let product_ls = read_u32(bytes, value_offset + 20)?;
+    let flags_mask = read_u32(bytes, value_offset + 24).unwrap_or(0);
+    let flags = read_u32(bytes, value_offset + 28).unwrap_or(0) & flags_mask;
+    let file_type = read_u32(bytes, value_offset + 36).unwrap_or(0);
+    Some(PeFixedVersion {
+        file_version: format_pe_version(file_ms, file_ls),
+        product_version: format_pe_version(product_ms, product_ls),
+        flags,
+        file_type: pe_version_file_type(file_type),
+    })
+}
+
+fn format_pe_version(ms: u32, ls: u32) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        ms >> 16,
+        ms & 0xFFFF,
+        ls >> 16,
+        ls & 0xFFFF
+    )
+}
+
+fn pe_version_file_type(value: u32) -> &'static str {
+    match value {
+        1 => "application",
+        2 => "DLL",
+        3 => "driver",
+        4 => "font",
+        5 => "VxD",
+        7 => "static library",
+        _ => "unknown",
+    }
 }
 
 fn parse_pe_version_node(
@@ -12588,6 +12664,22 @@ mod tests {
             bytes
         }
 
+        fn version_node_raw(key: &str, value: &[u8], children: Vec<Vec<u8>>) -> Vec<u8> {
+            let mut bytes = vec![0, 0];
+            bytes.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            bytes.extend_from_slice(&utf16z(key));
+            align_vec(&mut bytes);
+            bytes.extend_from_slice(value);
+            align_vec(&mut bytes);
+            for child in children {
+                bytes.extend_from_slice(&child);
+            }
+            let len = bytes.len() as u16;
+            bytes[0..2].copy_from_slice(&len.to_le_bytes());
+            bytes
+        }
+
         fn clr_metadata_root() -> Vec<u8> {
             let mut bytes = vec![0u8; 256];
             bytes[0..4].copy_from_slice(&0x424A_5342u32.to_le_bytes());
@@ -12680,9 +12772,19 @@ mod tests {
         bytes[0x940 + 14..0x940 + 16].copy_from_slice(&1u16.to_le_bytes());
         bytes[0x940 + 16..0x940 + 20].copy_from_slice(&1033u32.to_le_bytes());
         bytes[0x940 + 20..0x940 + 24].copy_from_slice(&0x60u32.to_le_bytes());
-        let version = version_node(
+        let mut fixed = vec![0u8; 52];
+        fixed[0..4].copy_from_slice(&0xFEEF_04BDu32.to_le_bytes());
+        fixed[4..8].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+        fixed[8..12].copy_from_slice(&0x0001_0002u32.to_le_bytes());
+        fixed[12..16].copy_from_slice(&0x0003_0004u32.to_le_bytes());
+        fixed[16..20].copy_from_slice(&0x0005_0006u32.to_le_bytes());
+        fixed[20..24].copy_from_slice(&0x0007_0008u32.to_le_bytes());
+        fixed[24..28].copy_from_slice(&0x0000_003Fu32.to_le_bytes());
+        fixed[28..32].copy_from_slice(&0x0000_0002u32.to_le_bytes());
+        fixed[36..40].copy_from_slice(&2u32.to_le_bytes());
+        let version = version_node_raw(
             "VS_VERSION_INFO",
-            None,
+            &fixed,
             vec![version_node(
                 "StringFileInfo",
                 None,
@@ -12737,6 +12839,11 @@ mod tests {
                 ("FileVersion".to_string(), "1.2.3".to_string())
             ]
         );
+        let fixed = pe.fixed_version.as_ref().expect("fixed version");
+        assert_eq!(fixed.file_version, "1.2.3.4");
+        assert_eq!(fixed.product_version, "5.6.7.8");
+        assert_eq!(fixed.flags, 2);
+        assert_eq!(fixed.file_type, "DLL");
         assert_eq!(pe.certificate.as_ref().map(|cert| cert.typ), Some(2));
         assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
         let clr = pe.clr.as_ref().expect("clr summary");
