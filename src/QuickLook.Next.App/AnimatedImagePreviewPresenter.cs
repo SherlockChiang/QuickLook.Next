@@ -36,6 +36,9 @@ internal sealed class AnimatedImagePreviewPresenter
     private NativeAnimationFrames? _nativeFrames;
     private WriteableBitmap? _nativeFrameBitmap;
     private int _nativeFrameIndex;
+    private int[]? _nativeFrameTimeline;
+    private int _nativeAnimationDurationMs;
+    private Stopwatch? _nativeFrameClock;
     private Stopwatch? _openWatch;
     private string _currentPath = "";
 
@@ -99,6 +102,8 @@ internal sealed class AnimatedImagePreviewPresenter
         _nativeFrames = frames;
         _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
         _nativeFrameIndex = 0;
+        _nativeFrameTimeline = BuildFrameTimeline(frames);
+        _nativeAnimationDurationMs = _nativeFrameTimeline.Length == 0 ? 0 : _nativeFrameTimeline[^1];
         _sourceWidth = Math.Max(1, frames.Width);
         _sourceHeight = Math.Max(1, frames.Height);
         _image.Width = frames.Width;
@@ -112,9 +117,10 @@ internal sealed class AnimatedImagePreviewPresenter
 
         if (frames.Frames.Count > 1)
         {
+            _nativeFrameClock = Stopwatch.StartNew();
             _nativeFrameTimer = new DispatcherTimer();
             _nativeFrameTimer.Tick += (_, _) => AdvanceNativeFrame();
-            _nativeFrameTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(20, frames.Frames[0].DelayMilliseconds));
+            _nativeFrameTimer.Interval = TimeSpan.FromMilliseconds(16);
             _nativeFrameTimer.Start();
         }
 
@@ -171,9 +177,16 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_nativeFrames is null || _nativeFrames.Frames.Count == 0)
             return;
 
-        _nativeFrameIndex = (_nativeFrameIndex + 1) % _nativeFrames.Frames.Count;
+        if (_nativeFrameTimeline is null || _nativeAnimationDurationMs <= 0 || _nativeFrameClock is null)
+            return;
+
+        int elapsed = (int)(_nativeFrameClock.ElapsedMilliseconds % _nativeAnimationDurationMs);
+        int frameIndex = FindFrameIndex(_nativeFrameTimeline, elapsed);
+        if (frameIndex == _nativeFrameIndex)
+            return;
+
+        _nativeFrameIndex = frameIndex;
         PresentNativeFrame(_nativeFrameIndex);
-        _nativeFrameTimer!.Interval = TimeSpan.FromMilliseconds(Math.Max(20, _nativeFrames.Frames[_nativeFrameIndex].DelayMilliseconds));
     }
 
     private void PresentNativeFrame(int index)
@@ -202,6 +215,27 @@ internal sealed class AnimatedImagePreviewPresenter
         _nativeFrames = null;
         _nativeFrameBitmap = null;
         _nativeFrameIndex = 0;
+        _nativeFrameTimeline = null;
+        _nativeAnimationDurationMs = 0;
+        _nativeFrameClock = null;
+    }
+
+    private static int[] BuildFrameTimeline(NativeAnimationFrames frames)
+    {
+        var timeline = new int[frames.Frames.Count];
+        int total = 0;
+        for (int i = 0; i < frames.Frames.Count; i++)
+        {
+            total = checked(total + Math.Clamp(frames.Frames[i].DelayMilliseconds, 20, 1_000));
+            timeline[i] = total;
+        }
+        return timeline;
+    }
+
+    private static int FindFrameIndex(int[] timeline, int elapsedMs)
+    {
+        int index = Array.BinarySearch(timeline, elapsedMs + 1);
+        return index >= 0 ? index : ~index;
     }
 
     public void ScheduleLayoutUpdate()
