@@ -6686,6 +6686,9 @@ struct Mp4TrackSummary {
     first_composition_offset: Option<i64>,
     composition_offset_range: Option<(i64, i64)>,
     edit_entries: Option<u32>,
+    first_edit_duration: Option<u64>,
+    first_edit_media_time: Option<i64>,
+    first_edit_rate: Option<f64>,
     chunks: Option<u32>,
     first_chunk_offset: Option<u64>,
     last_chunk_end: Option<u64>,
@@ -6784,6 +6787,15 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
         if let Some(entries) = track.edit_entries {
             text.push_str(&format!("\n{} edit list entries: {}", track.kind, entries));
         }
+        if let Some(duration) = track.first_edit_duration {
+            text.push_str(&format!("\n{} first edit duration: {}", track.kind, format_number(duration as i64)));
+        }
+        if let Some(media_time) = track.first_edit_media_time {
+            text.push_str(&format!("\n{} first edit media time: {}", track.kind, media_time));
+        }
+        if let Some(rate) = track.first_edit_rate {
+            text.push_str(&format!("\n{} first edit rate: {:.2}", track.kind, rate));
+        }
         if let Some(chunks) = track.chunks {
             text.push_str(&format!("\n{} chunks: {}", track.kind, chunks));
             if let (Some(first), Some(last)) = (track.first_chunk_offset, track.last_chunk_end) {
@@ -6852,7 +6864,14 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
             summary.composition_offset_range = composition.offset_range;
         }
     }
-    summary.edit_entries = find_mp4_atom_payload(trak, b"elst").and_then(parse_mp4_entry_count);
+    if let Some(elst) = find_mp4_atom_payload(trak, b"elst") {
+        summary.edit_entries = parse_mp4_entry_count(elst);
+        if let Some(edit) = parse_elst_summary(elst) {
+            summary.first_edit_duration = edit.first_duration;
+            summary.first_edit_media_time = edit.first_media_time;
+            summary.first_edit_rate = edit.first_rate;
+        }
+    }
     if let Some(chunk_summary) = parse_mp4_chunk_summary(trak) {
         summary.chunks = Some(chunk_summary.chunks);
         summary.first_chunk_offset = Some(chunk_summary.first_offset);
@@ -7363,6 +7382,41 @@ struct Mp4CttsSummary {
     samples: u64,
     first_offset: Option<i64>,
     offset_range: Option<(i64, i64)>,
+}
+
+struct Mp4ElstSummary {
+    first_duration: Option<u64>,
+    first_media_time: Option<i64>,
+    first_rate: Option<f64>,
+}
+
+fn parse_elst_summary(payload: &[u8]) -> Option<Mp4ElstSummary> {
+    let version = *payload.first()?;
+    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
+    if entries == 0 {
+        return Some(Mp4ElstSummary { first_duration: None, first_media_time: None, first_rate: None });
+    }
+    let offset = 8usize;
+    let (duration, media_time, rate_offset) = if version == 1 {
+        (
+            read_u64_be(payload, offset)?,
+            read_i64_be(payload, offset + 8)?,
+            offset + 16,
+        )
+    } else {
+        (
+            read_u32_be(payload, offset)? as u64,
+            read_i32_be(payload, offset + 4)? as i64,
+            offset + 8,
+        )
+    };
+    let rate_integer = read_i16_be(payload, rate_offset)? as f64;
+    let rate_fraction = read_u16_be(payload, rate_offset + 2)? as f64 / 65536.0;
+    Some(Mp4ElstSummary {
+        first_duration: Some(duration),
+        first_media_time: Some(media_time),
+        first_rate: Some(rate_integer + rate_fraction),
+    })
 }
 
 fn parse_ctts_summary(payload: &[u8]) -> Option<Mp4CttsSummary> {
@@ -9653,6 +9707,16 @@ fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
 fn read_i32_be(bytes: &[u8], offset: usize) -> Option<i32> {
     let end = offset.checked_add(4)?;
     Some(i32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_i16_be(bytes: &[u8], offset: usize) -> Option<i16> {
+    let end = offset.checked_add(2)?;
+    Some(i16::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_i64_be(bytes: &[u8], offset: usize) -> Option<i64> {
+    let end = offset.checked_add(8)?;
+    Some(i64::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
 }
 
 fn read_i32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<i32> {
@@ -13240,8 +13304,11 @@ mod tests {
         ctts_payload[8..12].copy_from_slice(&90u32.to_be_bytes());
         ctts_payload[12..16].copy_from_slice(&40u32.to_be_bytes());
         let ctts = atom(b"ctts", &ctts_payload);
-        let mut elst_payload = vec![0u8; 8];
+        let mut elst_payload = vec![0u8; 20];
         elst_payload[4..8].copy_from_slice(&1u32.to_be_bytes());
+        elst_payload[8..12].copy_from_slice(&90_000u32.to_be_bytes());
+        elst_payload[12..16].copy_from_slice(&0i32.to_be_bytes());
+        elst_payload[16..18].copy_from_slice(&1i16.to_be_bytes());
         let edts = atom(b"edts", &atom(b"elst", &elst_payload));
 
         let stbl = atom(b"stbl", &[stsd, stsz, stsc, stco, stts, ctts].concat());
@@ -13280,6 +13347,9 @@ mod tests {
         assert_eq!(summary.tracks[0].first_composition_offset, Some(40));
         assert_eq!(summary.tracks[0].composition_offset_range, Some((40, 40)));
         assert_eq!(summary.tracks[0].edit_entries, Some(1));
+        assert_eq!(summary.tracks[0].first_edit_duration, Some(90_000));
+        assert_eq!(summary.tracks[0].first_edit_media_time, Some(0));
+        assert_eq!(summary.tracks[0].first_edit_rate, Some(1.0));
         assert_eq!(summary.tracks[0].chunks, Some(2));
         assert_eq!(summary.tracks[0].first_chunk_offset, Some(1000));
         assert_eq!(summary.tracks[0].last_chunk_end, Some(702_000));
