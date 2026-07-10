@@ -13,6 +13,7 @@ QuickLook.Next/
   src/
     QuickLook.Next.Contracts/           control DTOs + legacy plugin-facing contracts
     QuickLook.Next.Core/                stable control protocol + FFI intents + pipe channel + watchdog
+    QuickLook.Next.ParserHost/          JSON-only native archive/package/Office parser process
     QuickLook.Next.RasterHost/          .NET RasterHost process: D3D surfaces + PDF/thumbnail bridges  (Spike 1)
     QuickLook.Next.App/                 WinUI 3 shell: native bridge + supervision + composition consumer  (Spikes 1+3)
   plugins/                              legacy/reference .NET plugin sources (reference-only)
@@ -20,13 +21,14 @@ QuickLook.Next/
 ```
 
 ## Dependency direction
-`Contracts` ← `Core` ← (`App`, `RasterHost`). Rust ↔ App/RasterHost is C ABI; App ⇄ RasterHost is IPC
+`Contracts` ← `Core` ← (`App`, `ParserHost`, `RasterHost`). Rust ↔ App/hosts is C ABI; App ⇄ hosts is IPC
 (control pipe + shared composition surface).
 
 ## Rust-first ownership
 Rust is the source of truth for native input, Explorer selection, file probing, shell thumbnails, image
-decoding, and lightweight content previews. The App calls Rust directly for text, archive, and folder
-previews; these do not require RasterHost or .NET plugins in the hot path. Raster image previews decode
+decoding, and lightweight content previews. The App calls Rust directly for text and folder previews.
+Archive, package, and Office structured previews execute in ParserHost; archive extraction and
+native image helpers remain App-local. Raster image previews decode
 to BGRA in Rust, then RasterHost uploads those pixels to a shared D3D surface.
 
 .NET remains intentional only where it is currently a frontend or surface-hosting component:
@@ -47,7 +49,7 @@ For PPT/XLSX, prioritize layout reconstruction: slide/sheet dimensions, text box
 row/column sizing, relationships, and embedded images. Perfect style parity, macros, animations,
 formula recalculation, and full Office compatibility are outside the default preview boundary.
 
-## The two boundaries
+## Process boundaries
 - **App ⇄ native (Rust):** in-process FFI. `quicklook_next_native` installs the WH_KEYBOARD_LL hook and
   reads the Explorer selection, then calls back with high-level intent lines decoded into `NativeIntent`.
 - **App ⇄ RasterHost:** named-pipe **control channel** (line-delimited JSON, `ControlMessage` in
@@ -58,6 +60,11 @@ formula recalculation, and full Office compatibility are outside the default pre
 Handshake: App (pipe server) launches Host → `hello{appPid}` → Host `host.ready{adapterLuid}` →
 `preview.open{requestId,path,probe}` → `preview.surface{handle,…}` + `preview.ready{…}`. Resize →
 `preview.resize` → new `preview.surface`. Host crash → App restarts it (supervisor).
+
+- **App ⇄ ParserHost:** separately authenticated named-pipe JSON control channel. The App verifies the
+  connecting child PID and sends a random session token in `hello`; ParserHost responds `parser.ready`.
+  It accepts archive/package/Office `preview.open` requests and returns bounded structured
+  `preview.ready` JSON only, never composition surfaces. It is lazy-started and stopped on app shutdown.
 
 ## Build / checks
 ```
@@ -75,14 +82,15 @@ For review handoff notes, fixed boundaries, and targeted verification commands, 
 [`docs/review-readiness.md`](docs/review-readiness.md).
 
 ## Current status
-Wired & compiling now: the four projects, the full control protocol, the FFI bridge, tray-background
+Wired & compiling now: the five projects, the full control protocol, the FFI bridge, tray-background
 startup, no-activate preview behavior, Explorer selection switching, RasterHost supervision + restart,
 the composition producer/consumer, App-direct media playback, and the raster paths:
 Rust image decode or Windows PDF render → BGRA pixels → RasterHost D3D texture → shared composition
 surface.
 
 RasterHost is lazy-started: text, Office metadata/layout, archive/folder listings, package metadata,
-certificates, executables, and other lightweight Rust previews do not start the surface host. It is
+certificates, executables, and other lightweight Rust previews do not start the surface host. ParserHost
+is likewise lazy-started only for archive/package/Office structured previews. RasterHost is
 started only when a preview needs a D3D surface, PDF page rasterization, or shell thumbnail fallback.
 
 Professional/specialized formats are prioritized by likely real-user frequency and cost:
@@ -95,7 +103,7 @@ raster/image surfaces, PDF page virtualization/cache, media playback, and topmos
 behavior. MainWindow remains the application coordinator: native intents, request cancellation,
 RasterHost pipe lifetime, panel switching, and window placement.
 
-The default release path is Rust/App/RasterHost only. `tools/guard-architecture.ps1` enforces the
+The default release path is Rust/App/ParserHost/RasterHost only. `tools/guard-architecture.ps1` enforces the
 current boundaries: no WebView/WebView2, no default .NET preview plugin path or project reference, no
 RasterHost plugin registry/loader, and no legacy .NET preview plugins in release output.
 

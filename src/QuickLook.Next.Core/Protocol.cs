@@ -14,6 +14,7 @@ namespace QuickLook.Next.Core;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(Hello), "hello")]
 [JsonDerivedType(typeof(HostReady), "host.ready")]
+[JsonDerivedType(typeof(ParserReady), "parser.ready")]
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewReady), "preview.ready")]
@@ -29,6 +30,9 @@ public sealed record Hello(int AppProcessId, string SessionToken) : ControlMessa
 
 /// <summary>Host → App once ready. AdapterLuid must match the App's compositor adapter for sharing.</summary>
 public sealed record HostReady(long AdapterLuid) : ControlMessage;
+
+/// <summary>ParserHost → App after the authenticated handshake completes.</summary>
+public sealed record ParserReady : ControlMessage;
 
 /// <summary>App → Host: open a file. Probe comes from the Rust native layer.</summary>
 public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe) : ControlMessage

@@ -83,6 +83,7 @@ if (Test-Path $pluginLoaderPath) {
 # Rule 3b: product projects must not reference legacy .NET preview plugins.
 $productProjectFiles = @(
     "src/QuickLook.Next.App/QuickLook.Next.App.csproj",
+    "src/QuickLook.Next.ParserHost/QuickLook.Next.ParserHost.csproj",
     "src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj"
 )
 foreach ($projectRelative in $productProjectFiles) {

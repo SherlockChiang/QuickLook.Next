@@ -183,7 +183,9 @@ internal sealed class NativeBridge
             : call is not null
             ? CallPreview(call, path)
             : ShouldUseNativeInfo(probe) ? CallInfoPreview(path, probe) : null;
-        return string.IsNullOrWhiteSpace(json) ? null : ParsePreviewReady(requestId, json);
+        return string.IsNullOrWhiteSpace(json)
+            ? null
+            : PreviewReadyJson.TryParse(requestId, json, out PreviewReady? ready, out _) ? ready : null;
     }
 
     public PreviewListing? TryPreviewFolderListing(string path)
@@ -587,67 +589,6 @@ internal sealed class NativeBridge
         }
     }
 
-    private static PreviewReady? ParsePreviewReady(string requestId, string json)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            string kind = root.GetProperty("kind").GetString() ?? "unknown";
-            string title = root.GetProperty("title").GetString() ?? kind;
-            double width = kind is "archive" or "folder" or "package" or "table" ? 760 : 720;
-            double height = kind is "archive" or "folder" or "package" or "table" ? 560 : 500;
-
-            var ready = new PreviewReady(requestId, kind, title, width, height);
-            if (root.TryGetProperty("table", out var table))
-            {
-                return ready with
-                {
-                    Table = JsonSerializer.Deserialize<PreviewTable>(table.GetRawText(), ProtocolJson.Options),
-                };
-            }
-
-            if (root.TryGetProperty("listing", out var listing))
-            {
-                return ready with
-                {
-                    Listing = JsonSerializer.Deserialize<PreviewListing>(listing.GetRawText(), ProtocolJson.Options),
-                };
-            }
-
-            OfficeLayout? officeLayout = null;
-            if (root.TryGetProperty("officeLayout", out var layout))
-                officeLayout = JsonSerializer.Deserialize<OfficeLayout>(layout.GetRawText(), ProtocolJson.Options);
-
-            PreviewMarkdown? markdown = null;
-            if (root.TryGetProperty("markdown", out var markdownElement))
-                markdown = JsonSerializer.Deserialize<PreviewMarkdown>(markdownElement.GetRawText(), ProtocolJson.Options);
-
-            if (root.TryGetProperty("text", out var text))
-            {
-                return ready with
-                {
-                    TextContent = text.GetString(),
-                    TextFormat = root.TryGetProperty("format", out var format) ? format.GetString() : "plain",
-                    TextLanguage = root.TryGetProperty("language", out var language) ? language.GetString() : "text",
-                    OfficeLayout = officeLayout,
-                    Markdown = markdown,
-                };
-            }
-
-            if (markdown is not null)
-                return ready with { Markdown = markdown };
-
-            if (officeLayout is not null)
-                return ready with { OfficeLayout = officeLayout };
-
-            return null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }
 
 internal sealed record NativeRasterImage(byte[] Bgra, int Width, int Height);

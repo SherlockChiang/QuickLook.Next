@@ -3,6 +3,7 @@
     <Project Path="src/QuickLook.Next.App/QuickLook.Next.App.csproj" />
     <Project Path="src/QuickLook.Next.Contracts/QuickLook.Next.Contracts.csproj" />
     <Project Path="src/QuickLook.Next.Core/QuickLook.Next.Core.csproj" />
+    <Project Path="src/QuickLook.Next.ParserHost/QuickLook.Next.ParserHost.csproj" />
     <Project Path="src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj" />
   </Folder>
 </Solution>

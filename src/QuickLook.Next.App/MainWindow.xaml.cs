@@ -58,6 +58,8 @@ public sealed partial class MainWindow : Window
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
     private RasterHostSupervisor? _supervisor;
+    private ParserHostSupervisor? _parserSupervisor;
+    private readonly Dictionary<string, PreviewHostOwner> _requestHosts = new(StringComparer.Ordinal);
     private PreviewKeyboardHook? _previewKeyboardHook;
     private UiThreadWatchdog? _uiWatchdog;
     private readonly PreviewSession _previewSession = new();
@@ -176,6 +178,7 @@ public sealed partial class MainWindow : Window
         [4] = "High gain down",
     };
     private enum PreviewInfoRailTab { Info, Exif, More }
+    private enum PreviewHostOwner { Raster, Parser }
     private enum PreviewFailureKind { Content, TimedOut, Service, Surface }
     private readonly record struct PreviewFailure(PreviewFailureKind Kind, bool CanRetry);
 
@@ -295,6 +298,7 @@ public sealed partial class MainWindow : Window
             _previewKeyboardHook?.Dispose();
             RemoveTrayIcon();
             _supervisor?.Stop();
+            _parserSupervisor?.Stop();
         };
 
         RootGrid.ActualThemeChanged += (s, e) =>
@@ -440,17 +444,19 @@ public sealed partial class MainWindow : Window
         if (id is null) return;
         if (requestId is null || string.Equals(_previewSession.CurrentRequestId, id, StringComparison.Ordinal))
             _previewSession.SetRequestId(null);
-        RasterHostSupervisor? supervisor = _supervisor;
-        if (supervisor is null)
+        if (!_requestHosts.Remove(id, out PreviewHostOwner owner))
         {
-            DiagLog.Write("App", $"close skip: no RasterHost; request={id}");
+            DiagLog.Write("App", $"close skip: request has no host owner; request={id}");
             return;
         }
 
         try
         {
             using var trace = DiagLog.TraceScope("App", $"close request={id}", 100);
-            await supervisor.CloseAsync(id).WaitAsync(TimeSpan.FromSeconds(1));
+            Task close = owner == PreviewHostOwner.Parser
+                ? _parserSupervisor?.CloseAsync(id) ?? Task.CompletedTask
+                : _supervisor?.CloseAsync(id) ?? Task.CompletedTask;
+            await close.WaitAsync(TimeSpan.FromSeconds(1));
         }
         catch (TimeoutException)
         {
@@ -483,6 +489,17 @@ public sealed partial class MainWindow : Window
         }
 
         await _supervisor.EnsureStartedAsync();
+    }
+
+    private async Task EnsureParserHostStartedAsync()
+    {
+        if (_parserSupervisor is null)
+        {
+            _parserSupervisor = new ParserHostSupervisor(ResolveParserHostExePath());
+            _parserSupervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
+        }
+
+        await _parserSupervisor.EnsureStartedAsync();
     }
 
     private async Task HandleNativeIntentAsync(NativeIntent intent)
@@ -628,15 +645,37 @@ public sealed partial class MainWindow : Window
             }
 
 
-            PreviewReady? nativeReady = forceAnimatedFirstFrameRaster
-                ? null
-                : await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
+            PreviewReady? nativeReady = null;
+            if (!forceAnimatedFirstFrameRaster && IsParserHostPreview(probe))
+            {
+                await EnsureParserHostStartedAsync();
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+                var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(path, probe);
+                _requestHosts[parserRequestId] = PreviewHostOwner.Parser;
+                _previewSession.SetRequestId(parserRequestId);
+                _previewSession.CommitPath(path);
+                ControlMessage parserResult = await parserCompletion.WaitAsync(previewToken);
+                if (!IsPreviewGenerationCurrent(generation, previewToken) || !_previewSession.IsCurrentRequest(parserRequestId)) return;
+                if (parserResult is PreviewError parserError)
+                {
+                    StatusText.Text = ShowHostError(parserError);
+                    RevealPreviewWindow(activate: false);
+                    return;
+                }
+                nativeReady = parserResult as PreviewReady;
+            }
+            else if (!forceAnimatedFirstFrameRaster)
+            {
+                nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
+            }
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             if (nativeReady is not null)
             {
                 _previewSession.CommitPath(path);
-                _previewSession.SetRequestId(null);
+                // ParserHost previews retain their request id until navigation/close can cancel that host.
+                if (!_requestHosts.ContainsKey(_previewSession.CurrentRequestId ?? ""))
+                    _previewSession.SetRequestId(null);
                 StatusText.Text = nativeReady switch
                 {
                     PreviewReady r when r.OfficeLayout is not null => ShowOfficeLayoutPreview(r),
@@ -654,6 +693,7 @@ public sealed partial class MainWindow : Window
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
             var (requestId, completion) = _supervisor!.BeginOpen(path, probe, targetSize.Width, targetSize.Height);
+            _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
             DiagLog.Write("App", $"preview host open sent gen={generation}; request={requestId}");
@@ -2615,6 +2655,7 @@ public sealed partial class MainWindow : Window
         _backgroundEfficiencyEnabled = enabled;
         ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled, "App");
         _supervisor?.SetBackgroundEfficiency(enabled);
+        _parserSupervisor?.SetBackgroundEfficiency(enabled);
     }
 
     private AppWindow GetAppWindow()
@@ -2657,6 +2698,7 @@ public sealed partial class MainWindow : Window
     {
         RemoveTrayIcon();
         _supervisor?.Stop();
+        _parserSupervisor?.Stop();
         try { Microsoft.UI.Xaml.Application.Current.Exit(); }
         catch (Exception ex) { DiagLog.Write("App", "graceful exit failed: " + ex); }
     }
@@ -2696,6 +2738,21 @@ public sealed partial class MainWindow : Window
         return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
             @"..\..\..\..\..\QuickLook.Next.RasterHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.RasterHost.exe"));
     }
+
+    private static string ResolveParserHostExePath()
+    {
+        string parserHost = System.IO.Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
+        if (System.IO.File.Exists(parserHost)) return parserHost;
+        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.ParserHost.exe");
+        if (System.IO.File.Exists(local)) return local;
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
+            @"..\..\..\..\..\QuickLook.Next.ParserHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ParserHost.exe"));
+    }
+
+    private static bool IsParserHostPreview(FileProbe probe)
+        => probe.Kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("package", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("office", StringComparison.OrdinalIgnoreCase);
 
     private string ResolveAppIconPath()
     {

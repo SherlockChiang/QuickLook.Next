@@ -1,5 +1,5 @@
 # Builds everything in Release and assembles a clean dist\ package.
-# The default release path is Rust/App/RasterHost only; legacy .NET plugins are intentionally excluded.
+# The default release path is Rust/App/RasterHost/ParserHost only; legacy .NET plugins are intentionally excluded.
 param(
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = ""
@@ -25,6 +25,8 @@ cargo build --release --locked --manifest-path (Join-Path $root "native\quickloo
 Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
 $rasterHostRelease = Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release"
 if (Test-Path $rasterHostRelease) { Remove-Item $rasterHostRelease -Recurse -Force }
+$parserHostRelease = Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release"
+if (Test-Path $parserHostRelease) { Remove-Item $parserHostRelease -Recurse -Force }
 
 Write-Host "== building solution (Release) ==" -ForegroundColor Cyan
 $buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release", "--no-restore")
@@ -39,6 +41,7 @@ dotnet @buildArgs
 Write-Host "== assembling dist ==" -ForegroundColor Cyan
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Force "$dist\RasterHost" | Out-Null
+New-Item -ItemType Directory -Force "$dist\ParserHost" | Out-Null
 
 function Copy-Clean($src, $dst) {
     New-Item -ItemType Directory -Force $dst | Out-Null
@@ -48,6 +51,7 @@ function Copy-Clean($src, $dst) {
 
 Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
 Copy-Clean (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm") "$dist\RasterHost"
+Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$dist\ParserHost"
 
 & (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist
 

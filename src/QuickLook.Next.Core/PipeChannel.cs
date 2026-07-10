@@ -29,7 +29,7 @@ public static class ProtocolJson
 /// </summary>
 public sealed class PipeChannel : IDisposable
 {
-    private const int MaxControlLineChars = 4 * 1024 * 1024;
+    public const int MaxControlLineChars = 4 * 1024 * 1024;
 
     private readonly StreamReader _reader;
     private readonly StreamWriter _writer;
