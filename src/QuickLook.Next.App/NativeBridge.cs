@@ -85,7 +85,7 @@ internal sealed class NativeBridge
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private delegate int NativeAnimationCall(byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
-    private const int MaxNativeProbeJsonBytes = 64 * 1024;
+    private const int MaxNativeProbeJsonBytes = 512 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
     private const int MaxNativeAnimationBytes = 80 * 1024 * 1024;
 

@@ -59,7 +59,8 @@ const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 
-const MAX_FFI_STRING_BYTES: usize = 32 * 1024;
+// A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
+const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
@@ -1383,6 +1384,16 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn ffi_accepts_multibyte_windows_path_sized_strings() {
+        let value = "界".repeat(12_000);
+        assert!(value.len() > 32 * 1024);
+        assert_eq!(
+            utf8_arg(value.as_ptr(), value.len(), MAX_FFI_STRING_BYTES),
+            Some(value.as_str())
+        );
+    }
 
     #[test]
     fn classify_accepts_known_and_sniffed_config_text() {
