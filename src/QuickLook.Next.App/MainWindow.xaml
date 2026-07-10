@@ -873,27 +873,44 @@
                                 x:Uid="ListingBreadcrumbPanel"
                                 AutomationProperties.Name="Listing path breadcrumbs" />
 
-                    <Grid Grid.Row="2" Padding="36,0,12,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" MinWidth="260" />
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="140" />
-                            <ColumnDefinition Width="110" />
-                        </Grid.ColumnDefinitions>
-                        <Button x:Name="ListingNameHeader" x:Uid="ListingNameHeader" Grid.Column="0" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by name" />
-                        <Button x:Name="ListingModifiedHeader" x:Uid="ListingModifiedHeader" Grid.Column="1" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by modified date" />
-                        <Button x:Name="ListingTypeHeader" x:Uid="ListingTypeHeader" Grid.Column="2" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by type" />
-                        <Button x:Name="ListingSizeHeader" x:Uid="ListingSizeHeader" Grid.Column="3" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by size" />
-                    </Grid>
+                    <ScrollViewer Grid.Row="2"
+                                  Grid.RowSpan="2"
+                                  HorizontalScrollMode="Enabled"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollMode="Disabled"
+                                  VerticalScrollBarVisibility="Disabled"
+                                  ZoomMode="Disabled">
+                        <Grid MinWidth="692">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Padding="8,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="28" />
+                                    <ColumnDefinition Width="*" MinWidth="220" />
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="110" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="ListingNameHeader" x:Uid="ListingNameHeader" Grid.Column="1" Tag="name" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by name" />
+                                <Button x:Name="ListingModifiedHeader" x:Uid="ListingModifiedHeader" Grid.Column="2" Tag="modified" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by modified date" />
+                                <Button x:Name="ListingTypeHeader" x:Uid="ListingTypeHeader" Grid.Column="3" Tag="type" Click="OnListingSortClick" HorizontalAlignment="Left" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by type" />
+                                <Button x:Name="ListingSizeHeader" x:Uid="ListingSizeHeader" Grid.Column="4" Tag="size" Click="OnListingSortClick" HorizontalAlignment="Right" HorizontalContentAlignment="Right" Style="{StaticResource ListingHeaderButtonStyle}" AutomationProperties.Name="Sort by size" />
+                            </Grid>
 
                     <ListView x:Name="ListingListView"
                               x:Uid="ListingListView"
-                              Grid.Row="3"
+                              Grid.Row="1"
                               IsItemClickEnabled="True"
                               ItemClick="OnListingItemClick"
                               DoubleTapped="OnListingListViewDoubleTapped"
                               KeyDown="OnListingListViewKeyDown"
                               SelectionMode="Single"
+                              ScrollViewer.HorizontalScrollMode="Disabled"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              ScrollViewer.VerticalScrollMode="Enabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                               AutomationProperties.Name="Preview listing">
                         <ListView.Resources>
                             <ResourceDictionary>
@@ -977,6 +994,8 @@
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+                        </Grid>
+                    </ScrollViewer>
                 </Grid>
             </Border>
             <Border x:Name="StatusBar"
