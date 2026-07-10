@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   beta-release:
@@ -62,6 +64,35 @@ jobs:
           dotnet restore QuickLook.Next.slnx --locked-mode
           ./tools/pack-release.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}"
 
+      - name: Generate CycloneDX NuGet SBOM
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\sbom | Out-Null
+          dotnet tool install CycloneDX --tool-path .tools --version 6.2.0
+          & .\.tools\dotnet-CycloneDX.exe QuickLook.Next.slnx `
+            --disable-package-restore `
+            --output artifacts\sbom `
+            --filename QuickLook.Next-$env:BETA_VERSION-nuget.cdx.json `
+            --output-format Json `
+            --spec-version 1.7 `
+            --set-name QuickLook.Next `
+            --set-version $env:BETA_VERSION
+
+      - name: Generate CycloneDX Cargo SBOM
+        shell: pwsh
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo cyclonedx `
+            --manifest-path native\quicklook_next_native\Cargo.toml `
+            --format json `
+            --describe binaries `
+            --target x86_64-pc-windows-msvc `
+            --target-in-filename `
+            --override-filename QuickLook.Next-$env:BETA_VERSION-cargo.cdx.json
+          Move-Item -LiteralPath native\quicklook_next_native\QuickLook.Next-$env:BETA_VERSION-cargo.cdx.json `
+            -Destination artifacts\sbom\QuickLook.Next-$env:BETA_VERSION-cargo.cdx.json `
+            -Force
+
       - name: Write release metadata
         shell: pwsh
         run: |
@@ -75,6 +106,7 @@ jobs:
       - name: Archive package
         shell: pwsh
         run: |
+          Copy-Item -LiteralPath artifacts\sbom -Destination dist\sbom -Recurse -Force
           New-Item -ItemType Directory -Force artifacts | Out-Null
           $zipPath = "artifacts/QuickLook.Next-$env:BETA_VERSION-win-x64.zip"
           Compress-Archive -Path dist/* -DestinationPath $zipPath -Force
@@ -90,7 +122,16 @@ jobs:
           path: |
             ${{ env.RELEASE_ASSET }}
             ${{ env.CHECKSUM_ASSET }}
+            artifacts/sbom/*.cdx.json
           if-no-files-found: error
+
+      - name: Attest release package and SBOMs
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            ${{ env.RELEASE_ASSET }}
+            ${{ env.CHECKSUM_ASSET }}
+            artifacts/sbom/*.cdx.json
 
       - name: Publish GitHub prerelease
         shell: pwsh
@@ -102,9 +143,12 @@ jobs:
 
           Version: $env:BETA_VERSION
           Base version: $env:BASE_VERSION
+
+          The ZIP, checksum, and SBOM release assets have GitHub Artifact Attestations.
+          Verify a downloaded asset with: gh attestation verify <asset-path> --repo $env:GITHUB_REPOSITORY
           "@
 
-          gh release create $env:RELEASE_TAG $env:RELEASE_ASSET $env:CHECKSUM_ASSET `
+          gh release create $env:RELEASE_TAG $env:RELEASE_ASSET $env:CHECKSUM_ASSET artifacts/sbom/*.cdx.json `
             --target $env:GITHUB_SHA `
             --title "QuickLook Next $env:BETA_VERSION" `
             --notes $notes `
