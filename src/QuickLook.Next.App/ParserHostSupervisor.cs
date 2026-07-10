@@ -19,6 +19,7 @@ internal sealed class ParserHostSupervisor
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
     private Process? _host;
+    private ParserHostJob? _job;
     private string? _sessionToken;
     private int _generation;
     private bool _stopping;
@@ -42,7 +43,9 @@ internal sealed class ParserHostSupervisor
         _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _channel?.Dispose();
         _server?.Dispose();
+        TryKillHost();
         try { _host?.Dispose(); } catch { }
+        _host = null;
         string pipeName = $"quicklook_next_parser_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         _sessionToken = RandomNumberGenerator.GetHexString(32);
         _server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
@@ -52,7 +55,21 @@ internal sealed class ParserHostSupervisor
         startInfo.ArgumentList.Add(pipeName);
         startInfo.ArgumentList.Add("--session-token");
         startInfo.ArgumentList.Add(_sessionToken);
-        _host = Process.Start(startInfo) ?? throw new InvalidOperationException("ParserHost process did not start");
+        var job = new ParserHostJob((nint)(512L * 1024 * 1024));
+        try
+        {
+            _host = Process.Start(startInfo) ?? throw new InvalidOperationException("ParserHost process did not start");
+            job.Assign(_host);
+            _job = job;
+        }
+        catch
+        {
+            try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
+            try { _host?.Dispose(); } catch { }
+            _host = null;
+            job.Dispose();
+            throw;
+        }
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, _backgroundEfficiencyEnabled, "App");
         _host.EnableRaisingEvents = true;
         _host.Exited += (_, _) => OnHostExited(generation);
@@ -202,11 +219,15 @@ internal sealed class ParserHostSupervisor
         try { _server?.Dispose(); } catch { }
         _server = null;
         TryKillHost();
+        try { _host?.Dispose(); } catch { }
+        _host = null;
     }
 
     private void TryKillHost()
     {
-        try { if (_host is { HasExited: false }) _host.Kill(); } catch { }
+        try { _job?.Dispose(); } catch { }
+        _job = null;
+        try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
     }
 
     private static bool IsArchiveExtractTempPath(string path)
