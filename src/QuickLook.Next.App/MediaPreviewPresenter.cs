@@ -7,15 +7,20 @@ namespace QuickLook.Next.App;
 internal sealed class MediaPreviewPresenter
 {
     private readonly MediaPlayerElement _mediaElement;
+    private string? _currentPath;
+
+    public event Action<string>? MediaFailed;
 
     public MediaPreviewPresenter(MediaPlayerElement mediaElement)
     {
         _mediaElement = mediaElement;
+        _mediaElement.MediaPlayer.MediaFailed += OnMediaFailed;
     }
 
     public MediaPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
         Clear();
+        _currentPath = ready.MediaPath;
 
         try
         {
@@ -25,6 +30,7 @@ internal sealed class MediaPreviewPresenter
         catch (Exception ex)
         {
             DiagLog.Write("App", "media load failed: " + ex);
+            NotifyFailed();
         }
 
         double width = ready.PreferredWidth > 0 ? ready.PreferredWidth : 800;
@@ -37,11 +43,24 @@ internal sealed class MediaPreviewPresenter
 
     public void Clear()
     {
+        _currentPath = null;
         _mediaElement.MediaPlayer?.Pause();
         var source = _mediaElement.Source;
         _mediaElement.Source = null;
         if (source is IDisposable disposableSource)
             disposableSource.Dispose();
+    }
+
+    private void OnMediaFailed(Windows.Media.Playback.MediaPlayer sender, Windows.Media.Playback.MediaPlayerFailedEventArgs args)
+    {
+        DiagLog.Write("App", "media playback failed: " + args.ErrorMessage);
+        NotifyFailed();
+    }
+
+    private void NotifyFailed()
+    {
+        if (!string.IsNullOrWhiteSpace(_currentPath))
+            MediaFailed?.Invoke(_currentPath);
     }
 
     public static bool IsMediaProbe(FileProbe probe)

@@ -233,6 +233,7 @@ public sealed partial class MainWindow : Window
             () => _compositor,
             () => _supervisor);
         _mediaPresenter = new MediaPreviewPresenter(MediaPreviewElement);
+        _mediaPresenter.MediaFailed += OnMediaPreviewFailed;
         _listingPresenter = new ListingPreviewPresenter(
             ListingTitle,
             ListingSummary,
@@ -1018,6 +1019,15 @@ public sealed partial class MainWindow : Window
         _previewSession.SetRequestId(null);
         _ = CloseCurrentAsync(requestId);
         StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Surface, false));
+        RevealPreviewWindow(activate: false);
+    }
+
+    private void OnMediaPreviewFailed(string path)
+    {
+        if (!_previewSession.IsCurrentPath(path))
+            return;
+
+        StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
         RevealPreviewWindow(activate: false);
     }
 
