@@ -595,6 +595,7 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "flate2",
+ "getrandom",
  "gif",
  "image",
  "qcms",

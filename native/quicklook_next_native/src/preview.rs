@@ -3,13 +3,11 @@
 //! These replace the equivalent .NET plugins with pure-Rust implementations callable directly
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use image::GenericImageView;
@@ -11744,6 +11742,8 @@ fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
 const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_EXTRACT_ROOTS: usize = 32;
+const ARCHIVE_EXTRACT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
 const ZIP_EXTS: &[&str] = &[
     ".zip",
@@ -11819,20 +11819,26 @@ pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Op
         return None;
     }
 
-    let target = archive_extract_target_path(archive_path, &normalized)?;
-    if target.exists() {
-        if let Ok(meta) = fs::metadata(&target) {
-            if meta.len() == entry.size() {
-                return target.to_str().map(|s| s.to_string());
-            }
-        }
-    }
-
     let bytes = read_limited_to_end(&mut entry, MAX_ARCHIVE_EXTRACT_BYTES)?;
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).ok()?;
+    let root = create_archive_extract_root()?;
+    let target = root.join(archive_extract_output_name(&normalized));
+    let mut output = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+    {
+        Ok(output) => output,
+        Err(_) => {
+            let _ = fs::remove_dir_all(&root);
+            return None;
+        }
+    };
+    if output.write_all(&bytes).is_err() {
+        drop(output);
+        let _ = fs::remove_dir_all(&root);
+        return None;
     }
-    fs::write(&target, bytes).ok()?;
+    drop(output);
     target.to_str().map(|s| s.to_string())
 }
 
@@ -11851,41 +11857,86 @@ fn normalize_archive_entry_path(path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn archive_extract_target_path(archive_path: &str, entry_path: &str) -> Option<std::path::PathBuf> {
-    let mut hasher = DefaultHasher::new();
-    archive_path.hash(&mut hasher);
-    if let Ok(meta) = fs::metadata(archive_path) {
-        meta.len().hash(&mut hasher);
-        if let Ok(modified) = meta.modified() {
-            if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
-                duration.as_secs().hash(&mut hasher);
-            }
-        }
+fn archive_extract_output_name(entry_path: &str) -> String {
+    let mut name = String::with_capacity(entry_path.len().saturating_mul(2) + 6);
+    name.push_str("entry-");
+    for byte in entry_path.bytes() {
+        use std::fmt::Write as _;
+        let _ = write!(name, "{byte:02x}");
     }
-    let archive_hash = hasher.finish();
-    let mut path = std::env::temp_dir();
-    path.push("QuickLookNext");
-    path.push("archive-preview");
-    path.push(format!("{archive_hash:016x}"));
-    for part in entry_path.split('/') {
-        path.push(sanitize_temp_path_component(part));
+
+    // Preserve conventional extensions so consumers can still select a preview provider.
+    if let Some(extension) = Path::new(entry_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 32
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+    {
+        name.push('.');
+        name.push_str(extension);
     }
-    Some(path)
+    name
 }
 
-fn sanitize_temp_path_component(part: &str) -> String {
-    let sanitized = part
-        .chars()
-        .map(|ch| match ch {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0' => '_',
-            _ if ch.is_control() => '_',
-            _ => ch,
-        })
-        .collect::<String>();
-    if sanitized.trim().is_empty() {
-        "_".to_string()
-    } else {
-        sanitized
+fn archive_extract_base_path() -> PathBuf {
+    std::env::temp_dir()
+        .join("QuickLookNext")
+        .join("archive-preview")
+}
+
+fn create_archive_extract_root() -> Option<PathBuf> {
+    let base = archive_extract_base_path();
+    fs::create_dir_all(&base).ok()?;
+    cleanup_archive_extract_roots(&base, MAX_ARCHIVE_EXTRACT_ROOTS.saturating_sub(1));
+
+    for _ in 0..16 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).ok()?;
+        let mut name = String::from("extract-");
+        for byte in random {
+            use std::fmt::Write as _;
+            let _ = write!(name, "{byte:02x}");
+        }
+        let root = base.join(name);
+        match fs::create_dir(&root) {
+            Ok(()) => return Some(root),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+fn cleanup_archive_extract_roots(base: &Path, retain: usize) {
+    let now = SystemTime::now();
+    let mut roots = Vec::new();
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || !entry.file_name().to_string_lossy().starts_with("extract-") {
+            continue;
+        }
+        let modified = entry.metadata().ok().and_then(|metadata| metadata.modified().ok());
+        if modified
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > ARCHIVE_EXTRACT_RETENTION)
+        {
+            let _ = fs::remove_dir_all(entry.path());
+        } else {
+            roots.push((modified, entry.path()));
+        }
+    }
+    roots.sort_by_key(|(modified, _)| *modified);
+    let excess = roots.len().saturating_sub(retain);
+    for (_, root) in roots.into_iter().take(excess) {
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -13472,6 +13523,16 @@ mod tests {
         let mut reader = Cursor::new(vec![1, 2, 3, 4, 5]);
 
         assert!(read_limited_to_end(&mut reader, 4).is_none());
+    }
+
+    #[test]
+    fn archive_extract_output_name_is_lossless_and_keeps_safe_extension() {
+        let first = archive_extract_output_name("folder/a:b?.png");
+        let second = archive_extract_output_name("folder/a<b>.png");
+
+        assert_ne!(first, second);
+        assert!(first.ends_with(".png"));
+        assert!(first.starts_with("entry-666f6c6465722f613a623f2e706e67"));
     }
 
     #[test]
