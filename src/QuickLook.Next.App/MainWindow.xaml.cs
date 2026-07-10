@@ -597,6 +597,20 @@ public sealed partial class MainWindow : Window
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentProbe = probe;
 
+            if (mayRequireHydration && probe.Kind.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                var unknownCloudReady = CreateCloudMetadataPreview(
+                    $"cloud-unknown-{generation}",
+                    path,
+                    probe,
+                    "Preview is deferred because this cloud file type cannot be identified without downloading its contents.");
+                _previewSession.CommitPath(path);
+                _previewSession.SetRequestId(null);
+                StatusText.Text = ShowTextPreview(unknownCloudReady);
+                RevealPreviewWindow(activate: false);
+                return;
+            }
+
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
                 if (mayRequireHydration)
