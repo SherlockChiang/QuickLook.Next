@@ -25,7 +25,6 @@ internal sealed class ImageSidecarController
     private readonly Func<string, bool> _isImagePath;
     private readonly Func<string, int, CancellationToken, bool> _isPathCurrent;
     private readonly Func<string, int, CancellationToken, Task<NativeRasterImage?>> _loadThumbnail;
-    private readonly Func<string, FileProbe?> _probeFile;
     private readonly Func<NativeRasterImage, ImageSource?> _createBitmapSource;
     private readonly ImageThumbnailCache _thumbnailCache = new(MaxImageThumbnailCacheItems);
     private string[] _siblingPaths = [];
@@ -38,7 +37,6 @@ internal sealed class ImageSidecarController
         Func<string, bool> isImagePath,
         Func<string, int, CancellationToken, bool> isPathCurrent,
         Func<string, int, CancellationToken, Task<NativeRasterImage?>> loadThumbnail,
-        Func<string, FileProbe?> probeFile,
         Func<NativeRasterImage, ImageSource?> createBitmapSource)
     {
         _filmstripList = filmstripList;
@@ -48,7 +46,6 @@ internal sealed class ImageSidecarController
         _isImagePath = isImagePath;
         _isPathCurrent = isPathCurrent;
         _loadThumbnail = loadThumbnail;
-        _probeFile = probeFile;
         _createBitmapSource = createBitmapSource;
         _filmstripList.ItemsSource = Items;
     }
@@ -272,7 +269,6 @@ internal sealed class ImageSidecarController
                     if (token.IsCancellationRequested || !_isPathCurrent(currentPath, generation, token))
                         return null;
 
-                    _ = _probeFile(target);
                     return await _loadThumbnail(target, 128, token);
                 }, token);
                 if (!_isPathCurrent(currentPath, generation, token))

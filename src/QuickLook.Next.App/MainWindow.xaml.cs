@@ -225,7 +225,6 @@ public sealed partial class MainWindow : Window
             IsImagePath,
             IsImageFilmstripLoadCurrent,
             (path, size, token) => _thumbnailScheduler.LoadAsync(path, size, NativeThumbnailPriority.Background, token),
-            path => _native.ProbeFile(path),
             CreateBitmapSource);
         _exifPresenter = new ExifPreviewPresenter(
             ExifDetailsList,
