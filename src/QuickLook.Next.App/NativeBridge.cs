@@ -85,6 +85,7 @@ internal sealed class NativeBridge
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private delegate int NativeAnimationCall(byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
+    private const int MaxNativeProbeJsonBytes = 64 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
     private const int MaxNativeAnimationBytes = 80 * 1024 * 1024;
 
@@ -123,6 +124,15 @@ internal sealed class NativeBridge
             try
             {
                 int n = ql_probe_file(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length);
+                if (n < -2)
+                {
+                    int required = checked(-n);
+                    if (required > MaxNativeProbeJsonBytes)
+                        return null;
+                    ArrayPool<byte>.Shared.Return(outBuf);
+                    outBuf = ArrayPool<byte>.Shared.Rent(required);
+                    n = ql_probe_file(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length);
+                }
                 if (n <= 0) return null;
 
                 using var doc = JsonDocument.Parse(new ReadOnlyMemory<byte>(outBuf, 0, n));
