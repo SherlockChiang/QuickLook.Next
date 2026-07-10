@@ -596,6 +596,19 @@ public sealed partial class MainWindow : Window
 
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
+                if (mayRequireHydration)
+                {
+                    var cloudMediaReady = CreateCloudMetadataPreview(
+                        $"cloud-media-{generation}",
+                        path,
+                        probe,
+                        "Media playback is deferred until the cloud provider makes this file available locally.");
+                    _previewSession.CommitPath(path);
+                    _previewSession.SetRequestId(null);
+                    StatusText.Text = ShowTextPreview(cloudMediaReady);
+                    RevealPreviewWindow(activate: false);
+                    return;
+                }
                 PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe, previewToken), previewToken);
                 DiagLog.Write("App", $"preview native media info end gen={generation}; hasInfo={mediaInfo is not null}");
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
@@ -1007,6 +1020,18 @@ public sealed partial class MainWindow : Window
         }
         catch { }
         return UiStrings.EmptyValue;
+    }
+
+    private static PreviewReady CreateCloudMetadataPreview(string requestId, string path, FileProbe probe, string status)
+    {
+        string fileName = System.IO.Path.GetFileName(path);
+        string modified = ModifiedText(path, probe);
+        return new PreviewReady(requestId, probe.Kind, fileName, 680, 420)
+        {
+            TextContent = $"Name: {fileName}\nKind: {probe.Kind}\nSize: {probe.Size:N0} bytes\nModified: {modified}\nStatus: {status}",
+            TextFormat = "plain",
+            TextLanguage = "text",
+        };
     }
 
     private static bool ProbeMatchesPath(FileProbe? probe, string? path)
