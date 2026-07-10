@@ -54,6 +54,7 @@ public sealed partial class MainWindow : Window
     private RasterPreviewPresenter? _rasterPresenter;
     private AnimatedImagePreviewPresenter? _animatedImagePresenter;
     private bool _isRasterChromeEnabled;
+    private bool _isCompactInfoRailOpen;
     private ImageSidecarController? _imageSidecarController;
     private ExifPreviewPresenter? _exifPresenter;
     private PdfPreviewPresenter? _pdfPresenter;
@@ -836,6 +837,8 @@ public sealed partial class MainWindow : Window
         PreviewMetaText.Text = UiStrings.Ready;
         PreviewKindPillText.Text = UiStrings.ReadyKind;
         _isRasterChromeEnabled = false;
+        _isCompactInfoRailOpen = false;
+        CompactInfoRailToggle.IsChecked = false;
         _panelController.ResetChromeVisibility();
         PreviewDimensionsText.Text = UiStrings.EmptyValue;
         PreviewSizeText.Text = UiStrings.EmptyValue;
@@ -852,8 +855,12 @@ public sealed partial class MainWindow : Window
 
     private void ApplyRasterChromeLayout()
     {
-        bool showInfoRail = _isRasterChromeEnabled && !IsCompactRasterChrome;
-        double rightMargin = showInfoRail ? RasterInfoRailWidth + RasterContentMargin : RasterContentMargin;
+        bool isCompact = IsCompactRasterChrome;
+        if (!isCompact)
+            _isCompactInfoRailOpen = false;
+        bool showInfoRail = _isRasterChromeEnabled && (!isCompact || _isCompactInfoRailOpen);
+        bool reserveRailSpace = _isRasterChromeEnabled && !isCompact;
+        double rightMargin = reserveRailSpace ? RasterInfoRailWidth + RasterContentMargin : RasterContentMargin;
         double bottomMargin = _isRasterChromeEnabled ? RasterToolbarHeight : RasterContentMargin;
 
         _panelController.ToggleRasterTools(_isRasterChromeEnabled, showInfoRail);
@@ -861,6 +868,11 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.Margin = PreviewRoot.Margin;
         ImagePreviewToolbar.Margin = new Thickness(RasterContentMargin, 0, rightMargin, RasterContentMargin);
         ImageFilmstrip.Margin = new Thickness(RasterContentMargin, 0, rightMargin, 78);
+        CompactInfoRailToggle.Visibility = _isRasterChromeEnabled && isCompact ? Visibility.Visible : Visibility.Collapsed;
+        CompactInfoRailToggle.IsChecked = _isCompactInfoRailOpen;
+        string infoAction = _isCompactInfoRailOpen ? UiStrings.HidePreviewDetails : UiStrings.ShowPreviewDetails;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CompactInfoRailToggle, infoAction);
+        ToolTipService.SetToolTip(CompactInfoRailToggle, infoAction);
     }
 
     private void OnPreviewContentHostSizeChanged(object sender, SizeChangedEventArgs e)
@@ -2136,6 +2148,17 @@ public sealed partial class MainWindow : Window
     {
         _animatedImagePresenter?.TogglePlayback();
         UpdateImageAnimationPlaybackButton();
+    }
+
+    private void OnCompactInfoRailToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (!IsCompactRasterChrome)
+            return;
+
+        _isCompactInfoRailOpen = CompactInfoRailToggle.IsChecked == true;
+        ApplyRasterChromeLayout();
+        if (_isCompactInfoRailOpen)
+            InfoTabButton.Focus(FocusState.Programmatic);
     }
 
     private void UpdateImageAnimationPlaybackButton()

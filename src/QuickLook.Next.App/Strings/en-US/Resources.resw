@@ -33,6 +33,12 @@
   <data name="PauseAnimation" xml:space="preserve">
     <value>Pause animation</value>
   </data>
+  <data name="ShowPreviewDetails" xml:space="preserve">
+    <value>Show preview details</value>
+  </data>
+  <data name="HidePreviewDetails" xml:space="preserve">
+    <value>Hide preview details</value>
+  </data>
   <data name="PreviewUnavailableTitle" xml:space="preserve">
     <value>Preview unavailable</value>
   </data>
