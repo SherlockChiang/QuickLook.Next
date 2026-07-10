@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -21,6 +22,7 @@ internal sealed class RasterHostSupervisor
     private readonly string _hostExePath;
     private readonly DispatcherQueue _ui;
     private readonly PendingRequests _pending = new();
+    private readonly ConcurrentDictionary<string, byte> _recycleOnCancel = new();
 
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -185,6 +187,7 @@ internal sealed class RasterHostSupervisor
         {
             DiagLog.Write("App", "host read loop failed: " + ex.Message);
             _ready.TrySetException(ex);
+            _recycleOnCancel.Clear();
             _pending.FailAll(ex);
         }
     }
@@ -199,8 +202,14 @@ internal sealed class RasterHostSupervisor
                 _ready.TrySetResult();
                 break;
             case PreviewSurface surface: _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface)); break;
-            case PreviewReady ready: _pending.TryComplete(ready.RequestId, ready); break;
-            case PreviewError error: _pending.TryComplete(error.RequestId, error); break;
+            case PreviewReady ready:
+                _recycleOnCancel.TryRemove(ready.RequestId, out _);
+                _pending.TryComplete(ready.RequestId, ready);
+                break;
+            case PreviewError error:
+                _recycleOnCancel.TryRemove(error.RequestId, out _);
+                _pending.TryComplete(error.RequestId, error);
+                break;
         }
     }
 
@@ -210,10 +219,13 @@ internal sealed class RasterHostSupervisor
         FileProbe probe,
         uint targetWidth = 0,
         uint targetHeight = 0,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        bool recycleHostOnCancel = false)
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
+        if (recycleHostOnCancel)
+            _recycleOnCancel[requestId] = 0;
         _ = StopOnTimeoutAsync(completion, requestId);
         lock (_stateLock)
         {
@@ -232,6 +244,7 @@ internal sealed class RasterHostSupervisor
         }
         catch (TimeoutException)
         {
+            _recycleOnCancel.TryRemove(requestId, out _);
             DiagLog.Write("App", $"RasterHost request timed out; terminating host: request={requestId}; gen={_generation}");
             TryKillHost();
         }
@@ -255,6 +268,7 @@ internal sealed class RasterHostSupervisor
         }
         catch (Exception ex)
         {
+            _recycleOnCancel.TryRemove(requestId, out _);
             _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
         }
     }
@@ -288,18 +302,30 @@ internal sealed class RasterHostSupervisor
 
     public async Task CloseAsync(string requestId)
     {
-        _pending.Cancel(requestId);
-        if (_channel is not null)
-        {
-            DiagLog.Write("App", $"host send close request={requestId}");
-            await _channel.SendAsync(new PreviewClose(requestId));
-        }
+        bool wasPending = _pending.Cancel(requestId);
+        bool recycleHost = wasPending && _recycleOnCancel.TryRemove(requestId, out _);
         lock (_stateLock)
         {
             if (_activeRequestId == requestId)
             {
                 _activeRequestId = null;
                 _activePath = null;
+            }
+        }
+        try
+        {
+            if (_channel is not null)
+            {
+                DiagLog.Write("App", $"host send close request={requestId}");
+                await _channel.SendAsync(new PreviewClose(requestId));
+            }
+        }
+        finally
+        {
+            if (recycleHost)
+            {
+                DiagLog.Write("App", $"recycling RasterHost after cloud preview cancellation: request={requestId}");
+                TryKillHost();
             }
         }
     }
@@ -315,6 +341,7 @@ internal sealed class RasterHostSupervisor
         if (_stopping || gen != _generation) return;
         (string? requestId, string? path) = GetRestartContext();
         DiagLog.Write("App", $"host exited gen={gen}; request={requestId}; scheduling restart");
+        _recycleOnCancel.Clear();
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
         _ = RestartAsync(gen, requestId, path);
     }
@@ -370,6 +397,7 @@ internal sealed class RasterHostSupervisor
         DiagLog.Write("App", "host stop");
         _stopping = true;
         ++_generation;
+        _recycleOnCancel.Clear();
         _ready.TrySetCanceled();
         _pending.FailAll(new OperationCanceledException("RasterHost stopped"));
         try { _channel?.Dispose(); } catch { }

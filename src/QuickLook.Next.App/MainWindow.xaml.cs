@@ -678,7 +678,10 @@ public sealed partial class MainWindow : Window
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(
-                    path, probe, mayRequireHydration ? CloudPreviewTimeout : null);
+                    path,
+                    probe,
+                    mayRequireHydration ? CloudPreviewTimeout : null,
+                    recycleHostOnCancel: mayRequireHydration);
                 _requestHosts[parserRequestId] = PreviewHostOwner.Parser;
                 _previewSession.SetRequestId(parserRequestId);
                 _previewSession.CommitPath(path);
@@ -729,7 +732,8 @@ public sealed partial class MainWindow : Window
                 probe,
                 targetSize.Width,
                 targetSize.Height,
-                mayRequireHydration ? CloudPreviewTimeout : null);
+                mayRequireHydration ? CloudPreviewTimeout : null,
+                recycleHostOnCancel: mayRequireHydration);
             _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);

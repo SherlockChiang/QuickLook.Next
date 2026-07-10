@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -16,6 +17,7 @@ internal sealed class ParserHostSupervisor
     private static readonly TimeSpan ResourceTelemetryInterval = TimeSpan.FromMinutes(1);
     private readonly string _hostExePath;
     private readonly PendingRequests _pending = new();
+    private readonly ConcurrentDictionary<string, byte> _recycleOnCancel = new();
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -109,10 +111,13 @@ internal sealed class ParserHostSupervisor
     public (string RequestId, Task<ControlMessage> Completion) BeginOpen(
         string path,
         FileProbe probe,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        bool recycleHostOnCancel = false)
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
+        if (recycleHostOnCancel)
+            _recycleOnCancel[requestId] = 0;
         _ = StopOnTimeoutAsync(completion, requestId);
         _ = SendOpenAsync(requestId, path, probe);
         return (requestId, completion);
@@ -121,13 +126,35 @@ internal sealed class ParserHostSupervisor
     private async Task SendOpenAsync(string requestId, string path, FileProbe probe)
     {
         try { await (_channel?.SendAsync(new PreviewOpen(requestId, path, probe)) ?? Task.FromException(new InvalidOperationException("ParserHost not connected"))); }
-        catch (Exception ex) { _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message)); }
+        catch (Exception ex)
+        {
+            _recycleOnCancel.TryRemove(requestId, out _);
+            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+        }
     }
 
     public Task CloseAsync(string requestId)
     {
-        _pending.Cancel(requestId);
-        return _channel?.SendAsync(new PreviewClose(requestId)) ?? Task.CompletedTask;
+        bool wasPending = _pending.Cancel(requestId);
+        bool recycleHost = wasPending && _recycleOnCancel.TryRemove(requestId, out _);
+        return CloseCoreAsync(requestId, recycleHost);
+    }
+
+    private async Task CloseCoreAsync(string requestId, bool recycleHost)
+    {
+        try
+        {
+            if (_channel is not null)
+                await _channel.SendAsync(new PreviewClose(requestId));
+        }
+        finally
+        {
+            if (recycleHost)
+            {
+                DiagLog.Write("App", $"recycling ParserHost after cloud preview cancellation: request={requestId}");
+                TryKillHost();
+            }
+        }
     }
 
     public async Task<string?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
@@ -180,6 +207,7 @@ internal sealed class ParserHostSupervisor
         }
         catch (TimeoutException)
         {
+            _recycleOnCancel.TryRemove(requestId, out _);
             int timeoutCount = Interlocked.Increment(ref _timeoutCount);
             int generation = _generation;
             LogHostResources("timeout", generation);
@@ -207,8 +235,14 @@ internal sealed class ParserHostSupervisor
                         DiagLog.Write("App", "ParserHost ready");
                         _ready.TrySetResult();
                         break;
-                    case PreviewReady ready: _pending.TryComplete(ready.RequestId, ready); break;
-                    case PreviewError error: _pending.TryComplete(error.RequestId, error); break;
+                    case PreviewReady ready:
+                        _recycleOnCancel.TryRemove(ready.RequestId, out _);
+                        _pending.TryComplete(ready.RequestId, ready);
+                        break;
+                    case PreviewError error:
+                        _recycleOnCancel.TryRemove(error.RequestId, out _);
+                        _pending.TryComplete(error.RequestId, error);
+                        break;
                     case ArchiveEntryExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
                     case HeroRasterExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
                 }
@@ -217,6 +251,7 @@ internal sealed class ParserHostSupervisor
         catch (Exception ex)
         {
             _ready.TrySetException(ex);
+            _recycleOnCancel.Clear();
             _pending.FailAll(ex);
         }
     }
@@ -235,6 +270,7 @@ internal sealed class ParserHostSupervisor
         int? exitCode = null;
         try { exitCode = _host?.ExitCode; } catch { }
         DiagLog.Write("App", $"ParserHost exited gen={generation}; pid={_host?.Id}; exitCode={exitCode?.ToString() ?? "unknown"}; timeouts={Volatile.Read(ref _timeoutCount)}");
+        _recycleOnCancel.Clear();
         _pending.FailAll(new InvalidOperationException("ParserHost exited"));
     }
 
@@ -243,6 +279,7 @@ internal sealed class ParserHostSupervisor
         _stopping = true;
         try { _telemetryCts.Cancel(); } catch { }
         ++_generation;
+        _recycleOnCancel.Clear();
         _pending.FailAll(new OperationCanceledException("ParserHost stopped"));
         _ready.TrySetCanceled();
         try { _channel?.Dispose(); } catch { }
