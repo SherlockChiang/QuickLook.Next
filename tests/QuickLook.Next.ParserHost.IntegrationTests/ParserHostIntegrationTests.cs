@@ -188,6 +188,61 @@ public sealed class ParserHostIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string zipPath = Path.Combine(tempDirectory, "cancel.zip");
+        string entryName = "cancel-" + Guid.NewGuid().ToString("n") + ".bin";
+        using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        using (Stream output = archive.CreateEntry(entryName, CompressionLevel.NoCompression).Open())
+        {
+            byte[] block = new byte[64 * 1024];
+            RandomNumberGenerator.Fill(block);
+            for (int i = 0; i < 128; i++)
+                output.Write(block);
+        }
+
+        string extractionRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "archive-preview");
+        HashSet<string> rootsBefore = EnumerateExtractionRoots(extractionRoot);
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string canceledId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new ArchiveEntryExtract(canceledId, zipPath, entryName), timeout.Token);
+            await channel.SendAsync(new ArchiveEntryExtractClose(canceledId), timeout.Token);
+
+            string previewId = Guid.NewGuid().ToString("n");
+            var probe = new FileProbe(zipPath, ".zip", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "archive",
+                Size = new FileInfo(zipPath).Length,
+            };
+            await channel.SendAsync(new PreviewOpen(previewId, zipPath, probe), timeout.Token);
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(previewId, ready.RequestId);
+
+            await WaitUntilAsync(() => EnumerateExtractionRoots(extractionRoot).IsSubsetOf(rootsBefore), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartHost(string pipeName, string token)
     {
         string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
@@ -216,4 +271,9 @@ public sealed class ParserHostIntegrationTests
         using StreamWriter writer = new(archive.CreateEntry(name).Open());
         writer.Write(contents);
     }
+
+    private static HashSet<string> EnumerateExtractionRoots(string root)
+        => Directory.Exists(root)
+            ? Directory.EnumerateDirectories(root, "extract-*").ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : [];
 }

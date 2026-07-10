@@ -27,6 +27,7 @@ catch (Exception ex)
 using var channelLifetime = channel;
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
 var archiveEntries = new ConcurrentDictionary<string, string>();
+var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var heroRasters = new ConcurrentDictionary<string, string>();
 bool authenticated = false;
 
@@ -99,6 +100,7 @@ while (true)
             break;
 
         case ArchiveEntryExtract extract:
+            closedArchiveEntries.TryRemove(extract.RequestId, out _);
             var extractCts = new CancellationTokenSource();
             if (!requests.TryAdd(extract.RequestId, extractCts))
             {
@@ -110,12 +112,23 @@ while (true)
                 try
                 {
                     string? path = ParserNativePreview.TryExtractArchiveEntry(extract.ArchivePath, extract.EntryPath, extractCts.Token);
+                    if (!string.IsNullOrWhiteSpace(path) && closedArchiveEntries.ContainsKey(extract.RequestId))
+                    {
+                        DeleteArchiveEntry(path);
+                        return;
+                    }
                     extractCts.Token.ThrowIfCancellationRequested();
                     if (string.IsNullOrWhiteSpace(path))
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
                     else
                     {
                         archiveEntries[extract.RequestId] = path;
+                        if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
+                        {
+                            if (archiveEntries.TryRemove(extract.RequestId, out string? closedPath))
+                                DeleteArchiveEntry(closedPath);
+                            return;
+                        }
                         await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
                     }
                 }
@@ -129,13 +142,16 @@ while (true)
                 {
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
+                    closedArchiveEntries.TryRemove(extract.RequestId, out _);
                 }
             });
             break;
 
         case ArchiveEntryExtractClose close:
+            if (requests.ContainsKey(close.RequestId))
+                closedArchiveEntries[close.RequestId] = 0;
             Cancel(close.RequestId);
-            if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath))
+            if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath) && archiveEntryPath is not null)
                 DeleteArchiveEntry(archiveEntryPath);
             break;
 

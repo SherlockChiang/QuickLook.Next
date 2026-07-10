@@ -95,7 +95,6 @@ internal static class ParserNativePreview
                     archiveBytes, (nuint)archiveBytes.Length,
                     entryBytes, (nuint)entryBytes.Length,
                     buffer, (nuint)maxPathBytes);
-                cancellationToken.ThrowIfCancellationRequested();
                 return length > 0 && length <= maxPathBytes
                     ? Encoding.UTF8.GetString(buffer, 0, length)
                     : null;
