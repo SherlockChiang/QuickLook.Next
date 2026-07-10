@@ -67,6 +67,7 @@ public sealed partial class MainWindow : Window
     private PreviewKeyboardHook? _previewKeyboardHook;
     private UiThreadWatchdog? _uiWatchdog;
     private readonly PreviewSession _previewSession = new();
+    private FileProbe? _currentProbe;
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
     private bool _previewVisible;
@@ -566,6 +567,7 @@ public sealed partial class MainWindow : Window
         using var previewTrace = DiagLog.TraceScope("App", $"preview path source={source} gen={generation} path={path}", 250);
         BeginPreviewTransition();
         ResetPreview();
+        _currentProbe = null;
         Title = System.IO.Path.GetFileName(path);
         PreviewTitleText.Text = Title;
         StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
@@ -585,6 +587,7 @@ public sealed partial class MainWindow : Window
             FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
             DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            _currentProbe = probe;
 
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
@@ -831,16 +834,16 @@ public sealed partial class MainWindow : Window
         Title = title;
         PreviewTitleText.Text = title;
         PreviewKindPillText.Text = ready.Kind.ToUpperInvariant();
-        PreviewMetaText.Text = BuildPreviewMetaLine(ready, path);
+        PreviewMetaText.Text = BuildPreviewMetaLine(ready, path, _currentProbe);
 
         _isRasterChromeEnabled = showRasterTools;
         ApplyRasterChromeLayout();
         UpdateImageAnimationPlaybackButton();
 
         PreviewDimensionsText.Text = BuildDimensionsText(ready);
-        PreviewSizeText.Text = FileSizeText(path);
+        PreviewSizeText.Text = FileSizeText(path, _currentProbe);
         PreviewTypeText.Text = PreviewTypeTextFor(ready, path);
-        PreviewModifiedText.Text = ModifiedText(path);
+        PreviewModifiedText.Text = ModifiedText(path, _currentProbe);
         PreviewPathText.Text = string.IsNullOrWhiteSpace(path) ? UiStrings.EmptyValue : path;
         if (showRasterTools)
             SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
@@ -903,20 +906,20 @@ public sealed partial class MainWindow : Window
             ApplyRasterChromeLayout();
     }
 
-    private static string BuildPreviewMetaLine(PreviewReady ready, string? path)
+    private static string BuildPreviewMetaLine(PreviewReady ready, string? path, FileProbe? probe)
     {
         var parts = new List<string>();
         string dimensions = BuildDimensionsText(ready);
         if (dimensions != UiStrings.EmptyValue)
             parts.Add(dimensions);
-        string size = FileSizeText(path);
+        string size = FileSizeText(path, probe);
         if (size != UiStrings.EmptyValue)
             parts.Add(size);
         string container = ExtractPreviewInfoLine(ready.TextContent, "Container");
         if (!string.IsNullOrWhiteSpace(container))
             parts.Add(container);
         parts.Add(PreviewTypeTextFor(ready, path));
-        string modified = ModifiedText(path);
+        string modified = ModifiedText(path, probe);
         if (modified != UiStrings.EmptyValue)
             parts.Add("Modified: " + modified);
         return string.Join("  |  ", parts);
@@ -959,8 +962,10 @@ public sealed partial class MainWindow : Window
         return string.IsNullOrEmpty(ext) ? ready.Kind : $"{ext} {ready.Kind}";
     }
 
-    private static string FileSizeText(string? path)
+    private static string FileSizeText(string? path, FileProbe? probe)
     {
+        if (ProbeMatchesPath(probe, path) && !probe!.Kind.Equals("folder", StringComparison.OrdinalIgnoreCase))
+            return FormatBytes(probe.Size);
         try
         {
             if (!string.IsNullOrWhiteSpace(path) && System.IO.File.Exists(path))
@@ -970,8 +975,10 @@ public sealed partial class MainWindow : Window
         return UiStrings.EmptyValue;
     }
 
-    private static string ModifiedText(string? path)
+    private static string ModifiedText(string? path, FileProbe? probe)
     {
+        if (ProbeMatchesPath(probe, path) && probe!.ModifiedUnix > 0)
+            return DateTimeOffset.FromUnixTimeSeconds(probe.ModifiedUnix).LocalDateTime.ToString("g");
         try
         {
             if (!string.IsNullOrWhiteSpace(path))
@@ -985,6 +992,11 @@ public sealed partial class MainWindow : Window
         catch { }
         return UiStrings.EmptyValue;
     }
+
+    private static bool ProbeMatchesPath(FileProbe? probe, string? path)
+        => probe is not null
+           && !string.IsNullOrWhiteSpace(path)
+           && string.Equals(probe.Path, path, StringComparison.OrdinalIgnoreCase);
 
     private string ShowHostError(PreviewError error)
     {
