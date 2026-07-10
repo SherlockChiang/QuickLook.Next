@@ -26,6 +26,7 @@ catch (Exception ex)
 
 using var channelLifetime = channel;
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
+var archiveEntries = new ConcurrentDictionary<string, string>();
 var heroRasters = new ConcurrentDictionary<string, string>();
 bool authenticated = false;
 
@@ -113,7 +114,10 @@ while (true)
                     if (string.IsNullOrWhiteSpace(path))
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
                     else
+                    {
+                        archiveEntries[extract.RequestId] = path;
                         await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
+                    }
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -131,6 +135,8 @@ while (true)
 
         case ArchiveEntryExtractClose close:
             Cancel(close.RequestId);
+            if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath))
+                DeleteArchiveEntry(archiveEntryPath);
             break;
 
         case HeroRasterExtract extract:
@@ -197,6 +203,8 @@ while (true)
 
 foreach (string requestId in requests.Keys)
     Cancel(requestId);
+foreach (string tempPath in archiveEntries.Values)
+    DeleteArchiveEntry(tempPath);
 foreach (string tempPath in heroRasters.Values)
     DeleteHeroRaster(tempPath);
 
@@ -254,6 +262,17 @@ static string? WriteHeroRaster(string requestId, byte[] raster)
 }
 
 static void DeleteHeroRaster(string path)
+{
+    try
+    {
+        File.Delete(path);
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null) Directory.Delete(directory, recursive: false);
+    }
+    catch { }
+}
+
+static void DeleteArchiveEntry(string path)
 {
     try
     {

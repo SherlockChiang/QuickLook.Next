@@ -85,6 +85,54 @@ public sealed class ParserHostIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Archive_entry_close_removes_successful_handoff()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string zipPath = Path.Combine(tempDirectory, "extract.zip");
+        const string entryName = "folder/extract-marker.txt";
+        const string contents = "archive extraction integration";
+        using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        {
+            using StreamWriter writer = new(archive.CreateEntry(entryName).Open());
+            writer.Write(contents);
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        string? handoffPath = null;
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new ArchiveEntryExtract(requestId, zipPath, entryName), timeout.Token);
+            ArchiveEntryExtracted extracted = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            handoffPath = extracted.TempPath;
+            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
+            Assert.True(TempHandoffPaths.IsArchiveExtractPath(handoffPath));
+            Assert.Equal(contents, await File.ReadAllTextAsync(handoffPath, timeout.Token));
+
+            await channel.SendAsync(new ArchiveEntryExtractClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartHost(string pipeName, string token)
     {
         string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
@@ -100,5 +148,11 @@ public sealed class ParserHostIntegrationTests
     {
         try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
         catch { try { host.Kill(entireProcessTree: true); } catch { } }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+            await Task.Delay(25, cancellationToken);
     }
 }
