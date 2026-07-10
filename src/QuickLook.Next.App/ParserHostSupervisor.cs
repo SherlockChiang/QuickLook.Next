@@ -119,7 +119,11 @@ internal sealed class ParserHostSupervisor
         catch (Exception ex) { _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message)); }
     }
 
-    public Task CloseAsync(string requestId) => _channel?.SendAsync(new PreviewClose(requestId)) ?? Task.CompletedTask;
+    public Task CloseAsync(string requestId)
+    {
+        _pending.Cancel(requestId);
+        return _channel?.SendAsync(new PreviewClose(requestId)) ?? Task.CompletedTask;
+    }
 
     public async Task<string?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
     {

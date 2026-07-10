@@ -285,6 +285,7 @@ internal sealed class RasterHostSupervisor
 
     public async Task CloseAsync(string requestId)
     {
+        _pending.Cancel(requestId);
         if (_channel is not null)
         {
             DiagLog.Write("App", $"host send close request={requestId}");
