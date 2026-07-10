@@ -32,6 +32,7 @@ var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, string>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 bool authenticated = false;
+string? activePreviewRequestId = null;
 
 while (true)
 {
@@ -65,14 +66,15 @@ while (true)
                                    && !string.IsNullOrWhiteSpace(open.Path)
                                    && open.Probe is not null
                                    && !string.IsNullOrWhiteSpace(open.Probe.Kind):
-            foreach (string requestId in requests.Keys)
-                Cancel(requestId);
+            if (activePreviewRequestId is not null)
+                Cancel(activePreviewRequestId);
             var cts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, cts))
             {
                 cts.Dispose();
                 break;
             }
+            activePreviewRequestId = open.RequestId;
             _ = Task.Run(async () =>
             {
                 try
