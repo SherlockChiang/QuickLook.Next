@@ -1924,6 +1924,13 @@ pub fn is_text(ext: &str, magic: &[u8]) -> bool {
     is_probably_utf8_text(magic)
 }
 
+pub fn is_text_file(file_name: &str, ext: &str, magic: &[u8]) -> bool {
+    known_text_filenames()
+        .iter()
+        .any(|(name, _, _)| name.eq_ignore_ascii_case(file_name))
+        || is_text(ext, magic)
+}
+
 fn is_probably_utf8_text(bytes: &[u8]) -> bool {
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return is_probably_utf16_text(&bytes[2..], true);
