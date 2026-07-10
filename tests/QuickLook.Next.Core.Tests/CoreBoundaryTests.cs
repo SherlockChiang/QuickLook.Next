@@ -9,6 +9,18 @@ public sealed class CoreBoundaryTests : IDisposable
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextTests", Guid.NewGuid().ToString("n"));
 
     [Theory]
+    [InlineData(FileAttributes.Offline)]
+    [InlineData((FileAttributes)0x00040000)]
+    [InlineData((FileAttributes)0x00400000)]
+    [InlineData(FileAttributes.Archive | (FileAttributes)0x00400000)]
+    public void Cloud_file_status_detects_recall_attributes(FileAttributes attributes)
+        => Assert.True(CloudFileStatus.MayRequireHydration(attributes));
+
+    [Fact]
+    public void Cloud_file_status_ignores_local_file_attributes()
+        => Assert.False(CloudFileStatus.MayRequireHydration(FileAttributes.Archive | FileAttributes.ReadOnly));
+
+    [Theory]
     [InlineData("app.config")]
     [InlineData("settings.cnf")]
     [InlineData("install.inf")]

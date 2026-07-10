@@ -573,6 +573,14 @@ public sealed partial class MainWindow : Window
         {
             await CloseCurrentAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), previewToken);
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            if (mayRequireHydration)
+            {
+                StatusText.Text = $"downloading {System.IO.Path.GetFileName(path)} from cloud storage…";
+                RevealPreviewWindow(activate: false);
+                DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
+            }
             DiagLog.Write("App", $"preview probe begin gen={generation}");
             FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
             DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
