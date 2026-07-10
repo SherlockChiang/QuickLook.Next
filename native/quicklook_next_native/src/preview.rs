@@ -1266,15 +1266,17 @@ pub fn render_text(path: &str) -> String {
         None => return String::new(),
     };
 
-    // BOM-aware decode via encoding_rs
-    let (text, _enc, _had_bom) = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
-        encoding_rs::UTF_8.decode(&bytes[3..])
+    // BOM-aware Unicode first, then strict UTF-8 and Windows-1252 for legacy configuration files.
+    let text = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
+        encoding_rs::UTF_8.decode(&bytes[3..]).0
     } else if bytes.len() >= 2 && &bytes[..2] == &[0xFF, 0xFE] {
-        encoding_rs::UTF_16LE.decode(&bytes[2..])
+        encoding_rs::UTF_16LE.decode(&bytes[2..]).0
     } else if bytes.len() >= 2 && &bytes[..2] == &[0xFE, 0xFF] {
-        encoding_rs::UTF_16BE.decode(&bytes[2..])
+        encoding_rs::UTF_16BE.decode(&bytes[2..]).0
+    } else if std::str::from_utf8(&bytes).is_ok() {
+        encoding_rs::UTF_8.decode(&bytes).0
     } else {
-        encoding_rs::UTF_8.decode(&bytes)
+        encoding_rs::WINDOWS_1252.decode(&bytes).0
     };
 
     let mut text = text.into_owned();
@@ -1939,13 +1941,31 @@ fn is_probably_utf8_text(bytes: &[u8]) -> bool {
         return is_probably_utf16_text(&bytes[2..], false);
     }
     if bytes.is_empty() || bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
-        return false;
+        return is_probably_windows_1252_text(bytes);
     }
     let printable = bytes
         .iter()
         .filter(|b| matches!(**b, b'\t' | b'\r' | b'\n' | 0x20..=0x7E) || **b >= 0x80)
         .count();
     printable * 100 / bytes.len().max(1) >= 90
+}
+
+fn is_probably_windows_1252_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty()
+        || bytes.contains(&0)
+        || !bytes
+            .iter()
+            .any(|byte| matches!(*byte, b'=' | b':' | b'[' | b'#' | b';' | b'\r' | b'\n'))
+    {
+        return false;
+    }
+    let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+    let char_count = text.chars().count();
+    let printable = text
+        .chars()
+        .filter(|ch| matches!(*ch, '\t' | '\r' | '\n') || !ch.is_control())
+        .count();
+    char_count > 0 && printable * 100 / char_count >= 90
 }
 
 fn is_probably_utf16_text(bytes: &[u8], little_endian: bool) -> bool {
@@ -14448,6 +14468,20 @@ mod tests {
 
     fn test_office_context() -> OfficeContext {
         OfficeContext::new(None)
+    }
+
+    #[test]
+    fn text_preview_decodes_windows_1252_config() {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-text-{}.ini",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"name=caf\xE9").expect("write Windows-1252 config");
+        let json = render_text(path.to_str().unwrap());
+        let _ = std::fs::remove_file(path);
+
+        assert!(json.contains("name=café"));
+        assert!(json.contains("\"language\":\"ini\""));
     }
 
     #[test]

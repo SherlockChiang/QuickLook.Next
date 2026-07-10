@@ -1390,6 +1390,7 @@ mod tests {
         assert_eq!(classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n"), "text");
         assert_eq!(classify("vendor.custom", ".custom", b"feature.enabled=true\r\n"), "text");
         assert_eq!(classify("settings", "", b"root = true\r\n"), "text");
+        assert_eq!(classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n"), "text");
     }
 
     #[test]
