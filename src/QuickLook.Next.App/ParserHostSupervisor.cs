@@ -187,8 +187,11 @@ internal sealed class ParserHostSupervisor
     {
         try
         {
-            while (generation == _generation && await channel.ReceiveAsync() is { } message)
+            while (generation == _generation)
             {
+                ControlMessage? message = await channel.ReceiveAsync();
+                if (message is null)
+                    throw new EndOfStreamException("ParserHost pipe closed");
                 switch (message)
                 {
                     case ParserReady:
