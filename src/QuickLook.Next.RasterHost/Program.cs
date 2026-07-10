@@ -247,20 +247,40 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                 var first = session.FirstPageSize;
                 uint pageCount = session.PageCount;
                 var pageGeometries = session.PageGeometries;
-                pdfSessions[open.RequestId] = session;
-                session = null;
-                await channel.SendAsync(new PreviewReady(
-                    open.RequestId,
-                    "pdf",
-                    $"{Path.GetFileName(open.Path)} — {pageCount} pages",
-                    first.Width,
-                    first.Height)
+                await surfacePublishGate.WaitAsync(cancellationToken);
+                try
                 {
-                    PageCount = checked((int)pageCount),
-                    PageWidth = first.Width,
-                    PageHeight = first.Height,
-                    PdfPageGeometries = pageGeometries,
-                });
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                        return;
+
+                    pdfSessions[open.RequestId] = session;
+                    session = null;
+                    try
+                    {
+                        await channel.SendAsync(new PreviewReady(
+                            open.RequestId,
+                            "pdf",
+                            $"{Path.GetFileName(open.Path)} — {pageCount} pages",
+                            first.Width,
+                            first.Height)
+                        {
+                            PageCount = checked((int)pageCount),
+                            PageWidth = first.Width,
+                            PageHeight = first.Height,
+                            PdfPageGeometries = pageGeometries,
+                        });
+                    }
+                    catch
+                    {
+                        if (pdfSessions.TryRemove(open.RequestId, out var failed)) failed.Dispose();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    surfacePublishGate.Release();
+                }
             }
             finally
             {
