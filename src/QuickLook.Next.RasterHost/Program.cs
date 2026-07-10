@@ -194,22 +194,32 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         if (IsPdf(open.Probe))
         {
             if (pdfSessions.TryRemove(open.RequestId, out var old)) old.Dispose();
-            var session = await PdfPreviewSession.OpenAsync(open.Path);
-            cancellationToken.ThrowIfCancellationRequested();
-            pdfSessions[open.RequestId] = session;
-            var first = session.FirstPageSize;
-            await channel.SendAsync(new PreviewReady(
-                open.RequestId,
-                "pdf",
-                $"{Path.GetFileName(open.Path)} — {session.PageCount} pages",
-                first.Width,
-                first.Height)
+            PdfPreviewSession? session = await PdfPreviewSession.OpenAsync(open.Path);
+            try
             {
-                PageCount = checked((int)session.PageCount),
-                PageWidth = first.Width,
-                PageHeight = first.Height,
-                PdfPageGeometries = session.PageGeometries,
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                var first = session.FirstPageSize;
+                uint pageCount = session.PageCount;
+                var pageGeometries = session.PageGeometries;
+                pdfSessions[open.RequestId] = session;
+                session = null;
+                await channel.SendAsync(new PreviewReady(
+                    open.RequestId,
+                    "pdf",
+                    $"{Path.GetFileName(open.Path)} — {pageCount} pages",
+                    first.Width,
+                    first.Height)
+                {
+                    PageCount = checked((int)pageCount),
+                    PageWidth = first.Width,
+                    PageHeight = first.Height,
+                    PdfPageGeometries = pageGeometries,
+                });
+            }
+            finally
+            {
+                session?.Dispose();
+            }
             return;
         }
 
