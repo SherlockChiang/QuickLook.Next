@@ -19,6 +19,10 @@ use serde::Serialize;
 use tar::Archive as TarArchive;
 use zip::ZipArchive;
 
+fn preview_cancelled(cancel_cb: Option<extern "C" fn() -> bool>) -> bool {
+    cancel_cb.map(|callback| callback()).unwrap_or(false)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewReadyDto {
@@ -1934,7 +1938,10 @@ const OFFICE_EMUS_PER_DIP: f64 = 9525.0;
 const XLSX_CELL_WIDTH: f64 = 96.0;
 const XLSX_ROW_HEIGHT: f64 = 28.0;
 
-pub fn render_office(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -11775,7 +11782,10 @@ pub fn is_archive(ext: &str, kind: &str, magic: &[u8]) -> bool {
 }
 
 /// Produce JSON for an archive listing: `{"kind":"archive","title":"...","listing":{...}}`.
-pub fn render_archive(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+pub fn render_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     let lower = path.to_ascii_lowercase();
     if is_package_path(&lower) {
         return render_package(path);
@@ -13195,7 +13205,7 @@ fn type_for_ext(name: &str) -> &'static str {
 const MAX_FOLDER_ITEMS: usize = 5000;
 
 /// Produce JSON for a folder listing: `{"kind":"folder","title":"...","listing":{...}}`.
-pub fn render_folder(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let root_name = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -13216,6 +13226,9 @@ pub fn render_folder(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) ->
     // Directories first
     if let Ok(dirs) = fs::read_dir(path) {
         for entry in dirs.flatten() {
+            if preview_cancelled(cancel_cb) {
+                return String::new();
+            }
             if items.len() >= MAX_FOLDER_ITEMS {
                 partial = true;
                 break;
@@ -13259,6 +13272,9 @@ pub fn render_folder(path: &str, _cancel_cb: Option<extern "C" fn() -> bool>) ->
     if !partial {
         if let Ok(files) = fs::read_dir(path) {
             for entry in files.flatten() {
+                if preview_cancelled(cancel_cb) {
+                    return String::new();
+                }
                 if items.len() >= MAX_FOLDER_ITEMS {
                     partial = true;
                     break;

@@ -71,7 +71,6 @@ type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 struct ThumbnailRequest {
     path: String,
     size: i32,
-    cancel_cb: Option<CancelCallback>,
     reply: mpsc::Sender<ThumbnailResult>,
 }
 
@@ -1897,15 +1896,7 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             while let Ok(request) = receiver.recv() {
-                if cancel_requested(request.cancel_cb) {
-                    let _ = request.reply.send(None);
-                    continue;
-                }
                 let result = shell_thumbnail(&request.path, request.size.max(16));
-                if cancel_requested(request.cancel_cb) {
-                    let _ = request.reply.send(None);
-                    continue;
-                }
                 let _ = request.reply.send(result);
             }
             CoUninitialize();
@@ -1923,7 +1914,6 @@ fn shell_thumbnail_on_sta(
     let request = ThumbnailRequest {
         path,
         size,
-        cancel_cb,
         reply,
     };
     if thumbnail_sta_worker().sender.send(request).is_err() {

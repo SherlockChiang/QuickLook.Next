@@ -156,7 +156,7 @@ internal sealed class NativeBridge
         catch { return null; }
     }
 
-    public PreviewReady? TryPreview(string requestId, string path, FileProbe probe)
+    public PreviewReady? TryPreview(string requestId, string path, FileProbe probe, CancellationToken cancellationToken = default)
     {
         if (probe.Kind.Equals("certificate", StringComparison.OrdinalIgnoreCase))
             return TryPreviewCertificate(requestId, path, probe);
@@ -179,7 +179,7 @@ internal sealed class NativeBridge
         };
 
         string? json = cancelableCall is not null
-            ? CallPreview(cancelableCall, path)
+            ? CallPreview(cancelableCall, path, cancellationToken)
             : call is not null
             ? CallPreview(call, path)
             : ShouldUseNativeInfo(probe) ? CallInfoPreview(path, probe) : null;
@@ -188,7 +188,7 @@ internal sealed class NativeBridge
 
     public PreviewListing? TryPreviewFolderListing(string path)
     {
-        string? json = CallPreview(ql_preview_folder, path);
+        string? json = CallPreview(ql_preview_folder, path, CancellationToken.None);
         if (string.IsNullOrWhiteSpace(json))
             return null;
 
@@ -390,8 +390,11 @@ internal sealed class NativeBridge
         return null;
     }
 
-    private static string? CallPreview(NativePreviewCallWithCancel call, string path)
+    private static string? CallPreview(NativePreviewCallWithCancel call, string path, CancellationToken cancellationToken)
     {
+        NativeCancelCallback? cancelCb = cancellationToken.CanBeCanceled
+            ? () => cancellationToken.IsCancellationRequested
+            : null;
         try
         {
             byte[] pathBytes = Encoding.UTF8.GetBytes(path);
@@ -401,7 +404,12 @@ internal sealed class NativeBridge
                 byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
                 try
                 {
-                    int n = call(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length, IntPtr.Zero);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    IntPtr cancelCbPtr = cancelCb is null
+                        ? IntPtr.Zero
+                        : Marshal.GetFunctionPointerForDelegate(cancelCb);
+                    int n = call(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length, cancelCbPtr);
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (n > 0)
                         return Encoding.UTF8.GetString(outBuf, 0, n);
                     if (n < 0)
@@ -421,7 +429,9 @@ internal sealed class NativeBridge
             }
             return null;
         }
+        catch (OperationCanceledException) { throw; }
         catch { return null; }
+        finally { GC.KeepAlive(cancelCb); }
     }
 
     private static NativeRasterImage? CallRaster(NativeRasterCall call, string path)

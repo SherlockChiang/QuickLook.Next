@@ -545,7 +545,7 @@ public sealed partial class MainWindow : Window
 
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
-                PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe), previewToken);
+                PreviewReady? mediaInfo = await Task.Run(() => _native.TryPreview($"media-info-{generation}", path, probe, previewToken), previewToken);
                 DiagLog.Write("App", $"preview native media info end gen={generation}; hasInfo={mediaInfo is not null}");
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 var mediaReady = new PreviewReady(
@@ -618,7 +618,7 @@ public sealed partial class MainWindow : Window
 
             PreviewReady? nativeReady = forceAnimatedFirstFrameRaster
                 ? null
-                : await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe), previewToken);
+                : await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             if (nativeReady is not null)
