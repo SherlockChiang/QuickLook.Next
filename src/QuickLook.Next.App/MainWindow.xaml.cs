@@ -1410,6 +1410,9 @@ public sealed partial class MainWindow : Window
         try
         {
             CancellationToken token = CurrentPreviewToken;
+            bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), token);
+            if (mayRequireHydration || !IsPreviewGenerationCurrent(generation, token))
+                return null;
             NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(path, 32, NativeThumbnailPriority.Foreground, token);
 
             if (!IsPreviewGenerationCurrent(generation, token) || raster is null)
