@@ -189,6 +189,59 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Generated_xlsx_and_pptx_return_office_layouts()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string xlsxPath = Path.Combine(tempDirectory, "sample.xlsx");
+        using (var archive = ZipFile.Open(xlsxPath, ZipArchiveMode.Create))
+        {
+            WriteEntry(archive, "xl/worksheets/sheet1.xml",
+                "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>ParserHost XLSX marker</t></is></c></row></sheetData></worksheet>");
+        }
+        string pptxPath = Path.Combine(tempDirectory, "sample.pptx");
+        using (var archive = ZipFile.Open(pptxPath, ZipArchiveMode.Create))
+        {
+            WriteEntry(archive, "ppt/presentation.xml",
+                "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:sldSz cx=\"9144000\" cy=\"5143500\"/></p:presentation>");
+            WriteEntry(archive, "ppt/slides/slide1.xml",
+                "<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:spPr><a:xfrm><a:off x=\"914400\" y=\"457200\"/><a:ext cx=\"7315200\" cy=\"914400\"/></a:xfrm><a:prstGeom prst=\"rect\"/></p:spPr><p:txBody><a:p><a:r><a:t>ParserHost PPTX marker</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>");
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            PreviewReady xlsx = await PreviewOfficeAsync(channel, xlsxPath, timeout.Token);
+            Assert.Contains("ParserHost XLSX marker", xlsx.TextContent);
+            OfficeLayout workbook = Assert.IsType<OfficeLayout>(xlsx.OfficeLayout);
+            Assert.Equal("workbook", workbook.LayoutKind);
+            Assert.Contains(workbook.Pages.SelectMany(page => page.Cells), cell => cell.Text == "ParserHost XLSX marker");
+
+            PreviewReady pptx = await PreviewOfficeAsync(channel, pptxPath, timeout.Token);
+            Assert.Contains("ParserHost PPTX marker", pptx.TextContent);
+            OfficeLayout presentation = Assert.IsType<OfficeLayout>(pptx.OfficeLayout);
+            Assert.Equal("presentation", presentation.LayoutKind);
+            Assert.Contains(presentation.Pages.SelectMany(page => page.Items), item => item.Text == "ParserHost PPTX marker");
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
@@ -270,6 +323,20 @@ public sealed class ParserHostIntegrationTests
     {
         using StreamWriter writer = new(archive.CreateEntry(name).Open());
         writer.Write(contents);
+    }
+
+    private static async Task<PreviewReady> PreviewOfficeAsync(PipeChannel channel, string path, CancellationToken cancellationToken)
+    {
+        string requestId = Guid.NewGuid().ToString("n");
+        var probe = new FileProbe(path, Path.GetExtension(path), [0x50, 0x4B, 0x03, 0x04])
+        {
+            Kind = "office",
+            Size = new FileInfo(path).Length,
+        };
+        await channel.SendAsync(new PreviewOpen(requestId, path, probe), cancellationToken);
+        PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(cancellationToken));
+        Assert.Equal(requestId, ready.RequestId);
+        return ready;
     }
 
     private static HashSet<string> EnumerateExtractionRoots(string root)
