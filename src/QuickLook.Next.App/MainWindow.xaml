@@ -1009,14 +1009,17 @@
                        TextAlignment="Center"
                        TextWrapping="Wrap"
                        MaxWidth="420"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         FontSize="13"
-                        AutomationProperties.Name="Preview error message" />
+                        AutomationProperties.Name="Preview error message"
+                        AutomationProperties.LiveSetting="Assertive" />
             <StackPanel x:Name="ErrorActionsPanel"
                         Orientation="Horizontal"
                         HorizontalAlignment="Center"
                         Spacing="8">
-                <Button Height="34"
+                <Button x:Name="ErrorOpenFileButton"
+                        x:Uid="ErrorOpenFileButton"
+                        Height="34"
                         Padding="14,0"
                         CornerRadius="6"
                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
@@ -1028,7 +1031,9 @@
                         <TextBlock x:Uid="ErrorOpenFileText" Text="Open file" FontSize="12" />
                     </StackPanel>
                 </Button>
-                <Button Height="34"
+                <Button x:Name="ErrorRevealFileButton"
+                        x:Uid="ErrorRevealFileButton"
+                        Height="34"
                         Padding="14,0"
                         CornerRadius="6"
                         Background="Transparent"

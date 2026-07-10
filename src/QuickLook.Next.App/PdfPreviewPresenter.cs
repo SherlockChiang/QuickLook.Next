@@ -271,7 +271,9 @@ internal sealed class PdfPreviewPresenter
     {
         int pageCount = _pageHosts.Count;
         int displayPage = pageCount == 0 ? 0 : _currentPageIndex + 1;
-        _pageIndicator.Text = pageCount == 0 ? "0 / 0" : $"{displayPage:N0} / {pageCount:N0}";
+        _pageIndicator.Text = pageCount == 0
+            ? UiStrings.PdfPageIndicatorEmpty
+            : UiStrings.Format(UiStrings.PdfPageIndicatorFormat, displayPage, pageCount);
         _previousButton.IsEnabled = pageCount > 1 && _currentPageIndex > 0;
         _nextButton.IsEnabled = pageCount > 1 && _currentPageIndex < pageCount - 1;
     }

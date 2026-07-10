@@ -878,6 +878,11 @@ public sealed partial class MainWindow : Window
             ? Visibility.Collapsed
             : Visibility.Visible;
         ResizeWindowForContent(520, 300, MaxTextWindowWidth, MaxTextWindowHeight);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (ErrorActionsPanel.Visibility == Visibility.Visible)
+                ErrorOpenFileButton.Focus(FocusState.Programmatic);
+        });
         return "error: " + ErrorText.Text;
     }
 

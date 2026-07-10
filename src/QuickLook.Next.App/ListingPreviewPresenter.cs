@@ -82,10 +82,10 @@ internal sealed class ListingPreviewPresenter
 
     public void UpdateSortHeaders()
     {
-        SetHeader(_nameHeader, "name", "名称");
-        SetHeader(_modifiedHeader, "modified", "修改日期");
-        SetHeader(_typeHeader, "type", "类型");
-        SetHeader(_sizeHeader, "size", "大小");
+        SetHeader(_nameHeader, "name", UiStrings.ListingSortName);
+        SetHeader(_modifiedHeader, "modified", UiStrings.ListingSortModified);
+        SetHeader(_typeHeader, "type", UiStrings.ListingSortType);
+        SetHeader(_sizeHeader, "size", UiStrings.ListingSortSize);
     }
 
     public void OnSortClick(object sender)
@@ -212,7 +212,7 @@ internal sealed class ListingPreviewPresenter
         int result = _sortColumn switch
         {
             "modified" => left.ModifiedUnix.CompareTo(right.ModifiedUnix),
-            "type" => string.Compare(left.IsFolder ? "文件夹" : left.Type, right.IsFolder ? "文件夹" : right.Type, StringComparison.OrdinalIgnoreCase),
+            "type" => string.Compare(left.IsFolder ? UiStrings.FolderTypeDisplay : left.Type, right.IsFolder ? UiStrings.FolderTypeDisplay : right.Type, StringComparison.OrdinalIgnoreCase),
             "size" => left.Size.CompareTo(right.Size),
             _ => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase),
         };
@@ -256,7 +256,7 @@ internal sealed class ListingPreviewPresenter
             Padding = new Thickness(8, 2, 8, 2),
             MinHeight = 26,
         };
-        AutomationProperties.SetName(button, $"Open {text} in listing");
+        AutomationProperties.SetName(button, UiStrings.Format(UiStrings.ListingOpenBreadcrumbFormat, text));
         button.Click += OnBreadcrumbClick;
         _breadcrumbPanel.Children.Add(button);
     }
@@ -367,12 +367,12 @@ internal sealed class ListingPreviewPresenter
     private string BuildSummary(PreviewListing listing, IReadOnlyCollection<PreviewListingItem> visibleItems)
     {
         if (string.IsNullOrEmpty(_currentPath))
-            return listing.Summary + (listing.IsPartial ? " - 部分内容" : "");
+            return listing.Summary + (listing.IsPartial ? UiStrings.ListingPartialSuffix : "");
 
         int folders = visibleItems.Count(i => i.IsFolder);
         int files = visibleItems.Count - folders;
         long bytes = visibleItems.Where(i => !i.IsFolder).Sum(i => i.Size);
-        return $"{files:N0} files, {folders:N0} folders - {MainWindow.FormatBytes(bytes)}";
+        return UiStrings.Format(UiStrings.ListingSummaryFormat, files, folders, MainWindow.FormatBytes(bytes));
     }
 
     private void SetHeader(Button button, string column, string label)

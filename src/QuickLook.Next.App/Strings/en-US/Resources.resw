@@ -63,6 +63,33 @@
   <data name="NoExifData" xml:space="preserve">
     <value>No EXIF data</value>
   </data>
+  <data name="ListingSortName" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="ListingSortModified" xml:space="preserve">
+    <value>Modified</value>
+  </data>
+  <data name="ListingSortType" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="ListingSortSize" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="ListingPartialSuffix" xml:space="preserve">
+    <value> - partial contents</value>
+  </data>
+  <data name="ListingSummaryFormat" xml:space="preserve">
+    <value>{0:N0} files, {1:N0} folders - {2}</value>
+  </data>
+  <data name="ListingOpenBreadcrumbFormat" xml:space="preserve">
+    <value>Open {0} in listing</value>
+  </data>
+  <data name="PdfPageIndicatorFormat" xml:space="preserve">
+    <value>{0:N0} / {1:N0}</value>
+  </data>
+  <data name="PdfPageIndicatorEmpty" xml:space="preserve">
+    <value>0 / 0</value>
+  </data>
   <data name="TrayShowPreview" xml:space="preserve">
     <value>显示预览</value>
   </data>
@@ -120,8 +147,14 @@
   <data name="ErrorOpenFileText.Text" xml:space="preserve">
     <value>Open file</value>
   </data>
+  <data name="ErrorOpenFileButton.AutomationProperties.Name" xml:space="preserve">
+    <value>Open previewed file</value>
+  </data>
   <data name="ErrorRevealFileText.Text" xml:space="preserve">
     <value>Reveal in Explorer</value>
+  </data>
+  <data name="ErrorRevealFileButton.AutomationProperties.Name" xml:space="preserve">
+    <value>Reveal previewed file in File Explorer</value>
   </data>
   <data name="RevealPreviewFileText.Text" xml:space="preserve">
     <value>Reveal in Explorer</value>
