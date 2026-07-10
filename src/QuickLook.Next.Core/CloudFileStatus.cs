@@ -31,10 +31,11 @@ public static class CloudFileStatus
             FileAttributes attributes = File.GetAttributes(path);
             if (MayRequireHydration(attributes))
                 return CloudFileAvailability.RequiresHydration;
-            bool isCloudReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0
-                && TryGetReparseTag(path, out uint reparseTag)
-                && IsCloudReparseTag(reparseTag);
-            return isCloudReparsePoint
+            if ((attributes & FileAttributes.ReparsePoint) == 0)
+                return CloudFileAvailability.Local;
+            if (!TryGetReparseTag(path, out uint reparseTag))
+                return CloudFileAvailability.Unknown;
+            return IsCloudReparseTag(reparseTag)
                 ? CloudFileAvailability.RequiresHydration
                 : CloudFileAvailability.Local;
         }
