@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
@@ -67,6 +68,7 @@ public sealed partial class MainWindow : Window
     private bool _previewRevealPending;
     private bool _previewTemporarilyHidden;
     private bool _keyboardCloseQueued;
+    private bool _isModalDialogOpen;
     private long _lastPreviewRevealTick;
     private string? _lastPreviewRevealPath;
     private ScrollViewer? _imageFilmstripScrollViewer;
@@ -250,7 +252,7 @@ public sealed partial class MainWindow : Window
         TrySetBackdrop();
         _previewKeyboardHook = new PreviewKeyboardHook(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
-            IsPreviewActiveForClose,
+            ShouldHandleSpaceAsPreviewClose,
             ClosePreviewFromKeyboard);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
@@ -872,7 +874,10 @@ public sealed partial class MainWindow : Window
         PreviewTitleText.Text = UiStrings.PreviewUnavailableTitle;
         PreviewMetaText.Text = ErrorText.Text;
         PreviewKindPillText.Text = UiStrings.ErrorKind;
-        ResizeWindowForContent(520, 260, MaxTextWindowWidth, MaxTextWindowHeight);
+        ErrorActionsPanel.Visibility = string.IsNullOrWhiteSpace(_previewSession.CurrentPath)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ResizeWindowForContent(520, 300, MaxTextWindowWidth, MaxTextWindowHeight);
         return "error: " + ErrorText.Text;
     }
 
@@ -1906,7 +1911,16 @@ public sealed partial class MainWindow : Window
         => !string.IsNullOrWhiteSpace(path) && ImageExtensions.Contains(Path.GetExtension(path));
 
     private (double Width, double Height) GetMaxContentSize(double preferredMaxWidth, double preferredMaxHeight)
-        => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight);
+        => PreviewWindowSizer.GetMaxContentSize(GetWindowId(), preferredMaxWidth, preferredMaxHeight, RasterizationScale);
+
+    private double RasterizationScale
+    {
+        get
+        {
+            double scale = RootGrid.XamlRoot?.RasterizationScale ?? 1.0;
+            return double.IsFinite(scale) && scale > 0 ? scale : 1.0;
+        }
+    }
 
     private void ResizeWindowForContent(
         double contentWidth,
@@ -1920,7 +1934,8 @@ public sealed partial class MainWindow : Window
             contentWidth,
             contentHeight,
             maxWidth,
-            maxHeight);
+            maxHeight,
+            RasterizationScale);
         DiagLog.Write("App", $"window resize content={contentWidth:0}x{contentHeight:0}; target={size.Width}x{size.Height}; visible={_previewVisible}; pending={_previewRevealPending}; topmost={setTopmost}");
         TemporarilyHideWindowForTransitionResize();
         GetAppWindow().Resize(size);
@@ -2141,7 +2156,7 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (e.Key == Windows.System.VirtualKey.Space && IsPreviewActiveForClose())
+        if (e.Key == Windows.System.VirtualKey.Space && ShouldHandleSpaceAsPreviewClose())
         {
             e.Handled = true;
             ClosePreviewFromKeyboard();
@@ -2198,6 +2213,17 @@ public sealed partial class MainWindow : Window
     private bool IsPreviewActiveForClose()
         => _previewVisible || _previewRevealPending;
 
+    private bool ShouldHandleSpaceAsPreviewClose()
+    {
+        if (!IsPreviewActiveForClose() || _isModalDialogOpen)
+            return false;
+
+        object? focused = RootGrid.XamlRoot is { } xamlRoot
+            ? FocusManager.GetFocusedElement(xamlRoot)
+            : null;
+        return focused is not Control;
+    }
+
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
         => OpenCurrentPreviewPath(revealInExplorer: true);
 
@@ -2239,6 +2265,30 @@ public sealed partial class MainWindow : Window
     {
         string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+            return;
+
+        var dialog = new ContentDialog
+        {
+            Title = UiStrings.DeleteFileTitle,
+            Content = string.Format(CultureInfo.CurrentCulture, UiStrings.DeleteFileMessage, Path.GetFileName(path)),
+            PrimaryButtonText = UiStrings.MoveToRecycleBin,
+            CloseButtonText = UiStrings.Cancel,
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot,
+        };
+
+        ContentDialogResult result;
+        _isModalDialogOpen = true;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        finally
+        {
+            _isModalDialogOpen = false;
+        }
+
+        if (result != ContentDialogResult.Primary)
             return;
 
         string? nextPath = _imageSidecarController?.NextPathAfterDelete(path);

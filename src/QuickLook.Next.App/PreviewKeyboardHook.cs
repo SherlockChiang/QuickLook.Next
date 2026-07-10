@@ -12,7 +12,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private const int VK_SPACE = 0x20;
 
     private readonly nint _hwnd;
-    private readonly Func<bool> _isPreviewVisible;
+    private readonly Func<bool> _shouldHandleSpace;
     private readonly Action _onSpace;
     private readonly SUBCLASSPROC _subclassProc;
     private readonly nuint _subclassId;
@@ -20,10 +20,10 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private bool _disposed;
     private bool _spaceDownHandled;
 
-    public PreviewKeyboardHook(nint hwnd, Func<bool> isPreviewVisible, Action onSpace)
+    public PreviewKeyboardHook(nint hwnd, Func<bool> shouldHandleSpace, Action onSpace)
     {
         _hwnd = hwnd;
-        _isPreviewVisible = isPreviewVisible;
+        _shouldHandleSpace = shouldHandleSpace;
         _onSpace = onSpace;
         _subclassProc = WndProc;
         _subclassId = (nuint)GetHashCode();
@@ -47,9 +47,12 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     private nint WndProc(nint hwnd, uint msg, nint wParam, nint lParam, nuint subclassId, nint refData)
     {
+        if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && wParam == VK_SPACE)
+            _spaceDownHandled = false;
+
         if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP)
             && wParam == VK_SPACE
-            && _isPreviewVisible())
+            && _shouldHandleSpace())
         {
             if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
             {
@@ -59,10 +62,6 @@ internal sealed class PreviewKeyboardHook : IDisposable
                     DiagLog.Write("App", "keyboard hook handled Space down");
                     _onSpace();
                 }
-            }
-            else
-            {
-                _spaceDownHandled = false;
             }
             return 0;
         }

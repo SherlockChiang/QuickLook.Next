@@ -29,6 +29,10 @@ internal static class UiStrings
     public static string ListingError => Get(nameof(ListingError), "无法读取此文件夹");
     public static string StartupErrorPrefix => Get(nameof(StartupErrorPrefix), "startup error: ");
     public static string MovedToRecycleBin => Get(nameof(MovedToRecycleBin), "Moved to Recycle Bin");
+    public static string DeleteFileTitle => Get(nameof(DeleteFileTitle), "Move file to Recycle Bin?");
+    public static string DeleteFileMessage => Get(nameof(DeleteFileMessage), "{0} will be moved to the Recycle Bin.");
+    public static string MoveToRecycleBin => Get(nameof(MoveToRecycleBin), "Move to Recycle Bin");
+    public static string Cancel => Get(nameof(Cancel), "Cancel");
     public static string TextPreviewTruncated => Get(nameof(TextPreviewTruncated), "[Preview truncated]");
     public static string CopyAction => Get(nameof(CopyAction), "Copy");
     public static string CopiedAction => Get(nameof(CopiedAction), "Copied!");

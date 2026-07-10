@@ -1010,8 +1010,37 @@
                        TextWrapping="Wrap"
                        MaxWidth="420"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       FontSize="13"
-                       AutomationProperties.Name="Preview error message" />
+                        FontSize="13"
+                        AutomationProperties.Name="Preview error message" />
+            <StackPanel x:Name="ErrorActionsPanel"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Center"
+                        Spacing="8">
+                <Button Height="34"
+                        Padding="14,0"
+                        CornerRadius="6"
+                        Background="{ThemeResource PreviewHeroSurfaceBrush}"
+                        BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                        BorderThickness="1"
+                        Click="OnOpenPreviewFileClick">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                        <TextBlock x:Uid="ErrorOpenFileText" Text="Open file" FontSize="12" />
+                    </StackPanel>
+                </Button>
+                <Button Height="34"
+                        Padding="14,0"
+                        CornerRadius="6"
+                        Background="Transparent"
+                        BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                        BorderThickness="1"
+                        Click="OnOpenFileLocationClick">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE838;" FontSize="14" />
+                        <TextBlock x:Uid="ErrorRevealFileText" Text="Reveal in Explorer" FontSize="12" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Window>

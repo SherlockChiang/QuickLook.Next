@@ -48,6 +48,18 @@
   <data name="FileCopied" xml:space="preserve">
     <value>File copied</value>
   </data>
+  <data name="DeleteFileTitle" xml:space="preserve">
+    <value>Move file to Recycle Bin?</value>
+  </data>
+  <data name="DeleteFileMessage" xml:space="preserve">
+    <value>{0} will be moved to the Recycle Bin.</value>
+  </data>
+  <data name="MoveToRecycleBin" xml:space="preserve">
+    <value>Move to Recycle Bin</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
   <data name="NoExifData" xml:space="preserve">
     <value>No EXIF data</value>
   </data>
@@ -101,6 +113,15 @@
   </data>
   <data name="OpenPreviewFileText.Text" xml:space="preserve">
     <value>Open file</value>
+  </data>
+  <data name="DeletePreviewFileText.Text" xml:space="preserve">
+    <value>Delete file</value>
+  </data>
+  <data name="ErrorOpenFileText.Text" xml:space="preserve">
+    <value>Open file</value>
+  </data>
+  <data name="ErrorRevealFileText.Text" xml:space="preserve">
+    <value>Reveal in Explorer</value>
   </data>
   <data name="RevealPreviewFileText.Text" xml:space="preserve">
     <value>Reveal in Explorer</value>
