@@ -812,6 +812,7 @@ public sealed partial class MainWindow : Window
         PreviewMetaText.Text = BuildPreviewMetaLine(ready, path);
 
         _panelController.ToggleRasterTools(showRasterTools);
+        UpdateImageAnimationPlaybackButton();
         PreviewRoot.Margin = showRasterTools
             ? new Thickness(14, 0, RasterInfoRailWidth + 14, RasterToolbarHeight)
             : new Thickness(14, 0, 14, 14);
@@ -840,6 +841,7 @@ public sealed partial class MainWindow : Window
         PreviewModifiedText.Text = UiStrings.EmptyValue;
         PreviewPathText.Text = UiStrings.EmptyValue;
         ImageZoomText.Text = UiStrings.FitZoom;
+        UpdateImageAnimationPlaybackButton();
         ResetExifDetails();
         SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
     }
@@ -1170,6 +1172,7 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        UpdateImageAnimationPlaybackButton();
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         ScheduleImageSidecarLoads(ready);
         return result.Status;
@@ -1182,6 +1185,7 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+        UpdateImageAnimationPlaybackButton();
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         ScheduleImageSidecarLoads(ready);
         return result.Status;
@@ -2098,6 +2102,23 @@ public sealed partial class MainWindow : Window
             _animatedImagePresenter.SetActualSize();
         else
             _rasterPresenter?.SetActualSize();
+    }
+
+    private void OnImageAnimationPlaybackClick(object sender, RoutedEventArgs e)
+    {
+        _animatedImagePresenter?.TogglePlayback();
+        UpdateImageAnimationPlaybackButton();
+    }
+
+    private void UpdateImageAnimationPlaybackButton()
+    {
+        bool canToggle = !PrefersReducedMotion && _animatedImagePresenter?.CanTogglePlayback == true;
+        ImageAnimationPlaybackButton.Visibility = canToggle ? Visibility.Visible : Visibility.Collapsed;
+        bool paused = _animatedImagePresenter?.IsPlaybackPaused == true;
+        ImageAnimationPlaybackIcon.Glyph = paused ? "\uE768" : "\uE769";
+        string action = paused ? UiStrings.PlayAnimation : UiStrings.PauseAnimation;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ImageAnimationPlaybackButton, action);
+        ToolTipService.SetToolTip(ImageAnimationPlaybackButton, action);
     }
 
     private void OnImageZoomPresetClick(object sender, RoutedEventArgs e)

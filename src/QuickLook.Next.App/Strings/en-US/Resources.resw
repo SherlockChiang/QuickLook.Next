@@ -27,6 +27,12 @@
   <data name="FitZoom" xml:space="preserve">
     <value>Fit</value>
   </data>
+  <data name="PlayAnimation" xml:space="preserve">
+    <value>Play animation</value>
+  </data>
+  <data name="PauseAnimation" xml:space="preserve">
+    <value>Pause animation</value>
+  </data>
   <data name="PreviewUnavailableTitle" xml:space="preserve">
     <value>Preview unavailable</value>
   </data>

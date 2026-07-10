@@ -66,6 +66,8 @@ internal sealed class AnimatedImagePreviewPresenter
     }
 
     public bool HasImage => _image.Source is not null;
+    public bool CanTogglePlayback => _nativeFrames?.Frames.Count > 1 && _nativeFrameTimer is not null;
+    public bool IsPlaybackPaused { get; private set; }
 
     public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
     {
@@ -102,6 +104,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _currentPath = path;
         _openWatch = null;
         _nativeFrames = frames;
+        IsPlaybackPaused = false;
         _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
         _nativeFrameIndex = 0;
         _nativeFrameTimeline = BuildFrameTimeline(frames);
@@ -141,6 +144,26 @@ internal sealed class AnimatedImagePreviewPresenter
         _sourceWidth = 0;
         _sourceHeight = 0;
         ResetView();
+    }
+
+    public void TogglePlayback()
+    {
+        if (!CanTogglePlayback || _nativeFrameClock is null || _nativeFrameTimer is null)
+            return;
+
+        if (IsPlaybackPaused)
+        {
+            _nativeFrameClock.Start();
+            _nativeFrameTimer.Start();
+            IsPlaybackPaused = false;
+            AdvanceNativeFrame();
+        }
+        else
+        {
+            _nativeFrameTimer.Stop();
+            _nativeFrameClock.Stop();
+            IsPlaybackPaused = true;
+        }
     }
 
     public void UpdateLayout()
@@ -220,6 +243,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _nativeFrameTimeline = null;
         _nativeAnimationDurationMs = 0;
         _nativeFrameClock = null;
+        IsPlaybackPaused = false;
     }
 
     private static int[] BuildFrameTimeline(NativeAnimationFrames frames)

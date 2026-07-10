@@ -11,6 +11,8 @@ internal static class UiStrings
     public static string ReadyKind => Get(nameof(ReadyKind), "READY");
     public static string EmptyValue => Get(nameof(EmptyValue), "-");
     public static string FitZoom => Get(nameof(FitZoom), "Fit");
+    public static string PlayAnimation => Get(nameof(PlayAnimation), "Play animation");
+    public static string PauseAnimation => Get(nameof(PauseAnimation), "Pause animation");
 
     public static string PreviewUnavailableTitle => Get(nameof(PreviewUnavailableTitle), "Preview unavailable");
     public static string PreviewUnavailableMessage => Get(nameof(PreviewUnavailableMessage), "Unable to preview this file.");
