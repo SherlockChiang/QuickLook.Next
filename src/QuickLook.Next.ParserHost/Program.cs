@@ -64,8 +64,7 @@ while (true)
 
         case PreviewOpen open when IsValidRequestId(open.RequestId)
                                    && !string.IsNullOrWhiteSpace(open.Path)
-                                   && open.Probe is not null
-                                   && !string.IsNullOrWhiteSpace(open.Probe.Kind):
+                                   && IsValidProbe(open.Probe):
             if (activePreviewRequestId is not null)
                 Cancel(activePreviewRequestId);
             var cts = new CancellationTokenSource();
@@ -321,6 +320,14 @@ static bool IsValidHeroKind(string? kind)
 
 static bool IsValidRequestId(string? requestId)
     => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
+
+static bool IsValidProbe(QuickLook.Next.Contracts.FileProbe? probe)
+    => probe is not null
+       && !string.IsNullOrWhiteSpace(probe.Path)
+       && probe.Extension is not null
+       && probe.MagicPrefix is not null
+       && !string.IsNullOrWhiteSpace(probe.Kind)
+       && probe.Size >= 0;
 
 static string? WriteHeroRaster(string requestId, byte[] raster)
 {

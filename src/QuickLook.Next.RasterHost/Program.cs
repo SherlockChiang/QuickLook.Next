@@ -88,8 +88,7 @@ while (true)
 
             case PreviewOpen open when IsValidRequestId(open.RequestId)
                                        && !string.IsNullOrWhiteSpace(open.Path)
-                                       && open.Probe is not null
-                                       && !string.IsNullOrWhiteSpace(open.Probe.Kind)
+                                       && IsValidProbe(open.Probe)
                                        && IsValidTargetSize(open.TargetWidth, open.TargetHeight):
                 StartOpen(open);
                 break;
@@ -456,6 +455,14 @@ static bool IsSystemRequiredImage(QuickLook.Next.Contracts.FileProbe probe)
 
 static bool IsValidRequestId(string? requestId)
     => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
+
+static bool IsValidProbe(QuickLook.Next.Contracts.FileProbe? probe)
+    => probe is not null
+       && !string.IsNullOrWhiteSpace(probe.Path)
+       && probe.Extension is not null
+       && probe.MagicPrefix is not null
+       && !string.IsNullOrWhiteSpace(probe.Kind)
+       && probe.Size >= 0;
 
 static bool IsValidTargetSize(uint width, uint height)
     => width <= MaxSurfaceDimension
