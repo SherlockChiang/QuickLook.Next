@@ -242,6 +242,58 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Office_hero_raster_close_removes_bgra_handoff()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string docxPath = Path.Combine(tempDirectory, "hero.docx");
+        using (var archive = ZipFile.Open(docxPath, ZipArchiveMode.Create))
+        {
+            byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8DwHx9mGBkKAMLXf4EvceABAAAAAElFTkSuQmCC");
+            using Stream stream = archive.CreateEntry("word/media/image1.png").Open();
+            stream.Write(png);
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        string? handoffPath = null;
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new HeroRasterExtract(requestId, docxPath, "office"), timeout.Token);
+            HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
+            handoffPath = extracted.TempPath;
+            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
+            Assert.Equal(8, extracted.Width);
+            Assert.Equal(8, extracted.Height);
+            Assert.True(TempHandoffPaths.IsHeroRasterPath(handoffPath, requestId));
+            byte[] raster = await File.ReadAllBytesAsync(handoffPath, timeout.Token);
+            Assert.Equal(8, BitConverter.ToInt32(raster, 0));
+            Assert.Equal(8, BitConverter.ToInt32(raster, 4));
+            Assert.Equal(8 + 8 * 8 * 4, raster.Length);
+
+            await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
