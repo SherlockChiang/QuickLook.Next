@@ -12930,7 +12930,7 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     }
 
     let mut candidates = Vec::new();
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -12951,12 +12951,18 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
+    let mut context = OfficeContext::new(None);
     for (path_score, name) in candidates.into_iter().take(24) {
-        let Ok(mut entry) = zip.by_name(&name) else {
-            continue;
-        };
-        let Some(bytes) = read_limited_to_end(&mut entry, MAX_OFFICE_MEDIA_BYTES) else {
-            continue;
+        let bytes = match read_office_zip_bytes(
+            &mut context,
+            &mut zip,
+            &name,
+            MAX_OFFICE_MEDIA_BYTES,
+        ) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(OfficeReadError::BudgetExhausted) => break,
+            Err(OfficeReadError::Cancelled) => break,
         };
         let image = match image::load_from_memory(&bytes) {
             Ok(img) => img,
