@@ -112,7 +112,8 @@ while (true)
                 try
                 {
                     string? path = ParserNativePreview.TryExtractArchiveEntry(extract.ArchivePath, extract.EntryPath, extractCts.Token);
-                    if (!string.IsNullOrWhiteSpace(path) && closedArchiveEntries.ContainsKey(extract.RequestId))
+                    if (!string.IsNullOrWhiteSpace(path)
+                        && (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId)))
                     {
                         DeleteArchiveEntry(path);
                         return;
