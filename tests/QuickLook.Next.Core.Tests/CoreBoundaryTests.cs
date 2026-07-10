@@ -55,6 +55,55 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.False(TempHandoffPaths.IsHeroRasterPath(valid, "f".PadLeft(32, 'f'), _tempRoot));
     }
 
+    [Fact]
+    public void Handoffs_reject_outside_and_nested_paths()
+    {
+        string archiveRoot = Path.Combine(_tempRoot, "QuickLookNext", "archive-preview");
+        string nested = Path.Combine(archiveRoot, "extract-abc", "nested");
+        Directory.CreateDirectory(nested);
+        string nestedFile = Path.Combine(nested, "entry-file.txt");
+        File.WriteAllText(nestedFile, "x");
+        string outside = Path.Combine(_tempRoot, "entry-outside.txt");
+        File.WriteAllText(outside, "x");
+
+        Assert.False(TempHandoffPaths.IsArchiveExtractPath(nestedFile, _tempRoot));
+        Assert.False(TempHandoffPaths.IsArchiveExtractPath(outside, _tempRoot));
+    }
+
+    [Fact]
+    public void Hero_handoff_rejects_invalid_request_id_and_nested_file()
+    {
+        const string requestId = "0123456789abcdef0123456789abcdef";
+        string nested = Path.Combine(_tempRoot, "QuickLookNext", "parser-raster", "raster-" + requestId, "nested");
+        Directory.CreateDirectory(nested);
+        string path = Path.Combine(nested, "hero.bgra");
+        File.WriteAllText(path, "x");
+
+        Assert.False(TempHandoffPaths.IsHeroRasterPath(path, requestId, _tempRoot));
+        Assert.False(TempHandoffPaths.IsHeroRasterPath(path, "not-hex", _tempRoot));
+    }
+
+    [Fact]
+    public void Archive_handoff_rejects_symbolic_link_when_supported()
+    {
+        string root = Path.Combine(_tempRoot, "QuickLookNext", "archive-preview");
+        string target = Path.Combine(_tempRoot, "target");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "entry-file.txt"), "x");
+        string link = Path.Combine(root, "extract-link");
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        Assert.False(TempHandoffPaths.IsArchiveExtractPath(Path.Combine(link, "entry-file.txt"), _tempRoot));
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_tempRoot, recursive: true); } catch { }
