@@ -37,6 +37,7 @@ var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
 var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
+var surfacePublishGate = new SemaphoreSlim(1, 1);
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
@@ -90,7 +91,15 @@ while (true)
                                        && !string.IsNullOrWhiteSpace(open.Path)
                                        && IsValidProbe(open.Probe)
                                        && IsValidTargetSize(open.TargetWidth, open.TargetHeight):
-                StartOpen(open);
+                await surfacePublishGate.WaitAsync();
+                try
+                {
+                    StartOpen(open);
+                }
+                finally
+                {
+                    surfacePublishGate.Release();
+                }
                 break;
 
         case PreviewResize resize:
@@ -277,16 +286,26 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                     $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}; " +
                     $"native decode={image.DecodeMilliseconds}ms resize={image.ResizeMilliseconds}ms convert={image.ConvertMilliseconds}ms");
                 var uploadWatch = Stopwatch.StartNew();
-                long imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
-                uploadWatch.Stop();
-                DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
-                cancellationToken.ThrowIfCancellationRequested();
-                await channel.SendAsync(new PreviewSurface(
-                    open.RequestId, imageHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM"));
-                string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
-                    ? Path.GetFileName(open.Path)
-                    : $"{Path.GetFileName(open.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
-                await channel.SendAsync(new PreviewReady(open.RequestId, "image", title, image.Width, image.Height));
+                await surfacePublishGate.WaitAsync(cancellationToken);
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                        return;
+                    long imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                    uploadWatch.Stop();
+                    DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
+                    await channel.SendAsync(new PreviewSurface(
+                        open.RequestId, imageHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM"));
+                    string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
+                        ? Path.GetFileName(open.Path)
+                        : $"{Path.GetFileName(open.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
+                    await channel.SendAsync(new PreviewReady(open.RequestId, "image", title, image.Width, image.Height));
+                }
+                finally
+                {
+                    surfacePublishGate.Release();
+                }
                 return;
             }
 
@@ -297,12 +316,22 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         {
             cancellationToken.ThrowIfCancellationRequested();
             DiagLog.Write("RasterHost", $"shell thumbnail {fallbackThumb.Width}x{fallbackThumb.Height}");
-            long fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
-            cancellationToken.ThrowIfCancellationRequested();
-            await channel.SendAsync(new PreviewSurface(
-                open.RequestId, fallbackHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM"));
-            await channel.SendAsync(new PreviewReady(
-                open.RequestId, "thumbnail", Path.GetFileName(open.Path), fallbackThumb.Width, fallbackThumb.Height));
+            await surfacePublishGate.WaitAsync(cancellationToken);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                    return;
+                long fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
+                await channel.SendAsync(new PreviewSurface(
+                    open.RequestId, fallbackHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM"));
+                await channel.SendAsync(new PreviewReady(
+                    open.RequestId, "thumbnail", Path.GetFileName(open.Path), fallbackThumb.Width, fallbackThumb.Height));
+            }
+            finally
+            {
+                surfacePublishGate.Release();
+            }
             return;
         }
 
