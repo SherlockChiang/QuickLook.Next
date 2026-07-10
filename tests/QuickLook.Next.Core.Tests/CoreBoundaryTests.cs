@@ -8,6 +8,32 @@ public sealed class CoreBoundaryTests : IDisposable
 {
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextTests", Guid.NewGuid().ToString("n"));
 
+    [Theory]
+    [InlineData("app.config")]
+    [InlineData("settings.cnf")]
+    [InlineData("install.inf")]
+    [InlineData("connection.rdp")]
+    [InlineData("Dockerfile")]
+    [InlineData(".editorconfig")]
+    public void Fallback_probe_recognizes_known_text_configs(string fileName)
+        => Assert.True(FallbackFileProbe.IsText(fileName, []));
+
+    [Fact]
+    public void Fallback_probe_sniffs_unknown_utf8_and_utf16_text()
+    {
+        Assert.True(FallbackFileProbe.IsText("settings.vendor", "feature=true\r\n"u8));
+        Assert.True(FallbackFileProbe.IsText("settings.vendor", [0xFF, 0xFE, (byte)'W', 0, (byte)'i', 0]));
+    }
+
+    [Fact]
+    public void Fallback_probe_rejects_unknown_binary_prefixes()
+    {
+        Assert.False(FallbackFileProbe.IsText("data.vendor", [0, 1, 2, 3]));
+        Assert.False(FallbackFileProbe.IsText("data.vendor", [0xFF, 0xD9, 0x80]));
+        Assert.False(FallbackFileProbe.IsText("data.vendor", "MZprintable header"u8));
+        Assert.False(FallbackFileProbe.IsText("data.vendor", "%PDF-readable header"u8));
+    }
+
     [Fact]
     public void ProtocolJson_round_trips_hero_raster_message()
     {

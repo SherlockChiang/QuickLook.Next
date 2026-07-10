@@ -2804,7 +2804,10 @@ public sealed partial class MainWindow : Window
             if (n < magic.Length) Array.Resize(ref magic, n);
         }
         catch { /* probe is best-effort in the scaffold; the real probe comes from native */ }
-        return new FileProbe(path, System.IO.Path.GetExtension(path), magic);
+        return new FileProbe(path, System.IO.Path.GetExtension(path), magic)
+        {
+            Kind = FallbackFileProbe.IsText(path, magic) ? "text" : "unknown",
+        };
     }
 
     private static string ResolveHostExePath()
