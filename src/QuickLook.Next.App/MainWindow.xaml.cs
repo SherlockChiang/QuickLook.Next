@@ -578,8 +578,9 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            bool forceAnimatedFirstFrameRaster = false;
-            if (AnimatedImagePreviewPresenter.CreateRenderPlan(path) is { } animatedPlan)
+            bool forceAnimatedFirstFrameRaster = PrefersReducedMotion;
+            if (!forceAnimatedFirstFrameRaster
+                && AnimatedImagePreviewPresenter.CreateRenderPlan(path) is { } animatedPlan)
             {
                 DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={animatedPlan.PlaybackMode}; {animatedPlan.Width}x{animatedPlan.Height}");
                 if (animatedPlan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
