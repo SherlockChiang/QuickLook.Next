@@ -39,11 +39,21 @@ public sealed class PendingRequests
             if (_pending.TryRemove(id, out var e))
             {
                 e.Tcs.TrySetException(new TimeoutException($"preview request {id} timed out after {timeout.TotalMilliseconds:F0} ms"));
+                e.WatchdogRegistration.Unregister();
                 e.Watchdog.Dispose();
             }
         });
         _pending[id] = entry;
-        watchdog.CancelAfter(timeout);
+        try
+        {
+            watchdog.CancelAfter(timeout);
+        }
+        catch
+        {
+            if (_pending.TryRemove(id, out var removed))
+                removed.Dispose();
+            throw;
+        }
         return (id, tcs.Task);
     }
 
