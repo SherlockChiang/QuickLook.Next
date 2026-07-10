@@ -36,15 +36,15 @@ internal sealed class ParserHostSupervisor
         _telemetryTask = RunResourceTelemetryAsync(_telemetryCts.Token);
     }
 
-    public async Task EnsureStartedAsync()
+    public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
     {
         if (IsConnected) return;
-        await _startLock.WaitAsync();
-        try { if (!IsConnected) await StartAsync(); }
+        await _startLock.WaitAsync(cancellationToken);
+        try { if (!IsConnected) await StartAsync(cancellationToken); }
         finally { _startLock.Release(); }
     }
 
-    private async Task StartAsync()
+    private async Task StartAsync(CancellationToken cancellationToken)
     {
         _stopping = false;
         int generation = ++_generation;
@@ -85,7 +85,8 @@ internal sealed class ParserHostSupervisor
         _host.Exited += (_, _) => OnHostExited(generation);
         try
         {
-            using var connectCts = new CancellationTokenSource(HostConnectTimeout);
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(HostConnectTimeout);
             await _server.WaitForConnectionAsync(connectCts.Token);
             if (!GetNamedPipeClientProcessId(_server.SafePipeHandle.DangerousGetHandle(), out uint clientPid) || clientPid != _host.Id)
                 throw new InvalidOperationException("ParserHost pipe client did not match the launched process");
@@ -95,7 +96,8 @@ internal sealed class ParserHostSupervisor
         _channel = new PipeChannel(_server);
         await _channel.SendAsync(new Hello(Environment.ProcessId, _sessionToken));
         _ = ReadLoopAsync(_channel, generation);
-        using var readyCts = new CancellationTokenSource(HostConnectTimeout);
+        using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        readyCts.CancelAfter(HostConnectTimeout);
         await _ready.Task.WaitAsync(readyCts.Token);
     }
 

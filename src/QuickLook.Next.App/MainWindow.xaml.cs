@@ -488,7 +488,7 @@ public sealed partial class MainWindow : Window
         await CloseCurrentAsync(requestId);
     }
 
-    private async Task EnsureRasterHostStartedAsync()
+    private async Task EnsureRasterHostStartedAsync(CancellationToken cancellationToken = default)
     {
         if (_supervisor is null)
         {
@@ -497,10 +497,10 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
         }
 
-        await _supervisor.EnsureStartedAsync();
+        await _supervisor.EnsureStartedAsync(cancellationToken);
     }
 
-    private async Task EnsureParserHostStartedAsync()
+    private async Task EnsureParserHostStartedAsync(CancellationToken cancellationToken = default)
     {
         if (_parserSupervisor is null)
         {
@@ -508,7 +508,7 @@ public sealed partial class MainWindow : Window
             _parserSupervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
         }
 
-        await _parserSupervisor.EnsureStartedAsync();
+        await _parserSupervisor.EnsureStartedAsync(cancellationToken);
     }
 
     private async Task HandleNativeIntentAsync(NativeIntent intent)
@@ -674,7 +674,7 @@ public sealed partial class MainWindow : Window
             PreviewReady? nativeReady = null;
             if (!forceAnimatedFirstFrameRaster && IsParserHostPreview(probe))
             {
-                await EnsureParserHostStartedAsync();
+                await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(
                     path, probe, mayRequireHydration ? CloudPreviewTimeout : null);
@@ -720,7 +720,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            await EnsureRasterHostStartedAsync();
+            await EnsureRasterHostStartedAsync(previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
             var (requestId, completion) = _supervisor!.BeginOpen(

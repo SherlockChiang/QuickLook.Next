@@ -48,7 +48,7 @@ internal sealed class RasterHostSupervisor
         _ui = ui;
     }
 
-    public async Task StartAsync()
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         using var trace = DiagLog.TraceScope("App", "host start", 500);
         _stopping = false;
@@ -97,7 +97,8 @@ internal sealed class RasterHostSupervisor
         if (_host is not null) { _host.EnableRaisingEvents = true; _host.Exited += (_, _) => OnHostExited(gen); }
         DiagLog.Write("App", $"host pid={_host?.Id}; waiting for pipe connection");
 
-        using var connectCts = new CancellationTokenSource(HostConnectTimeout);
+        using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        connectCts.CancelAfter(HostConnectTimeout);
         try
         {
             await _server.WaitForConnectionAsync(connectCts.Token);
@@ -122,7 +123,8 @@ internal sealed class RasterHostSupervisor
         _ = ReadLoopAsync(_channel, gen);
         try
         {
-            using var readyCts = new CancellationTokenSource(HostConnectTimeout);
+            using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readyCts.CancelAfter(HostConnectTimeout);
             await _ready.Task.WaitAsync(readyCts.Token);
         }
         catch
@@ -134,17 +136,17 @@ internal sealed class RasterHostSupervisor
         }
     }
 
-    public async Task EnsureStartedAsync()
+    public async Task EnsureStartedAsync(CancellationToken cancellationToken = default)
     {
         if (IsConnected)
             return;
 
         DiagLog.Write("App", "host ensure start waiting");
-        await _startLock.WaitAsync();
+        await _startLock.WaitAsync(cancellationToken);
         try
         {
             if (!IsConnected)
-                await StartAsync();
+                await StartAsync(cancellationToken);
         }
         finally
         {
