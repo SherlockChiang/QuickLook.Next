@@ -28,7 +28,9 @@ using var channelLifetime = channel;
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
 var archiveEntries = new ConcurrentDictionary<string, string>();
 var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
+var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, string>();
+var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 bool authenticated = false;
 
 while (true)
@@ -111,9 +113,18 @@ while (true)
                                               && !string.IsNullOrWhiteSpace(extract.EntryPath):
             closedArchiveEntries.TryRemove(extract.RequestId, out _);
             var extractCts = new CancellationTokenSource();
+            var archiveHandoffGate = new SemaphoreSlim(1, 1);
             if (!requests.TryAdd(extract.RequestId, extractCts))
             {
                 extractCts.Dispose();
+                archiveHandoffGate.Dispose();
+                break;
+            }
+            if (!archiveHandoffGates.TryAdd(extract.RequestId, archiveHandoffGate))
+            {
+                requests.TryRemove(extract.RequestId, out _);
+                extractCts.Dispose();
+                archiveHandoffGate.Dispose();
                 break;
             }
             _ = Task.Run(async () =>
@@ -132,14 +143,22 @@ while (true)
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
                     else
                     {
-                        archiveEntries[extract.RequestId] = path;
-                        if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
+                        await archiveHandoffGate.WaitAsync();
+                        try
                         {
-                            if (archiveEntries.TryRemove(extract.RequestId, out string? closedPath))
-                                DeleteArchiveEntry(closedPath);
-                            return;
+                            archiveEntries[extract.RequestId] = path;
+                            if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
+                            {
+                                if (archiveEntries.TryRemove(extract.RequestId, out string? closedPath))
+                                    DeleteArchiveEntry(closedPath);
+                                return;
+                            }
+                            await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
                         }
-                        await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
+                        finally
+                        {
+                            archiveHandoffGate.Release();
+                        }
                     }
                 }
                 catch (OperationCanceledException) { }
@@ -153,16 +172,26 @@ while (true)
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
                     closedArchiveEntries.TryRemove(extract.RequestId, out _);
+                    archiveHandoffGates.TryRemove(extract.RequestId, out _);
                 }
             });
             break;
 
         case ArchiveEntryExtractClose close when IsValidRequestId(close.RequestId):
-            if (requests.ContainsKey(close.RequestId))
-                closedArchiveEntries[close.RequestId] = 0;
-            Cancel(close.RequestId);
-            if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath) && archiveEntryPath is not null)
-                DeleteArchiveEntry(archiveEntryPath);
+            if (archiveHandoffGates.TryGetValue(close.RequestId, out var archiveCloseGate))
+                await archiveCloseGate.WaitAsync();
+            try
+            {
+                if (requests.ContainsKey(close.RequestId))
+                    closedArchiveEntries[close.RequestId] = 0;
+                Cancel(close.RequestId);
+                if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath) && archiveEntryPath is not null)
+                    DeleteArchiveEntry(archiveEntryPath);
+            }
+            finally
+            {
+                archiveCloseGate?.Release();
+            }
             break;
 
         case HeroRasterExtract extract:
@@ -172,9 +201,18 @@ while (true)
                 break;
             }
             var heroCts = new CancellationTokenSource();
+            var heroHandoffGate = new SemaphoreSlim(1, 1);
             if (!requests.TryAdd(extract.RequestId, heroCts))
             {
                 heroCts.Dispose();
+                heroHandoffGate.Dispose();
+                break;
+            }
+            if (!heroHandoffGates.TryAdd(extract.RequestId, heroHandoffGate))
+            {
+                requests.TryRemove(extract.RequestId, out _);
+                heroCts.Dispose();
+                heroHandoffGate.Dispose();
                 break;
             }
             _ = Task.Run(async () =>
@@ -200,9 +238,18 @@ while (true)
 
                     int width = BitConverter.ToInt32(raster, 0);
                     int height = BitConverter.ToInt32(raster, 4);
-                    heroRasters[extract.RequestId] = tempPath;
-                    await channel.SendAsync(new HeroRasterExtracted(extract.RequestId, tempPath, width, height));
-                    tempPath = null; // retained until the App acknowledges consumption.
+                    await heroHandoffGate.WaitAsync();
+                    try
+                    {
+                        heroCts.Token.ThrowIfCancellationRequested();
+                        heroRasters[extract.RequestId] = tempPath;
+                        await channel.SendAsync(new HeroRasterExtracted(extract.RequestId, tempPath, width, height));
+                        tempPath = null; // retained until the App acknowledges consumption.
+                    }
+                    finally
+                    {
+                        heroHandoffGate.Release();
+                    }
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -215,14 +262,24 @@ while (true)
                     if (tempPath is not null) DeleteHeroRaster(tempPath);
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
+                    heroHandoffGates.TryRemove(extract.RequestId, out _);
                 }
             });
             break;
 
         case HeroRasterExtractClose close when IsValidRequestId(close.RequestId):
-            Cancel(close.RequestId);
-            if (heroRasters.TryRemove(close.RequestId, out string? tempPath))
-                DeleteHeroRaster(tempPath);
+            if (heroHandoffGates.TryGetValue(close.RequestId, out var heroCloseGate))
+                await heroCloseGate.WaitAsync();
+            try
+            {
+                Cancel(close.RequestId);
+                if (heroRasters.TryRemove(close.RequestId, out string? tempPath))
+                    DeleteHeroRaster(tempPath);
+            }
+            finally
+            {
+                heroCloseGate?.Release();
+            }
             break;
 
         default:
