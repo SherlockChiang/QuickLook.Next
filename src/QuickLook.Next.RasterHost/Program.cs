@@ -86,7 +86,11 @@ while (true)
                 DiagLog.Write("RasterHost", "rejected repeated authentication");
                 return;
 
-            case PreviewOpen open:
+            case PreviewOpen open when IsValidRequestId(open.RequestId)
+                                       && !string.IsNullOrWhiteSpace(open.Path)
+                                       && open.Probe is not null
+                                       && !string.IsNullOrWhiteSpace(open.Probe.Kind)
+                                       && IsValidTargetSize(open.TargetWidth, open.TargetHeight):
                 StartOpen(open);
                 break;
 
@@ -105,18 +109,22 @@ while (true)
                 resize.RequestId, rh, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM"));
             break;
 
-        case PreviewPageOpen page:
+        case PreviewPageOpen page when IsValidRequestId(page.RequestId)
+                                       && page.PageIndex >= 0
+                                       && double.IsFinite(page.Scale)
+                                       && page.Scale > 0:
             _ = HandlePageOpenAsync(page);
             break;
 
-        case PreviewPageClose pageClose:
+        case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
+                                             && pageClose.PageIndex >= 0:
             CancelPageRender(pageClose.RequestId, pageClose.PageIndex);
             _ = Task.Delay(250).ContinueWith(
                 _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex),
                 TaskContinuationOptions.OnlyOnRanToCompletion);
             break;
 
-            case PreviewClose close:
+            case PreviewClose close when IsValidRequestId(close.RequestId):
                 bool isActiveRequest = string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal);
                 CancelOpen(close.RequestId);
                 if (pdfSessions.TryRemove(close.RequestId, out var pdf))
@@ -134,6 +142,10 @@ while (true)
                     producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                 }
                 break;
+
+            default:
+                DiagLog.Write("RasterHost", $"rejected invalid control message: {msg.GetType().Name}");
+                return;
         }
     }
     catch (Exception ex) { DiagLog.Write("RasterHost", "handler error: " + ex.Message); }
@@ -441,6 +453,14 @@ static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
 static bool IsSystemRequiredImage(QuickLook.Next.Contracts.FileProbe probe)
     => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
        && probe.Extension.ToLowerInvariant() is ".avif" or ".heic" or ".heif" or ".jxl";
+
+static bool IsValidRequestId(string? requestId)
+    => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
+
+static bool IsValidTargetSize(uint width, uint height)
+    => width <= MaxSurfaceDimension
+       && height <= MaxSurfaceDimension
+       && (width == 0 || height == 0 || (ulong)width * height <= MaxSurfacePixels);
 
 static string MissingSystemCodecMessage(string extension)
 {
