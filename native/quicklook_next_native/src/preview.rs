@@ -1927,6 +1927,7 @@ fn is_probably_utf8_text(bytes: &[u8]) -> bool {
 
 const MAX_OFFICE_TEXT_CHARS: usize = 96 * 1024;
 const MAX_OFFICE_INPUT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_OFFICE_DECOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_OFFICE_ZIP_ENTRIES: usize = 8_192;
 const MAX_OFFICE_ROWS: usize = 48;
 const MAX_OFFICE_SHEETS: usize = 6;
@@ -1938,6 +1939,45 @@ const MAX_OFFICE_INLINE_IMAGE_BYTES: u64 = 768 * 1024;
 const OFFICE_EMUS_PER_DIP: f64 = 9525.0;
 const XLSX_CELL_WIDTH: f64 = 96.0;
 const XLSX_ROW_HEIGHT: f64 = 28.0;
+
+type OfficeResult<T> = Result<T, OfficeReadError>;
+
+#[derive(Debug)]
+enum OfficeReadError {
+    Cancelled,
+    BudgetExhausted,
+}
+
+struct OfficeContext {
+    remaining_decompressed_bytes: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+}
+
+impl OfficeContext {
+    fn new(cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
+        Self {
+            remaining_decompressed_bytes: MAX_OFFICE_DECOMPRESSED_BYTES,
+            cancel_cb,
+        }
+    }
+
+    fn check_cancelled(&self) -> OfficeResult<()> {
+        if preview_cancelled(self.cancel_cb) {
+            Err(OfficeReadError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn consume(&mut self, bytes: u64) -> OfficeResult<()> {
+        self.check_cancelled()?;
+        if bytes > self.remaining_decompressed_bytes {
+            return Err(OfficeReadError::BudgetExhausted);
+        }
+        self.remaining_decompressed_bytes -= bytes;
+        Ok(())
+    }
+}
 
 pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     if preview_cancelled(cancel_cb) {
@@ -1955,11 +1995,12 @@ pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    let mut context = OfficeContext::new(cancel_cb);
     match ext.as_str() {
-        "docx" => render_docx(path),
-        "xlsx" | "xlsm" => render_xlsx(path),
-        "pptx" | "pptm" => render_pptx(path),
-        "odt" | "ods" | "odp" => render_odf(path),
+        "docx" => render_docx(path, &mut context).unwrap_or_default(),
+        "xlsx" | "xlsm" => render_xlsx(path, &mut context).unwrap_or_default(),
+        "pptx" | "pptm" => render_pptx(path, &mut context).unwrap_or_default(),
+        "odt" | "ods" | "odp" => render_odf(path, &mut context).unwrap_or_default(),
         _ => {
             let meta = fs::metadata(path).ok();
             let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
@@ -1973,21 +2014,29 @@ pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
     }
 }
 
-fn render_docx(path: &str) -> String {
+fn render_docx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
     let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
-        None => return String::new(),
+        None => return Ok(String::new()),
     };
-    let media_entries = office_media_entries(&mut zip, &["word/media/"]);
-    let header_footer_entries = docx_header_footer_entries(&mut zip);
-    let xml = match read_zip_text(&mut zip, "word/document.xml", 16 * 1024 * 1024) {
+    let media_entries = office_media_entries(context, &mut zip, &["word/media/"])?;
+    let header_footer_entries = docx_header_footer_entries(context, &mut zip)?;
+    let xml = match read_office_zip_text(context, &mut zip, "word/document.xml", 16 * 1024 * 1024)?
+    {
         Some(xml) => xml,
-        None => return office_error_json(path, "DOCX", "word/document.xml not found"),
+        None => {
+            return Ok(office_error_json(
+                path,
+                "DOCX",
+                "word/document.xml not found",
+            ))
+        }
     };
-    let header_footer_text = extract_docx_header_footer_text(&mut zip, &header_footer_entries);
+    let header_footer_text =
+        extract_docx_header_footer_text(context, &mut zip, &header_footer_entries)?;
     let body = extract_wordprocessing_text(&xml);
-    let layout = build_docx_layout(&mut zip, &body, &media_entries);
+    let layout = build_docx_layout(context, &mut zip, &body, &media_entries)?;
     let mut text = format!("Name: {filename}\nKind: Word document\n");
     append_office_media_summary(&mut text, &media_entries);
     if !header_footer_text.is_empty() {
@@ -2003,20 +2052,22 @@ fn render_docx(path: &str) -> String {
         text.push_str(&truncate_preview_text(&body));
         text
     };
-    office_preview_json_with_layout(path, "DOCX", text, "plain", "text", layout)
+    Ok(office_preview_json_with_layout(
+        path, "DOCX", text, "plain", "text", layout,
+    ))
 }
 
-fn render_pptx(path: &str) -> String {
+fn render_pptx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
     let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
-        None => return String::new(),
+        None => return Ok(String::new()),
     };
-    let media_entries = office_media_entries(&mut zip, &["ppt/media/"]);
+    let media_entries = office_media_entries(context, &mut zip, &["ppt/media/"])?;
     let mut slides = Vec::new();
     for slide_idx in 1..=MAX_OFFICE_SLIDES {
         let name = format!("ppt/slides/slide{slide_idx}.xml");
-        let Some(xml) = read_zip_text(&mut zip, &name, 8 * 1024 * 1024) else {
+        let Some(xml) = read_office_zip_text(context, &mut zip, &name, 8 * 1024 * 1024)? else {
             if slide_idx == 1 {
                 continue;
             }
@@ -2037,32 +2088,33 @@ fn render_pptx(path: &str) -> String {
     append_office_media_summary(&mut text, &media_entries);
     text.push('\n');
     text.push_str(&truncate_preview_text(&body));
-    let layout = build_pptx_layout(&mut zip);
-    office_preview_json_with_layout(
+    let layout = build_pptx_layout(context, &mut zip)?;
+    Ok(office_preview_json_with_layout(
         path,
         "PowerPoint presentation",
         text,
         "plain",
         "text",
         layout,
-    )
+    ))
 }
 
-fn render_xlsx(path: &str) -> String {
+fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
     let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
-        None => return String::new(),
+        None => return Ok(String::new()),
     };
-    let media_entries = office_media_entries(&mut zip, &["xl/media/"]);
-    let shared_strings = read_zip_text(&mut zip, "xl/sharedStrings.xml", 16 * 1024 * 1024)
-        .map(|xml| parse_shared_strings(&xml))
-        .unwrap_or_default();
+    let media_entries = office_media_entries(context, &mut zip, &["xl/media/"])?;
+    let shared_strings =
+        read_office_zip_text(context, &mut zip, "xl/sharedStrings.xml", 16 * 1024 * 1024)?
+            .map(|xml| parse_shared_strings(&xml))
+            .unwrap_or_default();
 
     let mut sections = Vec::new();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let name = format!("xl/worksheets/sheet{sheet_idx}.xml");
-        let Some(xml) = read_zip_text(&mut zip, &name, 16 * 1024 * 1024) else {
+        let Some(xml) = read_office_zip_text(context, &mut zip, &name, 16 * 1024 * 1024)? else {
             if sheet_idx == 1 {
                 continue;
             }
@@ -2087,29 +2139,42 @@ fn render_xlsx(path: &str) -> String {
     append_office_media_summary(&mut text, &media_entries);
     text.push('\n');
     text.push_str(&truncate_preview_text(&body));
-    let layout = build_xlsx_layout(&mut zip, &shared_strings);
-    office_preview_json_with_layout(path, "Excel workbook", text, "code", "text", layout)
+    let layout = build_xlsx_layout(context, &mut zip, &shared_strings)?;
+    Ok(office_preview_json_with_layout(
+        path,
+        "Excel workbook",
+        text,
+        "code",
+        "text",
+        layout,
+    ))
 }
 
-fn render_odf(path: &str) -> String {
+fn render_odf(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
     let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
-        None => return String::new(),
+        None => return Ok(String::new()),
     };
-    let xml = match read_zip_text(&mut zip, "content.xml", 16 * 1024 * 1024) {
+    let xml = match read_office_zip_text(context, &mut zip, "content.xml", 16 * 1024 * 1024)? {
         Some(xml) => xml,
-        None => return office_error_json(path, "OpenDocument", "content.xml not found"),
+        None => {
+            return Ok(office_error_json(
+                path,
+                "OpenDocument",
+                "content.xml not found",
+            ))
+        }
     };
     let body = extract_wordprocessing_text(&xml);
-    office_text_json(
+    Ok(office_text_json(
         path,
         "OpenDocument",
         format!(
             "Name: {filename}\nKind: OpenDocument\n\n{}",
             truncate_preview_text(&body)
         ),
-    )
+    ))
 }
 
 fn open_zip(path: &str) -> Option<ZipArchive<fs::File>> {
@@ -2150,32 +2215,6 @@ fn read_zip_text<R: Read + Seek>(
     None
 }
 
-fn read_zip_bytes<R: Read + Seek>(
-    zip: &mut ZipArchive<R>,
-    name: &str,
-    max_size: u64,
-) -> Option<Vec<u8>> {
-    if let Ok(mut entry) = zip.by_name(name) {
-        if entry.size() > max_size {
-            return None;
-        }
-        return read_limited_to_end(&mut entry, max_size);
-    }
-
-    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
-        let mut entry = zip.by_index(i).ok()?;
-        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
-            continue;
-        }
-        if entry.size() > max_size {
-            return None;
-        }
-        return read_limited_to_end(&mut entry, max_size);
-    }
-
-    None
-}
-
 fn read_limited_to_end<R: Read>(reader: &mut R, max_size: u64) -> Option<Vec<u8>> {
     let cap = max_size.min(64 * 1024) as usize;
     let mut limited = reader.take(max_size.saturating_add(1));
@@ -2187,9 +2226,14 @@ fn read_limited_to_end<R: Read>(reader: &mut R, max_size: u64) -> Option<Vec<u8>
     Some(bytes)
 }
 
-fn office_media_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, roots: &[&str]) -> Vec<String> {
+fn office_media_entries<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    roots: &[&str],
+) -> OfficeResult<Vec<String>> {
     let mut entries = Vec::new();
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        context.check_cancelled()?;
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -2204,7 +2248,7 @@ fn office_media_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, roots: &[&str])
         }
     }
     entries.sort();
-    entries
+    Ok(entries)
 }
 
 fn append_office_media_summary(out: &mut String, entries: &[String]) {
@@ -2222,8 +2266,12 @@ fn append_office_media_summary(out: &mut String, entries: &[String]) {
     out.push_str(&format!("Image files: {names}\n"));
 }
 
-fn build_pptx_layout(zip: &mut ZipArchive<fs::File>) -> Option<OfficeLayoutDto> {
-    let presentation_xml = read_zip_text(zip, "ppt/presentation.xml", 4 * 1024 * 1024);
+fn build_pptx_layout(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<fs::File>,
+) -> OfficeResult<Option<OfficeLayoutDto>> {
+    let presentation_xml =
+        read_office_zip_text(context, zip, "ppt/presentation.xml", 4 * 1024 * 1024)?;
     let (slide_width, slide_height) = presentation_xml
         .as_deref()
         .and_then(parse_ppt_slide_size)
@@ -2233,7 +2281,8 @@ fn build_pptx_layout(zip: &mut ZipArchive<fs::File>) -> Option<OfficeLayoutDto> 
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
     for slide_idx in 1..=MAX_OFFICE_SLIDES {
         let slide_name = format!("ppt/slides/slide{slide_idx}.xml");
-        let Some(slide_xml) = read_zip_text(zip, &slide_name, 8 * 1024 * 1024) else {
+        let Some(slide_xml) = read_office_zip_text(context, zip, &slide_name, 8 * 1024 * 1024)?
+        else {
             if slide_idx == 1 {
                 continue;
             }
@@ -2241,11 +2290,18 @@ fn build_pptx_layout(zip: &mut ZipArchive<fs::File>) -> Option<OfficeLayoutDto> 
         };
 
         let rels_name = format!("ppt/slides/_rels/slide{slide_idx}.xml.rels");
-        let rels = read_zip_text(zip, &rels_name, 2 * 1024 * 1024)
+        let rels = read_office_zip_text(context, zip, &rels_name, 2 * 1024 * 1024)?
             .map(|xml| parse_relationships(&xml))
             .unwrap_or_default();
         let background_color = parse_ppt_slide_background(&slide_xml);
-        let items = parse_ppt_slide_items(zip, "ppt/slides/", &slide_xml, &rels, &mut image_budget);
+        let items = parse_ppt_slide_items(
+            context,
+            zip,
+            "ppt/slides/",
+            &slide_xml,
+            &rels,
+            &mut image_budget,
+        )?;
         pages.push(OfficePageDto {
             title: format!("Slide {slide_idx}"),
             index: slide_idx,
@@ -2260,29 +2316,31 @@ fn build_pptx_layout(zip: &mut ZipArchive<fs::File>) -> Option<OfficeLayoutDto> 
     }
 
     if pages.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    Some(OfficeLayoutDto {
+    Ok(Some(OfficeLayoutDto {
         layout_kind: "presentation".to_string(),
         width: slide_width,
         height: slide_height,
         pages,
-    })
+    }))
 }
 
 fn build_xlsx_layout(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<fs::File>,
     shared_strings: &[String],
-) -> Option<OfficeLayoutDto> {
+) -> OfficeResult<Option<OfficeLayoutDto>> {
     let mut pages = Vec::new();
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
-    let styles = read_zip_text(zip, "xl/styles.xml", 4 * 1024 * 1024)
+    let styles = read_office_zip_text(context, zip, "xl/styles.xml", 4 * 1024 * 1024)?
         .map(|xml| parse_xlsx_styles(&xml))
         .unwrap_or_default();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let sheet_name = format!("xl/worksheets/sheet{sheet_idx}.xml");
-        let Some(sheet_xml) = read_zip_text(zip, &sheet_name, 16 * 1024 * 1024) else {
+        let Some(sheet_xml) = read_office_zip_text(context, zip, &sheet_name, 16 * 1024 * 1024)?
+        else {
             if sheet_idx == 1 {
                 continue;
             }
@@ -2299,8 +2357,14 @@ fn build_xlsx_layout(
             &merge_regions,
             &styles,
         );
-        let mut items =
-            parse_xlsx_sheet_images(zip, sheet_idx, &sheet_xml, &metrics, &mut image_budget);
+        let mut items = parse_xlsx_sheet_images(
+            context,
+            zip,
+            sheet_idx,
+            &sheet_xml,
+            &metrics,
+            &mut image_budget,
+        )?;
         let (width, height) = xlsx_page_size(&cells, &items);
         if cells.is_empty() && items.is_empty() {
             continue;
@@ -2321,24 +2385,25 @@ fn build_xlsx_layout(
     }
 
     if pages.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let width = pages.iter().map(|p| p.width).fold(0.0, f64::max);
     let height = pages.first().map(|p| p.height).unwrap_or(420.0);
-    Some(OfficeLayoutDto {
+    Ok(Some(OfficeLayoutDto {
         layout_kind: "workbook".to_string(),
         width,
         height,
         pages,
-    })
+    }))
 }
 
 fn build_docx_layout(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<fs::File>,
     body: &str,
     media_entries: &[String],
-) -> Option<OfficeLayoutDto> {
+) -> OfficeResult<Option<OfficeLayoutDto>> {
     let page_width = 760.0;
     let page_height = 980.0;
     let margin = 58.0;
@@ -2398,7 +2463,9 @@ fn build_docx_layout(
             y = margin;
         }
         let lower = entry.to_ascii_lowercase();
-        let Some(bytes) = read_zip_bytes(zip, entry, MAX_OFFICE_INLINE_IMAGE_BYTES) else {
+        let Some(bytes) =
+            read_office_zip_bytes(context, zip, entry, MAX_OFFICE_INLINE_IMAGE_BYTES)?
+        else {
             continue;
         };
         image_budget = image_budget.saturating_sub(1);
@@ -2435,15 +2502,15 @@ fn build_docx_layout(
     }
 
     if pages.iter().all(|page| page.items.is_empty()) {
-        return None;
+        return Ok(None);
     }
 
-    Some(OfficeLayoutDto {
+    Ok(Some(OfficeLayoutDto {
         layout_kind: "document".to_string(),
         width: page_width,
         height: page_height,
         pages,
-    })
+    }))
 }
 
 fn push_docx_page(
@@ -2532,12 +2599,13 @@ fn parse_ppt_slide_background(xml: &str) -> Option<String> {
 }
 
 fn parse_ppt_slide_items<R: Read + Seek>(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
     base_dir: &str,
     xml: &str,
     rels: &BTreeMap<String, String>,
     image_budget: &mut usize,
-) -> Vec<OfficeLayoutItemDto> {
+) -> OfficeResult<Vec<OfficeLayoutItemDto>> {
     let mut reader = Reader::from_str(xml);
     let mut items = Vec::new();
     let mut in_shape = false;
@@ -2700,6 +2768,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                             });
                         }
                     } else if let Some(item) = image_item_from_relationship(
+                        context,
                         zip,
                         base_dir,
                         rels,
@@ -2710,7 +2779,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         height,
                         items.len(),
                         image_budget,
-                    ) {
+                    )? {
                         items.push(item);
                     }
                     in_shape = false;
@@ -2735,7 +2804,7 @@ fn parse_ppt_slide_items<R: Read + Seek>(
             _ => {}
         }
     }
-    items
+    Ok(items)
 }
 
 fn ppt_paragraph_prefix(e: &BytesStart<'_>) -> String {
@@ -3138,9 +3207,13 @@ fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32,
     }
 }
 
-fn docx_header_footer_entries<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
+fn docx_header_footer_entries<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+) -> OfficeResult<Vec<String>> {
     let mut entries = Vec::new();
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        context.check_cancelled()?;
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -3154,7 +3227,7 @@ fn docx_header_footer_entries<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Vec<St
     }
     entries.sort();
     entries.truncate(8);
-    entries
+    Ok(entries)
 }
 
 fn is_docx_header_footer_name(name: &str) -> bool {
@@ -3168,12 +3241,13 @@ fn is_docx_header_footer_name(name: &str) -> bool {
 }
 
 fn extract_docx_header_footer_text<R: Read + Seek>(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
     entries: &[String],
-) -> String {
+) -> OfficeResult<String> {
     let mut out = Vec::new();
     for entry in entries.iter().take(8) {
-        let Some(xml) = read_zip_text(zip, entry, 1024 * 1024) else {
+        let Some(xml) = read_office_zip_text(context, zip, entry, 1024 * 1024)? else {
             continue;
         };
         let text = extract_wordprocessing_text(&xml);
@@ -3185,7 +3259,7 @@ fn extract_docx_header_footer_text<R: Read + Seek>(
             ));
         }
     }
-    out.join("\n")
+    Ok(out.join("\n"))
 }
 
 fn xlsx_style_number_format(
@@ -3331,32 +3405,35 @@ fn xlsx_builtin_number_format(id: u32) -> Option<&'static str> {
 }
 
 fn parse_xlsx_sheet_images<R: Read + Seek>(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
     sheet_idx: usize,
     sheet_xml: &str,
     metrics: &XlsxSheetMetrics,
     image_budget: &mut usize,
-) -> Vec<OfficeLayoutItemDto> {
+) -> OfficeResult<Vec<OfficeLayoutItemDto>> {
     let Some(drawing_rid) = parse_worksheet_drawing_rid(sheet_xml) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let sheet_rels_name = format!("xl/worksheets/_rels/sheet{sheet_idx}.xml.rels");
-    let sheet_rels = read_zip_text(zip, &sheet_rels_name, 2 * 1024 * 1024)
+    let sheet_rels = read_office_zip_text(context, zip, &sheet_rels_name, 2 * 1024 * 1024)?
         .map(|xml| parse_relationships(&xml))
         .unwrap_or_default();
     let Some(drawing_target) = sheet_rels.get(&drawing_rid) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let drawing_path = normalize_zip_target("xl/worksheets/", drawing_target);
-    let Some(drawing_xml) = read_zip_text(zip, &drawing_path, 4 * 1024 * 1024) else {
-        return Vec::new();
+    let Some(drawing_xml) = read_office_zip_text(context, zip, &drawing_path, 4 * 1024 * 1024)?
+    else {
+        return Ok(Vec::new());
     };
     let drawing_rels_path = rels_path_for_part(&drawing_path);
-    let drawing_rels = read_zip_text(zip, &drawing_rels_path, 2 * 1024 * 1024)
+    let drawing_rels = read_office_zip_text(context, zip, &drawing_rels_path, 2 * 1024 * 1024)?
         .map(|xml| parse_relationships(&xml))
         .unwrap_or_default();
     let base = part_base_dir(&drawing_path);
     parse_xlsx_drawing_items(
+        context,
         zip,
         &base,
         &drawing_xml,
@@ -3384,13 +3461,14 @@ fn parse_worksheet_drawing_rid(xml: &str) -> Option<String> {
 }
 
 fn parse_xlsx_drawing_items<R: Read + Seek>(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
     base_dir: &str,
     xml: &str,
     rels: &BTreeMap<String, String>,
     metrics: &XlsxSheetMetrics,
     image_budget: &mut usize,
-) -> Vec<OfficeLayoutItemDto> {
+) -> OfficeResult<Vec<OfficeLayoutItemDto>> {
     let mut reader = Reader::from_str(xml);
     let mut items = Vec::new();
     let mut in_anchor = false;
@@ -3465,6 +3543,7 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
                         ext_h.max(90.0)
                     };
                     if let Some(item) = image_item_from_relationship(
+                        context,
                         zip,
                         base_dir,
                         rels,
@@ -3475,7 +3554,7 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
                         height,
                         items.len(),
                         image_budget,
-                    ) {
+                    )? {
                         items.push(item);
                     }
                     in_anchor = false;
@@ -3499,10 +3578,11 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
             _ => {}
         }
     }
-    items
+    Ok(items)
 }
 
 fn image_item_from_relationship<R: Read + Seek>(
+    context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
     base_dir: &str,
     rels: &BTreeMap<String, String>,
@@ -3513,19 +3593,24 @@ fn image_item_from_relationship<R: Read + Seek>(
     height: f64,
     z_index: usize,
     image_budget: &mut usize,
-) -> Option<OfficeLayoutItemDto> {
+) -> OfficeResult<Option<OfficeLayoutItemDto>> {
     if rel_id.is_empty() || *image_budget == 0 || width <= 1.0 || height <= 1.0 {
-        return None;
+        return Ok(None);
     }
-    let target = rels.get(rel_id)?;
+    let Some(target) = rels.get(rel_id) else {
+        return Ok(None);
+    };
     let path = normalize_zip_target(base_dir, target);
     let lower = path.to_ascii_lowercase();
     if !is_supported_zip_image_name(&lower) {
-        return None;
+        return Ok(None);
     }
-    let bytes = read_zip_bytes(zip, &path, MAX_OFFICE_INLINE_IMAGE_BYTES)?;
+    let Some(bytes) = read_office_zip_bytes(context, zip, &path, MAX_OFFICE_INLINE_IMAGE_BYTES)?
+    else {
+        return Ok(None);
+    };
     *image_budget = (*image_budget).saturating_sub(1);
-    Some(OfficeLayoutItemDto {
+    Ok(Some(OfficeLayoutItemDto {
         kind: "image".to_string(),
         x,
         y,
@@ -3543,7 +3628,7 @@ fn image_item_from_relationship<R: Read + Seek>(
         image_name: Some(path.rsplit('/').next().unwrap_or(path.as_str()).to_string()),
         mime_type: image_mime_type(&lower).map(str::to_string),
         image_base64: Some(base64_encode(&bytes)),
-    })
+    }))
 }
 
 fn parse_relationships(xml: &str) -> BTreeMap<String, String> {
@@ -4651,7 +4736,10 @@ fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
                 .iter()
                 .find_map(|(k, v)| k.eq_ignore_ascii_case(key).then_some(v))
             {
-                text.push_str(&format!("\n{key}: {}", decode_mail_header_value(value).trim()));
+                text.push_str(&format!(
+                    "\n{key}: {}",
+                    decode_mail_header_value(value).trim()
+                ));
             }
         }
         if let Some(content_type) = header_value(&headers, "Content-Type") {
@@ -4733,7 +4821,10 @@ fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
 }
 
 fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
-    let Some(dir_offset) = read_u64(bytes, 40).map(|value| value as usize).filter(|value| *value > 0) else {
+    let Some(dir_offset) = read_u64(bytes, 40)
+        .map(|value| value as usize)
+        .filter(|value| *value > 0)
+    else {
         return;
     };
     if dir_offset + 56 > bytes.len() || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP") {
@@ -4753,7 +4844,11 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
     if !entries.is_empty() {
         text.push_str(&format!(
             "\nDirectory entries: {}",
-            entries.iter().map(ChmDirectoryEntry::summary).collect::<Vec<_>>().join(", ")
+            entries
+                .iter()
+                .map(ChmDirectoryEntry::summary)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
         let compressed = chm_compressed_stream_summary(&entries);
         if !compressed.is_empty() {
@@ -4784,12 +4879,19 @@ impl ChmDirectoryEntry {
     }
 }
 
-fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, block_len: usize) -> Vec<ChmDirectoryEntry> {
+fn chm_directory_entries(
+    bytes: &[u8],
+    dir_offset: usize,
+    header_len: usize,
+    block_len: usize,
+) -> Vec<ChmDirectoryEntry> {
     if header_len == 0 || block_len < 32 {
         return Vec::new();
     }
     let block_offset = dir_offset.saturating_add(header_len);
-    if block_offset.saturating_add(block_len) > bytes.len() || bytes.get(block_offset..block_offset + 4) != Some(b"PMGL") {
+    if block_offset.saturating_add(block_len) > bytes.len()
+        || bytes.get(block_offset..block_offset + 4) != Some(b"PMGL")
+    {
         return Vec::new();
     }
     let free_space = read_u32(bytes, block_offset + 4).unwrap_or(0) as usize;
@@ -4821,7 +4923,12 @@ fn chm_directory_entries(bytes: &[u8], dir_offset: usize, header_len: usize, blo
         };
         offset = next;
         if !name.is_empty() {
-            entries.push(ChmDirectoryEntry { name, section, offset: file_offset, len: file_len });
+            entries.push(ChmDirectoryEntry {
+                name,
+                section,
+                offset: file_offset,
+                len: file_len,
+            });
         }
     }
     entries
@@ -4832,9 +4939,16 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
     for entry in entries.iter().take(32) {
         let lower = entry.name.to_ascii_lowercase();
         if lower.contains("::dataspace/storage/") || lower.contains("::dataspace/namelist") {
-            summary.push(format!("{} ({})", entry.name, format_bytes(entry.len as i64)));
+            summary.push(format!(
+                "{} ({})",
+                entry.name,
+                format_bytes(entry.len as i64)
+            ));
         } else if lower.ends_with("/content") && lower.contains("mscompressed") {
-            summary.push(format!("compressed content {}", format_bytes(entry.len as i64)));
+            summary.push(format!(
+                "compressed content {}",
+                format_bytes(entry.len as i64)
+            ));
         }
         if summary.len() >= 8 {
             break;
@@ -4844,10 +4958,16 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
 }
 
 fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'static str, String)> {
-    let Some(system) = entries.iter().find(|entry| entry.name.eq_ignore_ascii_case("/#SYSTEM") && entry.section == 0) else {
+    let Some(system) = entries
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case("/#SYSTEM") && entry.section == 0)
+    else {
         return Vec::new();
     };
-    if system.len == 0 || system.len > 4096 || system.offset.saturating_add(system.len) > bytes.len() {
+    if system.len == 0
+        || system.len > 4096
+        || system.offset.saturating_add(system.len) > bytes.len()
+    {
         return Vec::new();
     }
     let data = &bytes[system.offset..system.offset + system.len];
@@ -5752,7 +5872,9 @@ fn decode_mail_header_value(value: &str) -> String {
         if let Some(decoded) = decode_rfc2047_word(charset, encoding, encoded_value) {
             output.push_str(&decoded);
         } else {
-            output.push_str(&rest[start..start + 2 + charset_end + 1 + encoding_end + 1 + value_end + 2]);
+            output.push_str(
+                &rest[start..start + 2 + charset_end + 1 + encoding_end + 1 + value_end + 2],
+            );
         }
         rest = &encoded[value_end + 2..];
     }
@@ -5846,16 +5968,17 @@ fn mail_mime_part_summaries(content: &str, boundary: &str) -> Vec<String> {
     summaries
 }
 
-fn mail_mime_part_summaries_inner(content: &str, boundary: &str, depth: usize, summaries: &mut Vec<String>) {
+fn mail_mime_part_summaries_inner(
+    content: &str,
+    boundary: &str,
+    depth: usize,
+    summaries: &mut Vec<String>,
+) {
     if depth > 4 || summaries.len() >= 32 {
         return;
     }
     let marker = format!("--{boundary}");
-    for part in content
-        .split(&marker)
-        .skip(1)
-        .take(32)
-    {
+    for part in content.split(&marker).skip(1).take(32) {
         let trimmed = part.trim_start_matches(|ch| ch == '\r' || ch == '\n');
         if summaries.len() >= 32 || trimmed.starts_with("--") || trimmed.trim().is_empty() {
             continue;
@@ -5912,7 +6035,9 @@ fn mail_mime_part_summaries_inner(content: &str, boundary: &str, depth: usize, s
         }
         summaries.push(summary);
         if is_multipart {
-            if let Some(child_boundary) = content_type_header.and_then(|value| mail_header_parameter(value, "boundary")) {
+            if let Some(child_boundary) =
+                content_type_header.and_then(|value| mail_header_parameter(value, "boundary"))
+            {
                 mail_mime_part_summaries_inner(body, &child_boundary, depth + 1, summaries);
             }
         }
@@ -5972,7 +6097,10 @@ fn decode_quoted_printable(bytes: &[u8]) -> Option<Vec<u8>> {
                 index += 2;
                 continue;
             }
-            if index + 2 < bytes.len() && hex_nibble(bytes[index + 1]).is_some() && hex_nibble(bytes[index + 2]).is_some() {
+            if index + 2 < bytes.len()
+                && hex_nibble(bytes[index + 1]).is_some()
+                && hex_nibble(bytes[index + 2]).is_some()
+            {
                 output.push((hex_nibble(bytes[index + 1])? << 4) | hex_nibble(bytes[index + 2])?);
                 if output.len() > 1024 * 1024 {
                     return None;
@@ -6015,8 +6143,7 @@ fn mail_attachment_filename_from_disposition(line: &str) -> Option<String> {
             break;
         }
     }
-    (!joined.is_empty())
-        .then(|| decode_rfc2231_value(&joined).unwrap_or(joined))
+    (!joined.is_empty()).then(|| decode_rfc2231_value(&joined).unwrap_or(joined))
 }
 
 #[derive(Clone)]
@@ -6085,7 +6212,10 @@ fn cfb_directory_entries(bytes: &[u8]) -> Vec<CfbDirectoryEntry> {
         return Vec::new();
     }
     let mut entries = Vec::new();
-    for chunk in bytes[directory_offset..directory_offset + sector_size].chunks_exact(128).take(64) {
+    for chunk in bytes[directory_offset..directory_offset + sector_size]
+        .chunks_exact(128)
+        .take(64)
+    {
         let name_len = u16::from_le_bytes([chunk[64], chunk[65]]) as usize;
         if !(2..=64).contains(&name_len) {
             continue;
@@ -6102,7 +6232,12 @@ fn cfb_directory_entries(bytes: &[u8]) -> Vec<CfbDirectoryEntry> {
         }
         let start_sector = u32::from_le_bytes([chunk[116], chunk[117], chunk[118], chunk[119]]);
         let size = u64::from_le_bytes(chunk[120..128].try_into().ok().unwrap_or([0; 8]));
-        entries.push(CfbDirectoryEntry { name, object_type, start_sector, size });
+        entries.push(CfbDirectoryEntry {
+            name,
+            object_type,
+            start_sector,
+            size,
+        });
     }
     entries
 }
@@ -6111,9 +6246,16 @@ fn cfb_sector_offset(sector: u32, sector_size: usize) -> Option<usize> {
     (sector as usize).checked_add(1)?.checked_mul(sector_size)
 }
 
-fn msg_property_stream<'a>(bytes: &'a [u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<&'a [u8]> {
+fn msg_property_stream<'a>(
+    bytes: &'a [u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<&'a [u8]> {
     let entry = entries.iter().find(|entry| {
-        entry.object_type == 2 && entry.name.eq_ignore_ascii_case(&format!("__substg1.0_{property}"))
+        entry.object_type == 2
+            && entry
+                .name
+                .eq_ignore_ascii_case(&format!("__substg1.0_{property}"))
     })?;
     let sector_size = 1usize << read_u16(bytes, 30).unwrap_or(9).min(12);
     let offset = cfb_sector_offset(entry.start_sector, sector_size)?;
@@ -6121,7 +6263,11 @@ fn msg_property_stream<'a>(bytes: &'a [u8], entries: &[CfbDirectoryEntry], prope
     bytes.get(offset..offset.checked_add(len)?)
 }
 
-fn msg_unicode_property(bytes: &[u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<String> {
+fn msg_unicode_property(
+    bytes: &[u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<String> {
     let stream = msg_property_stream(bytes, entries, property)?;
     let units = stream
         .chunks_exact(2)
@@ -6135,7 +6281,11 @@ fn msg_unicode_property(bytes: &[u8], entries: &[CfbDirectoryEntry], property: &
     (!value.is_empty()).then_some(value)
 }
 
-fn msg_filetime_property(bytes: &[u8], entries: &[CfbDirectoryEntry], property: &str) -> Option<String> {
+fn msg_filetime_property(
+    bytes: &[u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<String> {
     let stream = msg_property_stream(bytes, entries, property)?;
     let filetime = u64::from_le_bytes(stream.get(0..8)?.try_into().ok()?);
     if filetime < 116_444_736_000_000_000 {
@@ -6220,11 +6370,13 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
         } else if stream_type == 9 {
             memory64_info = parse_minidump_memory64_list(bytes, rva as usize, data_size as usize);
         } else if stream_type == 24 {
-            thread_names_info = parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
+            thread_names_info =
+                parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
         } else if stream_type == 17 {
             handle_info = parse_minidump_handle_data(bytes, rva as usize, data_size as usize);
         } else if stream_type == 11 {
-            unloaded_module_info = parse_minidump_unloaded_module_list(bytes, rva as usize, data_size as usize);
+            unloaded_module_info =
+                parse_minidump_unloaded_module_list(bytes, rva as usize, data_size as usize);
         } else if stream_type == 12 {
             misc_info = parse_minidump_misc_info(bytes, rva as usize, data_size as usize);
         }
@@ -6269,7 +6421,9 @@ fn parse_minidump_misc_info(bytes: &[u8], offset: usize, size: usize) -> Option<
         return None;
     }
     let size_of_info = read_u32(bytes, offset).unwrap_or(0) as usize;
-    let available = size.min(size_of_info).min(bytes.len().saturating_sub(offset));
+    let available = size
+        .min(size_of_info)
+        .min(bytes.len().saturating_sub(offset));
     if available < 8 {
         return None;
     }
@@ -6322,7 +6476,8 @@ fn parse_minidump_unloaded_module_list(bytes: &[u8], offset: usize, size: usize)
         let checksum = read_u32(bytes, entry_offset + 12).unwrap_or(0);
         let timestamp = read_u32(bytes, entry_offset + 16).unwrap_or(0);
         let name_rva = read_u32(bytes, entry_offset + 20).unwrap_or(0) as usize;
-        let name = read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        let name =
+            read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
         lines.push(format!(
             "Unloaded module {name}: range 0x{base:016X}-0x{end:016X}; timestamp 0x{timestamp:08X}; checksum 0x{checksum:08X}"
         ));
@@ -6344,7 +6499,9 @@ fn parse_minidump_handle_data(bytes: &[u8], offset: usize, size: usize) -> Optio
     let mut lines = vec![format!("\nHandles: {count}")];
     let mut descriptor_offset = offset + header_size;
     for _ in 0..count.min(8) {
-        if descriptor_offset + descriptor_size > offset + size || descriptor_offset + 32 > bytes.len() {
+        if descriptor_offset + descriptor_size > offset + size
+            || descriptor_offset + 32 > bytes.len()
+        {
             break;
         }
         let handle = read_u64(bytes, descriptor_offset).unwrap_or(0);
@@ -6354,8 +6511,10 @@ fn parse_minidump_handle_data(bytes: &[u8], offset: usize, size: usize) -> Optio
         let granted_access = read_u32(bytes, descriptor_offset + 20).unwrap_or(0);
         let handle_count = read_u32(bytes, descriptor_offset + 24).unwrap_or(0);
         let pointer_count = read_u32(bytes, descriptor_offset + 28).unwrap_or(0);
-        let type_name = read_minidump_utf16_string(bytes, type_name_rva).unwrap_or_else(|| "<unknown>".to_string());
-        let object_name = read_minidump_utf16_string(bytes, object_name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        let type_name = read_minidump_utf16_string(bytes, type_name_rva)
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let object_name = read_minidump_utf16_string(bytes, object_name_rva)
+            .unwrap_or_else(|| "<unnamed>".to_string());
         lines.push(format!(
             "Handle 0x{handle:016X}: {type_name} {object_name}; access 0x{granted_access:08X}; attributes 0x{attributes:08X}; handles {handle_count}; pointers {pointer_count}"
         ));
@@ -6392,7 +6551,10 @@ fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Opt
     let count = read_u64(bytes, offset)? as usize;
     let base_rva = read_u64(bytes, offset + 8).unwrap_or(0);
     let mut total = 0u64;
-    let mut lines = vec![format!("\nMemory64 ranges: {count}"), format!("Memory64 base RVA: 0x{base_rva:X}")];
+    let mut lines = vec![
+        format!("\nMemory64 ranges: {count}"),
+        format!("Memory64 base RVA: 0x{base_rva:X}"),
+    ];
     let mut descriptor_offset = offset + 16;
     for _ in 0..count.min(8) {
         if descriptor_offset + 16 > offset + size || descriptor_offset + 16 > bytes.len() {
@@ -6402,7 +6564,9 @@ fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Opt
         let data_size = read_u64(bytes, descriptor_offset + 8).unwrap_or(0);
         total = total.saturating_add(data_size);
         let end = start.saturating_add(data_size);
-        lines.push(format!("Memory64 0x{start:016X}-0x{end:016X} ({data_size} bytes)"));
+        lines.push(format!(
+            "Memory64 0x{start:016X}-0x{end:016X} ({data_size} bytes)"
+        ));
         descriptor_offset += 16;
     }
     if count > 0 {
@@ -6427,7 +6591,9 @@ fn parse_minidump_memory_list(bytes: &[u8], offset: usize, size: usize) -> Optio
         let data_size = read_u32(bytes, descriptor_offset + 8).unwrap_or(0) as u64;
         total = total.saturating_add(data_size);
         let end = start.saturating_add(data_size);
-        lines.push(format!("Memory 0x{start:016X}-0x{end:016X} ({data_size} bytes)"));
+        lines.push(format!(
+            "Memory 0x{start:016X}-0x{end:016X} ({data_size} bytes)"
+        ));
         descriptor_offset += 16;
     }
     if count > 0 {
@@ -6451,17 +6617,15 @@ fn parse_minidump_module_list(bytes: &[u8], offset: usize, size: usize) -> Optio
         let image_size = read_u32(bytes, module_offset + 8).unwrap_or(0);
         let timestamp = read_u32(bytes, module_offset + 16).unwrap_or(0);
         let name_rva = read_u32(bytes, module_offset + 20).unwrap_or(0) as usize;
-        let name = read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        let name =
+            read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
         let mut line = format!(
             "Module {name}: base 0x{base:016X}; size {image_size}; timestamp 0x{timestamp:08X}"
         );
         if let Some(version) = parse_minidump_fixed_version(bytes, module_offset + 24) {
             line.push_str(&format!(
                 "; file version {}; product version {}; type {}; flags 0x{:08X}",
-                version.file_version,
-                version.product_version,
-                version.file_type,
-                version.flags
+                version.file_version, version.product_version, version.file_type, version.flags
             ));
         }
         lines.push(line);
@@ -6770,7 +6934,9 @@ fn elf_needed_libraries(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let mut needed_offsets = Vec::new();
     let entry_size = if class == 2 { 16usize } else { 8usize };
     let mut offset = dynamic.file_offset as usize;
-    let end = offset.saturating_add(dynamic.file_size as usize).min(bytes.len());
+    let end = offset
+        .saturating_add(dynamic.file_size as usize)
+        .min(bytes.len());
     while offset + entry_size <= end && needed_offsets.len() < 32 {
         let tag = if class == 2 {
             read_u64_endian(bytes, offset, endian).unwrap_or(0)
@@ -6812,7 +6978,9 @@ fn elf_dynamic_string_tags(bytes: &[u8], class: u8, endian: u8) -> Vec<(&'static
     let mut tagged_offsets = Vec::new();
     let entry_size = if class == 2 { 16usize } else { 8usize };
     let mut offset = dynamic.file_offset as usize;
-    let end = offset.saturating_add(dynamic.file_size as usize).min(bytes.len());
+    let end = offset
+        .saturating_add(dynamic.file_size as usize)
+        .min(bytes.len());
     while offset + entry_size <= end && tagged_offsets.len() < 16 {
         let tag = if class == 2 {
             read_u64_endian(bytes, offset, endian).unwrap_or(0)
@@ -6865,8 +7033,11 @@ fn elf_program_headers(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfProgramHea
     } else {
         read_u32_endian(bytes, 28, endian).unwrap_or(0) as usize
     };
-    let phentsize = read_u16_endian(bytes, if class == 2 { 54 } else { 42 }, endian).unwrap_or(0) as usize;
-    let phnum = read_u16_endian(bytes, if class == 2 { 56 } else { 44 }, endian).unwrap_or(0).min(64) as usize;
+    let phentsize =
+        read_u16_endian(bytes, if class == 2 { 54 } else { 42 }, endian).unwrap_or(0) as usize;
+    let phnum = read_u16_endian(bytes, if class == 2 { 56 } else { 44 }, endian)
+        .unwrap_or(0)
+        .min(64) as usize;
     let mut headers = Vec::new();
     if phoff == 0 || phentsize == 0 {
         return headers;
@@ -6933,9 +7104,13 @@ fn elf_sections(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfSection> {
     } else {
         read_u32_endian(bytes, 32, endian).unwrap_or(0) as usize
     };
-    let shentsize = read_u16_endian(bytes, if class == 2 { 58 } else { 46 }, endian).unwrap_or(0) as usize;
-    let shnum = read_u16_endian(bytes, if class == 2 { 60 } else { 48 }, endian).unwrap_or(0).min(128) as usize;
-    let shstrndx = read_u16_endian(bytes, if class == 2 { 62 } else { 50 }, endian).unwrap_or(0) as usize;
+    let shentsize =
+        read_u16_endian(bytes, if class == 2 { 58 } else { 46 }, endian).unwrap_or(0) as usize;
+    let shnum = read_u16_endian(bytes, if class == 2 { 60 } else { 48 }, endian)
+        .unwrap_or(0)
+        .min(128) as usize;
+    let shstrndx =
+        read_u16_endian(bytes, if class == 2 { 62 } else { 50 }, endian).unwrap_or(0) as usize;
     if shoff == 0 || shentsize == 0 || shstrndx >= shnum {
         return Vec::new();
     }
@@ -6989,7 +7164,14 @@ fn elf_sections(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfSection> {
                 read_u32_endian(bytes, header + 36, endian).unwrap_or(0) as usize,
             )
         };
-        sections.push(ElfSection { name, typ, offset, size, link, entsize });
+        sections.push(ElfSection {
+            name,
+            typ,
+            offset,
+            size,
+            link,
+            entsize,
+        });
     }
     sections
 }
@@ -6997,8 +7179,17 @@ fn elf_sections(bytes: &[u8], class: u8, endian: u8) -> Vec<ElfSection> {
 fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let sections = elf_sections(bytes, class, endian);
     let mut symbols = Vec::new();
-    for section in sections.iter().filter(|section| section.typ == 2 || section.typ == 11) {
-        let entry_size = if section.entsize > 0 { section.entsize } else if class == 2 { 24 } else { 16 };
+    for section in sections
+        .iter()
+        .filter(|section| section.typ == 2 || section.typ == 11)
+    {
+        let entry_size = if section.entsize > 0 {
+            section.entsize
+        } else if class == 2 {
+            24
+        } else {
+            16
+        };
         if entry_size == 0 || section.offset.saturating_add(section.size) > bytes.len() {
             continue;
         }
@@ -7019,7 +7210,9 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             if name_offset == 0 || name_offset >= strtab.size {
                 continue;
             }
-            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 128).filter(|name| !name.is_empty()) {
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 128)
+                .filter(|name| !name.is_empty())
+            {
                 let (info, shndx) = if class == 2 {
                     (
                         bytes.get(offset + 4).copied().unwrap_or(0),
@@ -7044,7 +7237,12 @@ fn elf_symbol_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             }
         }
         if !named.is_empty() {
-            symbols.push(format!("{} {} entries ({})", section.name, count, named.join(", ")));
+            symbols.push(format!(
+                "{} {} entries ({})",
+                section.name,
+                count,
+                named.join(", ")
+            ));
         }
     }
     symbols
@@ -7106,7 +7304,10 @@ fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             } else {
                 8
             };
-            if entry_size == 0 || section.size == 0 || section.offset.saturating_add(section.size) > bytes.len() {
+            if entry_size == 0
+                || section.size == 0
+                || section.offset.saturating_add(section.size) > bytes.len()
+            {
                 return None;
             }
             let count = section.size / entry_size;
@@ -7126,7 +7327,12 @@ fn elf_relocation_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
             if types.is_empty() {
                 Some(format!("{} {} entries", section.name, count))
             } else {
-                Some(format!("{} {} entries ({})", section.name, count, types.join(", ")))
+                Some(format!(
+                    "{} {} entries ({})",
+                    section.name,
+                    count,
+                    types.join(", ")
+                ))
             }
         })
         .collect()
@@ -7160,7 +7366,10 @@ fn elf_relocation_type_name(machine: u16, typ: u32) -> String {
 fn elf_gnu_version_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let sections = elf_sections(bytes, class, endian);
     let mut versions = Vec::new();
-    for section in sections.iter().filter(|section| matches!(section.typ, 0x6FFF_FFFD..=0x6FFF_FFFF)) {
+    for section in sections
+        .iter()
+        .filter(|section| matches!(section.typ, 0x6FFF_FFFD..=0x6FFF_FFFF))
+    {
         if section.offset.saturating_add(section.size) > bytes.len() {
             continue;
         }
@@ -7169,7 +7378,9 @@ fn elf_gnu_version_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
                 let count = section.size / 2;
                 let mut sample = Vec::new();
                 for index in 0..count.min(8) {
-                    let value = read_u16_endian(bytes, section.offset + index * 2, endian).unwrap_or(0) & 0x7FFF;
+                    let value = read_u16_endian(bytes, section.offset + index * 2, endian)
+                        .unwrap_or(0)
+                        & 0x7FFF;
                     if value > 1 && !sample.contains(&value) {
                         sample.push(value);
                     }
@@ -7177,7 +7388,11 @@ fn elf_gnu_version_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
                 if sample.is_empty() {
                     versions.push(format!("{} {} entries", section.name, count));
                 } else {
-                    let sample = sample.iter().map(|value| value.to_string()).collect::<Vec<_>>().join("/");
+                    let sample = sample
+                        .iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join("/");
                     versions.push(format!("{} {} entries ({sample})", section.name, count));
                 }
             }
@@ -7203,11 +7418,19 @@ fn elf_gnu_version_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     versions
 }
 
-fn elf_gnu_version_string_table<'a>(sections: &'a [ElfSection], section: &ElfSection) -> Option<&'a ElfSection> {
+fn elf_gnu_version_string_table<'a>(
+    sections: &'a [ElfSection],
+    section: &ElfSection,
+) -> Option<&'a ElfSection> {
     sections.get(section.link).filter(|strtab| strtab.typ == 3)
 }
 
-fn elf_gnu_version_need_names(bytes: &[u8], sections: &[ElfSection], section: &ElfSection, endian: u8) -> Vec<String> {
+fn elf_gnu_version_need_names(
+    bytes: &[u8],
+    sections: &[ElfSection],
+    section: &ElfSection,
+    endian: u8,
+) -> Vec<String> {
     let Some(strtab) = elf_gnu_version_string_table(sections, section) else {
         return Vec::new();
     };
@@ -7218,7 +7441,9 @@ fn elf_gnu_version_need_names(bytes: &[u8], sections: &[ElfSection], section: &E
         if offset + 16 > end {
             break;
         }
-        let aux_count = read_u16_endian(bytes, offset + 2, endian).unwrap_or(0).min(16) as usize;
+        let aux_count = read_u16_endian(bytes, offset + 2, endian)
+            .unwrap_or(0)
+            .min(16) as usize;
         let aux_offset = read_u32_endian(bytes, offset + 8, endian).unwrap_or(0) as usize;
         let next = read_u32_endian(bytes, offset + 12, endian).unwrap_or(0) as usize;
         let mut current_aux = offset.saturating_add(aux_offset);
@@ -7227,7 +7452,9 @@ fn elf_gnu_version_need_names(bytes: &[u8], sections: &[ElfSection], section: &E
                 break;
             }
             let name_offset = read_u32_endian(bytes, current_aux + 8, endian).unwrap_or(0) as usize;
-            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96).filter(|name| !name.is_empty()) {
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96)
+                .filter(|name| !name.is_empty())
+            {
                 if !names.contains(&name) && names.len() < 8 {
                     names.push(name);
                 }
@@ -7246,7 +7473,12 @@ fn elf_gnu_version_need_names(bytes: &[u8], sections: &[ElfSection], section: &E
     names
 }
 
-fn elf_gnu_version_def_names(bytes: &[u8], sections: &[ElfSection], section: &ElfSection, endian: u8) -> Vec<String> {
+fn elf_gnu_version_def_names(
+    bytes: &[u8],
+    sections: &[ElfSection],
+    section: &ElfSection,
+    endian: u8,
+) -> Vec<String> {
     let Some(strtab) = elf_gnu_version_string_table(sections, section) else {
         return Vec::new();
     };
@@ -7257,7 +7489,9 @@ fn elf_gnu_version_def_names(bytes: &[u8], sections: &[ElfSection], section: &El
         if offset + 20 > end {
             break;
         }
-        let aux_count = read_u16_endian(bytes, offset + 4, endian).unwrap_or(0).min(16) as usize;
+        let aux_count = read_u16_endian(bytes, offset + 4, endian)
+            .unwrap_or(0)
+            .min(16) as usize;
         let aux_offset = read_u32_endian(bytes, offset + 12, endian).unwrap_or(0) as usize;
         let next = read_u32_endian(bytes, offset + 16, endian).unwrap_or(0) as usize;
         let mut current_aux = offset.saturating_add(aux_offset);
@@ -7266,7 +7500,9 @@ fn elf_gnu_version_def_names(bytes: &[u8], sections: &[ElfSection], section: &El
                 break;
             }
             let name_offset = read_u32_endian(bytes, current_aux, endian).unwrap_or(0) as usize;
-            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96).filter(|name| !name.is_empty()) {
+            if let Some(name) = read_c_string(bytes, strtab.offset + name_offset, 96)
+                .filter(|name| !name.is_empty())
+            {
                 if !names.contains(&name) && names.len() < 8 {
                     names.push(name);
                 }
@@ -7289,9 +7525,19 @@ fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     let sections = elf_sections(bytes, class, endian);
     let mut notes = Vec::new();
     for section in sections.iter().filter(|section| section.typ == 7) {
-        append_elf_notes(&mut notes, bytes, endian, &section.name, section.offset, section.size);
+        append_elf_notes(
+            &mut notes,
+            bytes,
+            endian,
+            &section.name,
+            section.offset,
+            section.size,
+        );
     }
-    for header in elf_program_headers(bytes, class, endian).iter().filter(|header| header.typ == 4) {
+    for header in elf_program_headers(bytes, class, endian)
+        .iter()
+        .filter(|header| header.typ == 4)
+    {
         append_elf_notes(
             &mut notes,
             bytes,
@@ -7304,7 +7550,14 @@ fn elf_note_summary(bytes: &[u8], class: u8, endian: u8) -> Vec<String> {
     notes
 }
 
-fn append_elf_notes(notes: &mut Vec<String>, bytes: &[u8], endian: u8, label: &str, file_offset: usize, size: usize) {
+fn append_elf_notes(
+    notes: &mut Vec<String>,
+    bytes: &[u8],
+    endian: u8,
+    label: &str,
+    file_offset: usize,
+    size: usize,
+) {
     if file_offset.saturating_add(size) > bytes.len() {
         return;
     }
@@ -7322,13 +7575,20 @@ fn append_elf_notes(notes: &mut Vec<String>, bytes: &[u8], endian: u8, label: &s
         }
         let name = bytes
             .get(name_offset..name_offset + namesz)
-            .map(|raw| String::from_utf8_lossy(raw).trim_end_matches('\0').to_string())
+            .map(|raw| {
+                String::from_utf8_lossy(raw)
+                    .trim_end_matches('\0')
+                    .to_string()
+            })
             .unwrap_or_default();
         let desc = bytes.get(desc_offset..desc_offset + descsz).unwrap_or(&[]);
         if name == "GNU" && typ == 3 && !desc.is_empty() {
             notes.push(format!("{} GNU build-id {}", label, bytes_to_hex(desc)));
         } else if !name.is_empty() {
-            notes.push(format!("{} {} type {} ({} bytes)", label, name, typ, descsz));
+            notes.push(format!(
+                "{} {} type {} ({} bytes)",
+                label, name, typ, descsz
+            ));
         }
         offset = next;
     }
@@ -7504,8 +7764,8 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
                 track.kind,
                 format_duration(duration)
             ));
-        if let Some(data_bytes) = track.data_bytes {
-            if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
+            if let Some(data_bytes) = track.data_bytes {
+                if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
                     text.push_str(&format!(
                         "\n{} bitrate: {}",
                         track.kind,
@@ -7518,34 +7778,62 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
             text.push_str(&format!("\n{} timing entries: {}", track.kind, entries));
         }
         if let Some(samples) = track.samples {
-            text.push_str(&format!("\n{} samples: {}", track.kind, format_number(samples as i64)));
+            text.push_str(&format!(
+                "\n{} samples: {}",
+                track.kind,
+                format_number(samples as i64)
+            ));
         }
         if let Some(decode_ticks) = track.decode_ticks {
-            text.push_str(&format!("\n{} decode ticks: {}", track.kind, format_number(decode_ticks as i64)));
+            text.push_str(&format!(
+                "\n{} decode ticks: {}",
+                track.kind,
+                format_number(decode_ticks as i64)
+            ));
         }
         if let Some(delta) = track.first_sample_delta {
             text.push_str(&format!("\n{} first sample delta: {}", track.kind, delta));
         }
         if let Some(entries) = track.composition_entries {
-            text.push_str(&format!("\n{} composition offsets: {}", track.kind, entries));
+            text.push_str(&format!(
+                "\n{} composition offsets: {}",
+                track.kind, entries
+            ));
         }
         if let Some(samples) = track.composition_samples {
-            text.push_str(&format!("\n{} composition samples: {}", track.kind, format_number(samples as i64)));
+            text.push_str(&format!(
+                "\n{} composition samples: {}",
+                track.kind,
+                format_number(samples as i64)
+            ));
         }
         if let Some(offset) = track.first_composition_offset {
-            text.push_str(&format!("\n{} first composition offset: {}", track.kind, offset));
+            text.push_str(&format!(
+                "\n{} first composition offset: {}",
+                track.kind, offset
+            ));
         }
         if let Some((min, max)) = track.composition_offset_range {
-            text.push_str(&format!("\n{} composition offset range: {}..{}", track.kind, min, max));
+            text.push_str(&format!(
+                "\n{} composition offset range: {}..{}",
+                track.kind, min, max
+            ));
         }
         if let Some(entries) = track.edit_entries {
             text.push_str(&format!("\n{} edit list entries: {}", track.kind, entries));
         }
         if let Some(duration) = track.first_edit_duration {
-            text.push_str(&format!("\n{} first edit duration: {}", track.kind, format_number(duration as i64)));
+            text.push_str(&format!(
+                "\n{} first edit duration: {}",
+                track.kind,
+                format_number(duration as i64)
+            ));
         }
         if let Some(media_time) = track.first_edit_media_time {
-            text.push_str(&format!("\n{} first edit media time: {}", track.kind, media_time));
+            text.push_str(&format!(
+                "\n{} first edit media time: {}",
+                track.kind, media_time
+            ));
         }
         if let Some(rate) = track.first_edit_rate {
             text.push_str(&format!("\n{} first edit rate: {:.2}", track.kind, rate));
@@ -7557,16 +7845,31 @@ fn append_mp4_tracks(text: &mut String, tracks: &[Mp4TrackSummary]) {
             }
         }
         if let Some(samples) = track.first_chunk_samples {
-            text.push_str(&format!("\n{} first chunk samples: {}", track.kind, samples));
+            text.push_str(&format!(
+                "\n{} first chunk samples: {}",
+                track.kind, samples
+            ));
         }
         if let Some(bytes) = track.first_chunk_bytes {
-            text.push_str(&format!("\n{} first chunk bytes: {}", track.kind, format_number(bytes as i64)));
+            text.push_str(&format!(
+                "\n{} first chunk bytes: {}",
+                track.kind,
+                format_number(bytes as i64)
+            ));
         }
         if let Some(size) = track.first_sample_size {
-            text.push_str(&format!("\n{} first sample size: {}", track.kind, format_number(size as i64)));
+            text.push_str(&format!(
+                "\n{} first sample size: {}",
+                track.kind,
+                format_number(size as i64)
+            ));
         }
         if !track.chunk_details.is_empty() {
-            text.push_str(&format!("\n{} chunk map: {}", track.kind, track.chunk_details.join(", ")));
+            text.push_str(&format!(
+                "\n{} chunk map: {}",
+                track.kind,
+                track.chunk_details.join(", ")
+            ));
         }
     }
 }
@@ -7741,7 +8044,11 @@ fn parse_stsd_summary(payload: &[u8], summary: &mut Mp4TrackSummary) -> Option<(
     Some(())
 }
 
-fn parse_video_codec_detail(payload: &[u8], entry_offset: usize, entry_size: usize) -> Option<String> {
+fn parse_video_codec_detail(
+    payload: &[u8],
+    entry_offset: usize,
+    entry_size: usize,
+) -> Option<String> {
     let start = entry_offset.checked_add(86)?;
     let end = entry_offset.checked_add(entry_size)?.min(payload.len());
     if let Some(avcc) = find_mp4_atom_payload_in_range(payload, start, end, b"avcC", 0) {
@@ -7753,7 +8060,11 @@ fn parse_video_codec_detail(payload: &[u8], entry_offset: usize, entry_size: usi
     None
 }
 
-fn parse_audio_codec_detail(payload: &[u8], entry_offset: usize, entry_size: usize) -> Option<String> {
+fn parse_audio_codec_detail(
+    payload: &[u8],
+    entry_offset: usize,
+    entry_size: usize,
+) -> Option<String> {
     let start = entry_offset.checked_add(36)?;
     let end = entry_offset.checked_add(entry_size)?.min(payload.len());
     find_mp4_atom_payload_in_range(payload, start, end, b"esds", 0).and_then(parse_esds_detail)
@@ -7927,7 +8238,10 @@ fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
     bits.read_bits(8)?;
     bits.read_ue()?;
     let mut chroma_format_idc = 1u32;
-    if matches!(profile_idc, 100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135) {
+    if matches!(
+        profile_idc,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
         chroma_format_idc = bits.read_ue()?;
         if chroma_format_idc == 3 {
             bits.read_bits(1)?;
@@ -7968,7 +8282,12 @@ fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
     bits.read_bits(1)?;
     let mut crop = (0u32, 0u32, 0u32, 0u32);
     if bits.read_bits(1)? != 0 {
-        crop = (bits.read_ue()?, bits.read_ue()?, bits.read_ue()?, bits.read_ue()?);
+        crop = (
+            bits.read_ue()?,
+            bits.read_ue()?,
+            bits.read_ue()?,
+            bits.read_ue()?,
+        );
     }
     let vui_summary = if bits.read_bits(1).unwrap_or(0) != 0 {
         parse_h264_vui_summary(&mut bits)
@@ -7976,7 +8295,9 @@ fn parse_h264_sps_summary(sps: &[u8]) -> Option<String> {
         None
     };
     let coded_width = width_mbs.checked_mul(16)?;
-    let coded_height = height_map_units.checked_mul(16)?.checked_mul(if frame_mbs_only { 1 } else { 2 })?;
+    let coded_height = height_map_units
+        .checked_mul(16)?
+        .checked_mul(if frame_mbs_only { 1 } else { 2 })?;
     let (crop_x, crop_y) = h264_crop_units(chroma_format_idc, frame_mbs_only);
     let display_width = coded_width.saturating_sub((crop.0 + crop.1).saturating_mul(crop_x));
     let display_height = coded_height.saturating_sub((crop.2 + crop.3).saturating_mul(crop_y));
@@ -8017,7 +8338,10 @@ fn parse_h264_vui_summary(bits: &mut BitReader<'_>) -> Option<String> {
             let primaries = bits.read_bits(8)? as u8;
             let transfer = bits.read_bits(8)? as u8;
             let matrix = bits.read_bits(8)? as u8;
-            parts.push(format!("primaries {}", h264_color_primaries_name(primaries)));
+            parts.push(format!(
+                "primaries {}",
+                h264_color_primaries_name(primaries)
+            ));
             parts.push(format!("transfer {}", h264_transfer_name(transfer)));
             parts.push(format!("matrix {}", h264_matrix_name(matrix)));
         }
@@ -8095,7 +8419,11 @@ fn skip_h264_scaling_list(bits: &mut BitReader<'_>, size: usize) -> Option<()> {
             let delta_scale = bits.read_se()?;
             next_scale = (last_scale + delta_scale + 256) % 256;
         }
-        last_scale = if next_scale == 0 { last_scale } else { next_scale };
+        last_scale = if next_scale == 0 {
+            last_scale
+        } else {
+            next_scale
+        };
     }
     Some(())
 }
@@ -8131,13 +8459,21 @@ impl<'a> BitReader<'a> {
                 return None;
             }
         }
-        let suffix = if zeros == 0 { 0 } else { self.read_bits(zeros)? };
+        let suffix = if zeros == 0 {
+            0
+        } else {
+            self.read_bits(zeros)?
+        };
         Some((1u32 << zeros) - 1 + suffix)
     }
 
     fn read_se(&mut self) -> Option<i32> {
         let value = self.read_ue()? as i32;
-        Some(if value & 1 == 0 { -(value / 2) } else { (value + 1) / 2 })
+        Some(if value & 1 == 0 {
+            -(value / 2)
+        } else {
+            (value + 1) / 2
+        })
     }
 }
 
@@ -8167,7 +8503,11 @@ fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     let luma_bits = payload.get(17).map(|value| (value & 0x07) + 8);
     let chroma_bits = payload.get(18).map(|value| (value & 0x07) + 8);
     let nal_length = payload.get(21).map(|value| (value & 0x03) + 1);
-    let mut parts = vec![format!("HEVC profile {profile}, level {}.{}", level / 30, level % 30)];
+    let mut parts = vec![format!(
+        "HEVC profile {profile}, level {}.{}",
+        level / 30,
+        level % 30
+    )];
     if let Some(nal_length) = nal_length {
         parts.push(format!("{}-byte NAL length", nal_length));
     }
@@ -8256,7 +8596,12 @@ fn parse_hevc_sps_summary(sps: &[u8]) -> Option<String> {
     let coded_height = bits.read_ue()?;
     let mut crop = (0u32, 0u32, 0u32, 0u32);
     if bits.read_bits(1)? != 0 {
-        crop = (bits.read_ue()?, bits.read_ue()?, bits.read_ue()?, bits.read_ue()?);
+        crop = (
+            bits.read_ue()?,
+            bits.read_ue()?,
+            bits.read_ue()?,
+            bits.read_ue()?,
+        );
     }
     let luma_bits = bits.read_ue()?.checked_add(8)?;
     let chroma_bits = bits.read_ue()?.checked_add(8)?;
@@ -8277,10 +8622,17 @@ fn parse_hevc_sps_summary(sps: &[u8]) -> Option<String> {
     Some(parts.join(", "))
 }
 
-fn parse_hevc_sps_vui_summary(bits: &mut BitReader<'_>, max_sub_layers_minus1: usize) -> Option<String> {
+fn parse_hevc_sps_vui_summary(
+    bits: &mut BitReader<'_>,
+    max_sub_layers_minus1: usize,
+) -> Option<String> {
     bits.read_ue()?;
     let ordering_info_all_layers = bits.read_bits(1)? == 0;
-    let start_layer = if ordering_info_all_layers { max_sub_layers_minus1 } else { 0 };
+    let start_layer = if ordering_info_all_layers {
+        max_sub_layers_minus1
+    } else {
+        0
+    };
     for _ in start_layer..=max_sub_layers_minus1 {
         bits.read_ue()?;
         bits.read_ue()?;
@@ -8332,7 +8684,10 @@ fn parse_hevc_vui_summary(bits: &mut BitReader<'_>) -> Option<String> {
             let primaries = bits.read_bits(8)? as u8;
             let transfer = bits.read_bits(8)? as u8;
             let matrix = bits.read_bits(8)? as u8;
-            parts.push(format!("primaries {}", h264_color_primaries_name(primaries)));
+            parts.push(format!(
+                "primaries {}",
+                h264_color_primaries_name(primaries)
+            ));
             parts.push(format!("transfer {}", h264_transfer_name(transfer)));
             parts.push(format!("matrix {}", h264_matrix_name(matrix)));
         }
@@ -8340,7 +8695,10 @@ fn parse_hevc_vui_summary(bits: &mut BitReader<'_>) -> Option<String> {
     Some(parts.join(", "))
 }
 
-fn skip_hevc_profile_tier_level(bits: &mut BitReader<'_>, max_sub_layers_minus1: usize) -> Option<()> {
+fn skip_hevc_profile_tier_level(
+    bits: &mut BitReader<'_>,
+    max_sub_layers_minus1: usize,
+) -> Option<()> {
     bits.read_bits(2)?;
     bits.read_bits(1)?;
     bits.read_bits(5)?;
@@ -8463,7 +8821,11 @@ fn parse_elst_summary(payload: &[u8]) -> Option<Mp4ElstSummary> {
     let version = *payload.first()?;
     let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
     if entries == 0 {
-        return Some(Mp4ElstSummary { first_duration: None, first_media_time: None, first_rate: None });
+        return Some(Mp4ElstSummary {
+            first_duration: None,
+            first_media_time: None,
+            first_rate: None,
+        });
     }
     let offset = 8usize;
     let (duration, media_time, rate_offset) = if version == 1 {
@@ -8534,7 +8896,11 @@ fn parse_stts_timeline(payload: &[u8]) -> Option<Mp4SttsTimeline> {
         decode_ticks = decode_ticks.checked_add(sample_count.checked_mul(sample_delta as u64)?)?;
         offset = offset.checked_add(8)?;
     }
-    Some(Mp4SttsTimeline { samples, decode_ticks, first_delta })
+    Some(Mp4SttsTimeline {
+        samples,
+        decode_ticks,
+        first_delta,
+    })
 }
 
 struct Mp4ChunkSummary {
@@ -8565,7 +8931,8 @@ fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
     let mut first_chunk_bytes = None;
     let mut chunk_details = Vec::new();
     for (chunk_index, chunk_offset) in chunk_offsets.iter().enumerate() {
-        let samples_per_chunk = samples_per_chunk_for_chunk(&sample_to_chunks, (chunk_index + 1) as u32)? as usize;
+        let samples_per_chunk =
+            samples_per_chunk_for_chunk(&sample_to_chunks, (chunk_index + 1) as u32)? as usize;
         let mut chunk_bytes = 0u64;
         for _ in 0..samples_per_chunk {
             let Some(size) = sample_sizes.get(sample_index) else {
@@ -9708,7 +10075,10 @@ pub fn render_executable(path: &str) -> String {
         text.push_str(&format!("Exports: {}\n", pe.exports.join(", ")));
     }
     if !pe.export_details.is_empty() {
-        text.push_str(&format!("Export details: {}\n", pe.export_details.join(", ")));
+        text.push_str(&format!(
+            "Export details: {}\n",
+            pe.export_details.join(", ")
+        ));
     }
     if pe.has_version_resource {
         text.push_str("Version resource: present\n");
@@ -9719,10 +10089,7 @@ pub fn render_executable(path: &str) -> String {
     if let Some(fixed) = &pe.fixed_version {
         text.push_str(&format!(
             "Fixed file version: {}; product {}; flags 0x{:08X}; type {}\n",
-            fixed.file_version,
-            fixed.product_version,
-            fixed.flags,
-            fixed.file_type
+            fixed.file_version, fixed.product_version, fixed.flags, fixed.file_type
         ));
     }
     if let Some(certificate) = &pe.certificate {
@@ -9733,22 +10100,40 @@ pub fn render_executable(path: &str) -> String {
             certificate.typ
         ));
         if !certificate.digest_algorithms.is_empty() {
-            text.push_str(&format!("Certificate digest algorithms: {}\n", certificate.digest_algorithms.join(", ")));
+            text.push_str(&format!(
+                "Certificate digest algorithms: {}\n",
+                certificate.digest_algorithms.join(", ")
+            ));
         }
         if !certificate.signature_algorithms.is_empty() {
-            text.push_str(&format!("Certificate signature algorithms: {}\n", certificate.signature_algorithms.join(", ")));
+            text.push_str(&format!(
+                "Certificate signature algorithms: {}\n",
+                certificate.signature_algorithms.join(", ")
+            ));
         }
         if !certificate.signers.is_empty() {
-            text.push_str(&format!("Certificate signers: {}\n", certificate.signers.join(", ")));
+            text.push_str(&format!(
+                "Certificate signers: {}\n",
+                certificate.signers.join(", ")
+            ));
         }
         if !certificate.names.is_empty() {
-            text.push_str(&format!("Certificate names: {}\n", certificate.names.join(", ")));
+            text.push_str(&format!(
+                "Certificate names: {}\n",
+                certificate.names.join(", ")
+            ));
         }
         if !certificate.issuers.is_empty() {
-            text.push_str(&format!("Certificate issuers: {}\n", certificate.issuers.join(", ")));
+            text.push_str(&format!(
+                "Certificate issuers: {}\n",
+                certificate.issuers.join(", ")
+            ));
         }
         if !certificate.subjects.is_empty() {
-            text.push_str(&format!("Certificate subjects: {}\n", certificate.subjects.join(", ")));
+            text.push_str(&format!(
+                "Certificate subjects: {}\n",
+                certificate.subjects.join(", ")
+            ));
         }
     }
     if let Some(clr) = &pe.clr {
@@ -9764,22 +10149,37 @@ pub fn render_executable(path: &str) -> String {
             text.push_str(&format!("CLR metadata version: {}\n", clr.metadata_version));
         }
         if !clr.metadata_streams.is_empty() {
-            text.push_str(&format!("CLR metadata streams: {}\n", clr.metadata_streams.join(", ")));
+            text.push_str(&format!(
+                "CLR metadata streams: {}\n",
+                clr.metadata_streams.join(", ")
+            ));
         }
         if !clr.metadata_tables.is_empty() {
-            text.push_str(&format!("CLR metadata tables: {}\n", clr.metadata_tables.join(", ")));
+            text.push_str(&format!(
+                "CLR metadata tables: {}\n",
+                clr.metadata_tables.join(", ")
+            ));
         }
         if let Some(assembly) = &clr.assembly {
             text.push_str(&format!("CLR assembly: {assembly}\n"));
         }
         if !clr.assembly_refs.is_empty() {
-            text.push_str(&format!("CLR assembly references: {}\n", clr.assembly_refs.join(", ")));
+            text.push_str(&format!(
+                "CLR assembly references: {}\n",
+                clr.assembly_refs.join(", ")
+            ));
         }
         if !clr.type_defs.is_empty() {
-            text.push_str(&format!("CLR type definitions: {}\n", clr.type_defs.join(", ")));
+            text.push_str(&format!(
+                "CLR type definitions: {}\n",
+                clr.type_defs.join(", ")
+            ));
         }
         if clr.custom_attributes > 0 {
-            text.push_str(&format!("CLR custom attributes: {}\n", clr.custom_attributes));
+            text.push_str(&format!(
+                "CLR custom attributes: {}\n",
+                clr.custom_attributes
+            ));
         }
     }
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
@@ -9906,7 +10306,8 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let dll_characteristics = read_u16(bytes, opt + 70).unwrap_or(0);
     let data_directories_offset = if magic == 0x20B { opt + 108 } else { opt + 92 };
     let data_directories = read_u32(bytes, data_directories_offset).unwrap_or(0);
-    let directories = parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
+    let directories =
+        parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
     let section_table = opt + opt_size;
     let section_names = parse_pe_section_names(bytes, section_table, sections);
     let section_summaries = parse_pe_sections(bytes, section_table, sections);
@@ -9918,7 +10319,9 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let imported_functions = directories
         .iter()
         .find(|directory| directory.name == "Import")
-        .map(|directory| parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B))
+        .map(|directory| {
+            parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B)
+        })
         .unwrap_or_default();
     let exports = directories
         .iter()
@@ -9940,7 +10343,11 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
                 .and_then(|offset| pe_find_resource_data(bytes, &section_summaries, offset, 16))
         });
     let version_strings = version_resource
-        .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)).map(parse_pe_version_strings))
+        .and_then(|(offset, size)| {
+            bytes
+                .get(offset..offset.saturating_add(size))
+                .map(parse_pe_version_strings)
+        })
         .unwrap_or_default();
     let fixed_version = version_resource
         .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)))
@@ -10062,7 +10469,11 @@ fn parse_pe_sections(bytes: &[u8], section_table: usize, sections: u16) -> Vec<P
     summaries
 }
 
-fn parse_pe_import_dlls(bytes: &[u8], sections: &[PeSectionSummary], import_rva: u32) -> Vec<String> {
+fn parse_pe_import_dlls(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    import_rva: u32,
+) -> Vec<String> {
     let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
         return Vec::new();
     };
@@ -10079,7 +10490,11 @@ fn parse_pe_import_dlls(bytes: &[u8], sections: &[PeSectionSummary], import_rva:
         }
         if let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) {
             if let Some(name) = read_c_string(bytes, name_offset, 260) {
-                if !name.is_empty() && !imports.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+                if !name.is_empty()
+                    && !imports
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(&name))
+                {
                     imports.push(name);
                 }
             }
@@ -10089,7 +10504,12 @@ fn parse_pe_import_dlls(bytes: &[u8], sections: &[PeSectionSummary], import_rva:
     imports
 }
 
-fn parse_pe_import_functions(bytes: &[u8], sections: &[PeSectionSummary], import_rva: u32, pe64: bool) -> Vec<String> {
+fn parse_pe_import_functions(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    import_rva: u32,
+    pe64: bool,
+) -> Vec<String> {
     let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
         return Vec::new();
     };
@@ -10107,7 +10527,11 @@ fn parse_pe_import_functions(bytes: &[u8], sections: &[PeSectionSummary], import
         let dll = pe_rva_to_file_offset(sections, name_rva)
             .and_then(|name_offset| read_c_string(bytes, name_offset, 260))
             .unwrap_or_default();
-        let thunk_rva = if original_first_thunk != 0 { original_first_thunk } else { first_thunk };
+        let thunk_rva = if original_first_thunk != 0 {
+            original_first_thunk
+        } else {
+            first_thunk
+        };
         append_pe_import_thunks(bytes, sections, thunk_rva, pe64, &dll, &mut functions);
         offset += 20;
     }
@@ -10135,13 +10559,24 @@ fn append_pe_import_thunks(
         if value == 0 {
             break;
         }
-        let ordinal_mask = if pe64 { 0x8000_0000_0000_0000 } else { 0x8000_0000 };
+        let ordinal_mask = if pe64 {
+            0x8000_0000_0000_0000
+        } else {
+            0x8000_0000
+        };
         if value & ordinal_mask == 0 {
             if let Some(name_offset) = pe_rva_to_file_offset(sections, value as u32) {
                 if let Some(name) = read_c_string(bytes, name_offset + 2, 260) {
                     if !name.is_empty() {
-                        let qualified = if dll.is_empty() { name } else { format!("{dll}!{name}") };
-                        if !functions.iter().any(|existing| existing.eq_ignore_ascii_case(&qualified)) {
+                        let qualified = if dll.is_empty() {
+                            name
+                        } else {
+                            format!("{dll}!{name}")
+                        };
+                        if !functions
+                            .iter()
+                            .any(|existing| existing.eq_ignore_ascii_case(&qualified))
+                        {
                             functions.push(qualified);
                         }
                     }
@@ -10165,7 +10600,11 @@ fn append_pe_import_thunks(
     }
 }
 
-fn parse_pe_export_names(bytes: &[u8], sections: &[PeSectionSummary], export_rva: u32) -> Vec<String> {
+fn parse_pe_export_names(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    export_rva: u32,
+) -> Vec<String> {
     let Some(offset) = pe_rva_to_file_offset(sections, export_rva) else {
         return Vec::new();
     };
@@ -10285,7 +10724,9 @@ fn pe_find_resource_data_in_directory(
         let target = read_u32(bytes, entry + 4).unwrap_or(0);
         if target & 0x8000_0000 != 0 {
             let child = root + (target & 0x7FFF_FFFF) as usize;
-            if let Some(found) = pe_find_resource_data_in_directory(bytes, sections, root, child, typ, depth + 1) {
+            if let Some(found) =
+                pe_find_resource_data_in_directory(bytes, sections, root, child, typ, depth + 1)
+            {
                 return Some(found);
             }
         } else {
@@ -10345,13 +10786,7 @@ fn parse_pe_fixed_version(bytes: &[u8]) -> Option<PeFixedVersion> {
 }
 
 fn format_pe_version(ms: u32, ls: u32) -> String {
-    format!(
-        "{}.{}.{}.{}",
-        ms >> 16,
-        ms & 0xFFFF,
-        ls >> 16,
-        ls & 0xFFFF
-    )
+    format!("{}.{}.{}.{}", ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
 }
 
 fn pe_version_file_type(value: u32) -> &'static str {
@@ -10383,9 +10818,15 @@ fn parse_pe_version_node(
     let typ = read_u16(bytes, offset + 4).unwrap_or(0);
     let (key, key_end) = read_utf16_z(bytes, offset + 6, offset + length)?;
     let value_offset = align4(key_end);
-    let value_bytes = if typ == 1 { value_len.saturating_mul(2) } else { value_len };
+    let value_bytes = if typ == 1 {
+        value_len.saturating_mul(2)
+    } else {
+        value_len
+    };
     if typ == 1 && value_len > 0 && is_version_string_key(&key) {
-        let value_end = value_offset.saturating_add(value_bytes).min(offset + length);
+        let value_end = value_offset
+            .saturating_add(value_bytes)
+            .min(offset + length);
         if let Some(raw) = bytes.get(value_offset..value_end) {
             let value = decode_utf16le_string(raw);
             if !value.is_empty() {
@@ -10475,13 +10916,31 @@ fn parse_authenticode_digest_algorithms(bytes: &[u8], offset: usize, length: usi
     let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
     let oid_patterns: [(&str, &[u8]); 4] = [
         ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]),
-        ("SHA-256", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]),
-        ("SHA-384", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02]),
-        ("SHA-512", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03]),
+        (
+            "SHA-256",
+            &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+            ],
+        ),
+        (
+            "SHA-384",
+            &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+            ],
+        ),
+        (
+            "SHA-512",
+            &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
+            ],
+        ),
     ];
     let mut algorithms = Vec::new();
     for (name, pattern) in oid_patterns {
-        if payload.windows(pattern.len()).any(|window| window == pattern) {
+        if payload
+            .windows(pattern.len())
+            .any(|window| window == pattern)
+        {
             algorithms.push(name.to_string());
         }
     }
@@ -10493,29 +10952,80 @@ fn parse_authenticode_signers(bytes: &[u8], offset: usize, length: usize) -> Vec
         return Vec::new();
     };
     let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let signed_data_oid = [0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
-    if !payload.windows(signed_data_oid.len()).any(|window| window == signed_data_oid) {
+    let signed_data_oid = [
+        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02,
+    ];
+    if !payload
+        .windows(signed_data_oid.len())
+        .any(|window| window == signed_data_oid)
+    {
         return Vec::new();
     }
     let digest = first_oid_name(
         payload,
         &[
             ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A][..]),
-            ("SHA-256", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01][..]),
-            ("SHA-384", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02][..]),
-            ("SHA-512", &[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03][..]),
+            (
+                "SHA-256",
+                &[
+                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+                ][..],
+            ),
+            (
+                "SHA-384",
+                &[
+                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+                ][..],
+            ),
+            (
+                "SHA-512",
+                &[
+                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
+                ][..],
+            ),
         ],
     );
     let signature = first_oid_name(
         payload,
         &[
-            ("SHA-1 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05][..]),
-            ("SHA-256 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B][..]),
-            ("SHA-384 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C][..]),
-            ("SHA-512 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D][..]),
-            ("RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01][..]),
-            ("ECDSA with SHA-256", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02][..]),
-            ("ECDSA with SHA-384", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03][..]),
+            (
+                "SHA-1 with RSA",
+                &[
+                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05,
+                ][..],
+            ),
+            (
+                "SHA-256 with RSA",
+                &[
+                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
+                ][..],
+            ),
+            (
+                "SHA-384 with RSA",
+                &[
+                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C,
+                ][..],
+            ),
+            (
+                "SHA-512 with RSA",
+                &[
+                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D,
+                ][..],
+            ),
+            (
+                "RSA",
+                &[
+                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
+                ][..],
+            ),
+            (
+                "ECDSA with SHA-256",
+                &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02][..],
+            ),
+            (
+                "ECDSA with SHA-384",
+                &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03][..],
+            ),
         ],
     );
     match (digest, signature) {
@@ -10527,9 +11037,12 @@ fn parse_authenticode_signers(bytes: &[u8], offset: usize, length: usize) -> Vec
 }
 
 fn first_oid_name(bytes: &[u8], patterns: &[(&'static str, &[u8])]) -> Option<&'static str> {
-    patterns
-        .iter()
-        .find_map(|(name, pattern)| bytes.windows(pattern.len()).any(|window| window == *pattern).then_some(*name))
+    patterns.iter().find_map(|(name, pattern)| {
+        bytes
+            .windows(pattern.len())
+            .any(|window| window == *pattern)
+            .then_some(*name)
+    })
 }
 
 fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
@@ -10546,7 +11059,10 @@ fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usi
     for (label, oid) in name_oids {
         let mut search = 0usize;
         while search + oid.len() + 2 <= payload.len() && names.len() < 12 {
-            let Some(position) = payload[search..].windows(oid.len()).position(|window| window == oid) else {
+            let Some(position) = payload[search..]
+                .windows(oid.len())
+                .position(|window| window == oid)
+            else {
                 break;
             };
             let value_offset = search + position + oid.len();
@@ -10562,7 +11078,11 @@ fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usi
     names
 }
 
-fn parse_authenticode_certificate_subjects(bytes: &[u8], offset: usize, length: usize) -> (Vec<String>, Vec<String>) {
+fn parse_authenticode_certificate_subjects(
+    bytes: &[u8],
+    offset: usize,
+    length: usize,
+) -> (Vec<String>, Vec<String>) {
     let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
         return (Vec::new(), Vec::new());
     };
@@ -10575,7 +11095,9 @@ fn parse_authenticode_certificate_subjects(bytes: &[u8], offset: usize, length: 
             break;
         };
         let cert_offset = search + position;
-        if let Some((issuer, subject, cert_end)) = parse_x509_certificate_names(payload, cert_offset) {
+        if let Some((issuer, subject, cert_end)) =
+            parse_x509_certificate_names(payload, cert_offset)
+        {
             if !issuer.is_empty() && !issuers.contains(&issuer) {
                 issuers.push(issuer);
             }
@@ -10624,7 +11146,10 @@ fn parse_x509_name(bytes: &[u8]) -> String {
     for (label, oid) in name_oids {
         let mut search = 0usize;
         while search + oid.len() + 2 <= bytes.len() && parts.len() < 8 {
-            let Some(position) = bytes[search..].windows(oid.len()).position(|window| window == oid) else {
+            let Some(position) = bytes[search..]
+                .windows(oid.len())
+                .position(|window| window == oid)
+            else {
                 break;
             };
             let value_offset = search + position + oid.len();
@@ -10687,49 +11212,110 @@ fn read_der_string(bytes: &[u8], offset: usize) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn parse_authenticode_signature_algorithms(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
+fn parse_authenticode_signature_algorithms(
+    bytes: &[u8],
+    offset: usize,
+    length: usize,
+) -> Vec<String> {
     let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
         return Vec::new();
     };
     let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
     let oid_patterns: [(&str, &[u8]); 7] = [
-        ("RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]),
-        ("SHA-1 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05]),
-        ("SHA-256 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]),
-        ("SHA-384 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C]),
-        ("SHA-512 with RSA", &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D]),
-        ("ECDSA with SHA-256", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]),
-        ("ECDSA with SHA-384", &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03]),
+        (
+            "RSA",
+            &[
+                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
+            ],
+        ),
+        (
+            "SHA-1 with RSA",
+            &[
+                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05,
+            ],
+        ),
+        (
+            "SHA-256 with RSA",
+            &[
+                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
+            ],
+        ),
+        (
+            "SHA-384 with RSA",
+            &[
+                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C,
+            ],
+        ),
+        (
+            "SHA-512 with RSA",
+            &[
+                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D,
+            ],
+        ),
+        (
+            "ECDSA with SHA-256",
+            &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02],
+        ),
+        (
+            "ECDSA with SHA-384",
+            &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03],
+        ),
     ];
     let mut algorithms = Vec::new();
     for (name, pattern) in oid_patterns {
-        if payload.windows(pattern.len()).any(|window| window == pattern) {
+        if payload
+            .windows(pattern.len())
+            .any(|window| window == pattern)
+        {
             algorithms.push(name.to_string());
         }
     }
     algorithms
 }
 
-fn parse_pe_clr_header(bytes: &[u8], sections: &[PeSectionSummary], offset: usize) -> Option<PeClrSummary> {
+fn parse_pe_clr_header(
+    bytes: &[u8],
+    sections: &[PeSectionSummary],
+    offset: usize,
+) -> Option<PeClrSummary> {
     if offset + 24 > bytes.len() || read_u32(bytes, offset)? < 24 {
         return None;
     }
     let metadata_rva = read_u32(bytes, offset + 8)?;
     let metadata_size = read_u32(bytes, offset + 12)?;
-    let metadata = pe_rva_to_file_offset(sections, metadata_rva)
-        .and_then(|metadata_offset| parse_clr_metadata_root(bytes, metadata_offset, metadata_size as usize));
+    let metadata = pe_rva_to_file_offset(sections, metadata_rva).and_then(|metadata_offset| {
+        parse_clr_metadata_root(bytes, metadata_offset, metadata_size as usize)
+    });
     Some(PeClrSummary {
         major: read_u16(bytes, offset + 4)?,
         minor: read_u16(bytes, offset + 6)?,
         metadata_rva,
         metadata_size,
         flags: read_u32(bytes, offset + 16)?,
-        metadata_version: metadata.as_ref().map(|root| root.version.clone()).unwrap_or_default(),
-        metadata_streams: metadata.as_ref().map(|root| root.streams.clone()).unwrap_or_default(),
-        metadata_tables: metadata.as_ref().map(|root| root.tables.clone()).unwrap_or_default(),
-        assembly_refs: metadata.as_ref().map(|root| root.assembly_refs.clone()).unwrap_or_default(),
-        type_defs: metadata.as_ref().map(|root| root.type_defs.clone()).unwrap_or_default(),
-        custom_attributes: metadata.as_ref().map(|root| root.custom_attributes).unwrap_or(0),
+        metadata_version: metadata
+            .as_ref()
+            .map(|root| root.version.clone())
+            .unwrap_or_default(),
+        metadata_streams: metadata
+            .as_ref()
+            .map(|root| root.streams.clone())
+            .unwrap_or_default(),
+        metadata_tables: metadata
+            .as_ref()
+            .map(|root| root.tables.clone())
+            .unwrap_or_default(),
+        assembly_refs: metadata
+            .as_ref()
+            .map(|root| root.assembly_refs.clone())
+            .unwrap_or_default(),
+        type_defs: metadata
+            .as_ref()
+            .map(|root| root.type_defs.clone())
+            .unwrap_or_default(),
+        custom_attributes: metadata
+            .as_ref()
+            .map(|root| root.custom_attributes)
+            .unwrap_or(0),
         assembly: metadata.and_then(|root| root.assembly),
     })
 }
@@ -10758,7 +11344,15 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .to_string();
     let mut stream_offset = align4(version_end) + 4;
     if stream_offset > end {
-        return Some(ClrMetadataRoot { version, streams: Vec::new(), tables: Vec::new(), assembly: None, assembly_refs: Vec::new(), type_defs: Vec::new(), custom_attributes: 0 });
+        return Some(ClrMetadataRoot {
+            version,
+            streams: Vec::new(),
+            tables: Vec::new(),
+            assembly: None,
+            assembly_refs: Vec::new(),
+            type_defs: Vec::new(),
+            custom_attributes: 0,
+        });
     }
     let streams = read_u16(bytes, stream_offset - 2).unwrap_or(0).min(64) as usize;
     let mut names = Vec::new();
@@ -10776,7 +11370,8 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         if name == "#Strings" {
             strings_heap = bytes.get(data_offset..data_offset.saturating_add(stream_size).min(end));
         } else if name == "#~" {
-            tables_stream = bytes.get(data_offset..data_offset.saturating_add(stream_size).min(end));
+            tables_stream =
+                bytes.get(data_offset..data_offset.saturating_add(stream_size).min(end));
         }
         stream_offset = align4(name_end);
     }
@@ -10795,8 +11390,18 @@ fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<C
         .and_then(clr_tables_layout)
         .map(|layout| layout.rows[12])
         .unwrap_or(0);
-    let tables = tables_stream.map(parse_clr_table_counts).unwrap_or_default();
-    Some(ClrMetadataRoot { version, streams: names, tables, assembly, assembly_refs, type_defs, custom_attributes })
+    let tables = tables_stream
+        .map(parse_clr_table_counts)
+        .unwrap_or_default();
+    Some(ClrMetadataRoot {
+        version,
+        streams: names,
+        tables,
+        assembly,
+        assembly_refs,
+        type_defs,
+        custom_attributes,
+    })
 }
 
 fn parse_clr_table_counts(tables: &[u8]) -> Vec<String> {
@@ -10894,7 +11499,9 @@ fn parse_clr_assembly_refs(tables: &[u8], strings: &[u8]) -> Vec<String> {
     let mut refs = Vec::new();
     let mut row = layout.offsets.get(35).copied().unwrap_or(0);
     for _ in 0..rows {
-        if row + 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size > tables.len() {
+        if row + 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size
+            > tables.len()
+        {
             break;
         }
         let major = read_u16(tables, row).unwrap_or(0);
@@ -10902,8 +11509,10 @@ fn parse_clr_assembly_refs(tables: &[u8], strings: &[u8]) -> Vec<String> {
         let build = read_u16(tables, row + 4).unwrap_or(0);
         let revision = read_u16(tables, row + 6).unwrap_or(0);
         let name_index_offset = row + 12 + layout.blob_index_size;
-        let name_index = read_clr_index(tables, name_index_offset, layout.string_index_size).unwrap_or(0) as usize;
-        if let Some(name) = read_c_string(strings, name_index, 260).filter(|name| !name.is_empty()) {
+        let name_index = read_clr_index(tables, name_index_offset, layout.string_index_size)
+            .unwrap_or(0) as usize;
+        if let Some(name) = read_c_string(strings, name_index, 260).filter(|name| !name.is_empty())
+        {
             refs.push(format!("{name} {major}.{minor}.{build}.{revision}"));
         }
         row += 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size;
@@ -10922,8 +11531,14 @@ fn parse_clr_type_defs(tables: &[u8], strings: &[u8]) -> Vec<String> {
         if row + 4 + layout.string_index_size * 2 > tables.len() {
             break;
         }
-        let name_index = read_clr_index(tables, row + 4, layout.string_index_size).unwrap_or(0) as usize;
-        let namespace_index = read_clr_index(tables, row + 4 + layout.string_index_size, layout.string_index_size).unwrap_or(0) as usize;
+        let name_index =
+            read_clr_index(tables, row + 4, layout.string_index_size).unwrap_or(0) as usize;
+        let namespace_index = read_clr_index(
+            tables,
+            row + 4 + layout.string_index_size,
+            layout.string_index_size,
+        )
+        .unwrap_or(0) as usize;
         let name = read_c_string(strings, name_index, 260).unwrap_or_default();
         if !name.is_empty() {
             let namespace = read_c_string(strings, namespace_index, 260).unwrap_or_default();
@@ -10933,7 +11548,8 @@ fn parse_clr_type_defs(tables: &[u8], strings: &[u8]) -> Vec<String> {
                 types.push(format!("{namespace}.{name}"));
             }
         }
-        row += clr_table_row_size(2, layout.string_index_size, 2, layout.blob_index_size).unwrap_or(14);
+        row += clr_table_row_size(2, layout.string_index_size, 2, layout.blob_index_size)
+            .unwrap_or(14);
     }
     types
 }
@@ -10969,13 +11585,24 @@ fn clr_tables_layout(tables: &[u8]) -> Option<ClrTablesLayout> {
             continue;
         }
         offsets[table] = offset;
-        let row_size = clr_table_row_size(table, string_index_size, guid_index_size, blob_index_size)?;
+        let row_size =
+            clr_table_row_size(table, string_index_size, guid_index_size, blob_index_size)?;
         offset = offset.checked_add(row_size.checked_mul(rows[table] as usize)?)?;
     }
-    Some(ClrTablesLayout { rows, offsets, string_index_size, blob_index_size })
+    Some(ClrTablesLayout {
+        rows,
+        offsets,
+        string_index_size,
+        blob_index_size,
+    })
 }
 
-fn clr_table_row_size(table: usize, string_index_size: usize, guid_index_size: usize, blob_index_size: usize) -> Option<usize> {
+fn clr_table_row_size(
+    table: usize,
+    string_index_size: usize,
+    guid_index_size: usize,
+    blob_index_size: usize,
+) -> Option<usize> {
     match table {
         0 => Some(2 + string_index_size + guid_index_size * 3),
         2 => Some(4 + string_index_size * 2 + 2 + 2 + 2),
@@ -11010,7 +11637,11 @@ fn pe_rva_to_file_offset(sections: &[PeSectionSummary], rva: u32) -> Option<usiz
     for section in sections {
         let span = section.virtual_size.max(section.raw_size).max(1);
         if rva >= section.virtual_address && rva < section.virtual_address.saturating_add(span) {
-            return Some(section.raw_pointer.saturating_add(rva - section.virtual_address) as usize);
+            return Some(
+                section
+                    .raw_pointer
+                    .saturating_add(rva - section.virtual_address) as usize,
+            );
         }
     }
     None
@@ -11859,6 +12490,77 @@ pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Op
     target.to_str().map(|s| s.to_string())
 }
 
+fn read_office_zip_text<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max_size: u64,
+) -> OfficeResult<Option<String>> {
+    Ok(read_office_zip_bytes(context, zip, name, max_size)?
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string()))
+}
+
+fn read_office_zip_bytes<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max_size: u64,
+) -> OfficeResult<Option<Vec<u8>>> {
+    context.check_cancelled()?;
+    if let Ok(mut entry) = zip.by_name(name) {
+        if entry.size() > max_size {
+            return Ok(None);
+        }
+        return read_office_limited_to_end(context, &mut entry, max_size);
+    }
+
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        context.check_cancelled()?;
+        let mut entry = match zip.by_index(i) {
+            Ok(entry) => entry,
+            Err(_) => return Ok(None),
+        };
+        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
+            continue;
+        }
+        if entry.size() > max_size {
+            return Ok(None);
+        }
+        return read_office_limited_to_end(context, &mut entry, max_size);
+    }
+
+    Ok(None)
+}
+
+fn read_office_limited_to_end<R: Read>(
+    context: &mut OfficeContext,
+    reader: &mut R,
+    max_size: u64,
+) -> OfficeResult<Option<Vec<u8>>> {
+    let mut bytes = Vec::with_capacity(max_size.min(64 * 1024) as usize);
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        context.check_cancelled()?;
+        let max_read = buffer.len().min(
+            max_size
+                .saturating_add(1)
+                .saturating_sub(bytes.len() as u64) as usize,
+        );
+        if max_read == 0 {
+            return Ok(None);
+        }
+        let read = match reader.read(&mut buffer[..max_read]) {
+            Ok(read) => read,
+            Err(_) => return Ok(None),
+        };
+        if read == 0 {
+            return Ok(Some(bytes));
+        }
+        context.consume(read as u64)?;
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+}
+
 fn normalize_archive_entry_path(path: &str) -> Option<String> {
     let path = path.replace('\\', "/").trim_start_matches('/').to_string();
     if path.is_empty() || path.ends_with('/') {
@@ -11940,7 +12642,10 @@ fn cleanup_archive_extract_roots(base: &Path, retain: usize) {
         if !file_type.is_dir() || !entry.file_name().to_string_lossy().starts_with("extract-") {
             continue;
         }
-        let modified = entry.metadata().ok().and_then(|metadata| metadata.modified().ok());
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
         if modified
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age > ARCHIVE_EXTRACT_RETENTION)
@@ -13614,6 +14319,59 @@ mod tests {
     }
 
     #[test]
+    fn office_reads_share_a_decompression_budget() {
+        let mut context = OfficeContext {
+            remaining_decompressed_bytes: 4,
+            cancel_cb: None,
+        };
+        let mut first = Cursor::new(vec![1, 2, 3]);
+        let mut second = Cursor::new(vec![4, 5]);
+
+        assert_eq!(
+            read_office_limited_to_end(&mut context, &mut first, 3)
+                .expect("first read")
+                .expect("first entry"),
+            vec![1, 2, 3]
+        );
+        assert!(matches!(
+            read_office_limited_to_end(&mut context, &mut second, 2),
+            Err(OfficeReadError::BudgetExhausted)
+        ));
+    }
+
+    #[test]
+    fn office_read_honors_cancellation() {
+        let mut context = OfficeContext::new(Some(always_cancel));
+        let mut reader = Cursor::new(vec![1]);
+
+        assert!(matches!(
+            read_office_limited_to_end(&mut context, &mut reader, 1),
+            Err(OfficeReadError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn office_entry_scans_honor_cancellation() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        writer
+            .start_file(
+                "word/media/image.png",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("media file");
+        writer.write_all(&[0]).expect("media bytes");
+        let mut cursor = writer.finish().expect("zip bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
+        let mut context = OfficeContext::new(Some(always_cancel));
+
+        assert!(matches!(
+            office_media_entries(&mut context, &mut zip, &["word/media/"]),
+            Err(OfficeReadError::Cancelled)
+        ));
+    }
+
+    #[test]
     fn tar_scan_reader_stops_at_decompressed_byte_budget() {
         let mut reader = TarScanReader {
             reader: Cursor::new(vec![1, 2, 3, 4, 5]),
@@ -13712,7 +14470,9 @@ mod tests {
         cursor.set_position(0);
         let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
         let mut image_budget = 0;
+        let mut context = OfficeContext::new(None);
         let items = parse_ppt_slide_items(
+            &mut context,
             &mut zip,
             "ppt/slides/",
             r#"<p:sld xmlns:p="p" xmlns:a="a">
@@ -13727,7 +14487,8 @@ mod tests {
             </p:sld>"#,
             &BTreeMap::new(),
             &mut image_budget,
-        );
+        )
+        .expect("text-only layout");
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].z_index, 0);
@@ -13746,7 +14507,9 @@ mod tests {
         cursor.set_position(0);
         let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
         let mut image_budget = 0;
+        let mut context = OfficeContext::new(None);
         let items = parse_ppt_slide_items(
+            &mut context,
             &mut zip,
             "ppt/slides/",
             r#"<p:sld xmlns:p="p" xmlns:a="a">
@@ -13760,7 +14523,8 @@ mod tests {
             </p:sld>"#,
             &BTreeMap::new(),
             &mut image_budget,
-        );
+        )
+        .expect("text-only layout");
 
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -13853,8 +14617,11 @@ mod tests {
         cursor.set_position(0);
         let mut zip = ZipArchive::new(cursor).expect("docx zip");
 
-        let entries = docx_header_footer_entries(&mut zip);
-        let text = extract_docx_header_footer_text(&mut zip, &entries);
+        let entries = docx_header_footer_entries(&mut OfficeContext::new(None), &mut zip)
+            .expect("header and footer entries");
+        let text =
+            extract_docx_header_footer_text(&mut OfficeContext::new(None), &mut zip, &entries)
+                .expect("header and footer text");
 
         assert_eq!(
             entries,
@@ -14928,9 +15695,8 @@ mod tests {
     #[test]
     fn media_info_reads_mp4_esds_aac_config() {
         let esds = [
-            0, 0, 0, 0,
-            0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0x05, 0x02, 0x12, 0x10,
+            0, 0, 0, 0, 0x04, 0x11, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0x02, 0x12,
+            0x10,
         ];
 
         let detail = parse_esds_detail(&esds).expect("esds detail");
@@ -15455,10 +16221,7 @@ mod tests {
             decode_mail_header_value("=?UTF-8?Q?Quarterly_Report?="),
             "Quarterly Report"
         );
-        assert_eq!(
-            decode_mail_header_value("=?UTF-8?Q?caf=C3=A9?="),
-            "café"
-        );
+        assert_eq!(decode_mail_header_value("=?UTF-8?Q?caf=C3=A9?="), "café");
         assert_eq!(
             decode_mail_header_value("=?UTF-8?B?UmVwb3J0IEphbnVhcnk=?="),
             "Report January"
@@ -15507,7 +16270,14 @@ mod tests {
 
     #[test]
     fn msg_compound_summary_reads_common_property_streams() {
-        fn write_entry(bytes: &mut [u8], index: usize, name: &str, object_type: u8, start_sector: u32, size: u64) {
+        fn write_entry(
+            bytes: &mut [u8],
+            index: usize,
+            name: &str,
+            object_type: u8,
+            start_sector: u32,
+            size: u64,
+        ) {
             let offset = 1024 + index * 128;
             let mut units = name.encode_utf16().collect::<Vec<_>>();
             units.push(0);
@@ -15515,7 +16285,8 @@ mod tests {
                 let pos = offset + unit_index * 2;
                 bytes[pos..pos + 2].copy_from_slice(&unit.to_le_bytes());
             }
-            bytes[offset + 64..offset + 66].copy_from_slice(&((units.len() * 2) as u16).to_le_bytes());
+            bytes[offset + 64..offset + 66]
+                .copy_from_slice(&((units.len() * 2) as u16).to_le_bytes());
             bytes[offset + 66] = object_type;
             bytes[offset + 116..offset + 120].copy_from_slice(&start_sector.to_le_bytes());
             bytes[offset + 120..offset + 128].copy_from_slice(&size.to_le_bytes());
@@ -15523,7 +16294,10 @@ mod tests {
 
         fn write_utf16_stream(bytes: &mut [u8], sector: u32, value: &str) -> u64 {
             let offset = (sector as usize + 1) * 1024;
-            let data = value.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+            let data = value
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
             bytes[offset..offset + data.len()].copy_from_slice(&data);
             data.len() as u64
         }
@@ -15543,8 +16317,22 @@ mod tests {
         write_entry(&mut bytes, 3, "__substg1.0_0E04001F", 2, 3, recipients_len);
         write_entry(&mut bytes, 4, "__substg1.0_0E060040", 2, 4, 8);
         write_entry(&mut bytes, 5, "__substg1.0_1000001F", 2, 5, 12);
-        write_entry(&mut bytes, 6, "__attach_version1.0_#00000000", 1, 0xFFFF_FFFF, 0);
-        write_entry(&mut bytes, 7, "__recip_version1.0_#00000000", 1, 0xFFFF_FFFF, 0);
+        write_entry(
+            &mut bytes,
+            6,
+            "__attach_version1.0_#00000000",
+            1,
+            0xFFFF_FFFF,
+            0,
+        );
+        write_entry(
+            &mut bytes,
+            7,
+            "__recip_version1.0_#00000000",
+            1,
+            0xFFFF_FFFF,
+            0,
+        );
         let mut text = String::new();
 
         append_msg_compound_summary(&mut text, &bytes);
@@ -15575,7 +16363,13 @@ mod tests {
             der(0x30, children.concat())
         }
         fn name(value: &str) -> Vec<u8> {
-            seq(vec![der(0x31, seq(vec![vec![0x06, 0x03, 0x55, 0x04, 0x03], der(0x0C, value.as_bytes().to_vec())]))])
+            seq(vec![der(
+                0x31,
+                seq(vec![
+                    vec![0x06, 0x03, 0x55, 0x04, 0x03],
+                    der(0x0C, value.as_bytes().to_vec()),
+                ]),
+            )])
         }
 
         let tbs = seq(vec![
@@ -15583,16 +16377,24 @@ mod tests {
             der(0x02, vec![1]),
             seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x04]]),
             name("Issuer Test"),
-            seq(vec![der(0x17, b"260101000000Z".to_vec()), der(0x17, b"270101000000Z".to_vec())]),
+            seq(vec![
+                der(0x17, b"260101000000Z".to_vec()),
+                der(0x17, b"270101000000Z".to_vec()),
+            ]),
             name("Subject Test"),
             seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x05]]),
         ]);
-        let cert = seq(vec![tbs, seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x04]]), der(0x03, vec![0])]);
+        let cert = seq(vec![
+            tbs,
+            seq(vec![vec![0x06, 0x03, 0x2A, 0x03, 0x04]]),
+            der(0x03, vec![0]),
+        ]);
         let mut win_cert = vec![0u8; 8];
         win_cert.extend_from_slice(&cert);
         let cert_len = win_cert.len() as u32;
         win_cert[0..4].copy_from_slice(&cert_len.to_le_bytes());
-        let (issuers, subjects) = parse_authenticode_certificate_subjects(&win_cert, 0, win_cert.len());
+        let (issuers, subjects) =
+            parse_authenticode_certificate_subjects(&win_cert, 0, win_cert.len());
 
         assert_eq!(issuers, vec!["CN=Issuer Test".to_string()]);
         assert_eq!(subjects, vec!["CN=Subject Test".to_string()]);
@@ -15601,9 +16403,15 @@ mod tests {
     #[test]
     fn authenticode_signer_summary_reads_pkcs7_algorithms() {
         let mut bytes = vec![0u8; 8];
-        bytes.extend_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]);
-        bytes.extend_from_slice(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
-        bytes.extend_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]);
+        bytes.extend_from_slice(&[
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02,
+        ]);
+        bytes.extend_from_slice(&[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        ]);
+        bytes.extend_from_slice(&[
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
+        ]);
         let len = bytes.len() as u32;
         bytes[0..4].copy_from_slice(&len.to_le_bytes());
 
@@ -15655,7 +16463,10 @@ mod tests {
         bytes[0xA4..0xA8].copy_from_slice(&2u32.to_le_bytes());
         bytes[0xA8..0xAC].copy_from_slice(&0x120u32.to_le_bytes());
         bytes[0xAC..0xAE].copy_from_slice(&0x0100u16.to_le_bytes());
-        let csd: Vec<u8> = "Service Pack 1".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let csd: Vec<u8> = "Service Pack 1"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         bytes[0x120..0x124].copy_from_slice(&(csd.len() as u32).to_le_bytes());
         bytes[0x124..0x124 + csd.len()].copy_from_slice(&csd);
         bytes[0x180..0x184].copy_from_slice(&42u32.to_le_bytes());
@@ -15710,7 +16521,10 @@ mod tests {
         let worker: Vec<u8> = "worker".encode_utf16().flat_map(u16::to_le_bytes).collect();
         bytes[0x480..0x484].copy_from_slice(&(worker.len() as u32).to_le_bytes());
         bytes[0x484..0x484 + worker.len()].copy_from_slice(&worker);
-        let io_thread: Vec<u8> = "io thread".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let io_thread: Vec<u8> = "io thread"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         bytes[0x4A0..0x4A4].copy_from_slice(&(io_thread.len() as u32).to_le_bytes());
         bytes[0x4A4..0x4A4 + io_thread.len()].copy_from_slice(&io_thread);
         bytes[0x4C0..0x4C4].copy_from_slice(&16u32.to_le_bytes());
@@ -15726,7 +16540,10 @@ mod tests {
         let file_type: Vec<u8> = "File".encode_utf16().flat_map(u16::to_le_bytes).collect();
         bytes[0x520..0x524].copy_from_slice(&(file_type.len() as u32).to_le_bytes());
         bytes[0x524..0x524 + file_type.len()].copy_from_slice(&file_type);
-        let object_name: Vec<u8> = r"\Device\HarddiskVolume1\demo.txt".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let object_name: Vec<u8> = r"\Device\HarddiskVolume1\demo.txt"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         bytes[0x540..0x544].copy_from_slice(&(object_name.len() as u32).to_le_bytes());
         bytes[0x544..0x544 + object_name.len()].copy_from_slice(&object_name);
         let mut text = String::new();
@@ -15743,7 +16560,9 @@ mod tests {
         assert!(text.contains("Exception code: access violation"));
         assert!(text.contains("Exception flags: 0x00000001"));
         assert!(text.contains("Threads: 2"));
-        assert!(text.contains("Thread 42: priority 15; stack 0x0000000000001000-0x0000000000005000"));
+        assert!(
+            text.contains("Thread 42: priority 15; stack 0x0000000000001000-0x0000000000005000")
+        );
         assert!(text.contains("Thread 99: priority 8; stack 0x0000000000009000-0x000000000000A000"));
         assert!(text.contains("Modules: 1"));
         assert!(text.contains("Module demo.exe: base 0x00007FF700000000; size 73728; timestamp 0x65432100; file version 1.2.3.4; product version 5.6.7.8; type DLL; flags 0x00000002"));
@@ -15772,7 +16591,10 @@ mod tests {
         bytes[0x58..0x5C].copy_from_slice(&0x1234_ABCDu32.to_le_bytes());
         bytes[0x5C..0x60].copy_from_slice(&0x6543_2100u32.to_le_bytes());
         bytes[0x60..0x64].copy_from_slice(&0x100u32.to_le_bytes());
-        let module_name: Vec<u8> = "old.dll".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let module_name: Vec<u8> = "old.dll"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         bytes[0x100..0x104].copy_from_slice(&(module_name.len() as u32).to_le_bytes());
         bytes[0x104..0x104 + module_name.len()].copy_from_slice(&module_name);
 
@@ -15804,7 +16626,8 @@ mod tests {
         assert!(text.contains("Process create time: 1700000000"));
         assert!(text.contains("Process user time: 12s"));
         assert!(text.contains("Process kernel time: 34s"));
-        assert!(text.contains("Processor power: max 4800 MHz; current 3600 MHz; limit 4200 MHz; idle 1/3"));
+        assert!(text
+            .contains("Processor power: max 4800 MHz; current 3600 MHz; limit 4200 MHz; idle 1/3"));
     }
 
     #[test]
@@ -15855,7 +16678,9 @@ mod tests {
         assert!(text.contains("Directory block count: 7"));
         assert!(text.contains("Directory index depth/root/head: 2/3/4"));
         assert!(text.contains("Directory entries: /index.htm [section 0, offset 123, 45 B]"));
-        assert!(text.contains("Compressed streams: ::DataSpace/Storage/MSCompressed/Content (200 B)"));
+        assert!(
+            text.contains("Compressed streams: ::DataSpace/Storage/MSCompressed/Content (200 B)")
+        );
         assert!(text.contains("Title: Help Title"));
         assert!(text.contains("Default topic: /index.htm"));
     }
@@ -15926,7 +16751,9 @@ mod tests {
             bytes[48..52].copy_from_slice(&0x60u32.to_le_bytes());
             bytes[52..61].copy_from_slice(b"#Strings\0");
             bytes[0x80 + 4] = 2;
-            bytes[0x80 + 8..0x80 + 16].copy_from_slice(&((1u64 << 2) | (1u64 << 12) | (1u64 << 32) | (1u64 << 35)).to_le_bytes());
+            bytes[0x80 + 8..0x80 + 16].copy_from_slice(
+                &((1u64 << 2) | (1u64 << 12) | (1u64 << 32) | (1u64 << 35)).to_le_bytes(),
+            );
             bytes[0x80 + 24..0x80 + 28].copy_from_slice(&1u32.to_le_bytes());
             bytes[0x80 + 28..0x80 + 32].copy_from_slice(&1u32.to_le_bytes());
             bytes[0x80 + 32..0x80 + 36].copy_from_slice(&1u32.to_le_bytes());
@@ -16059,8 +16886,12 @@ mod tests {
         bytes[0x1800..0x1804].copy_from_slice(&0x40u32.to_le_bytes());
         bytes[0x1804..0x1806].copy_from_slice(&0x0200u16.to_le_bytes());
         bytes[0x1806..0x1808].copy_from_slice(&0x0002u16.to_le_bytes());
-        bytes[0x1808..0x1813].copy_from_slice(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
-        bytes[0x1818..0x1823].copy_from_slice(&[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]);
+        bytes[0x1808..0x1813].copy_from_slice(&[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        ]);
+        bytes[0x1818..0x1823].copy_from_slice(&[
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
+        ]);
         bytes[0x1828..0x182D].copy_from_slice(&[0x06, 0x03, 0x55, 0x04, 0x03]);
         bytes[0x182D..0x183D].copy_from_slice(b"\x0C\x0EQuickLook Test");
 
@@ -16078,10 +16909,16 @@ mod tests {
         assert_eq!(pe.imports, vec!["KERNEL32.dll".to_string()]);
         assert_eq!(
             pe.imported_functions,
-            vec!["KERNEL32.dll!CreateFileW".to_string(), "KERNEL32.dll!#123".to_string()]
+            vec![
+                "KERNEL32.dll!CreateFileW".to_string(),
+                "KERNEL32.dll!#123".to_string()
+            ]
         );
         assert_eq!(pe.exports, vec!["PreviewExport".to_string()]);
-        assert_eq!(pe.export_details, vec!["PreviewExport #1 @ 0x00002000".to_string()]);
+        assert_eq!(
+            pe.export_details,
+            vec!["PreviewExport #1 @ 0x00002000".to_string()]
+        );
         assert!(pe.has_version_resource);
         assert_eq!(
             pe.version_strings,
@@ -16097,21 +16934,36 @@ mod tests {
         assert_eq!(fixed.file_type, "DLL");
         assert_eq!(pe.certificate.as_ref().map(|cert| cert.typ), Some(2));
         assert_eq!(
-            pe.certificate.as_ref().map(|cert| cert.digest_algorithms.clone()).unwrap_or_default(),
+            pe.certificate
+                .as_ref()
+                .map(|cert| cert.digest_algorithms.clone())
+                .unwrap_or_default(),
             vec!["SHA-256".to_string()]
         );
         assert_eq!(
-            pe.certificate.as_ref().map(|cert| cert.signature_algorithms.clone()).unwrap_or_default(),
+            pe.certificate
+                .as_ref()
+                .map(|cert| cert.signature_algorithms.clone())
+                .unwrap_or_default(),
             vec!["SHA-256 with RSA".to_string()]
         );
         assert_eq!(
-            pe.certificate.as_ref().map(|cert| cert.names.clone()).unwrap_or_default(),
+            pe.certificate
+                .as_ref()
+                .map(|cert| cert.names.clone())
+                .unwrap_or_default(),
             vec!["CN=QuickLook Test".to_string()]
         );
-        assert_eq!(pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)), Some((2, 5, 1)));
+        assert_eq!(
+            pe.clr.as_ref().map(|clr| (clr.major, clr.minor, clr.flags)),
+            Some((2, 5, 1))
+        );
         let clr = pe.clr.as_ref().expect("clr summary");
         assert_eq!(clr.metadata_version, "v4.0.30319");
-        assert_eq!(clr.metadata_streams, vec!["#~".to_string(), "#Strings".to_string()]);
+        assert_eq!(
+            clr.metadata_streams,
+            vec!["#~".to_string(), "#Strings".to_string()]
+        );
         assert_eq!(
             clr.metadata_tables,
             vec![
@@ -16123,7 +16975,10 @@ mod tests {
         );
         assert_eq!(clr.assembly.as_deref(), Some("QuickAsm 1.2.3.4"));
         assert_eq!(clr.assembly_refs, vec!["RefAsm 5.6.7.8".to_string()]);
-        assert_eq!(clr.type_defs, vec!["QuickLook.Next.PreviewType".to_string()]);
+        assert_eq!(
+            clr.type_defs,
+            vec!["QuickLook.Next.PreviewType".to_string()]
+        );
         assert_eq!(clr.custom_attributes, 1);
         assert_eq!(
             pe.section_names,
@@ -16197,7 +17052,9 @@ mod tests {
         bytes[0x684..0x688].copy_from_slice(&7u32.to_le_bytes());
         bytes[0x698..0x6A0].copy_from_slice(&0x7B0u64.to_le_bytes());
         bytes[0x6A0..0x6A8].copy_from_slice(&20u64.to_le_bytes());
-        bytes[0x700..0x73E].copy_from_slice(b"\0.text\0.shstrtab\0.symtab\0.strtab\0.rela.dyn\0.note.gnu.build-id\0");
+        bytes[0x700..0x73E].copy_from_slice(
+            b"\0.text\0.shstrtab\0.symtab\0.strtab\0.rela.dyn\0.note.gnu.build-id\0",
+        );
         bytes[0x740..0x744].copy_from_slice(&0u32.to_le_bytes());
         bytes[0x758..0x75C].copy_from_slice(&1u32.to_le_bytes());
         bytes[0x75C] = 0x12;
@@ -16229,7 +17086,9 @@ mod tests {
         assert!(text.contains("Needed libraries: libc.so.6"));
         assert!(text.contains("SONAME: libdemo.so"));
         assert!(text.contains("RUNPATH: $ORIGIN"));
-        assert!(text.contains("Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn, .note.gnu.build-id"));
+        assert!(text.contains(
+            "Section names: .text, .shstrtab, .symtab, .strtab, .rela.dyn, .note.gnu.build-id"
+        ));
         assert!(text.contains("Symbols: .symtab 2 entries (main[global func .text])"));
         assert!(text.contains("Relocations: .rela.dyn 1 entries (R_X86_64_RELATIVE)"));
         assert!(text.contains("Notes: .note.gnu.build-id GNU build-id 01020304"));
@@ -16238,7 +17097,16 @@ mod tests {
 
     #[test]
     fn elf_summary_reads_gnu_version_sections() {
-        fn write_sh64(bytes: &mut [u8], index: usize, name: u32, typ: u32, offset: u64, size: u64, link: u32, entsize: u64) {
+        fn write_sh64(
+            bytes: &mut [u8],
+            index: usize,
+            name: u32,
+            typ: u32,
+            offset: u64,
+            size: u64,
+            link: u32,
+            entsize: u64,
+        ) {
             let base = 0x100 + index * 64;
             bytes[base..base + 4].copy_from_slice(&name.to_le_bytes());
             bytes[base + 4..base + 8].copy_from_slice(&typ.to_le_bytes());
@@ -16261,7 +17129,9 @@ mod tests {
         write_sh64(&mut bytes, 3, 19, 0x6FFF_FFFF, 0x380, 6, 0, 2);
         write_sh64(&mut bytes, 4, 32, 0x6FFF_FFFE, 0x390, 32, 2, 0);
         write_sh64(&mut bytes, 5, 47, 0x6FFF_FFFD, 0x3C0, 28, 2, 0);
-        bytes[0x300..0x33E].copy_from_slice(b"\0.shstrtab\0.dynstr\0.gnu.version\0.gnu.version_r\0.gnu.version_d\0");
+        bytes[0x300..0x33E].copy_from_slice(
+            b"\0.shstrtab\0.dynstr\0.gnu.version\0.gnu.version_r\0.gnu.version_d\0",
+        );
         bytes[0x340..0x35B].copy_from_slice(b"\0GLIBC_2.2.5\0QUICKLOOK_1.0\0");
         bytes[0x380..0x382].copy_from_slice(&0u16.to_le_bytes());
         bytes[0x382..0x384].copy_from_slice(&2u16.to_le_bytes());
