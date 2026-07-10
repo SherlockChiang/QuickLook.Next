@@ -13,6 +13,7 @@ internal sealed class ParserHostSupervisor
 {
     private static readonly TimeSpan PreviewTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HostConnectTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ResourceTelemetryInterval = TimeSpan.FromMinutes(1);
     private readonly string _hostExePath;
     private readonly PendingRequests _pending = new();
     private readonly SemaphoreSlim _startLock = new(1, 1);
@@ -25,8 +26,15 @@ internal sealed class ParserHostSupervisor
     private bool _stopping;
     private bool _backgroundEfficiencyEnabled = true;
     private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource _telemetryCts = new();
+    private readonly Task _telemetryTask;
+    private int _timeoutCount;
 
-    public ParserHostSupervisor(string hostExePath) => _hostExePath = hostExePath;
+    public ParserHostSupervisor(string hostExePath)
+    {
+        _hostExePath = hostExePath;
+        _telemetryTask = RunResourceTelemetryAsync(_telemetryCts.Token);
+    }
 
     public async Task EnsureStartedAsync()
     {
@@ -40,6 +48,7 @@ internal sealed class ParserHostSupervisor
     {
         _stopping = false;
         int generation = ++_generation;
+        DiagLog.Write("App", $"ParserHost starting gen={generation}; restart={generation > 1}");
         _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _channel?.Dispose();
         _server?.Dispose();
@@ -71,6 +80,7 @@ internal sealed class ParserHostSupervisor
             throw;
         }
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, _backgroundEfficiencyEnabled, "App");
+        LogHostResources("started", generation, _host);
         _host.EnableRaisingEvents = true;
         _host.Exited += (_, _) => OnHostExited(generation);
         try
@@ -161,7 +171,10 @@ internal sealed class ParserHostSupervisor
         }
         catch (TimeoutException)
         {
-            DiagLog.Write("App", $"ParserHost request timed out; terminating host: request={requestId}");
+            int timeoutCount = Interlocked.Increment(ref _timeoutCount);
+            int generation = _generation;
+            LogHostResources("timeout", generation);
+            DiagLog.Write("App", $"ParserHost request timed out; terminating host: request={requestId}; gen={generation}; timeoutCount={timeoutCount}");
             TryKillHost();
         }
         catch
@@ -204,13 +217,19 @@ internal sealed class ParserHostSupervisor
 
     private void OnHostExited(int generation)
     {
-        if (!_stopping && generation == _generation)
-            _pending.FailAll(new InvalidOperationException("ParserHost exited"));
+        if (_stopping || generation != _generation)
+            return;
+
+        int? exitCode = null;
+        try { exitCode = _host?.ExitCode; } catch { }
+        DiagLog.Write("App", $"ParserHost exited gen={generation}; pid={_host?.Id}; exitCode={exitCode?.ToString() ?? "unknown"}; timeouts={Volatile.Read(ref _timeoutCount)}");
+        _pending.FailAll(new InvalidOperationException("ParserHost exited"));
     }
 
     public void Stop()
     {
         _stopping = true;
+        try { _telemetryCts.Cancel(); } catch { }
         ++_generation;
         _pending.FailAll(new OperationCanceledException("ParserHost stopped"));
         _ready.TrySetCanceled();
@@ -221,6 +240,39 @@ internal sealed class ParserHostSupervisor
         TryKillHost();
         try { _host?.Dispose(); } catch { }
         _host = null;
+        try { _telemetryCts.Dispose(); } catch { }
+    }
+
+    private async Task RunResourceTelemetryAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(ResourceTelemetryInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+                LogHostResources("periodic", _generation);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { DiagLog.Write("App", "ParserHost resource telemetry failed: " + ex.Message); }
+    }
+
+    private void LogHostResources(string reason, int generation, Process? host = null)
+    {
+        host ??= _host;
+        if (host is null || generation != _generation)
+            return;
+
+        try
+        {
+            host.Refresh();
+            if (host.HasExited)
+                return;
+
+            DiagLog.Write("App", $"ParserHost resources reason={reason}; gen={generation}; pid={host.Id}; privateMiB={host.PrivateMemorySize64 / (1024.0 * 1024.0):0.0}; cpuMs={host.TotalProcessorTime.TotalMilliseconds:0}; handles={host.HandleCount}; timeouts={Volatile.Read(ref _timeoutCount)}");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            DiagLog.Write("App", $"ParserHost resource sample skipped reason={reason}; gen={generation}: {ex.Message}");
+        }
     }
 
     private void TryKillHost()
