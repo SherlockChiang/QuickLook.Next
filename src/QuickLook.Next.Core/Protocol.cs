@@ -58,6 +58,7 @@ public sealed record PreviewReady(
     public int PageCount { get; init; }
     public double PageWidth { get; init; }
     public double PageHeight { get; init; }
+    public PdfPageGeometry[]? PdfPageGeometries { get; init; }
     public string? TextContent { get; init; }
     public string? TextFormat { get; init; }
     public string? TextLanguage { get; init; }
@@ -67,6 +68,9 @@ public sealed record PreviewReady(
     public PreviewMarkdown? Markdown { get; init; }
     public OfficeLayout? OfficeLayout { get; init; }
 }
+
+/// <summary>Logical dimensions of one PDF page, in the PDF renderer's native units.</summary>
+public readonly record struct PdfPageGeometry(double Width, double Height);
 
 /// <summary>Host → App: terminal failure for a RequestId.</summary>
 public sealed record PreviewError(string RequestId, string Message) : ControlMessage;

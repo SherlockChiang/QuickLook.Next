@@ -196,6 +196,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                 PageCount = checked((int)session.PageCount),
                 PageWidth = first.Width,
                 PageHeight = first.Height,
+                PdfPageGeometries = session.PageGeometries,
             });
             return;
         }

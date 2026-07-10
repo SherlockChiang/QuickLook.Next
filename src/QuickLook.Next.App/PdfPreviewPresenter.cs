@@ -22,6 +22,7 @@ internal sealed class PdfPreviewPresenter
 
     private const double PageTargetWidth = 860;
     private const double PageSpacing = 16;
+    private const double PagePanelTopPadding = 16;
     private const int OffscreenSurfaceCachePages = 5;
     private const int MaxActivePageHosts = 64;
     private const int PageHostOverscan = 4;
@@ -48,8 +49,9 @@ internal sealed class PdfPreviewPresenter
     private long _touchTick;
     private int _currentPageIndex;
     private int _pageCount;
-    private double _pageDisplayWidth;
-    private double _pageDisplayHeight;
+    private double[] _pageDisplayWidths = [];
+    private double[] _pageDisplayHeights = [];
+    private double[] _pageTopOffsets = [];
     private double _lastScrollOffset;
     private int _renderVersion;
 
@@ -85,20 +87,38 @@ internal sealed class PdfPreviewPresenter
         _currentPageIndex = 0;
         int version = _renderVersion;
 
+        _pageCount = Math.Max(1, ready.PageCount);
         double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
         double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
+        PdfPageGeometry[]? geometries = ready.PdfPageGeometries;
+        bool hasPageGeometries = geometries is { Length: > 0 }
+            && geometries.Length == _pageCount
+            && geometries.All(geometry => double.IsFinite(geometry.Width)
+                && double.IsFinite(geometry.Height)
+                && geometry.Width > 0
+                && geometry.Height > 0);
+        if (hasPageGeometries)
+        {
+            pageWidth = geometries![0].Width;
+            pageHeight = geometries[0].Height;
+        }
         double targetPageWidth = Math.Min(PageTargetWidth, Math.Max(320, maxContent.Width - 64));
         double targetPageHeight = Math.Max(320, maxContent.Height - 96);
         _scale = Math.Clamp(
             Math.Min(targetPageWidth / pageWidth, targetPageHeight / pageHeight),
             0.25,
             1.6);
-        double displayWidth = Math.Round(pageWidth * _scale);
-        double displayHeight = Math.Round(pageHeight * _scale);
-
-        _pageCount = Math.Max(1, ready.PageCount);
-        _pageDisplayWidth = displayWidth;
-        _pageDisplayHeight = displayHeight;
+        _pageDisplayWidths = new double[_pageCount];
+        _pageDisplayHeights = new double[_pageCount];
+        _pageTopOffsets = new double[_pageCount];
+        for (int pageIndex = 0; pageIndex < _pageCount; pageIndex++)
+        {
+            PdfPageGeometry geometry = hasPageGeometries ? geometries![pageIndex] : new(pageWidth, pageHeight);
+            _pageDisplayWidths[pageIndex] = Math.Round(geometry.Width * _scale);
+            _pageDisplayHeights[pageIndex] = Math.Round(geometry.Height * _scale);
+            if (pageIndex > 0)
+                _pageTopOffsets[pageIndex] = _pageTopOffsets[pageIndex - 1] + _pageDisplayHeights[pageIndex - 1] + PageSpacing;
+        }
         UpdatePageHosts(0, Math.Min(_pageCount - 1, MaxActivePageHosts - 1));
 
         _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
@@ -111,8 +131,8 @@ internal sealed class PdfPreviewPresenter
         }));
         return new PdfPreviewResult(
             $"pdf: {ready.Title}",
-            Math.Min(maxContent.Width, displayWidth + 64),
-            Math.Min(maxContent.Height, displayHeight + 96));
+            Math.Min(maxContent.Width, _pageDisplayWidths[0] + 64),
+            Math.Min(maxContent.Height, _pageDisplayHeights[0] + 96));
     }
 
     public bool AttachSurface(PreviewSurface surface, out string? error)
@@ -161,19 +181,17 @@ internal sealed class PdfPreviewPresenter
             return;
 
         int pageCount = _pageCount;
-        double pageHeight = _pageDisplayHeight;
-        if (pageHeight <= 0)
+        if (_pageDisplayHeights.Length != pageCount || _pageTopOffsets.Length != pageCount)
             return;
 
         double viewportHeight = Math.Max(1, _scrollViewer.ViewportHeight);
         double scrollOffset = _scrollViewer.VerticalOffset;
         bool scrollingDown = scrollOffset >= _lastScrollOffset;
         _lastScrollOffset = scrollOffset;
-        double pageExtent = pageHeight + PageSpacing;
-        int firstVisible = (int)Math.Floor(scrollOffset / pageExtent);
-        int lastVisible = (int)Math.Ceiling((scrollOffset + viewportHeight) / pageExtent);
-        int centered = (int)Math.Floor((scrollOffset + viewportHeight * 0.45) / pageExtent);
-        SetCurrentPage(Math.Clamp(centered, 0, pageCount - 1));
+        int firstVisible = FindPageAtOffset(scrollOffset - PagePanelTopPadding);
+        int lastVisible = FindPageAtOffset(scrollOffset + viewportHeight - PagePanelTopPadding);
+        int centered = FindPageAtOffset(scrollOffset + viewportHeight * 0.45 - PagePanelTopPadding);
+        SetCurrentPage(centered);
 
         int renderFirst = Math.Max(0, firstVisible - 1);
         int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
@@ -223,8 +241,9 @@ internal sealed class PdfPreviewPresenter
         _touchTick = 0;
         _currentPageIndex = 0;
         _pageCount = 0;
-        _pageDisplayWidth = 0;
-        _pageDisplayHeight = 0;
+        _pageDisplayWidths = [];
+        _pageDisplayHeights = [];
+        _pageTopOffsets = [];
         _lastScrollOffset = 0;
         _requestId = null;
         _renderVersion++;
@@ -238,7 +257,7 @@ internal sealed class PdfPreviewPresenter
             return;
 
         pageIndex = Math.Clamp(pageIndex, 0, _pageCount - 1);
-        double targetOffset = pageIndex * (_pageDisplayHeight + PageSpacing);
+        double targetOffset = PagePanelTopPadding + _pageTopOffsets[pageIndex];
         SetCurrentPage(pageIndex);
         _scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
         RequestVisiblePages();
@@ -316,30 +335,42 @@ internal sealed class PdfPreviewPresenter
 
             _pageHosts[pageIndex] = new Border
             {
-                Width = _pageDisplayWidth,
-                Height = _pageDisplayHeight,
+                Width = _pageDisplayWidths[pageIndex],
+                Height = _pageDisplayHeights[pageIndex],
                 Margin = new Thickness(0, 0, 0, pageIndex < _pageCount - 1 ? PageSpacing : 0),
                 Background = PageBackground,
             };
         }
 
         _pagesPanel.Children.Clear();
-        double pageExtent = _pageDisplayHeight + PageSpacing;
-        double topSpacerHeight = first * pageExtent;
+        double topSpacerHeight = _pageTopOffsets[first];
         if (topSpacerHeight > 0)
             _pagesPanel.Children.Add(CreateSpacer(topSpacerHeight));
 
         for (int pageIndex = first; pageIndex <= last; pageIndex++)
             _pagesPanel.Children.Add(_pageHosts[pageIndex]);
 
-        int pagesAfter = _pageCount - last - 1;
-        double bottomSpacerHeight = pagesAfter * pageExtent - (pagesAfter > 0 ? PageSpacing : 0);
+        double hostedEnd = _pageTopOffsets[last] + _pageDisplayHeights[last]
+            + (last < _pageCount - 1 ? PageSpacing : 0);
+        double bottomSpacerHeight = TotalContentHeight - hostedEnd;
         if (bottomSpacerHeight > 0)
             _pagesPanel.Children.Add(CreateSpacer(bottomSpacerHeight));
     }
 
     private static Border CreateSpacer(double height)
         => new() { Height = height };
+
+    private double TotalContentHeight => _pageCount == 0
+        ? 0
+        : _pageTopOffsets[^1] + _pageDisplayHeights[^1];
+
+    private int FindPageAtOffset(double offset)
+    {
+        int index = Array.BinarySearch(_pageTopOffsets, Math.Max(0, offset));
+        if (index < 0)
+            index = ~index - 1;
+        return Math.Clamp(index, 0, _pageCount - 1);
+    }
 
     private void TrimSurfaceCache(int protectedFirst, int protectedLast)
     {
