@@ -36,6 +36,8 @@ public sealed partial class MainWindow : Window
     private const double MaxTextWindowHeight = 860;
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 162;
+    private const double CompactRasterChromeWidth = 720;
+    private const double RasterContentMargin = 14;
     private const int SwitchDebounceMs = 110;
     private const int ImageSidecarLoadDelayMs = 180;
     private const int WindowsImageMetadataSupplementDelayMs = 850;
@@ -51,6 +53,7 @@ public sealed partial class MainWindow : Window
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
     private AnimatedImagePreviewPresenter? _animatedImagePresenter;
+    private bool _isRasterChromeEnabled;
     private ImageSidecarController? _imageSidecarController;
     private ExifPreviewPresenter? _exifPresenter;
     private PdfPreviewPresenter? _pdfPresenter;
@@ -267,6 +270,7 @@ public sealed partial class MainWindow : Window
             ClosePreviewFromKeyboard);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
+        PreviewContentHost.SizeChanged += OnPreviewContentHostSizeChanged;
         AnimatedImagePreviewRoot.PointerWheelChanged += OnAnimatedImageRootPointerWheelChanged;
         AnimatedImagePreviewRoot.PointerPressed += OnAnimatedImageRootPointerPressed;
         AnimatedImagePreviewRoot.PointerMoved += OnAnimatedImageRootPointerMoved;
@@ -811,12 +815,9 @@ public sealed partial class MainWindow : Window
         PreviewKindPillText.Text = ready.Kind.ToUpperInvariant();
         PreviewMetaText.Text = BuildPreviewMetaLine(ready, path);
 
-        _panelController.ToggleRasterTools(showRasterTools);
+        _isRasterChromeEnabled = showRasterTools;
+        ApplyRasterChromeLayout();
         UpdateImageAnimationPlaybackButton();
-        PreviewRoot.Margin = showRasterTools
-            ? new Thickness(14, 0, RasterInfoRailWidth + 14, RasterToolbarHeight)
-            : new Thickness(14, 0, 14, 14);
-        AnimatedImagePreviewRoot.Margin = PreviewRoot.Margin;
 
         PreviewDimensionsText.Text = BuildDimensionsText(ready);
         PreviewSizeText.Text = FileSizeText(path);
@@ -834,6 +835,7 @@ public sealed partial class MainWindow : Window
         PreviewTitleText.Text = UiStrings.AppName;
         PreviewMetaText.Text = UiStrings.Ready;
         PreviewKindPillText.Text = UiStrings.ReadyKind;
+        _isRasterChromeEnabled = false;
         _panelController.ResetChromeVisibility();
         PreviewDimensionsText.Text = UiStrings.EmptyValue;
         PreviewSizeText.Text = UiStrings.EmptyValue;
@@ -844,6 +846,32 @@ public sealed partial class MainWindow : Window
         UpdateImageAnimationPlaybackButton();
         ResetExifDetails();
         SetPreviewInfoRailTab(PreviewInfoRailTab.Info);
+    }
+
+    private bool IsCompactRasterChrome => PreviewContentHost.ActualWidth is > 0 and < CompactRasterChromeWidth;
+
+    private void ApplyRasterChromeLayout()
+    {
+        bool showInfoRail = _isRasterChromeEnabled && !IsCompactRasterChrome;
+        double rightMargin = showInfoRail ? RasterInfoRailWidth + RasterContentMargin : RasterContentMargin;
+        double bottomMargin = _isRasterChromeEnabled ? RasterToolbarHeight : RasterContentMargin;
+
+        _panelController.ToggleRasterTools(_isRasterChromeEnabled, showInfoRail);
+        PreviewRoot.Margin = new Thickness(RasterContentMargin, 0, rightMargin, bottomMargin);
+        AnimatedImagePreviewRoot.Margin = PreviewRoot.Margin;
+        ImagePreviewToolbar.Margin = new Thickness(RasterContentMargin, 0, rightMargin, RasterContentMargin);
+        ImageFilmstrip.Margin = new Thickness(RasterContentMargin, 0, rightMargin, 78);
+    }
+
+    private void OnPreviewContentHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_isRasterChromeEnabled)
+            return;
+
+        bool wasCompact = e.PreviousSize.Width is > 0 and < CompactRasterChromeWidth;
+        bool isCompact = e.NewSize.Width < CompactRasterChromeWidth;
+        if (wasCompact != isCompact)
+            ApplyRasterChromeLayout();
     }
 
     private static string BuildPreviewMetaLine(PreviewReady ready, string? path)

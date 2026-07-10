@@ -125,11 +125,10 @@ internal sealed class PreviewPanelController
         _listingPanel.Visibility = Visibility.Visible;
     }
 
-    public void ToggleRasterTools(bool show)
+    public void ToggleRasterTools(bool show, bool showPreviewInfoRail = true)
     {
-        var vis = show ? Visibility.Visible : Visibility.Collapsed;
-        _previewInfoRail.Visibility = vis;
-        _imagePreviewToolbar.Visibility = vis;
+        _previewInfoRail.Visibility = show && showPreviewInfoRail ? Visibility.Visible : Visibility.Collapsed;
+        _imagePreviewToolbar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         if (!show)
             _imageFilmstrip.Visibility = Visibility.Collapsed;
     }
