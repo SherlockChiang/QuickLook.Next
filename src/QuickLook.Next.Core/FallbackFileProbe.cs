@@ -30,11 +30,13 @@ public static class FallbackFileProbe
         ".gitattributes", ".dockerignore", ".env",
     };
 
-    public static bool IsText(string path, ReadOnlySpan<byte> prefix)
+    public static bool IsText(string path, ReadOnlySpan<byte> prefix, bool isEmptyFile = false)
     {
         if (HasKnownBinarySignature(prefix))
             return false;
         if (TextExtensions.Contains(Path.GetExtension(path)) || TextFileNames.Contains(Path.GetFileName(path)))
+            return true;
+        if (isEmptyFile)
             return true;
         if (prefix.IsEmpty)
             return false;

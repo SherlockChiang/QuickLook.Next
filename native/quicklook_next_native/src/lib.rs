@@ -569,7 +569,7 @@ fn probe_json(path: &str) -> Option<String> {
     let kind = if meta.is_dir() {
         "folder"
     } else {
-        classify(file_name, &ext, magic)
+        classify(file_name, &ext, magic, size == 0)
     };
     let magic_hex: String = magic.iter().map(|b| format!("{b:02X}")).collect();
 
@@ -602,7 +602,7 @@ fn probe_json(path: &str) -> Option<String> {
 
 /// Coarse type classification. Container formats are recognized by extension first (e.g. .docx is a
 /// ZIP by magic but should be "office"), then images/pdf/archives by magic, then text.
-fn classify(file_name: &str, ext: &str, magic: &[u8]) -> &'static str {
+fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'static str {
     const OFFICE_EXTS: &[&str] = &[
         ".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm", ".rtf",
         ".odt", ".ods", ".odp",
@@ -744,7 +744,7 @@ fn classify(file_name: &str, ext: &str, magic: &[u8]) -> &'static str {
 
     // Specialized extensions and binary signatures win above. For everything else, accept known
     // text formats or a conservative printable-text prefix so uncommon config files remain useful.
-    if preview::is_text_file(file_name, ext, magic) {
+    if is_empty || preview::is_text_file(file_name, ext, magic) {
         return "text";
     }
     "binary"
@@ -1386,20 +1386,23 @@ mod tests {
 
     #[test]
     fn classify_accepts_known_and_sniffed_config_text() {
-        assert_eq!(classify("app.config", ".config", b"<configuration>"), "text");
-        assert_eq!(classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n"), "text");
-        assert_eq!(classify("vendor.custom", ".custom", b"feature.enabled=true\r\n"), "text");
-        assert_eq!(classify("settings", "", b"root = true\r\n"), "text");
-        assert_eq!(classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n"), "text");
+        assert_eq!(classify("app.config", ".config", b"<configuration>", false), "text");
+        assert_eq!(classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n", false), "text");
+        assert_eq!(classify("vendor.custom", ".custom", b"feature.enabled=true\r\n", false), "text");
+        assert_eq!(classify("settings", "", b"root = true\r\n", false), "text");
+        assert_eq!(classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n", false), "text");
     }
 
     #[test]
     fn classify_accepts_known_text_file_names_with_empty_content() {
-        assert_eq!(classify("Dockerfile", "", b""), "text");
-        assert_eq!(classify("Makefile", "", b""), "text");
-        assert_eq!(classify(".editorconfig", "", b""), "text");
-        assert_eq!(classify(".gitignore", "", b""), "text");
-        assert_eq!(classify(".env", "", b""), "text");
+        assert_eq!(classify("Dockerfile", "", b"", true), "text");
+        assert_eq!(classify("Makefile", "", b"", true), "text");
+        assert_eq!(classify(".editorconfig", "", b"", true), "text");
+        assert_eq!(classify(".gitignore", "", b"", true), "text");
+        assert_eq!(classify(".env", "", b"", true), "text");
+        assert_eq!(classify("settings.vendor", ".vendor", b"", true), "text");
+        assert_eq!(classify("settings", "", b"", true), "text");
+        assert_eq!(classify("empty.zip", ".zip", b"", true), "archive");
     }
 
     #[test]
@@ -1407,16 +1410,16 @@ mod tests {
         let utf16_le = [0xFF, 0xFE, b'W', 0, b'i', 0, b'n', 0];
         let utf16_be = [0xFE, 0xFF, 0, b'W', 0, b'i', 0, b'n'];
         let utf16_localized = [0xFF, 0xFE, 0x4D, 0x50, 0x3D, 0, 0x3C, 0x50];
-        assert_eq!(classify("settings.reg", ".reg", &utf16_le), "text");
-        assert_eq!(classify("settings.unknown", ".unknown", &utf16_be), "text");
-        assert_eq!(classify("settings.unknown", ".unknown", &utf16_localized), "text");
+        assert_eq!(classify("settings.reg", ".reg", &utf16_le, false), "text");
+        assert_eq!(classify("settings.unknown", ".unknown", &utf16_be, false), "text");
+        assert_eq!(classify("settings.unknown", ".unknown", &utf16_localized, false), "text");
     }
 
     #[test]
     fn classify_does_not_treat_binary_prefixes_as_text() {
-        assert_eq!(classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4]), "binary");
-        assert_eq!(classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80]), "binary");
-        assert_eq!(classify("file.unknown", ".unknown", b"MZprintable header"), "executable");
+        assert_eq!(classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4], false), "binary");
+        assert_eq!(classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80], false), "binary");
+        assert_eq!(classify("file.unknown", ".unknown", b"MZprintable header", false), "executable");
     }
 
     #[test]

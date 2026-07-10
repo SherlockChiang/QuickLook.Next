@@ -23,6 +23,8 @@ public sealed class CoreBoundaryTests : IDisposable
     {
         Assert.True(FallbackFileProbe.IsText("settings.vendor", "feature=true\r\n"u8));
         Assert.True(FallbackFileProbe.IsText("settings.vendor", [0xFF, 0xFE, (byte)'W', 0, (byte)'i', 0]));
+        Assert.True(FallbackFileProbe.IsText("settings.vendor", [], isEmptyFile: true));
+        Assert.False(FallbackFileProbe.IsText("settings.vendor", [], isEmptyFile: false));
     }
 
     [Fact]
