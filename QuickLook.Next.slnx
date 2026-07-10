@@ -8,5 +8,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj" />
+    <Project Path="tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj" />
   </Folder>
 </Solution>

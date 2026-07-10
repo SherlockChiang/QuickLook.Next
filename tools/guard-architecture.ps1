@@ -105,7 +105,8 @@ $apiRules = @(
         Name = "System.IO.Compression"
         Pattern = 'System\.IO\.Compression'
         Allowed = @(
-            "plugins/QuickLook.Next.Plugin.Archive/ArchiveProvider.cs"
+            "plugins/QuickLook.Next.Plugin.Archive/ArchiveProvider.cs",
+            "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs"
         )
     },
     @{
