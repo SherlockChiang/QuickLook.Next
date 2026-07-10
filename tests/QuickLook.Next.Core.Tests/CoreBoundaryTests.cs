@@ -21,6 +21,21 @@ public sealed class CoreBoundaryTests : IDisposable
         => Assert.False(CloudFileStatus.MayRequireHydration(FileAttributes.Archive | FileAttributes.ReadOnly));
 
     [Theory]
+    [InlineData("cloud.config", "text")]
+    [InlineData("cloud.pdf", "pdf")]
+    [InlineData("cloud.docx", "office")]
+    [InlineData("cloud.png", "image")]
+    [InlineData("cloud.zip", "archive")]
+    [InlineData("cloud.mp4", "video")]
+    [InlineData("cloud.vendor", "unknown")]
+    public void Metadata_only_probe_routes_without_content(string fileName, string expectedKind)
+    {
+        FileProbe probe = FallbackFileProbe.CreateMetadataOnlyProbe(fileName);
+        Assert.Equal(expectedKind, probe.Kind);
+        Assert.Empty(probe.MagicPrefix);
+    }
+
+    [Theory]
     [InlineData("app.config")]
     [InlineData("settings.cnf")]
     [InlineData("install.inf")]

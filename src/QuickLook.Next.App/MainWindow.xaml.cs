@@ -584,7 +584,11 @@ public sealed partial class MainWindow : Window
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
             }
             DiagLog.Write("App", $"preview probe begin gen={generation}");
-            FileProbe probe = await Task.Run(() => _native.ProbeFile(path) ?? BuildProbe(path), previewToken);
+            FileProbe probe = await Task.Run(
+                () => mayRequireHydration
+                    ? FallbackFileProbe.CreateMetadataOnlyProbe(path)
+                    : _native.ProbeFile(path) ?? BuildProbe(path),
+                previewToken);
             DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentProbe = probe;
@@ -613,7 +617,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            bool forceAnimatedFirstFrameRaster = PrefersReducedMotion;
+            bool forceAnimatedFirstFrameRaster = PrefersReducedMotion || mayRequireHydration;
             AnimatedImageRenderPlan? animatedPlan = forceAnimatedFirstFrameRaster
                 ? null
                 : await Task.Run(() => AnimatedImagePreviewPresenter.CreateRenderPlan(path), previewToken);

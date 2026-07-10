@@ -30,6 +30,55 @@ public static class FallbackFileProbe
         ".gitattributes", ".dockerignore", ".env",
     };
 
+    private static readonly IReadOnlyDictionary<string, string> MetadataKinds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        [".doc"] = "office", [".docx"] = "office", [".docm"] = "office", [".xls"] = "office",
+        [".xlsx"] = "office", [".xlsm"] = "office", [".ppt"] = "office", [".pptx"] = "office",
+        [".pptm"] = "office", [".rtf"] = "office", [".odt"] = "office", [".ods"] = "office", [".odp"] = "office",
+        [".pdf"] = "pdf",
+        [".png"] = "image", [".jpg"] = "image", [".jpeg"] = "image", [".jpe"] = "image", [".gif"] = "image",
+        [".bmp"] = "image", [".dib"] = "image", [".tif"] = "image", [".tiff"] = "image", [".webp"] = "image",
+        [".ico"] = "image", [".heic"] = "image", [".heif"] = "image", [".avif"] = "image", [".jxl"] = "image",
+        [".zip"] = "archive", [".jar"] = "archive", [".nupkg"] = "archive", [".vsix"] = "archive",
+        [".whl"] = "archive", [".cbz"] = "archive", [".xpi"] = "archive", [".tar"] = "archive",
+        [".tgz"] = "archive", [".gz"] = "archive",
+        [".apk"] = "package", [".apks"] = "package", [".aab"] = "package", [".msix"] = "package",
+        [".msixbundle"] = "package", [".appx"] = "package", [".appxbundle"] = "package",
+        [".mp4"] = "video", [".mkv"] = "video", [".avi"] = "video", [".mov"] = "video", [".webm"] = "video",
+        [".flv"] = "video", [".wmv"] = "video", [".m4v"] = "video", [".mpg"] = "video", [".mpeg"] = "video", [".3gp"] = "video",
+        [".mp3"] = "audio", [".wav"] = "audio", [".flac"] = "audio", [".aac"] = "audio", [".ogg"] = "audio",
+        [".m4a"] = "audio", [".wma"] = "audio", [".opus"] = "audio", [".mid"] = "audio",
+        [".epub"] = "ebook", [".fb2"] = "ebook", [".mobi"] = "ebook", [".azw"] = "ebook", [".azw3"] = "ebook",
+        [".exe"] = "executable", [".dll"] = "executable", [".sys"] = "executable", [".scr"] = "executable",
+        [".cpl"] = "executable", [".ocx"] = "executable",
+        [".torrent"] = "torrent",
+    };
+
+    public static FileProbe CreateMetadataOnlyProbe(string path)
+    {
+        string extension = Path.GetExtension(path);
+        string kind = TextExtensions.Contains(extension) || TextFileNames.Contains(Path.GetFileName(path))
+            ? "text"
+            : MetadataKinds.GetValueOrDefault(extension, "unknown");
+        long size = 0;
+        long modifiedUnix = 0;
+        try
+        {
+            var info = new FileInfo(path);
+            size = info.Length;
+            modifiedUnix = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeSeconds();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+        }
+        return new FileProbe(path, extension, [])
+        {
+            Kind = kind,
+            Size = size,
+            ModifiedUnix = modifiedUnix,
+        };
+    }
+
     public static bool IsText(string path, ReadOnlySpan<byte> prefix, bool isEmptyFile = false)
     {
         if (HasKnownBinarySignature(prefix))
