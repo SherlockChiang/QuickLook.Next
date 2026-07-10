@@ -673,8 +673,7 @@ public sealed partial class MainWindow : Window
 
             PreviewReady? nativeReady = null;
             if (!forceAnimatedFirstFrameRaster
-                && (IsParserHostPreview(probe)
-                    || (mayRequireHydration && probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase))))
+                && (IsParserHostPreview(probe) || (mayRequireHydration && IsCloudParserHostPreview(probe))))
             {
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
@@ -2887,6 +2886,12 @@ public sealed partial class MainWindow : Window
         => probe.Kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
            || probe.Kind.Equals("package", StringComparison.OrdinalIgnoreCase)
            || probe.Kind.Equals("office", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCloudParserHostPreview(FileProbe probe)
+        => probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("ebook", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("torrent", StringComparison.OrdinalIgnoreCase);
 
     private string ResolveAppIconPath()
     {

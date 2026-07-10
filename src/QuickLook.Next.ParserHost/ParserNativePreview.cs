@@ -27,6 +27,15 @@ internal static class ParserNativePreview
     private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_torrent(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_archive_entry(
         byte[] archivePathUtf8,
         nuint archivePathLen,
@@ -43,7 +52,14 @@ internal static class ParserNativePreview
 
     public static string? TryPreview(string kind, string path, CancellationToken cancellationToken)
     {
-        bool isText = kind.Equals("text", StringComparison.OrdinalIgnoreCase);
+        NativeSimplePreviewCall? simpleCall = kind.ToLowerInvariant() switch
+        {
+            "text" => ql_preview_text,
+            "ebook" => ql_preview_ebook,
+            "executable" => ql_preview_executable,
+            "torrent" => ql_preview_torrent,
+            _ => null,
+        };
         NativePreviewCall call = kind.Equals("office", StringComparison.OrdinalIgnoreCase)
             ? ql_preview_office
             : ql_preview_archive;
@@ -58,8 +74,8 @@ internal static class ParserNativePreview
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
-                    int length = isText
-                        ? ql_preview_text(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity)
+                    int length = simpleCall is not null
+                        ? simpleCall(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity)
                         : call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (length > 0 && length <= capacity)
@@ -184,5 +200,6 @@ internal static class ParserNativePreview
     }
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    private delegate int NativeSimplePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 }
