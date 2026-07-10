@@ -114,6 +114,9 @@
   <data name="PdfPageIndicatorFormat" xml:space="preserve">
     <value>{0:N0} / {1:N0}</value>
   </data>
+  <data name="PdfPageIndicatorPagedFormat" xml:space="preserve">
+    <value>{0:N0} / {1:N0} (paged)</value>
+  </data>
   <data name="PdfPageIndicatorEmpty" xml:space="preserve">
     <value>0 / 0</value>
   </data>
