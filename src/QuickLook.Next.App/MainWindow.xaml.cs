@@ -69,6 +69,7 @@ public sealed partial class MainWindow : Window
     private UiThreadWatchdog? _uiWatchdog;
     private readonly PreviewSession _previewSession = new();
     private FileProbe? _currentProbe;
+    private bool _currentPreviewWasCloudPlaceholder;
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
     private bool _previewVisible;
@@ -569,6 +570,7 @@ public sealed partial class MainWindow : Window
         BeginPreviewTransition();
         ResetPreview();
         _currentProbe = null;
+        _currentPreviewWasCloudPlaceholder = false;
         Title = System.IO.Path.GetFileName(path);
         PreviewTitleText.Text = Title;
         StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
@@ -578,6 +580,7 @@ public sealed partial class MainWindow : Window
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            _currentPreviewWasCloudPlaceholder = mayRequireHydration;
             if (mayRequireHydration)
             {
                 StatusText.Text = $"downloading {System.IO.Path.GetFileName(path)} from cloud storage…";
@@ -1460,11 +1463,12 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
+        bool cloudOrigin = _currentPreviewWasCloudPlaceholder;
         Task.Run(async () =>
         {
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return null;
-            return await LoadPreviewHeroRasterAsync(ready, path, token);
+            return await LoadPreviewHeroRasterAsync(ready, path, cloudOrigin, token);
         }, token).ContinueWith(task =>
         {
             if (task.IsFaulted || task.IsCanceled || task.Result is null)
@@ -1496,14 +1500,19 @@ public sealed partial class MainWindow : Window
         }, TaskScheduler.Default);
     }
 
-    private async Task<NativeRasterImage?> LoadPreviewHeroRasterAsync(PreviewReady ready, string path, CancellationToken token)
+    private async Task<NativeRasterImage?> LoadPreviewHeroRasterAsync(
+        PreviewReady ready,
+        string path,
+        bool cloudOrigin,
+        CancellationToken token)
     {
         if (IsPackagePreview(ready, path))
         {
             await EnsureParserHostStartedAsync();
             NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(path, "package", token);
-            return icon
-                ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
+            return icon ?? (cloudOrigin
+                ? null
+                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token));
         }
 
         if (IsOfficePreviewWithImages(ready))
@@ -1513,10 +1522,14 @@ public sealed partial class MainWindow : Window
         }
 
         if (IsExecutablePreview(ready, path))
-            return await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
+            return cloudOrigin
+                ? null
+                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
 
         if (ready.Kind == "certificate")
-            return await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, token);
+            return cloudOrigin
+                ? null
+                : await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, token);
 
         return null;
     }
@@ -1625,6 +1638,12 @@ public sealed partial class MainWindow : Window
         string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
+        if (_currentPreviewWasCloudPlaceholder)
+        {
+            DiagLog.Write("App", $"image sidecars skipped for cloud-origin preview: {path}");
+            ClearImageSidecars();
+            return;
+        }
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
