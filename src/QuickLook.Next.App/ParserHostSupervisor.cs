@@ -104,10 +104,13 @@ internal sealed class ParserHostSupervisor
         get { try { return _channel is not null && _host is { HasExited: false }; } catch { return false; } }
     }
 
-    public (string RequestId, Task<ControlMessage> Completion) BeginOpen(string path, FileProbe probe)
+    public (string RequestId, Task<ControlMessage> Completion) BeginOpen(
+        string path,
+        FileProbe probe,
+        TimeSpan? timeout = null)
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
-        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
         _ = SendOpenAsync(requestId, path, probe);
         return (requestId, completion);

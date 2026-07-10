@@ -207,10 +207,11 @@ internal sealed class RasterHostSupervisor
         string path,
         FileProbe probe,
         uint targetWidth = 0,
-        uint targetHeight = 0)
+        uint targetHeight = 0,
+        TimeSpan? timeout = null)
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
-        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
         lock (_stateLock)
         {

@@ -43,6 +43,7 @@ public sealed partial class MainWindow : Window
     private const int WindowsImageMetadataSupplementDelayMs = 850;
     private const int DuplicateOpenCloseGuardMs = 750;
     private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan CloudPreviewTimeout = TimeSpan.FromSeconds(45);
 
     private readonly NativeBridge _native = new();
     private readonly NativeThumbnailScheduler _thumbnailScheduler;
@@ -675,7 +676,8 @@ public sealed partial class MainWindow : Window
             {
                 await EnsureParserHostStartedAsync();
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(path, probe);
+                var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(
+                    path, probe, mayRequireHydration ? CloudPreviewTimeout : null);
                 _requestHosts[parserRequestId] = PreviewHostOwner.Parser;
                 _previewSession.SetRequestId(parserRequestId);
                 _previewSession.CommitPath(path);
@@ -721,7 +723,12 @@ public sealed partial class MainWindow : Window
             await EnsureRasterHostStartedAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
-            var (requestId, completion) = _supervisor!.BeginOpen(path, probe, targetSize.Width, targetSize.Height);
+            var (requestId, completion) = _supervisor!.BeginOpen(
+                path,
+                probe,
+                targetSize.Width,
+                targetSize.Height,
+                mayRequireHydration ? CloudPreviewTimeout : null);
             _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
