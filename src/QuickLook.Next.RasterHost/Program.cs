@@ -40,6 +40,9 @@ var openCtsLock = new object();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
+string? activeRequestId = null;
+const uint MaxSurfaceDimension = 8192;
+const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
 
 while (true)
 {
@@ -88,6 +91,15 @@ while (true)
                 break;
 
         case PreviewResize resize:
+            if (!string.Equals(resize.RequestId, activeRequestId, StringComparison.Ordinal)
+                || resize.Width == 0 || resize.Height == 0
+                || resize.Width > MaxSurfaceDimension || resize.Height > MaxSurfaceDimension
+                || (ulong)resize.Width * resize.Height > MaxSurfacePixels
+                || !double.IsFinite(resize.Dpi) || resize.Dpi <= 0 || resize.Dpi > 960)
+            {
+                DiagLog.Write("RasterHost", $"rejected invalid resize: request={resize.RequestId} size={resize.Width}x{resize.Height} dpi={resize.Dpi}");
+                break;
+            }
             long rh = producer.CreateSurface(resize.Width, resize.Height);
             await channel.SendAsync(new PreviewSurface(
                 resize.RequestId, rh, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM"));
@@ -105,6 +117,7 @@ while (true)
             break;
 
             case PreviewClose close:
+                bool isActiveRequest = string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal);
                 CancelOpen(close.RequestId);
                 if (pdfSessions.TryRemove(close.RequestId, out var pdf))
                     pdf.Dispose();
@@ -115,7 +128,11 @@ while (true)
                         try { cts.Cancel(); } catch (ObjectDisposedException) { }
                     }
                 }
-                producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
+                if (isActiveRequest)
+                {
+                    activeRequestId = null;
+                    producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
+                }
                 break;
         }
     }
@@ -135,6 +152,7 @@ foreach (var cts in remainingOpenCts)
 
 void StartOpen(PreviewOpen open)
 {
+    activeRequestId = open.RequestId;
     string[] existing;
     lock (openCtsLock)
         existing = openCts.Keys.ToArray();
