@@ -19,21 +19,26 @@ internal sealed class TablePreviewPresenter
     private readonly ScrollViewer _scrollViewer;
     private readonly TextBlock _titleText;
     private readonly TextBlock _summaryText;
-    private readonly Grid _grid;
+    private readonly Canvas _canvas;
     private readonly Func<ElementTheme> _getTheme;
+    private PreviewTable? _table;
+    private double[] _widths = [];
+    private TablePalette? _palette;
 
     public TablePreviewPresenter(
         ScrollViewer scrollViewer,
         TextBlock titleText,
         TextBlock summaryText,
-        Grid grid,
+        Canvas canvas,
         Func<ElementTheme> getTheme)
     {
         _scrollViewer = scrollViewer;
         _titleText = titleText;
         _summaryText = summaryText;
-        _grid = grid;
+        _canvas = canvas;
         _getTheme = getTheme;
+        _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
+        _scrollViewer.SizeChanged += OnScrollViewerSizeChanged;
     }
 
     public TablePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -41,39 +46,18 @@ internal sealed class TablePreviewPresenter
         PreviewTable table = ready.Table!;
         _titleText.Text = ready.Title;
         _summaryText.Text = BuildSummary(table);
-        _grid.Children.Clear();
-        _grid.RowDefinitions.Clear();
-        _grid.ColumnDefinitions.Clear();
         _scrollViewer.ChangeView(0, 0, null, true);
 
         int columnCount = Math.Clamp(table.Headers.Length, 1, 64);
-        double[] widths = EstimateColumnWidths(table, columnCount);
-        var palette = new TablePalette(_getTheme() != ElementTheme.Light);
+        _table = table;
+        _widths = EstimateColumnWidths(table, columnCount);
+        _palette = new TablePalette(_getTheme() != ElementTheme.Light);
 
-        _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(RowHeaderWidth) });
-        foreach (double width in widths)
-            _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
-
-        _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderHeight) });
-        AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, palette);
-        for (int c = 0; c < columnCount; c++)
-            AddCell(table.Headers.ElementAtOrDefault(c) ?? $"Column {c + 1}", 0, c + 1, widths[c], HeaderHeight, TableCellKind.Header, palette);
-
-        for (int r = 0; r < table.Rows.Length; r++)
-        {
-            _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(RowHeight) });
-            int rowIndex = r + 1;
-            AddCell(rowIndex.ToString(), rowIndex, 0, RowHeaderWidth, RowHeight, TableCellKind.RowHeader, palette);
-            string[] cells = table.Rows[r].Cells;
-            for (int c = 0; c < columnCount; c++)
-            {
-                string value = c < cells.Length ? cells[c] : "";
-                AddCell(value, rowIndex, c + 1, widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell, palette);
-            }
-        }
-
-        double tableWidth = RowHeaderWidth + widths.Sum();
+        double tableWidth = RowHeaderWidth + _widths.Sum();
         double tableHeight = HeaderHeight + table.Rows.Length * RowHeight;
+        _canvas.Width = tableWidth;
+        _canvas.Height = tableHeight;
+        RenderViewport();
         double widthTarget = Math.Clamp(Math.Min(tableWidth + 72, maxContent.Width), 560, maxContent.Width);
         double heightTarget = Math.Clamp(Math.Min(tableHeight + 132, maxContent.Height), 320, maxContent.Height);
         return new TablePreviewResult($"{ready.Kind}: {ready.Title}", widthTarget, heightTarget);
@@ -81,9 +65,12 @@ internal sealed class TablePreviewPresenter
 
     public void Clear()
     {
-        _grid.Children.Clear();
-        _grid.RowDefinitions.Clear();
-        _grid.ColumnDefinitions.Clear();
+        _table = null;
+        _widths = [];
+        _palette = null;
+        _canvas.Children.Clear();
+        _canvas.Width = 0;
+        _canvas.Height = 0;
         _titleText.Text = "";
         _summaryText.Text = "";
     }
@@ -112,7 +99,65 @@ internal sealed class TablePreviewPresenter
         return widths;
     }
 
-    private void AddCell(string text, int row, int column, double width, double height, TableCellKind kind, TablePalette palette)
+    private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e) => RenderViewport();
+
+    private void OnScrollViewerSizeChanged(object sender, SizeChangedEventArgs e) => RenderViewport();
+
+    private void RenderViewport()
+    {
+        _canvas.Children.Clear();
+        if (_table is null || _palette is null || _widths.Length == 0)
+            return;
+
+        var canvasOrigin = _canvas.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point());
+        double left = Math.Max(0, -canvasOrigin.X);
+        double top = Math.Max(0, -canvasOrigin.Y);
+        double right = left + _scrollViewer.ViewportWidth;
+        double bottom = top + _scrollViewer.ViewportHeight;
+        if (right <= left || bottom <= top)
+            return;
+
+        int firstColumn = 0;
+        double columnLeft = RowHeaderWidth;
+        while (firstColumn < _widths.Length && columnLeft + _widths[firstColumn] <= left)
+        {
+            columnLeft += _widths[firstColumn];
+            firstColumn++;
+        }
+
+        int lastColumn = firstColumn;
+        double columnRight = columnLeft;
+        while (lastColumn < _widths.Length && columnRight < right)
+            columnRight += _widths[lastColumn++];
+
+        if (top < HeaderHeight)
+        {
+            AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, _palette);
+            double x = columnLeft;
+            for (int c = firstColumn; c < lastColumn; c++)
+            {
+                AddCell(_table.Headers.ElementAtOrDefault(c) ?? $"Column {c + 1}", x, 0, _widths[c], HeaderHeight, TableCellKind.Header, _palette);
+                x += _widths[c];
+            }
+        }
+
+        int firstRow = Math.Max(0, (int)Math.Floor((top - HeaderHeight) / RowHeight));
+        int lastRow = Math.Min(_table.Rows.Length, (int)Math.Ceiling((bottom - HeaderHeight) / RowHeight));
+        for (int r = firstRow; r < lastRow; r++)
+        {
+            double y = HeaderHeight + r * RowHeight;
+            AddCell((r + 1).ToString(), 0, y, RowHeaderWidth, RowHeight, TableCellKind.RowHeader, _palette);
+            string[] cells = _table.Rows[r].Cells;
+            double x = columnLeft;
+            for (int c = firstColumn; c < lastColumn; c++)
+            {
+                AddCell(c < cells.Length ? cells[c] : "", x, y, _widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell, _palette);
+                x += _widths[c];
+            }
+        }
+    }
+
+    private void AddCell(string text, double x, double y, double width, double height, TableCellKind kind, TablePalette palette)
     {
         var border = new Border
         {
@@ -139,9 +184,9 @@ internal sealed class TablePreviewPresenter
                 MaxWidth = Math.Max(8, width - 18),
             },
         };
-        Grid.SetRow(border, row);
-        Grid.SetColumn(border, column);
-        _grid.Children.Add(border);
+        Canvas.SetLeft(border, x);
+        Canvas.SetTop(border, y);
+        _canvas.Children.Add(border);
     }
 
     private sealed class TablePalette

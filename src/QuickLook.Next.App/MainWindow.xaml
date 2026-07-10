@@ -416,8 +416,8 @@
                             BorderThickness="1"
                             CornerRadius="6"
                             HorizontalAlignment="Left">
-                        <Grid x:Name="TableGrid"
-                              AutomationProperties.Name="Delimited table cells" />
+                        <Canvas x:Name="TableGrid"
+                                AutomationProperties.Name="Delimited table cells" />
                     </Border>
                 </StackPanel>
             </ScrollViewer>
