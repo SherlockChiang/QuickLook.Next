@@ -11,10 +11,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{AnimationDecoder, ImageReader};
 
@@ -472,24 +472,31 @@ impl Drop for PwstrGuard {
 
 // ── File probe + cache ───────────────────────────────────────────────────────────────────────
 // The native layer is the single source of truth for "what is this file": extension, magic prefix,
-// a coarse kind, and metadata — cached by path+mtime so repeated previews don't re-stat/re-read.
+// a coarse kind, and metadata — cached by path+exact mtime+size so rapid edits cannot reuse stale data.
 
-static PROBE_CACHE: OnceLock<Mutex<HashMap<String, (i64, String)>>> = OnceLock::new();
+struct ProbeCacheEntry {
+    modified: Option<SystemTime>,
+    size: u64,
+    sequence: u64,
+    json: String,
+}
+
+static PROBE_CACHE: OnceLock<Mutex<HashMap<String, ProbeCacheEntry>>> = OnceLock::new();
+static PROBE_CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const PROBE_CACHE_MAX: usize = 500;
 
-fn probe_cache() -> &'static Mutex<HashMap<String, (i64, String)>> {
+fn probe_cache() -> &'static Mutex<HashMap<String, ProbeCacheEntry>> {
     PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Evict oldest entries when the cache exceeds PROBE_CACHE_MAX. Called after insertion.
-fn probe_cache_evict(cache: &mut HashMap<String, (i64, String)>) {
+fn probe_cache_evict(cache: &mut HashMap<String, ProbeCacheEntry>) {
     if cache.len() <= PROBE_CACHE_MAX {
         return;
     }
-    // Evict the entry with the smallest mtime (oldest probed file).
     let oldest_key = cache
         .iter()
-        .min_by_key(|(_, (mt, _))| *mt)
+        .min_by_key(|(_, entry)| entry.sequence)
         .map(|(k, _)| k.clone());
     if let Some(key) = oldest_key {
         cache.remove(&key);
@@ -524,17 +531,16 @@ pub extern "C" fn ql_probe_file(
 fn probe_json(path: &str) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     let size = meta.len();
-    let modified = meta
-        .modified()
-        .ok()
+    let precise_modified = meta.modified().ok();
+    let modified = precise_modified
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
     if let Ok(cache) = probe_cache().lock() {
-        if let Some((m, json)) = cache.get(path) {
-            if *m == modified {
-                return Some(json.clone());
+        if let Some(entry) = cache.get(path) {
+            if entry.modified == precise_modified && entry.size == size {
+                return Some(entry.json.clone());
             }
         }
     }
@@ -579,7 +585,15 @@ fn probe_json(path: &str) -> Option<String> {
 
     {
         if let Ok(mut cache) = probe_cache().lock() {
-            cache.insert(path.to_string(), (modified, json.clone()));
+            cache.insert(
+                path.to_string(),
+                ProbeCacheEntry {
+                    modified: precise_modified,
+                    size,
+                    sequence: PROBE_CACHE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                    json: json.clone(),
+                },
+            );
             probe_cache_evict(&mut cache);
         }
     }
@@ -1402,6 +1416,21 @@ mod tests {
         assert_eq!(classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4]), "binary");
         assert_eq!(classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80]), "binary");
         assert_eq!(classify("file.unknown", ".unknown", b"MZprintable header"), "executable");
+    }
+
+    #[test]
+    fn probe_cache_invalidates_when_file_changes_within_one_second() {
+        let path = temp_image_path("vendor");
+        fs::write(&path, b"enabled=true\r\n").expect("write text config");
+        let first = probe_json(path.to_str().unwrap()).expect("probe text config");
+        assert!(first.contains("\"kind\":\"text\""));
+
+        fs::write(&path, [0u8, 1, 2, 3, 4]).expect("replace with binary");
+        let second = probe_json(path.to_str().unwrap()).expect("probe replaced config");
+        let _ = fs::remove_file(path);
+
+        assert!(second.contains("\"kind\":\"binary\""));
+        assert!(second.contains("\"size\":5"));
     }
 
     #[test]
