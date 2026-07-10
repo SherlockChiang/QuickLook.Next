@@ -32,6 +32,7 @@ internal sealed class RasterHostSupervisor
     private bool _backgroundEfficiencyEnabled = true;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private readonly object _stateLock = new();
+    private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private string? _activeRequestId;
     private string? _activePath;
 
@@ -51,6 +52,7 @@ internal sealed class RasterHostSupervisor
         using var trace = DiagLog.TraceScope("App", "host start", 500);
         _stopping = false;
         int gen = ++_generation;
+        _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // Dispose the old channel + process + pipe before creating new ones (prevents handle leaks on restart).
         _channel?.Dispose();
         _channel = null;
@@ -103,6 +105,18 @@ internal sealed class RasterHostSupervisor
         DiagLog.Write("App", "host connected; sent hello");
         _restartAttempts = 0;
         _ = ReadLoopAsync(_channel, gen);
+        try
+        {
+            using var readyCts = new CancellationTokenSource(HostConnectTimeout);
+            await _ready.Task.WaitAsync(readyCts.Token);
+        }
+        catch
+        {
+            _channel?.Dispose();
+            _channel = null;
+            TryKillHost();
+            throw;
+        }
     }
 
     public async Task EnsureStartedAsync()
@@ -143,6 +157,8 @@ internal sealed class RasterHostSupervisor
                 if (msg is null || gen != _generation)
                 {
                     DiagLog.Write("App", $"host read loop stop gen={gen}; msgNull={msg is null}; currentGen={_generation}");
+                    if (msg is null && gen == _generation)
+                        throw new EndOfStreamException("RasterHost pipe closed");
                     break;
                 }
                 Dispatch(msg);
@@ -151,6 +167,7 @@ internal sealed class RasterHostSupervisor
         catch (Exception ex)
         {
             DiagLog.Write("App", "host read loop failed: " + ex.Message);
+            _ready.TrySetException(ex);
             _pending.FailAll(ex);
         }
     }
@@ -160,7 +177,10 @@ internal sealed class RasterHostSupervisor
         DiagLog.Write("App", "host recv " + msg.GetType().Name);
         switch (msg)
         {
-            case HostReady ready: AdapterLuid = ready.AdapterLuid; break;
+            case HostReady ready:
+                AdapterLuid = ready.AdapterLuid;
+                _ready.TrySetResult();
+                break;
             case PreviewSurface surface: _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface)); break;
             case PreviewReady ready: _pending.TryComplete(ready.RequestId, ready); break;
             case PreviewError error: _pending.TryComplete(error.RequestId, error); break;
@@ -312,6 +332,9 @@ internal sealed class RasterHostSupervisor
     {
         DiagLog.Write("App", "host stop");
         _stopping = true;
+        ++_generation;
+        _ready.TrySetCanceled();
+        _pending.FailAll(new OperationCanceledException("RasterHost stopped"));
         try { _channel?.Dispose(); } catch { }
         _channel = null;
         try { _server?.Dispose(); } catch { }
