@@ -80,9 +80,9 @@ while (true)
                 try
                 {
                     string kind = open.Probe.Kind.ToLowerInvariant();
-                    if (kind is not ("archive" or "package" or "office"))
+                    if (kind is not ("archive" or "package" or "office" or "text"))
                     {
-                        await channel.SendAsync(new PreviewError(open.RequestId, "ParserHost only handles archive, package, and office previews."));
+                        await channel.SendAsync(new PreviewError(open.RequestId, "ParserHost only handles archive, package, office, and text previews."));
                         return;
                     }
                     string? json = ParserNativePreview.TryPreview(kind, open.Path, cts.Token);

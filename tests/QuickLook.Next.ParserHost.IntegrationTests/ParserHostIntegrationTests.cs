@@ -100,6 +100,47 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Authenticated_host_previews_text_file()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string textPath = Path.Combine(tempDirectory, "cloud.config");
+        await File.WriteAllTextAsync(textPath, "<configuration><add key=\"cloud\" /></configuration>");
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var probe = new FileProbe(textPath, ".config", [])
+            {
+                Kind = "text",
+                Size = new FileInfo(textPath).Length,
+            };
+            await channel.SendAsync(new PreviewOpen(requestId, textPath, probe), timeout.Token);
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, ready.RequestId);
+            Assert.Contains("key=\"cloud\"", ready.TextContent);
+            Assert.Equal("xml", ready.TextLanguage);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Archive_entry_close_removes_successful_handoff()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));

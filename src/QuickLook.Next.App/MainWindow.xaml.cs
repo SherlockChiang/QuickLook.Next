@@ -672,7 +672,9 @@ public sealed partial class MainWindow : Window
 
 
             PreviewReady? nativeReady = null;
-            if (!forceAnimatedFirstFrameRaster && IsParserHostPreview(probe))
+            if (!forceAnimatedFirstFrameRaster
+                && (IsParserHostPreview(probe)
+                    || (mayRequireHydration && probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase))))
             {
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
