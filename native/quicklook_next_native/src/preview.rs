@@ -231,7 +231,8 @@ fn is_zero_usize(value: &usize) -> bool {
 // ── Text preview ─────────────────────────────────────────────────────────────
 
 const MAX_TEXT_BYTES: usize = 512 * 1024;
-const MAX_TABLE_ROWS: usize = 500;
+// The WinUI grid currently realizes every displayed cell, so keep synchronous UI work bounded.
+const MAX_TABLE_ROWS: usize = 160;
 const MAX_TABLE_COLUMNS: usize = 64;
 const MAX_TABLE_CELL_CHARS: usize = 240;
 const MAX_MARKDOWN_BLOCKS: usize = 500;
