@@ -603,13 +603,16 @@ public sealed partial class MainWindow : Window
             }
 
             bool forceAnimatedFirstFrameRaster = PrefersReducedMotion;
-            if (!forceAnimatedFirstFrameRaster
-                && AnimatedImagePreviewPresenter.CreateRenderPlan(path) is { } animatedPlan)
+            AnimatedImageRenderPlan? animatedPlan = forceAnimatedFirstFrameRaster
+                ? null
+                : await Task.Run(() => AnimatedImagePreviewPresenter.CreateRenderPlan(path), previewToken);
+            if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            if (animatedPlan is { } plan)
             {
-                DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={animatedPlan.PlaybackMode}; {animatedPlan.Width}x{animatedPlan.Height}");
-                if (animatedPlan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
+                DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={plan.PlaybackMode}; {plan.Width}x{plan.Height}");
+                if (plan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
                 {
-                    DiagLog.Write("App", $"preview animated image using native frame playback gen={generation}; {animatedPlan.Width}x{animatedPlan.Height}");
+                    DiagLog.Write("App", $"preview animated image using native frame playback gen={generation}; {plan.Width}x{plan.Height}");
                     string animatedExt = System.IO.Path.GetExtension(path);
                     if (animatedExt.Equals(".gif", StringComparison.OrdinalIgnoreCase) || animatedExt.Equals(".webp", StringComparison.OrdinalIgnoreCase))
                     {
@@ -624,8 +627,8 @@ public sealed partial class MainWindow : Window
                                 $"gif-native-{generation}",
                                 "image",
                                 System.IO.Path.GetFileName(path),
-                                animatedPlan.Width,
-                                animatedPlan.Height);
+                                plan.Width,
+                                plan.Height);
                             _previewSession.CommitPath(path);
                             _previewSession.SetRequestId(null);
                             StatusText.Text = ShowNativeAnimatedImagePreview(gifReady, path, frames);
@@ -641,8 +644,8 @@ public sealed partial class MainWindow : Window
                         $"gif-{generation}",
                         "image",
                         System.IO.Path.GetFileName(path),
-                        animatedPlan.Width,
-                        animatedPlan.Height);
+                        plan.Width,
+                        plan.Height);
                     _previewSession.CommitPath(path);
                     _previewSession.SetRequestId(null);
                     StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
