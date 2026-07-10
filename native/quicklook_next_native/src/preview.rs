@@ -3233,6 +3233,7 @@ fn parse_xlsx_styles(context: &OfficeContext, xml: &str) -> OfficeResult<Vec<Xls
     Ok(styles)
 }
 
+#[cfg(test)]
 fn parse_xlsx_style_number_formats(
     context: &OfficeContext,
     xml: &str,
@@ -5537,6 +5538,7 @@ fn sqlite_table_interior_children(page: &[u8], header: usize) -> Vec<u32> {
     children
 }
 
+#[cfg(test)]
 fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec<SqliteSchemaRow> {
     parse_sqlite_schema_summary(bytes, page_size, limit).rows
 }
@@ -7770,6 +7772,7 @@ fn mp4_major_brand(bytes: &[u8]) -> Option<String> {
     (!brand.is_empty()).then(|| brand.to_string())
 }
 
+#[cfg(test)]
 fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
     find_mp4_atom_payload(bytes, b"mvhd").and_then(parse_mvhd_duration_seconds)
 }
