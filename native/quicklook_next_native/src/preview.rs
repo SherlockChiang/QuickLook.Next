@@ -1926,6 +1926,7 @@ fn is_probably_utf8_text(bytes: &[u8]) -> bool {
 // ── Office preview (OOXML / ODF lightweight extraction) ─────────────────────
 
 const MAX_OFFICE_TEXT_CHARS: usize = 96 * 1024;
+const MAX_OFFICE_INPUT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_OFFICE_ROWS: usize = 48;
 const MAX_OFFICE_SHEETS: usize = 6;
 const MAX_OFFICE_SLIDES: usize = 30;
@@ -1939,6 +1940,12 @@ const XLSX_ROW_HEIGHT: f64 = 28.0;
 
 pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    if fs::metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.len() > MAX_OFFICE_INPUT_BYTES)
+    {
         return String::new();
     }
     let ext = Path::new(path)
@@ -13659,6 +13666,12 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.ends_with(".png"));
         assert!(first.starts_with("entry-666f6c6465722f613a623f2e706e67"));
+    }
+
+    #[test]
+    fn office_input_budget_is_below_archive_extract_budget() {
+        assert!(MAX_OFFICE_INPUT_BYTES > MAX_OFFICE_MEDIA_BYTES);
+        assert_eq!(MAX_OFFICE_INPUT_BYTES, 128 * 1024 * 1024);
     }
 
     #[test]
