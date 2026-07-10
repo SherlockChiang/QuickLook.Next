@@ -263,8 +263,10 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
         TrySetBackdrop();
-        _uiSettings.ColorValuesChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals);
-        _accessibilitySettings.HighContrastChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals);
+        try { _uiSettings.ColorValuesChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals); }
+        catch (Exception ex) { DiagLog.Write("App", "UI color notifications unavailable: " + ex.Message); }
+        try { _accessibilitySettings.HighContrastChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals); }
+        catch (Exception ex) { DiagLog.Write("App", "high contrast notifications unavailable: " + ex.Message); }
         _previewKeyboardHook = new PreviewKeyboardHook(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ShouldHandleSpaceAsPreviewClose,

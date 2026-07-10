@@ -18,9 +18,9 @@ public partial class App : Application
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
         try
         {
+            _window = new MainWindow();
             await _window.StartBackgroundAsync();
         }
         catch (Exception ex)
