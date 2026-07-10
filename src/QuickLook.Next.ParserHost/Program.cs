@@ -9,6 +9,7 @@ string? sessionToken = GetArg(args, "--session-token");
 DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "parser-host.log"));
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
+CleanupStaleHeroRasters();
 
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
@@ -25,6 +26,7 @@ catch (Exception ex)
 
 using var channelLifetime = channel;
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
+var heroRasters = new ConcurrentDictionary<string, string>();
 bool authenticated = false;
 
 while (true)
@@ -130,11 +132,73 @@ while (true)
         case ArchiveEntryExtractClose close:
             Cancel(close.RequestId);
             break;
+
+        case HeroRasterExtract extract:
+            if (!IsValidHeroKind(extract.Kind) || !IsValidRequestId(extract.RequestId))
+            {
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Invalid hero raster request."));
+                break;
+            }
+            var heroCts = new CancellationTokenSource();
+            if (!requests.TryAdd(extract.RequestId, heroCts))
+            {
+                heroCts.Dispose();
+                break;
+            }
+            _ = Task.Run(async () =>
+            {
+                string? tempPath = null;
+                try
+                {
+                    byte[]? raster = ParserNativePreview.TryExtractHeroRaster(extract.Kind, extract.Path, heroCts.Token);
+                    heroCts.Token.ThrowIfCancellationRequested();
+                    if (raster is null || !ParserNativePreview.IsValidRaster(raster, raster.Length))
+                    {
+                        await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster extraction failed."));
+                        return;
+                    }
+
+                    tempPath = WriteHeroRaster(extract.RequestId, raster);
+                    heroCts.Token.ThrowIfCancellationRequested();
+                    if (tempPath is null)
+                    {
+                        await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster handoff failed."));
+                        return;
+                    }
+
+                    int width = BitConverter.ToInt32(raster, 0);
+                    int height = BitConverter.ToInt32(raster, 4);
+                    heroRasters[extract.RequestId] = tempPath;
+                    await channel.SendAsync(new HeroRasterExtracted(extract.RequestId, tempPath, width, height));
+                    tempPath = null; // retained until the App acknowledges consumption.
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("ParserHost", $"hero raster extraction failed request={extract.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (tempPath is not null) DeleteHeroRaster(tempPath);
+                    if (requests.TryRemove(extract.RequestId, out var current))
+                        current.Dispose();
+                }
+            });
+            break;
+
+        case HeroRasterExtractClose close:
+            Cancel(close.RequestId);
+            if (heroRasters.TryRemove(close.RequestId, out string? tempPath))
+                DeleteHeroRaster(tempPath);
+            break;
     }
 }
 
 foreach (string requestId in requests.Keys)
     Cancel(requestId);
+foreach (string tempPath in heroRasters.Values)
+    DeleteHeroRaster(tempPath);
 
 void Cancel(string requestId)
 {
@@ -149,4 +213,70 @@ static string? GetArg(string[] values, string key)
     for (int i = 0; i < values.Length - 1; i++)
         if (values[i] == key) return values[i + 1];
     return null;
+}
+
+static bool IsValidHeroKind(string kind)
+    => kind.Equals("package", StringComparison.OrdinalIgnoreCase)
+        || kind.Equals("office", StringComparison.OrdinalIgnoreCase);
+
+static bool IsValidRequestId(string requestId)
+    => requestId.Length == 32 && requestId.All(static c => char.IsAsciiHexDigit(c));
+
+static string? WriteHeroRaster(string requestId, byte[] raster)
+{
+    try
+    {
+        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster");
+        Directory.CreateDirectory(root);
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return null;
+
+        string directory = Path.Combine(root, "raster-" + requestId);
+        Directory.CreateDirectory(directory);
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            return null;
+
+        string path = Path.Combine(directory, "hero.bgra");
+        using var stream = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.WriteThrough,
+        });
+        stream.Write(raster);
+        return path;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+    {
+        return null;
+    }
+}
+
+static void DeleteHeroRaster(string path)
+{
+    try
+    {
+        File.Delete(path);
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null) Directory.Delete(directory, recursive: false);
+    }
+    catch { }
+}
+
+static void CleanupStaleHeroRasters()
+{
+    try
+    {
+        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster");
+        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return;
+
+        foreach (string directory in Directory.EnumerateDirectories(root, "raster-*"))
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+    catch { }
 }

@@ -65,10 +65,6 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_gif_frames_sized(
         byte[] pathUtf8,
         nuint pathLen,
@@ -87,7 +83,6 @@ internal sealed class NativeBridge
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
-    private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativeAnimationCall(byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight, byte[] outBuf, nuint outCap);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
@@ -214,12 +209,6 @@ internal sealed class NativeBridge
             return null;
         }
     }
-
-    public NativeRasterImage? TryExtractPackageIcon(string path)
-        => CallRaster(ql_extract_package_icon, path);
-
-    public NativeRasterImage? TryExtractOfficeImage(string path)
-        => CallRaster(ql_extract_office_image, path);
 
     public NativeAnimationFrames? TryDecodeGifFrames(string path, uint targetWidth, uint targetHeight)
         => TryDecodeAnimationFrames(ql_decode_gif_frames_sized, path, targetWidth, targetHeight);
@@ -397,32 +386,6 @@ internal sealed class NativeBridge
         catch (OperationCanceledException) { throw; }
         catch { return null; }
         finally { GC.KeepAlive(cancelCb); }
-    }
-
-    private static NativeRasterImage? CallRaster(NativeRasterCall call, string path)
-    {
-        try
-        {
-            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
-            return ReadRasterBuffer(cap =>
-            {
-                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
-                try
-                {
-                    int n = call(pathBytes, (nuint)pathBytes.Length, outBuf, (nuint)outBuf.Length);
-                    return (n, outBuf);
-                }
-                catch
-                {
-                    ArrayPool<byte>.Shared.Return(outBuf);
-                    throw;
-                }
-            });
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static NativeRasterImage? ReadRasterBuffer(Func<int, (int Length, byte[] Buffer)> read)

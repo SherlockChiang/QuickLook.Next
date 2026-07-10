@@ -27,8 +27,9 @@ QuickLook.Next/
 ## Rust-first ownership
 Rust is the source of truth for native input, Explorer selection, file probing, shell thumbnails, image
 decoding, and lightweight content previews. The App calls Rust directly for text and folder previews.
-Archive, package, and Office structured previews execute in ParserHost; archive extraction and
-native image helpers remain App-local. Raster image previews decode
+Archive, package, and Office structured previews execute in ParserHost. Package icons and Office embedded
+hero rasters are extracted there and handed back through validated, bounded temp files, never raw pixels
+on the control pipe. Raster image previews decode
 to BGRA in Rust, then RasterHost uploads those pixels to a shared D3D surface.
 
 .NET remains intentional only where it is currently a frontend or surface-hosting component:
@@ -64,7 +65,8 @@ Handshake: App (pipe server) launches Host → `hello{appPid}` → Host `host.re
 - **App ⇄ ParserHost:** separately authenticated named-pipe JSON control channel. The App verifies the
   connecting child PID and sends a random session token in `hello`; ParserHost responds `parser.ready`.
   It accepts archive/package/Office `preview.open` requests and returns bounded structured
-  `preview.ready` JSON only, never composition surfaces. It is lazy-started and stopped on app shutdown.
+   `preview.ready` JSON only, never composition surfaces. Its bounded hero rasters use a validated
+   temp-file handoff rather than control-pipe pixel payloads. It is lazy-started and stopped on app shutdown.
 
 ## Build / checks
 ```

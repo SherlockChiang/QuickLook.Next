@@ -26,6 +26,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(ArchiveEntryExtract), "archive.entry.extract")]
 [JsonDerivedType(typeof(ArchiveEntryExtracted), "archive.entry.extracted")]
 [JsonDerivedType(typeof(ArchiveEntryExtractClose), "archive.entry.extract.close")]
+[JsonDerivedType(typeof(HeroRasterExtract), "hero.raster.extract")]
+[JsonDerivedType(typeof(HeroRasterExtracted), "hero.raster.extracted")]
+[JsonDerivedType(typeof(HeroRasterExtractClose), "hero.raster.extract.close")]
 public abstract record ControlMessage;
 
 /// <summary>App → Host on connect: authenticates the launch and lets the host duplicate surface handles into the App.</summary>
@@ -88,3 +91,12 @@ public sealed record ArchiveEntryExtracted(string RequestId, string TempPath) : 
 
 /// <summary>App → ParserHost: cancel an archive entry extraction.</summary>
 public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage;
+
+/// <summary>App → ParserHost: extract a package icon or Office embedded image into a bounded temp raster.</summary>
+public sealed record HeroRasterExtract(string RequestId, string Path, string Kind) : ControlMessage;
+
+/// <summary>ParserHost → App: a bounded BGRA raster is ready at TempPath; pixels never use the control pipe.</summary>
+public sealed record HeroRasterExtracted(string RequestId, string TempPath, int Width, int Height) : ControlMessage;
+
+/// <summary>App → ParserHost: release a hero-raster temp handoff after the App has consumed it.</summary>
+public sealed record HeroRasterExtractClose(string RequestId) : ControlMessage;

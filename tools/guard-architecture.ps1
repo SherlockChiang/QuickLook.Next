@@ -170,6 +170,15 @@ else {
     Write-Host "dist check: skipped; directory does not exist"
 }
 
+# Rule 6: package and Office hero raster extraction belongs to ParserHost, never the App process.
+$appNativeBridge = Join-Path $Root "src/QuickLook.Next.App/NativeBridge.cs"
+if (Test-Path $appNativeBridge) {
+    $appNativeBridgeText = Get-Content -LiteralPath $appNativeBridge -Raw
+    if ($appNativeBridgeText -match 'ql_extract_(package_icon|office_image)') {
+        Add-Failure "App NativeBridge must not P/Invoke package/Office hero raster extraction"
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Architecture guard failed:" -ForegroundColor Red

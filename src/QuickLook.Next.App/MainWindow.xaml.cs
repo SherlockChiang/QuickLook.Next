@@ -1385,11 +1385,18 @@ public sealed partial class MainWindow : Window
     private async Task<NativeRasterImage?> LoadPreviewHeroRasterAsync(PreviewReady ready, string path, CancellationToken token)
     {
         if (IsPackagePreview(ready, path))
-            return _native.TryExtractPackageIcon(path)
+        {
+            await EnsureParserHostStartedAsync();
+            NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(path, "package", token);
+            return icon
                 ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
+        }
 
         if (IsOfficePreviewWithImages(ready))
-            return _native.TryExtractOfficeImage(path);
+        {
+            await EnsureParserHostStartedAsync();
+            return await _parserSupervisor!.ExtractHeroRasterAsync(path, "office", token);
+        }
 
         if (IsExecutablePreview(ready, path))
             return await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);

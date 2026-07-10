@@ -115,6 +115,27 @@ internal sealed class ParserHostSupervisor
         }
     }
 
+    public async Task<NativeRasterImage?> ExtractHeroRasterAsync(string path, string kind, CancellationToken cancellationToken)
+    {
+        if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
+        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
+        try
+        {
+            await _channel.SendAsync(new HeroRasterExtract(requestId, path, kind), cancellationToken);
+            ControlMessage response = await completion.WaitAsync(cancellationToken);
+            return response is HeroRasterExtracted extracted
+                ? ReadHeroRaster(extracted)
+                : null;
+        }
+        finally
+        {
+            _pending.Cancel(requestId);
+            try { await (_channel?.SendAsync(new HeroRasterExtractClose(requestId)) ?? Task.CompletedTask); }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        }
+    }
+
     private async Task StopOnTimeoutAsync(Task<ControlMessage> completion, string requestId)
     {
         try
@@ -147,6 +168,7 @@ internal sealed class ParserHostSupervisor
                     case PreviewReady ready: _pending.TryComplete(ready.RequestId, ready); break;
                     case PreviewError error: _pending.TryComplete(error.RequestId, error); break;
                     case ArchiveEntryExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
+                    case HeroRasterExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
                 }
             }
         }
@@ -210,6 +232,80 @@ internal sealed class ParserHostSupervisor
                 && Path.GetFileName(extractionDirectory).StartsWith("extract-", StringComparison.Ordinal)
                 && Path.GetFileName(fullPath).StartsWith("entry-", StringComparison.Ordinal)
                 && (File.GetAttributes(extractionDirectory) & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
+    {
+        const int maxRasterBytes = 16 * 1024 * 1024;
+        const int maxDimension = 4096;
+        if (!IsHeroRasterTempPath(extracted.TempPath, extracted.RequestId))
+            return null;
+
+        try
+        {
+            using var stream = new FileStream(extracted.TempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length is <= 8 or > maxRasterBytes)
+                return null;
+
+            byte[] raster = new byte[checked((int)stream.Length)];
+            int offset = 0;
+            while (offset < raster.Length)
+            {
+                int read = stream.Read(raster, offset, raster.Length - offset);
+                if (read == 0) return null;
+                offset += read;
+            }
+
+            int width = BitConverter.ToInt32(raster, 0);
+            int height = BitConverter.ToInt32(raster, 4);
+            int pixelBytes = checked(width * height * 4);
+            if (width is <= 0 or > maxDimension
+                || height is <= 0 or > maxDimension
+                || extracted.Width != width
+                || extracted.Height != height
+                || raster.Length != 8 + pixelBytes)
+                return null;
+
+            byte[] bgra = new byte[pixelBytes];
+            Buffer.BlockCopy(raster, 8, bgra, 0, pixelBytes);
+            return new NativeRasterImage(bgra, width, height);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsHeroRasterTempPath(string path, string requestId)
+    {
+        const int maxPathChars = 32 * 1024;
+        if (string.IsNullOrWhiteSpace(path) || path.Length > maxPathChars)
+            return false;
+
+        try
+        {
+            string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster"));
+            string fullPath = Path.GetFullPath(path);
+            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                || !File.Exists(fullPath)
+                || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0
+                || (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+                return false;
+
+            string? directory = Path.GetDirectoryName(fullPath);
+            return directory is not null
+                && string.Equals(Path.GetDirectoryName(directory), root, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(Path.GetFileName(directory), "raster-" + requestId, StringComparison.Ordinal)
+                && requestId.Length == 32
+                && requestId.All(static c => char.IsAsciiHexDigit(c))
+                && string.Equals(Path.GetFileName(fullPath), "hero.bgra", StringComparison.Ordinal)
+                && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
