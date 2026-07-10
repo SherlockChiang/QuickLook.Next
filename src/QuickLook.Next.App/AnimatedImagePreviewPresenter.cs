@@ -125,8 +125,7 @@ internal sealed class AnimatedImagePreviewPresenter
             _nativeFrameClock = Stopwatch.StartNew();
             _nativeFrameTimer = new DispatcherTimer();
             _nativeFrameTimer.Tick += (_, _) => AdvanceNativeFrame();
-            _nativeFrameTimer.Interval = TimeSpan.FromMilliseconds(16);
-            _nativeFrameTimer.Start();
+            ScheduleNextNativeFrame();
         }
 
         double width = frames.Width * scale + InfoRailWidth;
@@ -205,13 +204,29 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_nativeFrameTimeline is null || _nativeAnimationDurationMs <= 0 || _nativeFrameClock is null)
             return;
 
+        _nativeFrameTimer?.Stop();
         int elapsed = (int)(_nativeFrameClock.ElapsedMilliseconds % _nativeAnimationDurationMs);
         int frameIndex = FindFrameIndex(_nativeFrameTimeline, elapsed);
-        if (frameIndex == _nativeFrameIndex)
+        if (frameIndex != _nativeFrameIndex)
+        {
+            _nativeFrameIndex = frameIndex;
+            PresentNativeFrame(_nativeFrameIndex);
+        }
+        ScheduleNextNativeFrame();
+    }
+
+    private void ScheduleNextNativeFrame()
+    {
+        if (_nativeFrameTimer is null || _nativeFrameClock is null || _nativeFrameTimeline is null || _nativeAnimationDurationMs <= 0)
             return;
 
-        _nativeFrameIndex = frameIndex;
-        PresentNativeFrame(_nativeFrameIndex);
+        int elapsed = (int)(_nativeFrameClock.ElapsedMilliseconds % _nativeAnimationDurationMs);
+        int nextDeadline = _nativeFrameTimeline[_nativeFrameIndex];
+        if (nextDeadline <= elapsed)
+            nextDeadline += _nativeAnimationDurationMs;
+        int delay = Math.Max(1, nextDeadline - elapsed);
+        _nativeFrameTimer.Interval = TimeSpan.FromMilliseconds(delay);
+        _nativeFrameTimer.Start();
     }
 
     private void PresentNativeFrame(int index)
