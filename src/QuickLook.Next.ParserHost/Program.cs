@@ -80,9 +80,14 @@ while (true)
                 try
                 {
                     string kind = open.Probe.Kind.ToLowerInvariant();
-                    if (kind is not ("archive" or "package" or "office" or "text" or "ebook" or "executable" or "torrent"))
+                    if (kind is not ("archive" or "package" or "office" or "text" or "ebook" or "executable" or "torrent" or "certificate"))
                     {
                         await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
+                        return;
+                    }
+                    if (kind == "certificate")
+                    {
+                        await channel.SendAsync(CertificatePreview.Create(open.RequestId, open.Path, open.Probe.Size));
                         return;
                     }
                     string? json = ParserNativePreview.TryPreview(kind, open.Path, cts.Token);

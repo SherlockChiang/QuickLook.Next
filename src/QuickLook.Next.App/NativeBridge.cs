@@ -1,7 +1,5 @@
 using System.Buffers;
-using System.Security.Cryptography;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using QuickLook.Next.Contracts;
@@ -156,7 +154,7 @@ internal sealed class NativeBridge
     public PreviewReady? TryPreview(string requestId, string path, FileProbe probe, CancellationToken cancellationToken = default)
     {
         if (probe.Kind.Equals("certificate", StringComparison.OrdinalIgnoreCase))
-            return TryPreviewCertificate(requestId, path, probe);
+            return CertificatePreview.Create(requestId, path, probe.Size);
 
         NativePreviewCall? call = probe.Kind.ToLowerInvariant() switch
         {
@@ -438,60 +436,6 @@ internal sealed class NativeBridge
 
     private static bool ShouldUseNativeInfo(FileProbe probe)
         => probe.Kind is "binary" or "unknown" or "disk-image" or "font" or "database" or "mail" or "chm" or "dump" or "elf" or "video" or "audio" or "media";
-
-    private static PreviewReady TryPreviewCertificate(string requestId, string path, FileProbe probe)
-    {
-        string fileName = Path.GetFileName(path);
-        try
-        {
-            using X509Certificate2 cert = X509CertificateLoader.LoadCertificateFromFile(path);
-            string[] usages = cert.Extensions
-                .OfType<X509EnhancedKeyUsageExtension>()
-                .SelectMany(e => e.EnhancedKeyUsages.Cast<Oid>())
-                .Select(oid =>
-                {
-                    string value = oid.Value ?? "";
-                    return string.IsNullOrWhiteSpace(oid.FriendlyName) ? value : $"{oid.FriendlyName} ({value})";
-                })
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .ToArray();
-
-            var builder = new StringBuilder();
-            builder.AppendLine($"Name: {fileName}");
-            builder.AppendLine("Kind: certificate");
-            builder.AppendLine($"Subject: {cert.Subject}");
-            builder.AppendLine($"Issuer: {cert.Issuer}");
-            builder.AppendLine($"Serial number: {cert.SerialNumber}");
-            builder.AppendLine($"Thumbprint: {cert.Thumbprint}");
-            builder.AppendLine($"Valid from: {cert.NotBefore:G}");
-            builder.AppendLine($"Valid until: {cert.NotAfter:G}");
-            builder.AppendLine($"Signature algorithm: {cert.SignatureAlgorithm.FriendlyName ?? cert.SignatureAlgorithm.Value}");
-            builder.AppendLine($"Public key: {cert.PublicKey.Oid.FriendlyName ?? cert.PublicKey.Oid.Value}");
-            builder.AppendLine($"Has private key: {(cert.HasPrivateKey ? "yes" : "no")}");
-            if (usages.Length > 0)
-                builder.AppendLine($"Enhanced key usage: {string.Join(", ", usages)}");
-            builder.AppendLine($"File size: {FormatNumber(probe.Size)} bytes");
-
-            return new PreviewReady(requestId, "certificate", $"{fileName} - {cert.GetNameInfo(X509NameType.SimpleName, false)}", 720, 520)
-            {
-                TextContent = builder.ToString(),
-                TextFormat = "plain",
-                TextLanguage = "text",
-            };
-        }
-        catch (Exception ex)
-        {
-            return new PreviewReady(requestId, "certificate", fileName, 640, 420)
-            {
-                TextContent = $"Name: {fileName}\nKind: certificate\nSize: {FormatNumber(probe.Size)} bytes\nStatus: failed to parse certificate\nError: {ex.Message}",
-                TextFormat = "plain",
-                TextLanguage = "text",
-            };
-        }
-    }
-
-    private static string FormatNumber(long value)
-        => value.ToString("N0");
 
     private static string? CallInfoPreview(string path, FileProbe probe)
     {

@@ -27,6 +27,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("cloud.png", "image")]
     [InlineData("cloud.zip", "archive")]
     [InlineData("cloud.mp4", "video")]
+    [InlineData("cloud.cer", "certificate")]
     [InlineData("cloud.vendor", "unknown")]
     public void Metadata_only_probe_routes_without_content(string fileName, string expectedKind)
     {

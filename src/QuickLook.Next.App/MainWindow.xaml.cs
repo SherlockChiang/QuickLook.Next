@@ -2891,7 +2891,8 @@ public sealed partial class MainWindow : Window
         => probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase)
            || probe.Kind.Equals("ebook", StringComparison.OrdinalIgnoreCase)
            || probe.Kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("torrent", StringComparison.OrdinalIgnoreCase);
+           || probe.Kind.Equals("torrent", StringComparison.OrdinalIgnoreCase)
+           || probe.Kind.Equals("certificate", StringComparison.OrdinalIgnoreCase);
 
     private string ResolveAppIconPath()
     {

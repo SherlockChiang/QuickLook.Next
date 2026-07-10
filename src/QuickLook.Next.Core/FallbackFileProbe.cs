@@ -51,6 +51,8 @@ public static class FallbackFileProbe
         [".epub"] = "ebook", [".fb2"] = "ebook", [".mobi"] = "ebook", [".azw"] = "ebook", [".azw3"] = "ebook",
         [".exe"] = "executable", [".dll"] = "executable", [".sys"] = "executable", [".scr"] = "executable",
         [".cpl"] = "executable", [".ocx"] = "executable",
+        [".cer"] = "certificate", [".crt"] = "certificate", [".der"] = "certificate", [".pem"] = "certificate",
+        [".p7b"] = "certificate", [".p7c"] = "certificate",
         [".torrent"] = "torrent",
     };
 

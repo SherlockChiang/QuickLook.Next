@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.IO.Pipes;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using Xunit;
@@ -131,6 +132,52 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal(requestId, ready.RequestId);
             Assert.Contains("key=\"cloud\"", ready.TextContent);
             Assert.Equal("xml", ready.TextLanguage);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Authenticated_host_previews_certificate_file()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string certificatePath = Path.Combine(tempDirectory, "cloud.cer");
+        using (RSA rsa = RSA.Create(2048))
+        {
+            var request = new CertificateRequest("CN=QuickLook Cloud Test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            using X509Certificate2 certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            await File.WriteAllBytesAsync(certificatePath, certificate.Export(X509ContentType.Cert));
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var probe = new FileProbe(certificatePath, ".cer", [])
+            {
+                Kind = "certificate",
+                Size = new FileInfo(certificatePath).Length,
+            };
+            await channel.SendAsync(new PreviewOpen(requestId, certificatePath, probe), timeout.Token);
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, ready.RequestId);
+            Assert.Contains("CN=QuickLook Cloud Test", ready.TextContent);
+            Assert.Contains("Thumbprint:", ready.TextContent);
         }
         finally
         {
