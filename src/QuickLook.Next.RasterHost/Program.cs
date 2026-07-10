@@ -61,9 +61,17 @@ while (true)
                     DiagLog.Write("RasterHost", "rejected unauthenticated pipe client");
                     return;
                 }
-                authenticated = true;
-                producer.Initialize(hello.AppProcessId);
-                await channel.SendAsync(new HostReady(producer.AdapterLuid));
+                try
+                {
+                    producer.Initialize(hello.AppProcessId);
+                    await channel.SendAsync(new HostReady(producer.AdapterLuid));
+                    authenticated = true;
+                }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("RasterHost", "authentication initialization failed: " + ex.Message);
+                    return;
+                }
                 DiagLog.Write("RasterHost", $"initialized; sent host.ready");
                 break;
 
