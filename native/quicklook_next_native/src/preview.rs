@@ -1927,6 +1927,7 @@ fn is_probably_utf8_text(bytes: &[u8]) -> bool {
 
 const MAX_OFFICE_TEXT_CHARS: usize = 96 * 1024;
 const MAX_OFFICE_INPUT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_OFFICE_ZIP_ENTRIES: usize = 8_192;
 const MAX_OFFICE_ROWS: usize = 48;
 const MAX_OFFICE_SHEETS: usize = 6;
 const MAX_OFFICE_SLIDES: usize = 30;
@@ -1974,7 +1975,7 @@ pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
 
 fn render_docx(path: &str) -> String {
     let filename = file_name(path);
-    let mut zip = match open_zip(path) {
+    let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
         None => return String::new(),
     };
@@ -2007,7 +2008,7 @@ fn render_docx(path: &str) -> String {
 
 fn render_pptx(path: &str) -> String {
     let filename = file_name(path);
-    let mut zip = match open_zip(path) {
+    let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
         None => return String::new(),
     };
@@ -2049,7 +2050,7 @@ fn render_pptx(path: &str) -> String {
 
 fn render_xlsx(path: &str) -> String {
     let filename = file_name(path);
-    let mut zip = match open_zip(path) {
+    let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
         None => return String::new(),
     };
@@ -2092,7 +2093,7 @@ fn render_xlsx(path: &str) -> String {
 
 fn render_odf(path: &str) -> String {
     let filename = file_name(path);
-    let mut zip = match open_zip(path) {
+    let mut zip = match open_office_zip(path) {
         Some(zip) => zip,
         None => return String::new(),
     };
@@ -2116,6 +2117,11 @@ fn open_zip(path: &str) -> Option<ZipArchive<fs::File>> {
     ZipArchive::new(file).ok()
 }
 
+fn open_office_zip(path: &str) -> Option<ZipArchive<fs::File>> {
+    let zip = open_zip(path)?;
+    (zip.len() <= MAX_OFFICE_ZIP_ENTRIES).then_some(zip)
+}
+
 fn read_zip_text<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     name: &str,
@@ -2129,7 +2135,7 @@ fn read_zip_text<R: Read + Seek>(
         return Some(String::from_utf8_lossy(&bytes).to_string());
     }
 
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         let mut entry = zip.by_index(i).ok()?;
         if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
             continue;
@@ -2156,7 +2162,7 @@ fn read_zip_bytes<R: Read + Seek>(
         return read_limited_to_end(&mut entry, max_size);
     }
 
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         let mut entry = zip.by_index(i).ok()?;
         if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
             continue;
