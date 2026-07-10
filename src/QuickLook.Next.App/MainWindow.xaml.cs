@@ -1613,6 +1613,12 @@ public sealed partial class MainWindow : Window
             await Task.Delay(ImageSidecarLoadDelayMs, token);
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return;
+            bool stillRequiresHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), token);
+            if (stillRequiresHydration)
+            {
+                DiagLog.Write("App", $"image sidecars skipped while cloud hydration remains pending: {path}");
+                return;
+            }
 
             DispatcherQueue.TryEnqueue(() =>
             {
