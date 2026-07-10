@@ -122,9 +122,15 @@ internal sealed class PdfPreviewPresenter
         error = null;
         Compositor? compositor = _compositorProvider();
         if (compositor is null || !_pageHosts.TryGetValue(surface.PageIndex, out var pageHost))
+        {
+            CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
             return true;
+        }
         if (_pageStates.TryGetValue(surface.PageIndex, out PdfPageState state) && state == PdfPageState.Released)
+        {
+            CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
             return true;
+        }
 
         var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(compositor, (nint)surface.SharedHandle);
         if (hr < 0 || compSurface is null)

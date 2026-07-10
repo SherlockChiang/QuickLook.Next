@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.UI.Dispatching;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
@@ -13,7 +15,6 @@ namespace QuickLook.Next.App;
 /// </summary>
 internal sealed class RasterHostSupervisor
 {
-    private const string PipeName = "quicklook_next";
     private static readonly TimeSpan PreviewTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HostConnectTimeout = TimeSpan.FromSeconds(5);
 
@@ -24,6 +25,7 @@ internal sealed class RasterHostSupervisor
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
     private Process? _host;
+    private string? _sessionToken;
     private int _generation;
     private int _restartAttempts;
     private bool _stopping;
@@ -55,17 +57,22 @@ internal sealed class RasterHostSupervisor
         try { _host?.Dispose(); } catch { }
         _host = null;
         _server?.Dispose();
-        _server = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        string pipeName = $"quicklook_next_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        _sessionToken = RandomNumberGenerator.GetHexString(32);
+        _server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 
         DiagLog.Write("App", $"launching host: {_hostExePath} (exists={File.Exists(_hostExePath)})");
         var psi = new ProcessStartInfo(_hostExePath)
         {
-            Arguments = $"--pipe {PipeName}",
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
         };
+        psi.ArgumentList.Add("--pipe");
+        psi.ArgumentList.Add(pipeName);
+        psi.ArgumentList.Add("--session-token");
+        psi.ArgumentList.Add(_sessionToken);
         _host = Process.Start(psi);
         if (_host is null)
             throw new InvalidOperationException("RasterHost process did not start");
@@ -77,6 +84,12 @@ internal sealed class RasterHostSupervisor
         try
         {
             await _server.WaitForConnectionAsync(connectCts.Token);
+            if (!GetNamedPipeClientProcessId(_server.SafePipeHandle.DangerousGetHandle(), out uint clientPid)
+                || _host is null
+                || clientPid != _host.Id)
+            {
+                throw new InvalidOperationException("RasterHost pipe client did not match the launched process");
+            }
             DiagLog.Write("App", $"host pipe connected gen={gen}");
         }
         catch
@@ -86,7 +99,7 @@ internal sealed class RasterHostSupervisor
         }
 
         _channel = new PipeChannel(_server);
-        await _channel.SendAsync(new Hello(Environment.ProcessId));
+        await _channel.SendAsync(new Hello(Environment.ProcessId, _sessionToken));
         DiagLog.Write("App", "host connected; sent hello");
         _restartAttempts = 0;
         _ = ReadLoopAsync(_channel, gen);
@@ -315,4 +328,8 @@ internal sealed class RasterHostSupervisor
         }
         catch { }
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(nint pipe, out uint clientProcessId);
 }

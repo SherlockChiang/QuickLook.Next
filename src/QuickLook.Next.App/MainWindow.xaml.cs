@@ -900,26 +900,31 @@ public sealed partial class MainWindow : Window
             "App",
             $"surface received request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}",
             50);
-        EnsureCompositor();
-        Compositor? compositor = _compositor;
-        if (compositor is null)
-        {
-            DiagLog.Write("App", "surface ignored: compositor unavailable");
-            StatusText.Text = UiStrings.SurfaceFailed;
-            return;
-        }
-
-        // Only accept surfaces for the exact current request. While switching/closing the session request id is
-        // null, so late surfaces for a just-closed request are dropped — never build a composition surface
-        // from a handle whose swapchain the host may already be retiring.
+        bool handleConsumed = false;
         try
         {
+            EnsureCompositor();
+            Compositor? compositor = _compositor;
+            if (compositor is null)
+            {
+                DiagLog.Write("App", "surface ignored: compositor unavailable");
+                StatusText.Text = UiStrings.SurfaceFailed;
+                return;
+            }
+
+            // Only accept surfaces for the exact current request. While switching/closing the session request id is
+            // null, so late surfaces for a just-closed request are dropped — never build a composition surface
+            // from a handle whose swapchain the host may already be retiring.
             if (!_previewSession.IsCurrentRequest(surface.RequestId)) return;
 
             if (surface.PageIndex >= 0)
             {
+                if (_pdfPresenter is null)
+                    return;
+
                 var pdfAttachWatch = Stopwatch.StartNew();
-                if (_pdfPresenter?.AttachSurface(surface, out string? pdfError) == false)
+                handleConsumed = true;
+                if (!_pdfPresenter.AttachSurface(surface, out string? pdfError))
                 {
                     StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
                     return;
@@ -936,6 +941,7 @@ public sealed partial class MainWindow : Window
             }
 
             var attachWatch = Stopwatch.StartNew();
+            handleConsumed = true;
             if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
             {
                 StatusText.Text = error ?? UiStrings.SurfaceFailed;
@@ -957,6 +963,11 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", $"FATAL ERROR in OnSurfaceReceived: {ex}");
+        }
+        finally
+        {
+            if (!handleConsumed)
+                CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
         }
     }
 

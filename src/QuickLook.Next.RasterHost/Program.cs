@@ -14,6 +14,7 @@ if (GetArg(args, "--smoke-system-image-corpus") is { } smokeCorpusDir)
 }
 
 string pipeName = GetArg(args, "--pipe") ?? "quicklook_next";
+string? sessionToken = GetArg(args, "--session-token");
 
 DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "raster-host.log"));
 DiagLog.Write("RasterHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
@@ -53,6 +54,12 @@ while (true)
         switch (msg)
         {
             case Hello hello:
+                if (string.IsNullOrWhiteSpace(sessionToken)
+                    || !string.Equals(hello.SessionToken, sessionToken, StringComparison.Ordinal))
+                {
+                    DiagLog.Write("RasterHost", "rejected unauthenticated pipe client");
+                    return;
+                }
                 producer.Initialize(hello.AppProcessId);
                 await channel.SendAsync(new HostReady(producer.AdapterLuid));
                 DiagLog.Write("RasterHost", $"initialized; sent host.ready");

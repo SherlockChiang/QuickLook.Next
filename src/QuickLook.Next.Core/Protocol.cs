@@ -24,8 +24,8 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewClose), "preview.close")]
 public abstract record ControlMessage;
 
-/// <summary>App → Host on connect: lets the host duplicate the shared surface handle into the App.</summary>
-public sealed record Hello(int AppProcessId) : ControlMessage;
+/// <summary>App → Host on connect: authenticates the launch and lets the host duplicate surface handles into the App.</summary>
+public sealed record Hello(int AppProcessId, string SessionToken) : ControlMessage;
 
 /// <summary>Host → App once ready. AdapterLuid must match the App's compositor adapter for sharing.</summary>
 public sealed record HostReady(long AdapterLuid) : ControlMessage;
