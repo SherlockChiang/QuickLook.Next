@@ -1067,7 +1067,6 @@ public sealed partial class MainWindow : Window
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        ScheduleAnimatedImageLayoutUpdate();
         ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
@@ -1080,13 +1079,9 @@ public sealed partial class MainWindow : Window
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        ScheduleAnimatedImageLayoutUpdate();
         ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
-
-    private void ScheduleAnimatedImageLayoutUpdate()
-        => _animatedImagePresenter?.ScheduleLayoutUpdate();
 
     private string ShowPdfDocument(string requestId, PreviewReady ready)
     {

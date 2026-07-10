@@ -14,6 +14,7 @@ internal sealed class TablePreviewPresenter
     private const double MaxColumnWidth = 240;
     private const double HeaderHeight = 34;
     private const double RowHeight = 32;
+    private static readonly FontFamily TableFontFamily = new("Segoe UI");
 
     private readonly ScrollViewer _scrollViewer;
     private readonly TextBlock _titleText;
@@ -47,26 +48,27 @@ internal sealed class TablePreviewPresenter
 
         int columnCount = Math.Clamp(table.Headers.Length, 1, 64);
         double[] widths = EstimateColumnWidths(table, columnCount);
+        var palette = new TablePalette(_getTheme() != ElementTheme.Light);
 
         _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(RowHeaderWidth) });
         foreach (double width in widths)
             _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
 
         _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderHeight) });
-        AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner);
+        AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, palette);
         for (int c = 0; c < columnCount; c++)
-            AddCell(table.Headers.ElementAtOrDefault(c) ?? $"Column {c + 1}", 0, c + 1, widths[c], HeaderHeight, TableCellKind.Header);
+            AddCell(table.Headers.ElementAtOrDefault(c) ?? $"Column {c + 1}", 0, c + 1, widths[c], HeaderHeight, TableCellKind.Header, palette);
 
         for (int r = 0; r < table.Rows.Length; r++)
         {
             _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(RowHeight) });
             int rowIndex = r + 1;
-            AddCell(rowIndex.ToString(), rowIndex, 0, RowHeaderWidth, RowHeight, TableCellKind.RowHeader);
+            AddCell(rowIndex.ToString(), rowIndex, 0, RowHeaderWidth, RowHeight, TableCellKind.RowHeader, palette);
             string[] cells = table.Rows[r].Cells;
             for (int c = 0; c < columnCount; c++)
             {
                 string value = c < cells.Length ? cells[c] : "";
-                AddCell(value, rowIndex, c + 1, widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell);
+                AddCell(value, rowIndex, c + 1, widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell, palette);
             }
         }
 
@@ -110,7 +112,7 @@ internal sealed class TablePreviewPresenter
         return widths;
     }
 
-    private void AddCell(string text, int row, int column, double width, double height, TableCellKind kind)
+    private void AddCell(string text, int row, int column, double width, double height, TableCellKind kind, TablePalette palette)
     {
         var border = new Border
         {
@@ -119,16 +121,16 @@ internal sealed class TablePreviewPresenter
             Padding = kind is TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
                 ? new Thickness(9, 0, 9, 0)
                 : new Thickness(10, 0, 10, 0),
-            Background = BrushFor(kind),
-            BorderBrush = BrushFor(TableCellKind.GridLine),
+            Background = palette.For(kind),
+            BorderBrush = palette.GridLine,
             BorderThickness = new Thickness(0, 0, 1, 1),
             Child = new TextBlock
             {
                 Text = text,
                 FontSize = kind is TableCellKind.Header or TableCellKind.RowHeader ? 12 : 13,
                 FontWeight = new Windows.UI.Text.FontWeight { Weight = kind is TableCellKind.Header ? (ushort)600 : (ushort)400 },
-                FontFamily = new FontFamily("Segoe UI"),
-                Foreground = BrushFor(kind is TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
+                FontFamily = TableFontFamily,
+                Foreground = palette.For(kind is TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
                     ? TableCellKind.HeaderText
                     : TableCellKind.Text),
                 VerticalAlignment = VerticalAlignment.Center,
@@ -142,24 +144,31 @@ internal sealed class TablePreviewPresenter
         _grid.Children.Add(border);
     }
 
-    private SolidColorBrush BrushFor(TableCellKind kind)
+    private sealed class TablePalette
     {
-        bool dark = _getTheme() != ElementTheme.Light;
-        Windows.UI.Color color = kind switch
+        private readonly bool _dark;
+        private readonly Dictionary<TableCellKind, SolidColorBrush> _brushes;
+
+        public TablePalette(bool dark)
         {
-            TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
-                => dark ? ColorHelper.FromArgb(255, 45, 45, 48) : ColorHelper.FromArgb(255, 246, 247, 249),
-            TableCellKind.AlternateCell
-                => dark ? ColorHelper.FromArgb(22, 255, 255, 255) : ColorHelper.FromArgb(255, 250, 251, 252),
-            TableCellKind.GridLine
-                => dark ? ColorHelper.FromArgb(255, 62, 62, 66) : ColorHelper.FromArgb(255, 226, 230, 235),
-            TableCellKind.HeaderText
-                => dark ? ColorHelper.FromArgb(255, 218, 222, 230) : ColorHelper.FromArgb(255, 76, 83, 96),
-            TableCellKind.Text
-                => dark ? ColorHelper.FromArgb(255, 244, 244, 244) : ColorHelper.FromArgb(255, 28, 31, 36),
-            _ => dark ? ColorHelper.FromArgb(255, 32, 32, 32) : Colors.White,
-        };
-        return new SolidColorBrush(color);
+            _dark = dark;
+            _brushes = [];
+            GridLine = For(TableCellKind.GridLine);
+        }
+
+        public SolidColorBrush GridLine { get; }
+
+        public SolidColorBrush For(TableCellKind kind) => _brushes.TryGetValue(kind, out var brush)
+            ? brush
+            : _brushes[kind] = new SolidColorBrush(kind switch
+            {
+                TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner => _dark ? ColorHelper.FromArgb(255, 45, 45, 48) : ColorHelper.FromArgb(255, 246, 247, 249),
+                TableCellKind.AlternateCell => _dark ? ColorHelper.FromArgb(22, 255, 255, 255) : ColorHelper.FromArgb(255, 250, 251, 252),
+                TableCellKind.GridLine => _dark ? ColorHelper.FromArgb(255, 62, 62, 66) : ColorHelper.FromArgb(255, 226, 230, 235),
+                TableCellKind.HeaderText => _dark ? ColorHelper.FromArgb(255, 218, 222, 230) : ColorHelper.FromArgb(255, 76, 83, 96),
+                TableCellKind.Text => _dark ? ColorHelper.FromArgb(255, 244, 244, 244) : ColorHelper.FromArgb(255, 28, 31, 36),
+                _ => _dark ? ColorHelper.FromArgb(255, 32, 32, 32) : Colors.White,
+            });
     }
 
     private enum TableCellKind

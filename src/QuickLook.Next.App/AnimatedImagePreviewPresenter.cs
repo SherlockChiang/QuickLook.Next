@@ -22,6 +22,7 @@ internal sealed class AnimatedImagePreviewPresenter
     private readonly Image _image;
     private readonly TextBlock _zoomText;
     private readonly CompositeTransform _transform = new();
+    private readonly RectangleGeometry _clip = new();
     private double _sourceWidth;
     private double _sourceHeight;
     private double _zoom = 1.0;
@@ -49,6 +50,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _zoomText = zoomText;
         _image.Stretch = Stretch.Fill;
         _image.RenderTransform = _transform;
+        _previewRoot.Clip = _clip;
         _previewRoot.Loaded += (_, _) => ScheduleLayoutUpdate();
         _image.ImageOpened += (_, _) =>
         {
@@ -151,7 +153,7 @@ internal sealed class AnimatedImagePreviewPresenter
         if (availableWidth <= 1 || availableHeight <= 1)
             return;
 
-        _previewRoot.Clip = new RectangleGeometry { Rect = new Rect(0, 0, availableWidth, availableHeight) };
+        _clip.Rect = new Rect(0, 0, availableWidth, availableHeight);
         double fitScale = Math.Min(1.0, Math.Min(availableWidth / _sourceWidth, availableHeight / _sourceHeight));
         double scale = fitScale * _zoom;
         double scaledWidth = _sourceWidth * scale;
