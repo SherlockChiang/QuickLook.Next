@@ -72,6 +72,7 @@ while (true)
             if (!requests.TryAdd(open.RequestId, cts))
             {
                 cts.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
                 break;
             }
             activePreviewRequestId = open.RequestId;
@@ -120,6 +121,7 @@ while (true)
             {
                 extractCts.Dispose();
                 archiveHandoffGate.Dispose();
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Duplicate request ID."));
                 break;
             }
             if (!archiveHandoffGates.TryAdd(extract.RequestId, archiveHandoffGate))
@@ -208,6 +210,7 @@ while (true)
             {
                 heroCts.Dispose();
                 heroHandoffGate.Dispose();
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Duplicate request ID."));
                 break;
             }
             if (!heroHandoffGates.TryAdd(extract.RequestId, heroHandoffGate))
