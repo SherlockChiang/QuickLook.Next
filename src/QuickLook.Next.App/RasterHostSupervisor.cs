@@ -196,6 +196,7 @@ internal sealed class RasterHostSupervisor
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
         lock (_stateLock)
         {
             _activeRequestId = requestId;
@@ -203,6 +204,23 @@ internal sealed class RasterHostSupervisor
         }
         _ = SendOpenAsync(requestId, path, probe, targetWidth, targetHeight);
         return (requestId, completion);
+    }
+
+    private async Task StopOnTimeoutAsync(Task<ControlMessage> completion, string requestId)
+    {
+        try
+        {
+            await completion;
+        }
+        catch (TimeoutException)
+        {
+            DiagLog.Write("App", $"RasterHost request timed out; terminating host: request={requestId}; gen={_generation}");
+            TryKillHost();
+        }
+        catch
+        {
+            // Terminal errors and cancellation do not require a process restart.
+        }
     }
 
     private async Task SendOpenAsync(string requestId, string path, FileProbe probe, uint targetWidth, uint targetHeight)
