@@ -81,6 +81,7 @@ internal sealed class ParserHostSupervisor
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
         _ = SendOpenAsync(requestId, path, probe);
         return (requestId, completion);
     }
@@ -97,6 +98,7 @@ internal sealed class ParserHostSupervisor
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
         try
         {
             await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
@@ -110,6 +112,23 @@ internal sealed class ParserHostSupervisor
             _pending.Cancel(requestId);
             try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(requestId)) ?? Task.CompletedTask); }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        }
+    }
+
+    private async Task StopOnTimeoutAsync(Task<ControlMessage> completion, string requestId)
+    {
+        try
+        {
+            await completion;
+        }
+        catch (TimeoutException)
+        {
+            DiagLog.Write("App", $"ParserHost request timed out; terminating host: request={requestId}");
+            TryKillHost();
+        }
+        catch
+        {
+            // Terminal errors and cancellation do not require a process restart.
         }
     }
 
