@@ -22,7 +22,8 @@ internal sealed class RasterHostSupervisor
     private readonly string _hostExePath;
     private readonly DispatcherQueue _ui;
     private readonly PendingRequests _pending = new();
-    private readonly ConcurrentDictionary<string, byte> _recycleOnCancel = new();
+    private readonly ConcurrentDictionary<string, byte> _cloudOriginRequests = new();
+    private readonly ConcurrentDictionary<(string RequestId, int PageIndex), byte> _pendingCloudPages = new();
 
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -185,9 +186,11 @@ internal sealed class RasterHostSupervisor
         }
         catch (Exception ex)
         {
+            if (gen != _generation)
+                return;
             DiagLog.Write("App", "host read loop failed: " + ex.Message);
             _ready.TrySetException(ex);
-            _recycleOnCancel.Clear();
+            ClearCloudRequestState();
             _pending.FailAll(ex);
         }
     }
@@ -201,14 +204,22 @@ internal sealed class RasterHostSupervisor
                 AdapterLuid = ready.AdapterLuid;
                 _ready.TrySetResult();
                 break;
-            case PreviewSurface surface: _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface)); break;
+            case PreviewSurface surface:
+                if (surface.PageIndex >= 0)
+                    _pendingCloudPages.TryRemove((surface.RequestId, surface.PageIndex), out _);
+                _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface));
+                break;
             case PreviewReady ready:
-                _recycleOnCancel.TryRemove(ready.RequestId, out _);
                 _pending.TryComplete(ready.RequestId, ready);
                 break;
             case PreviewError error:
-                _recycleOnCancel.TryRemove(error.RequestId, out _);
+                RemoveCloudRequestState(error.RequestId);
                 _pending.TryComplete(error.RequestId, error);
+                break;
+            case PreviewPageError pageError:
+                if (_pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex), out _)
+                    && pageError.TimedOut)
+                    RecycleHost(pageError.RequestId, $"cloud PDF page timed out: page={pageError.PageIndex}");
                 break;
         }
     }
@@ -225,7 +236,7 @@ internal sealed class RasterHostSupervisor
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
         if (recycleHostOnCancel)
-            _recycleOnCancel[requestId] = 0;
+            _cloudOriginRequests[requestId] = 0;
         _ = StopOnTimeoutAsync(completion, requestId);
         lock (_stateLock)
         {
@@ -244,7 +255,7 @@ internal sealed class RasterHostSupervisor
         }
         catch (TimeoutException)
         {
-            _recycleOnCancel.TryRemove(requestId, out _);
+            RemoveCloudRequestState(requestId);
             DiagLog.Write("App", $"RasterHost request timed out; terminating host: request={requestId}; gen={_generation}");
             TryKillHost();
         }
@@ -268,7 +279,7 @@ internal sealed class RasterHostSupervisor
         }
         catch (Exception ex)
         {
-            _recycleOnCancel.TryRemove(requestId, out _);
+            RemoveCloudRequestState(requestId);
             _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
         }
     }
@@ -284,15 +295,35 @@ internal sealed class RasterHostSupervisor
 
     public async Task RenderPageAsync(string requestId, int pageIndex, double scale)
     {
+        var key = (requestId, pageIndex);
+        bool trackCloudPage = _cloudOriginRequests.ContainsKey(requestId);
+        if (trackCloudPage)
+            _pendingCloudPages[key] = 0;
         if (_channel is not null)
         {
-            DiagLog.Write("App", $"host send page open request={requestId}; page={pageIndex}; scale={scale:0.###}");
-            await _channel.SendAsync(new PreviewPageOpen(requestId, pageIndex, scale));
+            try
+            {
+                DiagLog.Write("App", $"host send page open request={requestId}; page={pageIndex}; scale={scale:0.###}");
+                await _channel.SendAsync(new PreviewPageOpen(requestId, pageIndex, scale));
+            }
+            catch
+            {
+                if (trackCloudPage)
+                    _pendingCloudPages.TryRemove(key, out _);
+                throw;
+            }
         }
+        else if (trackCloudPage)
+            _pendingCloudPages.TryRemove(key, out _);
     }
 
     public async Task ClosePageAsync(string requestId, int pageIndex)
     {
+        if (_pendingCloudPages.TryRemove((requestId, pageIndex), out _))
+        {
+            RecycleHost(requestId, $"cloud PDF page canceled: page={pageIndex}");
+            return;
+        }
         if (_channel is not null)
         {
             DiagLog.Write("App", $"host send page close request={requestId}; page={pageIndex}");
@@ -303,7 +334,9 @@ internal sealed class RasterHostSupervisor
     public async Task CloseAsync(string requestId)
     {
         bool wasPending = _pending.Cancel(requestId);
-        bool recycleHost = wasPending && _recycleOnCancel.TryRemove(requestId, out _);
+        bool cloudOrigin = _cloudOriginRequests.TryRemove(requestId, out _);
+        bool recycleHost = wasPending && cloudOrigin;
+        RemovePendingCloudPages(requestId);
         lock (_stateLock)
         {
             if (_activeRequestId == requestId)
@@ -323,10 +356,7 @@ internal sealed class RasterHostSupervisor
         finally
         {
             if (recycleHost)
-            {
-                DiagLog.Write("App", $"recycling RasterHost after cloud preview cancellation: request={requestId}");
-                TryKillHost();
-            }
+                RecycleHost(requestId, "cloud preview canceled while opening");
         }
     }
 
@@ -341,7 +371,7 @@ internal sealed class RasterHostSupervisor
         if (_stopping || gen != _generation) return;
         (string? requestId, string? path) = GetRestartContext();
         DiagLog.Write("App", $"host exited gen={gen}; request={requestId}; scheduling restart");
-        _recycleOnCancel.Clear();
+        ClearCloudRequestState();
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
         _ = RestartAsync(gen, requestId, path);
     }
@@ -397,7 +427,7 @@ internal sealed class RasterHostSupervisor
         DiagLog.Write("App", "host stop");
         _stopping = true;
         ++_generation;
-        _recycleOnCancel.Clear();
+        ClearCloudRequestState();
         _ready.TrySetCanceled();
         _pending.FailAll(new OperationCanceledException("RasterHost stopped"));
         try { _channel?.Dispose(); } catch { }
@@ -417,6 +447,46 @@ internal sealed class RasterHostSupervisor
                 _host.Kill();
         }
         catch { }
+    }
+
+    private void RecycleHost(string requestId, string reason)
+    {
+        DiagLog.Write("App", $"recycling RasterHost: request={requestId}; reason={reason}");
+        lock (_stateLock)
+        {
+            if (_activeRequestId == requestId)
+            {
+                _activeRequestId = null;
+                _activePath = null;
+            }
+        }
+        ++_generation;
+        ClearCloudRequestState();
+        _pending.FailAll(new OperationCanceledException(reason));
+        try { _channel?.Dispose(); } catch { }
+        _channel = null;
+        try { _server?.Dispose(); } catch { }
+        _server = null;
+        TryKillHost();
+    }
+
+    private void RemoveCloudRequestState(string requestId)
+    {
+        _cloudOriginRequests.TryRemove(requestId, out _);
+        RemovePendingCloudPages(requestId);
+    }
+
+    private void RemovePendingCloudPages(string requestId)
+    {
+        foreach (var key in _pendingCloudPages.Keys)
+            if (key.RequestId == requestId)
+                _pendingCloudPages.TryRemove(key, out _);
+    }
+
+    private void ClearCloudRequestState()
+    {
+        _cloudOriginRequests.Clear();
+        _pendingCloudPages.Clear();
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

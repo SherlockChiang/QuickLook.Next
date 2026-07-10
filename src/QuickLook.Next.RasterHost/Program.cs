@@ -454,7 +454,10 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     try
     {
         if (!pdfSessions.TryGetValue(page.RequestId, out var session))
+        {
+            await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, false, "PDF session is no longer available"));
             return;
+        }
 
         var rendered = await session.RenderPageAsync(page.PageIndex, page.Scale, pageCts.Token);
         if (!pdfSessions.TryGetValue(page.RequestId, out var current) || !ReferenceEquals(current, session))
@@ -476,9 +479,15 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     {
         DiagLog.Write("RasterHost", $"page render canceled: request={page.RequestId} page={page.PageIndex}");
     }
+    catch (TimeoutException ex)
+    {
+        DiagLog.Write("RasterHost", $"page render timed out: request={page.RequestId} page={page.PageIndex}");
+        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, true, ex.Message));
+    }
     catch (Exception ex)
     {
         DiagLog.Write("RasterHost", $"page render failed: {ex.Message}");
+        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, false, ex.Message));
     }
     finally
     {

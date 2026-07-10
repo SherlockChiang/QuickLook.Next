@@ -7,6 +7,20 @@ namespace QuickLook.Next.Core.Tests;
 
 public sealed class PipeChannelTests
 {
+    [Fact]
+    public async Task Round_trips_pdf_page_error()
+    {
+        await using var pipes = await ConnectedPipePair.CreateAsync();
+        using var sender = new PipeChannel(pipes.Server);
+        using var receiver = new PipeChannel(pipes.Client);
+        var expected = new PreviewPageError("request", 7, true, "render timed out");
+
+        Task<ControlMessage?> receive = receiver.ReceiveAsync();
+        await sender.SendAsync(expected).WaitAsync(Timeout);
+
+        Assert.Equal(expected, Assert.IsType<PreviewPageError>(await receive.WaitAsync(Timeout)));
+    }
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     [Fact]

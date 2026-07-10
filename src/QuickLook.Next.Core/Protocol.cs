@@ -22,6 +22,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewResize), "preview.resize")]
 [JsonDerivedType(typeof(PreviewPageOpen), "preview.page.open")]
 [JsonDerivedType(typeof(PreviewPageClose), "preview.page.close")]
+[JsonDerivedType(typeof(PreviewPageError), "preview.page.error")]
 [JsonDerivedType(typeof(PreviewClose), "preview.close")]
 [JsonDerivedType(typeof(ArchiveEntryExtract), "archive.entry.extract")]
 [JsonDerivedType(typeof(ArchiveEntryExtracted), "archive.entry.extracted")]
@@ -83,6 +84,9 @@ public sealed record PreviewPageOpen(string RequestId, int PageIndex, double Sca
 
 /// <summary>App → Host: a page scrolled out of the keep-alive window; release its GPU surface.</summary>
 public sealed record PreviewPageClose(string RequestId, int PageIndex) : ControlMessage;
+
+/// <summary>Host → App: one requested page failed before publishing a surface.</summary>
+public sealed record PreviewPageError(string RequestId, int PageIndex, bool TimedOut, string Message) : ControlMessage;
 
 /// <summary>App → Host: tear down a preview.</summary>
 public sealed record PreviewClose(string RequestId) : ControlMessage;
