@@ -85,14 +85,18 @@ internal static class NativeImageDecoder
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<NativeDecodedImage?> decodeTask = DecodeOnGateAsync(path, cancellationToken, targetWidth, targetHeight);
-        Task delayTask = Task.Delay(timeout, timeoutCts.Token);
-        Task completed = await Task.WhenAny(decodeTask, delayTask);
-        if (completed != decodeTask)
-            return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
+        timeoutCts.CancelAfter(timeout);
+        NativeDecodedImage? nativeImage;
+        try
+        {
+            nativeImage = await DecodeOnGateAsync(path, timeoutCts.Token, targetWidth, targetHeight);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            nativeImage = null;
+        }
 
-        timeoutCts.Cancel();
-        NativeDecodedImage? nativeImage = await decodeTask;
+        cancellationToken.ThrowIfCancellationRequested();
         return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
     }
 

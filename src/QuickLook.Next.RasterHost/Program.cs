@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using QuickLook.Next.Core;
@@ -31,8 +32,8 @@ catch (Exception ex) { DiagLog.Write("RasterHost", "pipe connect FAILED: " + ex)
 using var channelLifetime = channel;
 using var producer = new CompositionProducer();
 using var idleTrimmer = new IdleTrimmer(producer);
-var pdfSessions = new Dictionary<string, PdfPreviewSession>();
-var pdfPageRenderCts = new Dictionary<(string RequestId, int PageIndex), CancellationTokenSource>();
+var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
+var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
@@ -68,7 +69,7 @@ while (true)
             break;
 
         case PreviewPageOpen page:
-            await HandlePageOpenAsync(page);
+            _ = HandlePageOpenAsync(page);
             break;
 
         case PreviewPageClose pageClose:
@@ -78,14 +79,13 @@ while (true)
 
             case PreviewClose close:
                 CancelOpen(close.RequestId);
-                if (pdfSessions.Remove(close.RequestId, out var pdf))
+                if (pdfSessions.TryRemove(close.RequestId, out var pdf))
                     pdf.Dispose();
                 foreach (var key in pdfPageRenderCts.Keys.Where(k => k.RequestId == close.RequestId).ToArray())
                 {
-                    if (pdfPageRenderCts.TryGetValue(key, out var cts))
+                    if (pdfPageRenderCts.TryRemove(key, out var cts))
                     {
                         try { cts.Cancel(); } catch (ObjectDisposedException) { }
-                        pdfPageRenderCts.Remove(key);
                     }
                 }
                 producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
@@ -159,7 +159,7 @@ void CancelOpen(string requestId)
 void CancelPageRender(string requestId, int pageIndex)
 {
     var key = (requestId, pageIndex);
-    if (!pdfPageRenderCts.Remove(key, out var cts))
+    if (!pdfPageRenderCts.TryRemove(key, out var cts))
         return;
 
     try { cts.Cancel(); } catch (ObjectDisposedException) { }
@@ -174,7 +174,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         cancellationToken.ThrowIfCancellationRequested();
         if (IsPdf(open.Probe))
         {
-            if (pdfSessions.Remove(open.RequestId, out var old)) old.Dispose();
+            if (pdfSessions.TryRemove(open.RequestId, out var old)) old.Dispose();
             var session = await PdfPreviewSession.OpenAsync(open.Path);
             cancellationToken.ThrowIfCancellationRequested();
             pdfSessions[open.RequestId] = session;
@@ -325,14 +325,13 @@ static bool PreferSystemImageDecoder(string path)
 async Task HandlePageOpenAsync(PreviewPageOpen page)
 {
     var key = (page.RequestId, page.PageIndex);
-    if (pdfPageRenderCts.ContainsKey(key))
+    var pageCts = new CancellationTokenSource();
+    if (!pdfPageRenderCts.TryAdd(key, pageCts))
     {
+        pageCts.Dispose();
         DiagLog.Write("RasterHost", $"page render coalesced: request={page.RequestId} page={page.PageIndex}");
         return;
     }
-
-    var pageCts = new CancellationTokenSource();
-    pdfPageRenderCts[key] = pageCts;
 
     try
     {
@@ -365,8 +364,8 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     }
     finally
     {
-        if (pdfPageRenderCts.TryGetValue(key, out var currentCts) && ReferenceEquals(currentCts, pageCts))
-            pdfPageRenderCts.Remove(key);
+        ((ICollection<KeyValuePair<(string RequestId, int PageIndex), CancellationTokenSource>>)pdfPageRenderCts)
+            .Remove(new KeyValuePair<(string RequestId, int PageIndex), CancellationTokenSource>(key, pageCts));
         pageCts.Dispose();
     }
 }
