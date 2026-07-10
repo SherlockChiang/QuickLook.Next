@@ -23,7 +23,8 @@ internal sealed class PdfPreviewPresenter
     private const double PageTargetWidth = 860;
     private const double PageSpacing = 16;
     private const int OffscreenSurfaceCachePages = 5;
-    private const int MaxContinuousPageHosts = 64;
+    private const int MaxActivePageHosts = 64;
+    private const int PageHostOverscan = 4;
 
     private static readonly SolidColorBrush PageBackground = new(Microsoft.UI.Colors.White);
 
@@ -47,7 +48,8 @@ internal sealed class PdfPreviewPresenter
     private long _touchTick;
     private int _currentPageIndex;
     private int _pageCount;
-    private bool _usesPagedFallback;
+    private double _pageDisplayWidth;
+    private double _pageDisplayHeight;
     private double _lastScrollOffset;
     private int _renderVersion;
 
@@ -71,8 +73,9 @@ internal sealed class PdfPreviewPresenter
         _dispatcherQueue = dispatcherQueue;
         _compositorProvider = compositorProvider;
         _supervisorProvider = supervisorProvider;
-        _pagesPanel.Spacing = PageSpacing;
+        _pagesPanel.Spacing = 0;
         _scrollViewer.ViewChanged += (_, _) => RequestVisiblePages();
+        _scrollViewer.SizeChanged += (_, _) => RequestVisiblePages();
     }
 
     public PdfPreviewResult Render(string requestId, PreviewReady ready, (double Width, double Height) maxContent)
@@ -94,19 +97,9 @@ internal sealed class PdfPreviewPresenter
         double displayHeight = Math.Round(pageHeight * _scale);
 
         _pageCount = Math.Max(1, ready.PageCount);
-        _usesPagedFallback = _pageCount > MaxContinuousPageHosts;
-        int hostCount = _usesPagedFallback ? 1 : _pageCount;
-        for (int i = 0; i < hostCount; i++)
-        {
-            var pageHost = new Border
-            {
-                Width = displayWidth,
-                Height = displayHeight,
-                Background = PageBackground,
-            };
-            _pageHosts[i] = pageHost;
-            _pagesPanel.Children.Add(pageHost);
-        }
+        _pageDisplayWidth = displayWidth;
+        _pageDisplayHeight = displayHeight;
+        UpdatePageHosts(0, Math.Min(_pageCount - 1, MaxActivePageHosts - 1));
 
         _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         _pagerBar.Visibility = _pageCount > 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -144,8 +137,6 @@ internal sealed class PdfPreviewPresenter
             return false;
         }
 
-        pageHost.Width = surface.Width;
-        pageHost.Height = surface.Height;
         TouchPage(surface.PageIndex);
         SetPageState(surface.PageIndex, PdfPageState.Rendered);
         DisposePageVisual(pageHost);
@@ -170,12 +161,7 @@ internal sealed class PdfPreviewPresenter
             return;
 
         int pageCount = _pageCount;
-        if (_usesPagedFallback)
-        {
-            RequestCurrentPage(supervisor);
-            return;
-        }
-        double pageHeight = _pageHosts[0].ActualHeight;
+        double pageHeight = _pageDisplayHeight;
         if (pageHeight <= 0)
             return;
 
@@ -191,6 +177,7 @@ internal sealed class PdfPreviewPresenter
 
         int renderFirst = Math.Max(0, firstVisible - 1);
         int renderLast = Math.Min(pageCount - 1, lastVisible + 2);
+        UpdatePageHosts(renderFirst, renderLast);
         foreach (int index in PrioritizePageRequests(renderFirst, renderLast, _currentPageIndex, scrollingDown))
         {
             if (!_requestedPages.Contains(index))
@@ -208,21 +195,6 @@ internal sealed class PdfPreviewPresenter
 
         CancelFarPageRequests(renderFirst, renderLast);
         TrimSurfaceCache(renderFirst, renderLast);
-    }
-
-    private void RequestCurrentPage(RasterHostSupervisor supervisor)
-    {
-        int pageIndex = _currentPageIndex;
-        if (_requestedPages.Add(pageIndex))
-        {
-            TouchPage(pageIndex);
-            SetPageState(pageIndex, PdfPageState.Requested);
-            _ = RenderPageAsync(supervisor, _requestId!, pageIndex, _scale);
-        }
-        else
-        {
-            TouchPage(pageIndex);
-        }
     }
 
     public void GoToPreviousPage()
@@ -251,7 +223,8 @@ internal sealed class PdfPreviewPresenter
         _touchTick = 0;
         _currentPageIndex = 0;
         _pageCount = 0;
-        _usesPagedFallback = false;
+        _pageDisplayWidth = 0;
+        _pageDisplayHeight = 0;
         _lastScrollOffset = 0;
         _requestId = null;
         _renderVersion++;
@@ -265,15 +238,7 @@ internal sealed class PdfPreviewPresenter
             return;
 
         pageIndex = Math.Clamp(pageIndex, 0, _pageCount - 1);
-        if (_usesPagedFallback)
-        {
-            ShowPagedFallbackPage(pageIndex);
-            return;
-        }
-        double pageHeight = _pageHosts.TryGetValue(0, out Border? firstPage)
-            ? Math.Max(1, firstPage.ActualHeight > 0 ? firstPage.ActualHeight : firstPage.Height)
-            : 1;
-        double targetOffset = pageIndex * (pageHeight + PageSpacing);
+        double targetOffset = pageIndex * (_pageDisplayHeight + PageSpacing);
         SetCurrentPage(pageIndex);
         _scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
         RequestVisiblePages();
@@ -305,40 +270,76 @@ internal sealed class PdfPreviewPresenter
         int displayPage = pageCount == 0 ? 0 : _currentPageIndex + 1;
         _pageIndicator.Text = pageCount == 0
             ? UiStrings.PdfPageIndicatorEmpty
-            : UiStrings.Format(
-                _usesPagedFallback ? UiStrings.PdfPageIndicatorPagedFormat : UiStrings.PdfPageIndicatorFormat,
-                displayPage,
-                pageCount);
+            : UiStrings.Format(UiStrings.PdfPageIndicatorFormat, displayPage, pageCount);
         _previousButton.IsEnabled = pageCount > 1 && _currentPageIndex > 0;
         _nextButton.IsEnabled = pageCount > 1 && _currentPageIndex < pageCount - 1;
-    }
-
-    private void ShowPagedFallbackPage(int pageIndex)
-    {
-        if (pageIndex == _currentPageIndex)
-        {
-            UpdatePager();
-            RequestVisiblePages();
-            return;
-        }
-
-        int oldPageIndex = _currentPageIndex;
-        if (_pageHosts.TryGetValue(oldPageIndex, out Border? host))
-        {
-            ReleasePageSurface(oldPageIndex);
-            _pageHosts.Remove(oldPageIndex);
-            _pageHosts[pageIndex] = host;
-        }
-
-        SetCurrentPage(pageIndex);
-        _scrollViewer.ChangeView(null, 0, null, disableAnimation: false);
-        RequestVisiblePages();
     }
 
     private void TouchPage(int pageIndex)
     {
         _pageLastTouched[pageIndex] = ++_touchTick;
     }
+
+    private void UpdatePageHosts(int renderFirst, int renderLast)
+    {
+        if (_pageCount == 0)
+            return;
+
+        int first = Math.Max(0, renderFirst - PageHostOverscan);
+        int last = Math.Min(_pageCount - 1, renderLast + PageHostOverscan);
+        if (last - first + 1 > MaxActivePageHosts)
+        {
+            first = Math.Clamp(_currentPageIndex - MaxActivePageHosts / 2, 0, _pageCount - MaxActivePageHosts);
+            last = first + MaxActivePageHosts - 1;
+        }
+
+        if (_pageHosts.Count == last - first + 1
+            && _pageHosts.ContainsKey(first)
+            && _pageHosts.ContainsKey(last))
+        {
+            return;
+        }
+
+        foreach (int pageIndex in _pageHosts.Keys.ToArray())
+        {
+            if (pageIndex < first || pageIndex > last)
+            {
+                ReleasePageSurface(pageIndex);
+                _pageHosts.Remove(pageIndex);
+            }
+        }
+
+        for (int pageIndex = first; pageIndex <= last; pageIndex++)
+        {
+            if (_pageHosts.ContainsKey(pageIndex))
+                continue;
+
+            _pageHosts[pageIndex] = new Border
+            {
+                Width = _pageDisplayWidth,
+                Height = _pageDisplayHeight,
+                Margin = new Thickness(0, 0, 0, pageIndex < _pageCount - 1 ? PageSpacing : 0),
+                Background = PageBackground,
+            };
+        }
+
+        _pagesPanel.Children.Clear();
+        double pageExtent = _pageDisplayHeight + PageSpacing;
+        double topSpacerHeight = first * pageExtent;
+        if (topSpacerHeight > 0)
+            _pagesPanel.Children.Add(CreateSpacer(topSpacerHeight));
+
+        for (int pageIndex = first; pageIndex <= last; pageIndex++)
+            _pagesPanel.Children.Add(_pageHosts[pageIndex]);
+
+        int pagesAfter = _pageCount - last - 1;
+        double bottomSpacerHeight = pagesAfter * pageExtent - (pagesAfter > 0 ? PageSpacing : 0);
+        if (bottomSpacerHeight > 0)
+            _pagesPanel.Children.Add(CreateSpacer(bottomSpacerHeight));
+    }
+
+    private static Border CreateSpacer(double height)
+        => new() { Height = height };
 
     private void TrimSurfaceCache(int protectedFirst, int protectedLast)
     {
