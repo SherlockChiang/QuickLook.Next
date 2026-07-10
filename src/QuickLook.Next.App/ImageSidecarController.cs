@@ -130,6 +130,11 @@ internal sealed class ImageSidecarController
                     FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
                     continue;
                 }
+                if (CloudFileStatus.MayRequireHydration(sibling))
+                {
+                    DiagLog.Write("App", $"image filmstrip skipped cloud placeholder: {sibling}");
+                    continue;
+                }
 
                 NativeRasterImage? raster = await _loadThumbnail(sibling, 96, token);
                 if (!_isPathCurrent(path, generation, token))
@@ -250,6 +255,7 @@ internal sealed class ImageSidecarController
         {
             string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
                 .Where(path => !_thumbnailCache.Contains(path))
+                .Where(path => !CloudFileStatus.MayRequireHydration(path))
                 .ToArray();
             if (targets.Length == 0)
                 return;
