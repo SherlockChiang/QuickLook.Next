@@ -39,6 +39,20 @@ jobs:
           "BETA_VERSION=$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_TAG=v$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Test native layer
+        shell: pwsh
+        run: cargo test --manifest-path native/quicklook_next_native/Cargo.toml
+
+      - name: Check NuGet vulnerabilities
+        shell: pwsh
+        run: dotnet list QuickLook.Next.slnx package --vulnerable --include-transitive
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file native/quicklook_next_native/Cargo.lock
+
       - name: Build release package
         shell: pwsh
         run: |
