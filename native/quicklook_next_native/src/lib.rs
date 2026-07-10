@@ -66,12 +66,15 @@ const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
+const QL_THUMBNAIL_KNOWN_FLAGS: u32 = QL_THUMBNAIL_FLAG_CACHE_ONLY;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
 struct ThumbnailRequest {
     path: String,
     size: i32,
+    flags: u32,
     reply: mpsc::Sender<ThumbnailResult>,
 }
 
@@ -1380,10 +1383,27 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
     cancel_cb.map(|cb| cb()).unwrap_or(false)
 }
 
+fn thumbnail_flags_valid(flags: u32) -> bool {
+    flags & !QL_THUMBNAIL_KNOWN_FLAGS == 0
+}
+
+fn thumbnail_cache_only(flags: u32) -> bool {
+    flags & QL_THUMBNAIL_FLAG_CACHE_ONLY != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn thumbnail_flags_reject_unknown_bits() {
+        assert!(thumbnail_flags_valid(0));
+        assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY));
+        assert!(thumbnail_cache_only(QL_THUMBNAIL_FLAG_CACHE_ONLY));
+        assert!(!thumbnail_cache_only(0));
+        assert!(!thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY | 2));
+    }
 
     #[test]
     fn ffi_accepts_multibyte_windows_path_sized_strings() {
@@ -1863,7 +1883,7 @@ pub extern "C" fn ql_get_thumbnail(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_get_thumbnail_cancelable(path_utf8, path_len, size, out, out_cap, None)
+    ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
 }
 
 #[no_mangle]
@@ -1875,12 +1895,30 @@ pub extern "C" fn ql_get_thumbnail_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    ql_get_thumbnail_cancelable_with_flags(
+        path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn ql_get_thumbnail_cancelable_with_flags(
+    path_utf8: *const u8,
+    path_len: usize,
+    size: i32,
+    flags: u32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    if !thumbnail_flags_valid(flags) {
+        return -1;
+    }
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s.to_string(),
         None => return -1,
     };
 
-    let result = shell_thumbnail_on_sta(path, size.max(16), cancel_cb);
+    let result = shell_thumbnail_on_sta(path, size.max(16), flags, cancel_cb);
     if cancel_requested(cancel_cb) {
         return -3;
     }
@@ -1907,7 +1945,7 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             while let Ok(request) = receiver.recv() {
-                let result = shell_thumbnail(&request.path, request.size.max(16));
+                let result = shell_thumbnail(&request.path, request.size.max(16), request.flags);
                 let _ = request.reply.send(result);
             }
             CoUninitialize();
@@ -1919,12 +1957,14 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
 fn shell_thumbnail_on_sta(
     path: String,
     size: i32,
+    flags: u32,
     cancel_cb: Option<CancelCallback>,
 ) -> ThumbnailResult {
     let (reply, result) = mpsc::channel();
     let request = ThumbnailRequest {
         path,
         size,
+        flags,
         reply,
     };
     if thumbnail_sta_worker().sender.send(request).is_err() {
@@ -2003,16 +2043,20 @@ pub extern "C" fn ql_extract_office_image(
     total as i32
 }
 
-unsafe fn shell_thumbnail(path: &str, size: i32) -> Option<(u32, u32, Vec<u8>)> {
+unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::UI::Shell::{
         IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
+        SIIGBF_INCACHEONLY,
     };
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()?;
     let factory: IShellItemImageFactory = item.cast().ok()?;
-    let hbm = factory
-        .GetImage(SIZE { cx: size, cy: size }, SIIGBF_BIGGERSIZEOK)
-        .ok()?;
+    let shell_flags = if thumbnail_cache_only(flags) {
+        SIIGBF_BIGGERSIZEOK | SIIGBF_INCACHEONLY
+    } else {
+        SIIGBF_BIGGERSIZEOK
+    };
+    let hbm = factory.GetImage(SIZE { cx: size, cy: size }, shell_flags).ok()?;
     let result = hbitmap_to_bgra(hbm);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbm.into());
     result

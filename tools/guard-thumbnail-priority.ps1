@@ -17,8 +17,9 @@ $appRoot = Join-Path $Root "src/QuickLook.Next.App"
 $mainWindowPath = Join-Path $appRoot "MainWindow.xaml.cs"
 $sidecarPath = Join-Path $appRoot "ImageSidecarController.cs"
 $schedulerPath = Join-Path $appRoot "NativeThumbnailScheduler.cs"
+$nativePath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 
-foreach ($path in @($mainWindowPath, $sidecarPath, $schedulerPath)) {
+foreach ($path in @($mainWindowPath, $sidecarPath, $schedulerPath, $nativePath)) {
     if (-not (Test-Path $path)) {
         Add-Failure "Missing thumbnail priority source: $path"
     }
@@ -34,6 +35,15 @@ if (Test-Path $mainWindowPath) {
     }
     if ($mainWindowText -notmatch 'NativeThumbnailPriority\.Background') {
         Add-Failure "MainWindow does not mark filmstrip thumbnails as background"
+    }
+    if ($mainWindowText -notmatch 'NativeThumbnailPriority\.Background, cacheOnly: true') {
+        Add-Failure "Automatic filmstrip thumbnails must use the Shell cache only"
+    }
+    if ($mainWindowText -notmatch 'LoadAsync\(path, 32, NativeThumbnailPriority\.Foreground, cacheOnly: true') {
+        Add-Failure "Automatic listing thumbnails must use the Shell cache only"
+    }
+    if (($mainWindowText | Select-String -Pattern 'NativeThumbnailPriority\.Foreground, cacheOnly: false' -AllMatches).Matches.Count -lt 3) {
+        Add-Failure "Explicit package, executable, and certificate heroes must retain foreground thumbnail generation"
     }
 }
 
@@ -51,6 +61,19 @@ if (Test-Path $schedulerPath) {
     }
     if ($schedulerText -notmatch 'if \(_foreground\.Count > 0\)\s*return _foreground\.Dequeue\(\);\s*if \(_background\.Count > 0\)') {
         Add-Failure "NativeThumbnailScheduler must drain foreground thumbnails before background thumbnails"
+    }
+    if ($schedulerText -notmatch 'bool cacheOnly' -or $schedulerText -notmatch 'request\.CacheOnly') {
+        Add-Failure "NativeThumbnailScheduler must preserve the cache-only policy on each request"
+    }
+}
+
+if (Test-Path $nativePath) {
+    $nativeText = Get-Content -LiteralPath $nativePath -Raw
+    if ($nativeText -notmatch 'ql_get_thumbnail_cancelable_with_flags' -or $nativeText -notmatch 'SIIGBF_INCACHEONLY') {
+        Add-Failure "Native thumbnail ABI must expose and apply cache-only requests"
+    }
+    if ($nativeText -notmatch 'ql_get_thumbnail_cancelable_with_flags\(path_utf8, path_len, size, 0, out, out_cap, None\)') {
+        Add-Failure "Legacy thumbnail ABI must preserve non-cache-only behavior"
     }
 }
 

@@ -13,10 +13,15 @@ internal sealed class NativeThumbnailScheduler
         _native = native;
     }
 
-    public Task<NativeRasterImage?> LoadAsync(string path, int size, NativeThumbnailPriority priority, CancellationToken token)
+    public Task<NativeRasterImage?> LoadAsync(
+        string path,
+        int size,
+        NativeThumbnailPriority priority,
+        bool cacheOnly,
+        CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var request = new Request(path, size, token);
+        var request = new Request(path, size, cacheOnly, token);
 
         lock (_gate)
         {
@@ -51,7 +56,7 @@ internal sealed class NativeThumbnailScheduler
 
             try
             {
-                request.TrySetResult(_native.TryGetThumbnail(request.Path, request.Size, request.Token));
+                request.TrySetResult(_native.TryGetThumbnail(request.Path, request.Size, request.CacheOnly, request.Token));
             }
             catch (OperationCanceledException)
             {
@@ -84,10 +89,11 @@ internal sealed class NativeThumbnailScheduler
         private readonly TaskCompletionSource<NativeRasterImage?> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenRegistration _registration;
 
-        public Request(string path, int size, CancellationToken token)
+        public Request(string path, int size, bool cacheOnly, CancellationToken token)
         {
             Path = path;
             Size = size;
+            CacheOnly = cacheOnly;
             Token = token;
             if (token.CanBeCanceled)
                 _registration = token.Register(static state => ((Request)state!).CancelFromToken(), this);
@@ -95,6 +101,7 @@ internal sealed class NativeThumbnailScheduler
 
         public string Path { get; }
         public int Size { get; }
+        public bool CacheOnly { get; }
         public CancellationToken Token { get; }
         public Task<NativeRasterImage?> Task => _completion.Task;
 

@@ -63,6 +63,8 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_get_thumbnail_cancelable_with_flags(byte[] pathUtf8, nuint pathLen, int size, uint flags, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_gif_frames_sized(
         byte[] pathUtf8,
         nuint pathLen,
@@ -279,6 +281,9 @@ internal sealed class NativeBridge
         => TryGetThumbnail(path, size, CancellationToken.None);
 
     public NativeRasterImage? TryGetThumbnail(string path, int size, CancellationToken token)
+        => TryGetThumbnail(path, size, cacheOnly: false, token);
+
+    public NativeRasterImage? TryGetThumbnail(string path, int size, bool cacheOnly, CancellationToken token)
     {
         NativeCancelCallback? cancelCb = null;
         try
@@ -292,9 +297,11 @@ internal sealed class NativeBridge
                 byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
                 try
                 {
-                    int n = cancelCb is null
-                        ? ql_get_thumbnail(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length)
-                        : ql_get_thumbnail_cancelable(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length, cancelCb);
+                    int n = cacheOnly
+                        ? ql_get_thumbnail_cancelable_with_flags(pathBytes, (nuint)pathBytes.Length, size, 1, outBuf, (nuint)outBuf.Length, cancelCb)
+                        : cancelCb is null
+                            ? ql_get_thumbnail(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length)
+                            : ql_get_thumbnail_cancelable(pathBytes, (nuint)pathBytes.Length, size, outBuf, (nuint)outBuf.Length, cancelCb);
                     return (n, outBuf);
                 }
                 catch

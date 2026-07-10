@@ -224,7 +224,7 @@ public sealed partial class MainWindow : Window
             path => _native.TryPreviewFolderListing(path),
             IsImagePath,
             IsImageFilmstripLoadCurrent,
-            (path, size, token) => _thumbnailScheduler.LoadAsync(path, size, NativeThumbnailPriority.Background, token),
+            (path, size, token) => _thumbnailScheduler.LoadAsync(path, size, NativeThumbnailPriority.Background, cacheOnly: true, token),
             CreateBitmapSource);
         _exifPresenter = new ExifPreviewPresenter(
             ExifDetailsList,
@@ -1437,7 +1437,7 @@ public sealed partial class MainWindow : Window
             bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), token);
             if (mayRequireHydration || !IsPreviewGenerationCurrent(generation, token))
                 return null;
-            NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(path, 32, NativeThumbnailPriority.Foreground, token);
+            NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(path, 32, NativeThumbnailPriority.Foreground, cacheOnly: true, token);
 
             if (!IsPreviewGenerationCurrent(generation, token) || raster is null)
                 return null;
@@ -1539,7 +1539,7 @@ public sealed partial class MainWindow : Window
             NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(path, "package", token);
             return icon ?? (cloudOrigin
                 ? null
-                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token));
+                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token));
         }
 
         if (IsOfficePreviewWithImages(ready))
@@ -1551,12 +1551,12 @@ public sealed partial class MainWindow : Window
         if (IsExecutablePreview(ready, path))
             return cloudOrigin
                 ? null
-                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, token);
+                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
 
         if (ready.Kind == "certificate")
             return cloudOrigin
                 ? null
-                : await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, token);
+                : await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
 
         return null;
     }
