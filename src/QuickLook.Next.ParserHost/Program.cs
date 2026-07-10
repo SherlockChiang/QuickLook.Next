@@ -113,6 +113,11 @@ while (true)
         case ArchiveEntryExtract extract when IsValidRequestId(extract.RequestId)
                                               && !string.IsNullOrWhiteSpace(extract.ArchivePath)
                                               && !string.IsNullOrWhiteSpace(extract.EntryPath):
+            if (archiveEntries.ContainsKey(extract.RequestId))
+            {
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Archive handoff has not been released."));
+                break;
+            }
             closedArchiveEntries.TryRemove(extract.RequestId, out _);
             var extractCts = new CancellationTokenSource();
             var archiveHandoffGate = new SemaphoreSlim(1, 1);
@@ -201,6 +206,11 @@ while (true)
             if (!IsValidHeroKind(extract.Kind) || !IsValidRequestId(extract.RequestId))
             {
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Invalid hero raster request."));
+                break;
+            }
+            if (heroRasters.ContainsKey(extract.RequestId))
+            {
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster handoff has not been released."));
                 break;
             }
             var heroCts = new CancellationTokenSource();
