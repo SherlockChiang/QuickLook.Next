@@ -24,6 +24,11 @@ internal sealed class TablePreviewPresenter
     private PreviewTable? _table;
     private double[] _widths = [];
     private TablePalette? _palette;
+    private int _firstRenderedRow = -1;
+    private int _lastRenderedRow = -1;
+    private int _firstRenderedColumn = -1;
+    private int _lastRenderedColumn = -1;
+    private bool _headerRendered;
 
     public TablePreviewPresenter(
         ScrollViewer scrollViewer,
@@ -57,6 +62,7 @@ internal sealed class TablePreviewPresenter
         double tableHeight = HeaderHeight + table.Rows.Length * RowHeight;
         _canvas.Width = tableWidth;
         _canvas.Height = tableHeight;
+        ResetRenderedRange();
         RenderViewport();
         double widthTarget = Math.Clamp(Math.Min(tableWidth + 72, maxContent.Width), 560, maxContent.Width);
         double heightTarget = Math.Clamp(Math.Min(tableHeight + 132, maxContent.Height), 320, maxContent.Height);
@@ -68,6 +74,7 @@ internal sealed class TablePreviewPresenter
         _table = null;
         _widths = [];
         _palette = null;
+        ResetRenderedRange();
         _canvas.Children.Clear();
         _canvas.Width = 0;
         _canvas.Height = 0;
@@ -105,7 +112,6 @@ internal sealed class TablePreviewPresenter
 
     private void RenderViewport()
     {
-        _canvas.Children.Clear();
         if (_table is null || _palette is null || _widths.Length == 0)
             return;
 
@@ -130,7 +136,24 @@ internal sealed class TablePreviewPresenter
         while (lastColumn < _widths.Length && columnRight < right)
             columnRight += _widths[lastColumn++];
 
-        if (top < HeaderHeight)
+        int firstRow = Math.Max(0, (int)Math.Floor((top - HeaderHeight) / RowHeight));
+        int lastRow = Math.Min(_table.Rows.Length, (int)Math.Ceiling((bottom - HeaderHeight) / RowHeight));
+        bool showHeader = top < HeaderHeight;
+        if (firstRow == _firstRenderedRow
+            && lastRow == _lastRenderedRow
+            && firstColumn == _firstRenderedColumn
+            && lastColumn == _lastRenderedColumn
+            && showHeader == _headerRendered)
+            return;
+
+        _firstRenderedRow = firstRow;
+        _lastRenderedRow = lastRow;
+        _firstRenderedColumn = firstColumn;
+        _lastRenderedColumn = lastColumn;
+        _headerRendered = showHeader;
+        _canvas.Children.Clear();
+
+        if (showHeader)
         {
             AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, _palette);
             double x = columnLeft;
@@ -141,8 +164,6 @@ internal sealed class TablePreviewPresenter
             }
         }
 
-        int firstRow = Math.Max(0, (int)Math.Floor((top - HeaderHeight) / RowHeight));
-        int lastRow = Math.Min(_table.Rows.Length, (int)Math.Ceiling((bottom - HeaderHeight) / RowHeight));
         for (int r = firstRow; r < lastRow; r++)
         {
             double y = HeaderHeight + r * RowHeight;
@@ -155,6 +176,15 @@ internal sealed class TablePreviewPresenter
                 x += _widths[c];
             }
         }
+    }
+
+    private void ResetRenderedRange()
+    {
+        _firstRenderedRow = -1;
+        _lastRenderedRow = -1;
+        _firstRenderedColumn = -1;
+        _lastRenderedColumn = -1;
+        _headerRendered = false;
     }
 
     private void AddCell(string text, double x, double y, double width, double height, TableCellKind kind, TablePalette palette)
