@@ -20,14 +20,14 @@ if ($VersionPrefix -and $VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
 }
 
 Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
-cargo build --release --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
 
 Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
 $rasterHostRelease = Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release"
 if (Test-Path $rasterHostRelease) { Remove-Item $rasterHostRelease -Recurse -Force }
 
 Write-Host "== building solution (Release) ==" -ForegroundColor Cyan
-$buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release")
+$buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release", "--no-restore")
 if ($VersionPrefix) {
     $buildArgs += "/p:VersionPrefix=$VersionPrefix"
 }

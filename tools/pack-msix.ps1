@@ -1,6 +1,7 @@
 # Build and Pack QuickLook.Next as an MSIX package.
 param(
-    [string]$version = "1.0.0.0"
+    [string]$version = "1.0.0.0",
+    [switch]$CreateDevCertificate
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
@@ -97,24 +98,22 @@ if (Test-Path $msixPath) { Remove-Item $msixPath -Force }
 Write-Host "MSIX package created at $msixPath" -ForegroundColor Green
 
 if ($signTool) {
-    Write-Host "== Step 6: Finding or creating Developer Certificate ==" -ForegroundColor Cyan
+    Write-Host "== Step 6: Finding Developer Certificate ==" -ForegroundColor Cyan
     $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq "CN=QuickLookNextDev" } | Select-Object -First 1
-    if (-not $cert) {
+    if (-not $cert -and $CreateDevCertificate) {
         Write-Host "Creating self-signed developer certificate..."
         $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=QuickLookNextDev" -KeyAlgorithm RSA -KeyLength 2048 -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3") -KeyExportPolicy Exportable
     }
-    
-    # Export developer cert for easy trust configuration
-    $certPath = Join-Path $dist "QuickLookNextDev.cer"
-    Export-Certificate -Cert $cert -FilePath $certPath -Type CERT | Out-Null
-    Write-Host "Developer certificate exported to $certPath"
-    
-    Write-Host "== Step 7: Signing MSIX Package ==" -ForegroundColor Cyan
-    & $signTool sign /a /s My /n "QuickLookNextDev" /fd SHA256 $msixPath
-    Write-Host "MSIX package successfully signed!" -ForegroundColor Green
-    Write-Host "`nTo install and test locally:" -ForegroundColor Yellow
-    Write-Host "1. Double-click 'QuickLookNextDev.cer', click 'Install Certificate', select 'Local Machine', and place it in the 'Trusted People' store." -ForegroundColor Yellow
-    Write-Host "2. Double-click 'QuickLook.Next.msix' to install the application." -ForegroundColor Yellow
+    if ($cert) {
+        # Developer-only signing; this script must not be used for public release signing.
+        $certPath = Join-Path $dist "QuickLookNextDev.cer"
+        Export-Certificate -Cert $cert -FilePath $certPath -Type CERT | Out-Null
+        Write-Host "== Step 7: Signing MSIX Package with a developer certificate ==" -ForegroundColor Cyan
+        & $signTool sign /a /s My /n "QuickLookNextDev" /fd SHA256 $msixPath
+        Write-Host "Developer-signed MSIX created at $msixPath" -ForegroundColor Green
+    } else {
+        Write-Warning "Package is unsigned. Re-run with -CreateDevCertificate only for local development, or sign with a production certificate outside this script."
+    }
 } else {
     Write-Warning "Package created but not signed. To install it, you must sign it manually or enable Developer Mode and use Add-AppxPackage."
 }
