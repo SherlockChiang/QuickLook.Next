@@ -39,6 +39,20 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public Task Host_rejects_control_message_before_authentication()
+        => AssertRejectedAsync((channel, _, cancellationToken) =>
+            channel.SendAsync(new PreviewClose(Guid.NewGuid().ToString("n")), cancellationToken));
+
+    [Fact]
+    public Task Host_rejects_repeated_authentication()
+        => AssertRejectedAsync(async (channel, token, cancellationToken) =>
+        {
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), cancellationToken);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(cancellationToken));
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), cancellationToken);
+        });
+
+    [Fact]
     public async Task Authenticated_host_previews_generated_zip()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
@@ -413,6 +427,29 @@ public sealed class ParserHostIntegrationTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("ParserHost did not start");
+    }
+
+    private static async Task AssertRejectedAsync(Func<PipeChannel, string, CancellationToken, Task> send)
+    {
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await send(channel, token, timeout.Token);
+            Assert.Null(await channel.ReceiveAsync(timeout.Token));
+            await host.WaitForExitAsync(timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+        }
     }
 
     private static async Task StopHostAsync(Process host)

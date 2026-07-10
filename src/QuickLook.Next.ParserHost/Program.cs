@@ -55,7 +55,14 @@ while (true)
             DiagLog.Write("ParserHost", "rejected control message before authentication");
             return;
 
-        case PreviewOpen open when authenticated:
+        case Hello:
+            DiagLog.Write("ParserHost", "rejected repeated authentication");
+            return;
+
+        case PreviewOpen open when IsValidRequestId(open.RequestId)
+                                   && !string.IsNullOrWhiteSpace(open.Path)
+                                   && open.Probe is not null
+                                   && !string.IsNullOrWhiteSpace(open.Probe.Kind):
             foreach (string requestId in requests.Keys)
                 Cancel(requestId);
             var cts = new CancellationTokenSource();
@@ -95,11 +102,13 @@ while (true)
             });
             break;
 
-        case PreviewClose close:
+        case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
             break;
 
-        case ArchiveEntryExtract extract:
+        case ArchiveEntryExtract extract when IsValidRequestId(extract.RequestId)
+                                              && !string.IsNullOrWhiteSpace(extract.ArchivePath)
+                                              && !string.IsNullOrWhiteSpace(extract.EntryPath):
             closedArchiveEntries.TryRemove(extract.RequestId, out _);
             var extractCts = new CancellationTokenSource();
             if (!requests.TryAdd(extract.RequestId, extractCts))
@@ -148,7 +157,7 @@ while (true)
             });
             break;
 
-        case ArchiveEntryExtractClose close:
+        case ArchiveEntryExtractClose close when IsValidRequestId(close.RequestId):
             if (requests.ContainsKey(close.RequestId))
                 closedArchiveEntries[close.RequestId] = 0;
             Cancel(close.RequestId);
@@ -210,11 +219,15 @@ while (true)
             });
             break;
 
-        case HeroRasterExtractClose close:
+        case HeroRasterExtractClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
             if (heroRasters.TryRemove(close.RequestId, out string? tempPath))
                 DeleteHeroRaster(tempPath);
             break;
+
+        default:
+            DiagLog.Write("ParserHost", $"rejected invalid control message: {message.GetType().Name}");
+            return;
     }
 }
 
@@ -240,12 +253,12 @@ static string? GetArg(string[] values, string key)
     return null;
 }
 
-static bool IsValidHeroKind(string kind)
-    => kind.Equals("package", StringComparison.OrdinalIgnoreCase)
-        || kind.Equals("office", StringComparison.OrdinalIgnoreCase);
+static bool IsValidHeroKind(string? kind)
+    => string.Equals(kind, "package", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "office", StringComparison.OrdinalIgnoreCase);
 
-static bool IsValidRequestId(string requestId)
-    => requestId.Length == 32 && requestId.All(static c => char.IsAsciiHexDigit(c));
+static bool IsValidRequestId(string? requestId)
+    => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
 
 static string? WriteHeroRaster(string requestId, byte[] raster)
 {
