@@ -2800,7 +2800,7 @@ public sealed partial class MainWindow : Window
             };
         }
 
-        byte[] magic = new byte[16];
+        byte[] magic = new byte[64];
         try
         {
             using var fs = System.IO.File.OpenRead(path);

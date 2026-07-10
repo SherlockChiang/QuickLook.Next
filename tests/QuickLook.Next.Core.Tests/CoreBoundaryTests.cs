@@ -32,6 +32,9 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.False(FallbackFileProbe.IsText("data.vendor", [0xFF, 0xD9, 0x80]));
         Assert.False(FallbackFileProbe.IsText("data.vendor", "MZprintable header"u8));
         Assert.False(FallbackFileProbe.IsText("data.vendor", "%PDF-readable header"u8));
+        Assert.False(FallbackFileProbe.IsText("payload.config", "MZprintable header"u8));
+        Assert.False(FallbackFileProbe.IsText("document.config", "%PDF-readable header"u8));
+        Assert.False(FallbackFileProbe.IsText("data.vendor", [0xFF, 0xFE, 0x00, 0xD8]));
     }
 
     [Fact]

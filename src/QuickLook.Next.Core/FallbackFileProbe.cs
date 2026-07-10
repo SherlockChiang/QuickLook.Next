@@ -32,11 +32,11 @@ public static class FallbackFileProbe
 
     public static bool IsText(string path, ReadOnlySpan<byte> prefix)
     {
+        if (HasKnownBinarySignature(prefix))
+            return false;
         if (TextExtensions.Contains(Path.GetExtension(path)) || TextFileNames.Contains(Path.GetFileName(path)))
             return true;
         if (prefix.IsEmpty)
-            return false;
-        if (HasKnownBinarySignature(prefix))
             return false;
         if (prefix.Length >= 2 && prefix[0] == 0xFF && prefix[1] == 0xFE)
             return IsPrintableUtf16(prefix[2..], littleEndian: true);
@@ -149,15 +149,15 @@ public static class FallbackFileProbe
     {
         if (bytes.Length < 2 || bytes.Length % 2 != 0)
             return false;
-        char[] chars = new char[bytes.Length / 2];
-        for (int i = 0; i < chars.Length; i++)
+        try
         {
-            int offset = i * 2;
-            chars[i] = (char)(littleEndian
-                ? bytes[offset] | bytes[offset + 1] << 8
-                : bytes[offset] << 8 | bytes[offset + 1]);
+            var encoding = new UnicodeEncoding(!littleEndian, false, true);
+            return IsPrintable(encoding.GetString(bytes));
         }
-        return IsPrintable(new string(chars));
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
     }
 
     private static bool IsPrintable(string text)
