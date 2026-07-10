@@ -91,7 +91,9 @@ while (true)
 
         case PreviewPageClose pageClose:
             CancelPageRender(pageClose.RequestId, pageClose.PageIndex);
-            _ = Task.Delay(250).ContinueWith(_ => producer.ReleasePage(pageClose.PageIndex), TaskContinuationOptions.OnlyOnRanToCompletion);
+            _ = Task.Delay(250).ContinueWith(
+                _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex),
+                TaskContinuationOptions.OnlyOnRanToCompletion);
             break;
 
             case PreviewClose close:
@@ -363,7 +365,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
             return;
 
         var uploadWatch = Stopwatch.StartNew();
-        long handle = producer.CreatePresentedPageSurface(page.PageIndex, rendered.Bgra, rendered.Width, rendered.Height);
+        long handle = producer.CreatePresentedPageSurface(page.RequestId, page.PageIndex, rendered.Bgra, rendered.Width, rendered.Height);
         uploadWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
         var sendWatch = Stopwatch.StartNew();
