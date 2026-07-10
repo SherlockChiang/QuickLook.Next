@@ -39,6 +39,7 @@ var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
+bool authenticated = false;
 
 while (true)
 {
@@ -53,17 +54,26 @@ while (true)
     {
         switch (msg)
         {
-            case Hello hello:
+            case Hello hello when !authenticated:
                 if (string.IsNullOrWhiteSpace(sessionToken)
                     || !string.Equals(hello.SessionToken, sessionToken, StringComparison.Ordinal))
                 {
                     DiagLog.Write("RasterHost", "rejected unauthenticated pipe client");
                     return;
                 }
+                authenticated = true;
                 producer.Initialize(hello.AppProcessId);
                 await channel.SendAsync(new HostReady(producer.AdapterLuid));
                 DiagLog.Write("RasterHost", $"initialized; sent host.ready");
                 break;
+
+            case var _ when !authenticated:
+                DiagLog.Write("RasterHost", "rejected control message before authentication");
+                return;
+
+            case Hello:
+                DiagLog.Write("RasterHost", "rejected repeated authentication");
+                return;
 
             case PreviewOpen open:
                 StartOpen(open);
