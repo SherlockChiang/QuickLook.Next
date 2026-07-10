@@ -577,14 +577,21 @@ public sealed partial class MainWindow : Window
         {
             await CloseCurrentAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), previewToken);
+            CloudFileAvailability availability = await Task.Run(() => CloudFileStatus.GetAvailability(path), previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            bool mayRequireHydration = availability != CloudFileAvailability.Local;
             _currentPreviewWasCloudPlaceholder = mayRequireHydration;
-            if (mayRequireHydration)
+            if (availability == CloudFileAvailability.RequiresHydration)
             {
                 StatusText.Text = $"downloading {System.IO.Path.GetFileName(path)} from cloud storage…";
                 RevealPreviewWindow(activate: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
+            }
+            else if (availability == CloudFileAvailability.Unknown)
+            {
+                StatusText.Text = $"checking {System.IO.Path.GetFileName(path)} availability safely…";
+                RevealPreviewWindow(activate: false);
+                DiagLog.Write("App", $"file availability unknown; using isolated preview gen={generation}; path={path}");
             }
             DiagLog.Write("App", $"preview probe begin gen={generation}");
             FileProbe probe = await Task.Run(
@@ -602,7 +609,9 @@ public sealed partial class MainWindow : Window
                     $"cloud-unknown-{generation}",
                     path,
                     probe,
-                    "Preview is deferred because this cloud file type cannot be identified without downloading its contents.");
+                    availability == CloudFileAvailability.RequiresHydration
+                        ? "Preview is deferred because this cloud file type cannot be identified without downloading its contents."
+                        : "Preview is deferred because file availability could not be verified without reading its contents.");
                 _previewSession.CommitPath(path);
                 _previewSession.SetRequestId(null);
                 StatusText.Text = ShowTextPreview(unknownCloudReady);
@@ -615,10 +624,12 @@ public sealed partial class MainWindow : Window
                 if (mayRequireHydration)
                 {
                     var cloudMediaReady = CreateCloudMetadataPreview(
-                        $"cloud-media-{generation}",
-                        path,
-                        probe,
-                        "Media playback is deferred until the cloud provider makes this file available locally.");
+                    $"cloud-media-{generation}",
+                    path,
+                    probe,
+                    availability == CloudFileAvailability.RequiresHydration
+                        ? "Media playback is deferred until the cloud provider makes this file available locally."
+                        : "Media playback is deferred because file availability could not be verified safely.");
                     _previewSession.CommitPath(path);
                     _previewSession.SetRequestId(null);
                     StatusText.Text = ShowTextPreview(cloudMediaReady);

@@ -34,6 +34,15 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Cloud_file_status_rejects_unrelated_reparse_tags(uint reparseTag)
         => Assert.False(CloudFileStatus.IsCloudReparseTag(reparseTag));
 
+    [Fact]
+    public void Cloud_file_status_fails_closed_when_path_cannot_be_inspected()
+    {
+        string missingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"), "missing.dat");
+
+        Assert.Equal(CloudFileAvailability.Unknown, CloudFileStatus.GetAvailability(missingPath));
+        Assert.True(CloudFileStatus.MayRequireHydration(missingPath));
+    }
+
     [Theory]
     [InlineData("cloud.config", "text")]
     [InlineData("cloud.pdf", "pdf")]

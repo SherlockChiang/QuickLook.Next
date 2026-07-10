@@ -3,6 +3,13 @@ using Microsoft.Win32.SafeHandles;
 
 namespace QuickLook.Next.Core;
 
+public enum CloudFileAvailability
+{
+    Local,
+    RequiresHydration,
+    Unknown,
+}
+
 public static class CloudFileStatus
 {
     public const FileAttributes RecallOnOpen = (FileAttributes)0x00040000;
@@ -15,19 +22,25 @@ public static class CloudFileStatus
         => (reparseTag & 0xFFFF0FFF) == 0x9000001A;
 
     public static bool MayRequireHydration(string path)
+        => GetAvailability(path) != CloudFileAvailability.Local;
+
+    public static CloudFileAvailability GetAvailability(string path)
     {
         try
         {
             FileAttributes attributes = File.GetAttributes(path);
             if (MayRequireHydration(attributes))
-                return true;
-            return (attributes & FileAttributes.ReparsePoint) != 0
+                return CloudFileAvailability.RequiresHydration;
+            bool isCloudReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0
                 && TryGetReparseTag(path, out uint reparseTag)
                 && IsCloudReparseTag(reparseTag);
+            return isCloudReparsePoint
+                ? CloudFileAvailability.RequiresHydration
+                : CloudFileAvailability.Local;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return false;
+            return CloudFileAvailability.Unknown;
         }
     }
 
