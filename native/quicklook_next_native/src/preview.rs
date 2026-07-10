@@ -1158,9 +1158,21 @@ fn known_text_formats() -> &'static [(&'static str, &'static str, &'static str)]
         (".xsd", "code", "xml"),
         (".resx", "code", "xml"),
         (".config", "code", "xml"),
+        (".manifest", "code", "xml"),
+        (".policy", "code", "xml"),
+        (".settings", "code", "xml"),
         (".ini", "code", "ini"),
         (".cfg", "code", "ini"),
         (".conf", "code", "ini"),
+        (".cnf", "code", "ini"),
+        (".inf", "code", "ini"),
+        (".url", "code", "ini"),
+        (".desktop", "code", "ini"),
+        (".service", "code", "ini"),
+        (".reg", "code", "ini"),
+        (".rdp", "code", "properties"),
+        (".rc", "code", "properties"),
+        (".prefs", "code", "properties"),
         (".properties", "code", "properties"),
         (".yml", "code", "yaml"),
         (".yaml", "code", "yaml"),
@@ -1901,7 +1913,7 @@ fn normalize_table_cells(mut cells: Vec<String>, column_count: usize) -> Vec<Str
     cells
 }
 
-/// Check if a file is text-like (extension known or a small UTF-8 printable header).
+/// Check if a file is text-like (extension known or a small printable Unicode header).
 pub fn is_text(ext: &str, magic: &[u8]) -> bool {
     if known_text_formats()
         .iter()
@@ -1913,6 +1925,12 @@ pub fn is_text(ext: &str, magic: &[u8]) -> bool {
 }
 
 fn is_probably_utf8_text(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return is_probably_utf16_text(&bytes[2..], true);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return is_probably_utf16_text(&bytes[2..], false);
+    }
     if bytes.is_empty() || bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
         return false;
     }
@@ -1921,6 +1939,31 @@ fn is_probably_utf8_text(bytes: &[u8]) -> bool {
         .filter(|b| matches!(**b, b'\t' | b'\r' | b'\n' | 0x20..=0x7E) || **b >= 0x80)
         .count();
     printable * 100 / bytes.len().max(1) >= 90
+}
+
+fn is_probably_utf16_text(bytes: &[u8], little_endian: bool) -> bool {
+    if bytes.len() < 2 || bytes.len() % 2 != 0 {
+        return false;
+    }
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|unit| {
+            if little_endian {
+                u16::from_le_bytes([unit[0], unit[1]])
+            } else {
+                u16::from_be_bytes([unit[0], unit[1]])
+            }
+        })
+        .collect();
+    let Ok(text) = String::from_utf16(&units) else {
+        return false;
+    };
+    let char_count = text.chars().count();
+    let printable = text
+        .chars()
+        .filter(|ch| matches!(*ch, '\t' | '\r' | '\n') || !ch.is_control())
+        .count();
+    char_count > 0 && printable * 100 / char_count >= 90
 }
 
 // ── Office preview (OOXML / ODF lightweight extraction) ─────────────────────
