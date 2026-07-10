@@ -21,6 +21,20 @@ public sealed class CoreBoundaryTests : IDisposable
         => Assert.False(CloudFileStatus.MayRequireHydration(FileAttributes.Archive | FileAttributes.ReadOnly));
 
     [Theory]
+    [InlineData(0x9000001A)]
+    [InlineData(0x9000101A)]
+    [InlineData(0x9000F01A)]
+    public void Cloud_file_status_recognizes_cloud_reparse_tags(uint reparseTag)
+        => Assert.True(CloudFileStatus.IsCloudReparseTag(reparseTag));
+
+    [Theory]
+    [InlineData(0xA000000C)]
+    [InlineData(0x8000001B)]
+    [InlineData(0u)]
+    public void Cloud_file_status_rejects_unrelated_reparse_tags(uint reparseTag)
+        => Assert.False(CloudFileStatus.IsCloudReparseTag(reparseTag));
+
+    [Theory]
     [InlineData("cloud.config", "text")]
     [InlineData("cloud.pdf", "pdf")]
     [InlineData("cloud.docx", "office")]

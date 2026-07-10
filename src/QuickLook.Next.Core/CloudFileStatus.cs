@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
 namespace QuickLook.Next.Core;
 
 public static class CloudFileStatus
@@ -8,15 +11,75 @@ public static class CloudFileStatus
     public static bool MayRequireHydration(FileAttributes attributes)
         => (attributes & (FileAttributes.Offline | RecallOnOpen | RecallOnDataAccess)) != 0;
 
+    public static bool IsCloudReparseTag(uint reparseTag)
+        => (reparseTag & 0xFFFF0FFF) == 0x9000001A;
+
     public static bool MayRequireHydration(string path)
     {
         try
         {
-            return MayRequireHydration(File.GetAttributes(path));
+            FileAttributes attributes = File.GetAttributes(path);
+            if (MayRequireHydration(attributes))
+                return true;
+            return (attributes & FileAttributes.ReparsePoint) != 0
+                && TryGetReparseTag(path, out uint reparseTag)
+                && IsCloudReparseTag(reparseTag);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return false;
         }
     }
+
+    private static bool TryGetReparseTag(string path, out uint reparseTag)
+    {
+        reparseTag = 0;
+        using SafeFileHandle handle = CreateFile(
+            path,
+            0,
+            FileShare.ReadWrite | FileShare.Delete,
+            nint.Zero,
+            FileMode.Open,
+            FileFlagBackupSemantics | FileFlagOpenReparsePoint,
+            nint.Zero);
+        if (handle.IsInvalid)
+            return false;
+        if (!GetFileInformationByHandleEx(
+                handle,
+                FileAttributeTagInfoClass,
+                out FileAttributeTagInfo info,
+                (uint)Marshal.SizeOf<FileAttributeTagInfo>()))
+            return false;
+        reparseTag = info.ReparseTag;
+        return true;
+    }
+
+    private const int FileAttributeTagInfoClass = 9;
+    private const uint FileFlagOpenReparsePoint = 0x00200000;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo
+    {
+        public FileAttributes FileAttributes;
+        public uint ReparseTag;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+        string fileName,
+        uint desiredAccess,
+        FileShare shareMode,
+        nint securityAttributes,
+        FileMode creationDisposition,
+        uint flagsAndAttributes,
+        nint templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle file,
+        int fileInformationClass,
+        out FileAttributeTagInfo fileInformation,
+        uint bufferSize);
 }
