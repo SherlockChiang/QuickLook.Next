@@ -1977,6 +1977,13 @@ impl OfficeContext {
         self.remaining_decompressed_bytes -= bytes;
         Ok(())
     }
+
+    fn check_xml_event(&self, event_count: usize) -> OfficeResult<()> {
+        if event_count % 256 == 0 {
+            self.check_cancelled()?;
+        }
+        Ok(())
+    }
 }
 
 pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
@@ -2035,7 +2042,7 @@ fn render_docx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     };
     let header_footer_text =
         extract_docx_header_footer_text(context, &mut zip, &header_footer_entries)?;
-    let body = extract_wordprocessing_text(&xml);
+    let body = extract_wordprocessing_text(context, &xml)?;
     let layout = build_docx_layout(context, &mut zip, &body, &media_entries)?;
     let mut text = format!("Name: {filename}\nKind: Word document\n");
     append_office_media_summary(&mut text, &media_entries);
@@ -2073,7 +2080,7 @@ fn render_pptx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
             }
             break;
         };
-        let text = extract_ppt_text(&xml);
+        let text = extract_ppt_text(context, &xml)?;
         if !text.trim().is_empty() {
             slides.push(format!("Slide {slide_idx}\n{}", text.trim()));
         }
@@ -2108,7 +2115,8 @@ fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     let media_entries = office_media_entries(context, &mut zip, &["xl/media/"])?;
     let shared_strings =
         read_office_zip_text(context, &mut zip, "xl/sharedStrings.xml", 16 * 1024 * 1024)?
-            .map(|xml| parse_shared_strings(&xml))
+            .map(|xml| parse_shared_strings(context, &xml))
+            .transpose()?
             .unwrap_or_default();
 
     let mut sections = Vec::new();
@@ -2120,7 +2128,7 @@ fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
             }
             break;
         };
-        let rows = parse_worksheet_rows(&xml, &shared_strings);
+        let rows = parse_worksheet_rows(context, &xml, &shared_strings)?;
         if rows.is_empty() {
             continue;
         }
@@ -2166,7 +2174,7 @@ fn render_odf(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
             ))
         }
     };
-    let body = extract_wordprocessing_text(&xml);
+    let body = extract_wordprocessing_text(context, &xml)?;
     Ok(office_text_json(
         path,
         "OpenDocument",
@@ -2274,7 +2282,9 @@ fn build_pptx_layout(
         read_office_zip_text(context, zip, "ppt/presentation.xml", 4 * 1024 * 1024)?;
     let (slide_width, slide_height) = presentation_xml
         .as_deref()
-        .and_then(parse_ppt_slide_size)
+        .map(|xml| parse_ppt_slide_size(context, xml))
+        .transpose()?
+        .flatten()
         .unwrap_or((960.0, 540.0));
 
     let mut pages = Vec::new();
@@ -2291,9 +2301,10 @@ fn build_pptx_layout(
 
         let rels_name = format!("ppt/slides/_rels/slide{slide_idx}.xml.rels");
         let rels = read_office_zip_text(context, zip, &rels_name, 2 * 1024 * 1024)?
-            .map(|xml| parse_relationships(&xml))
+            .map(|xml| parse_relationships(context, &xml))
+            .transpose()?
             .unwrap_or_default();
-        let background_color = parse_ppt_slide_background(&slide_xml);
+        let background_color = parse_ppt_slide_background(context, &slide_xml)?;
         let items = parse_ppt_slide_items(
             context,
             zip,
@@ -2335,7 +2346,8 @@ fn build_xlsx_layout(
     let mut pages = Vec::new();
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
     let styles = read_office_zip_text(context, zip, "xl/styles.xml", 4 * 1024 * 1024)?
-        .map(|xml| parse_xlsx_styles(&xml))
+        .map(|xml| parse_xlsx_styles(context, &xml))
+        .transpose()?
         .unwrap_or_default();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let sheet_name = format!("xl/worksheets/sheet{sheet_idx}.xml");
@@ -2347,16 +2359,17 @@ fn build_xlsx_layout(
             break;
         };
 
-        let metrics = parse_xlsx_sheet_metrics(&sheet_xml);
-        let merge_regions = parse_xlsx_merge_regions(&sheet_xml);
-        let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(&sheet_xml);
+        let metrics = parse_xlsx_sheet_metrics(context, &sheet_xml)?;
+        let merge_regions = parse_xlsx_merge_regions(context, &sheet_xml)?;
+        let (freeze_rows, freeze_columns) = parse_xlsx_freeze_pane(context, &sheet_xml)?;
         let mut cells = parse_worksheet_layout_cells(
+            context,
             &sheet_xml,
             shared_strings,
             &metrics,
             &merge_regions,
             &styles,
-        );
+        )?;
         let mut items = parse_xlsx_sheet_images(
             context,
             zip,
@@ -2533,18 +2546,29 @@ fn push_docx_page(
     });
 }
 
-fn parse_ppt_slide_size(xml: &str) -> Option<(f64, f64)> {
+fn parse_ppt_slide_size(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<Option<(f64, f64)>> {
     let mut reader = Reader::from_str(xml);
+    let mut event_count = 0;
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) == "sldsz" {
-                    let cx = attr_f64(&e, "cx")?;
-                    let cy = attr_f64(&e, "cy")?;
-                    return Some((
+                    let Some(cx) = attr_f64(&e, "cx") else {
+                        continue;
+                    };
+                    let Some(cy) = attr_f64(&e, "cy") else {
+                        continue;
+                    };
+                    return Ok(Some((
                         (cx / OFFICE_EMUS_PER_DIP).max(320.0),
                         (cy / OFFICE_EMUS_PER_DIP).max(180.0),
-                    ));
+                    )));
                 }
             }
             Ok(Event::Eof) => break,
@@ -2552,16 +2576,20 @@ fn parse_ppt_slide_size(xml: &str) -> Option<(f64, f64)> {
             _ => {}
         }
     }
-    None
+    Ok(None)
 }
 
-fn parse_ppt_slide_background(xml: &str) -> Option<String> {
+fn parse_ppt_slide_background(context: &OfficeContext, xml: &str) -> OfficeResult<Option<String>> {
     let mut reader = Reader::from_str(xml);
     let mut in_background = false;
     let mut depth = 0usize;
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if !in_background && (local == "bg" || local == "bgpr") {
@@ -2572,7 +2600,7 @@ fn parse_ppt_slide_background(xml: &str) -> Option<String> {
                     if (local == "srgbclr" || local == "schemeclr")
                         && office_color_from_element(&e).is_some()
                     {
-                        return office_color_from_element(&e);
+                        return Ok(office_color_from_element(&e));
                     }
                 }
             }
@@ -2580,7 +2608,7 @@ fn parse_ppt_slide_background(xml: &str) -> Option<String> {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "srgbclr" || local == "schemeclr" {
                     if let Some(color) = office_color_from_element(&e) {
-                        return Some(color);
+                        return Ok(Some(color));
                     }
                 }
             }
@@ -2595,7 +2623,7 @@ fn parse_ppt_slide_background(xml: &str) -> Option<String> {
             _ => {}
         }
     }
-    None
+    Ok(None)
 }
 
 fn parse_ppt_slide_items<R: Read + Seek>(
@@ -2628,9 +2656,13 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
     let mut color_target = "";
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if !in_shape && (local == "sp" || local == "pic") {
@@ -2842,14 +2874,18 @@ fn apply_ppt_run_style(
     }
 }
 
-fn extract_ppt_text(xml: &str) -> String {
+fn extract_ppt_text(context: &OfficeContext, xml: &str) -> OfficeResult<String> {
     let mut reader = Reader::from_str(xml);
     let mut out = String::new();
     let mut in_text = false;
     let mut paragraph_had_text = false;
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
@@ -2897,16 +2933,17 @@ fn extract_ppt_text(xml: &str) -> String {
         }
     }
 
-    normalize_preview_lines(&out)
+    Ok(normalize_preview_lines(&out))
 }
 
 fn parse_worksheet_layout_cells(
+    context: &OfficeContext,
     xml: &str,
     shared_strings: &[String],
     metrics: &XlsxSheetMetrics,
     merge_regions: &BTreeMap<(usize, usize), XlsxMergeRegion>,
     styles: &[XlsxStyle],
-) -> Vec<OfficeCellDto> {
+) -> OfficeResult<Vec<OfficeCellDto>> {
     let mut reader = Reader::from_str(xml);
     let mut cells = Vec::new();
     let mut in_row = false;
@@ -2920,9 +2957,13 @@ fn parse_worksheet_layout_cells(
     let mut cell_style = 0usize;
     let mut cell_type = String::new();
     let mut cell_value = String::new();
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 match local.as_str() {
@@ -3036,7 +3077,7 @@ fn parse_worksheet_layout_cells(
             _ => {}
         }
     }
-    cells
+    Ok(cells)
 }
 
 #[derive(Clone, Default)]
@@ -3052,7 +3093,7 @@ struct XlsxStyle {
     wrap_text: bool,
 }
 
-fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
+fn parse_xlsx_styles(context: &OfficeContext, xml: &str) -> OfficeResult<Vec<XlsxStyle>> {
     let mut reader = Reader::from_str(xml);
     let mut custom_formats = BTreeMap::<u32, String>::new();
     let mut font_bold = Vec::<bool>::new();
@@ -3073,9 +3114,13 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
     let mut current_font_size: Option<f64> = None;
     let mut current_font_color: Option<String> = None;
     let mut current_fill_color: Option<String> = None;
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "fonts" {
@@ -3185,14 +3230,17 @@ fn parse_xlsx_styles(xml: &str) -> Vec<XlsxStyle> {
         }
     }
 
-    styles
+    Ok(styles)
 }
 
-fn parse_xlsx_style_number_formats(xml: &str) -> Vec<Option<String>> {
-    parse_xlsx_styles(xml)
+fn parse_xlsx_style_number_formats(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<Vec<Option<String>>> {
+    Ok(parse_xlsx_styles(context, xml)?
         .into_iter()
         .map(|style| style.number_format)
-        .collect()
+        .collect())
 }
 
 fn collect_xlsx_custom_number_format(e: &BytesStart, formats: &mut BTreeMap<u32, String>) {
@@ -3250,7 +3298,7 @@ fn extract_docx_header_footer_text<R: Read + Seek>(
         let Some(xml) = read_office_zip_text(context, zip, entry, 1024 * 1024)? else {
             continue;
         };
-        let text = extract_wordprocessing_text(&xml);
+        let text = extract_wordprocessing_text(context, &xml)?;
         if !text.trim().is_empty() {
             out.push(format!(
                 "- {}: {}",
@@ -3412,12 +3460,13 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
     metrics: &XlsxSheetMetrics,
     image_budget: &mut usize,
 ) -> OfficeResult<Vec<OfficeLayoutItemDto>> {
-    let Some(drawing_rid) = parse_worksheet_drawing_rid(sheet_xml) else {
+    let Some(drawing_rid) = parse_worksheet_drawing_rid(context, sheet_xml)? else {
         return Ok(Vec::new());
     };
     let sheet_rels_name = format!("xl/worksheets/_rels/sheet{sheet_idx}.xml.rels");
     let sheet_rels = read_office_zip_text(context, zip, &sheet_rels_name, 2 * 1024 * 1024)?
-        .map(|xml| parse_relationships(&xml))
+        .map(|xml| parse_relationships(context, &xml))
+        .transpose()?
         .unwrap_or_default();
     let Some(drawing_target) = sheet_rels.get(&drawing_rid) else {
         return Ok(Vec::new());
@@ -3429,7 +3478,8 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
     };
     let drawing_rels_path = rels_path_for_part(&drawing_path);
     let drawing_rels = read_office_zip_text(context, zip, &drawing_rels_path, 2 * 1024 * 1024)?
-        .map(|xml| parse_relationships(&xml))
+        .map(|xml| parse_relationships(context, &xml))
+        .transpose()?
         .unwrap_or_default();
     let base = part_base_dir(&drawing_path);
     parse_xlsx_drawing_items(
@@ -3443,13 +3493,20 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
     )
 }
 
-fn parse_worksheet_drawing_rid(xml: &str) -> Option<String> {
+fn parse_worksheet_drawing_rid(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<Option<String>> {
     let mut reader = Reader::from_str(xml);
+    let mut event_count = 0;
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) == "drawing" {
-                    return attr_value(&e, "id");
+                    return Ok(attr_value(&e, "id"));
                 }
             }
             Ok(Event::Eof) => break,
@@ -3457,7 +3514,7 @@ fn parse_worksheet_drawing_rid(xml: &str) -> Option<String> {
             _ => {}
         }
     }
-    None
+    Ok(None)
 }
 
 fn parse_xlsx_drawing_items<R: Read + Seek>(
@@ -3482,9 +3539,13 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
     let mut ext_w = 0.0;
     let mut ext_h = 0.0;
     let mut rel_id = String::new();
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if !in_anchor && (local == "twocellanchor" || local == "onecellanchor") {
@@ -3631,11 +3692,18 @@ fn image_item_from_relationship<R: Read + Seek>(
     }))
 }
 
-fn parse_relationships(xml: &str) -> BTreeMap<String, String> {
+fn parse_relationships(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<BTreeMap<String, String>> {
     let mut reader = Reader::from_str(xml);
     let mut rels = BTreeMap::new();
+    let mut event_count = 0;
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) == "relationship" {
                     if let (Some(id), Some(target)) =
@@ -3650,7 +3718,7 @@ fn parse_relationships(xml: &str) -> BTreeMap<String, String> {
             _ => {}
         }
     }
-    rels
+    Ok(rels)
 }
 
 fn attr_value(e: &BytesStart<'_>, name: &str) -> Option<String> {
@@ -3718,12 +3786,19 @@ struct XlsxMergeRegion {
     column_span: usize,
 }
 
-fn parse_xlsx_sheet_metrics(xml: &str) -> XlsxSheetMetrics {
+fn parse_xlsx_sheet_metrics(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<XlsxSheetMetrics> {
     let mut reader = Reader::from_str(xml);
     let mut metrics = XlsxSheetMetrics::default();
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "col" {
@@ -3758,25 +3833,32 @@ fn parse_xlsx_sheet_metrics(xml: &str) -> XlsxSheetMetrics {
         }
     }
 
-    metrics
+    Ok(metrics)
 }
 
-fn parse_xlsx_freeze_pane(xml: &str) -> (Option<usize>, Option<usize>) {
+fn parse_xlsx_freeze_pane(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<(Option<usize>, Option<usize>)> {
     let mut reader = Reader::from_str(xml);
+    let mut event_count = 0;
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) == "pane" {
                     let state = attr_value(&e, "state").unwrap_or_default();
                     if state != "frozen" && state != "frozenSplit" {
-                        return (None, None);
+                        return Ok((None, None));
                     }
                     let rows = attr_f64(&e, "ysplit").map(|value| value.max(0.0) as usize);
                     let columns = attr_f64(&e, "xsplit").map(|value| value.max(0.0) as usize);
-                    return (
+                    return Ok((
                         rows.filter(|value| *value > 0),
                         columns.filter(|value| *value > 0),
-                    );
+                    ));
                 }
             }
             Ok(Event::Eof) => break,
@@ -3784,15 +3866,22 @@ fn parse_xlsx_freeze_pane(xml: &str) -> (Option<usize>, Option<usize>) {
             _ => {}
         }
     }
-    (None, None)
+    Ok((None, None))
 }
 
-fn parse_xlsx_merge_regions(xml: &str) -> BTreeMap<(usize, usize), XlsxMergeRegion> {
+fn parse_xlsx_merge_regions(
+    context: &OfficeContext,
+    xml: &str,
+) -> OfficeResult<BTreeMap<(usize, usize), XlsxMergeRegion>> {
     let mut reader = Reader::from_str(xml);
     let mut regions = BTreeMap::new();
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) == "mergecell" {
                     let Some(reference) = attr_value(&e, "ref") else {
@@ -3812,7 +3901,7 @@ fn parse_xlsx_merge_regions(xml: &str) -> BTreeMap<(usize, usize), XlsxMergeRegi
         }
     }
 
-    regions
+    Ok(regions)
 }
 
 fn parse_xlsx_merge_reference(reference: &str) -> Option<XlsxMergeRegion> {
@@ -4005,7 +4094,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-fn extract_wordprocessing_text(xml: &str) -> String {
+fn extract_wordprocessing_text(context: &OfficeContext, xml: &str) -> OfficeResult<String> {
     let mut reader = Reader::from_str(xml);
     let mut out = String::new();
     let mut in_text = false;
@@ -4016,9 +4105,13 @@ fn extract_wordprocessing_text(xml: &str) -> String {
     let mut in_cell = false;
     let mut cell_text = String::new();
     let mut row_cells: Vec<String> = Vec::new();
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "t" {
@@ -4141,7 +4234,7 @@ fn extract_wordprocessing_text(xml: &str) -> String {
         }
     }
 
-    normalize_preview_lines(&out)
+    Ok(normalize_preview_lines(&out))
 }
 
 fn append_docx_block_marker(out: &mut String, marker: &str) {
@@ -4181,15 +4274,19 @@ fn docx_numbered_paragraph_prefix(current: &str) -> String {
     }
 }
 
-fn parse_shared_strings(xml: &str) -> Vec<String> {
+fn parse_shared_strings(context: &OfficeContext, xml: &str) -> OfficeResult<Vec<String>> {
     let mut reader = Reader::from_str(xml);
     let mut values = Vec::new();
     let mut current = String::new();
     let mut in_si = false;
     let mut in_t = false;
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "si" {
@@ -4216,10 +4313,14 @@ fn parse_shared_strings(xml: &str) -> Vec<String> {
         }
     }
 
-    values
+    Ok(values)
 }
 
-fn parse_worksheet_rows(xml: &str, shared_strings: &[String]) -> Vec<Vec<String>> {
+fn parse_worksheet_rows(
+    context: &OfficeContext,
+    xml: &str,
+    shared_strings: &[String],
+) -> OfficeResult<Vec<Vec<String>>> {
     let mut reader = Reader::from_str(xml);
     let mut rows = Vec::new();
     let mut row = Vec::<String>::new();
@@ -4230,9 +4331,13 @@ fn parse_worksheet_rows(xml: &str, shared_strings: &[String]) -> Vec<Vec<String>
     let mut cell_type = String::new();
     let mut cell_value = String::new();
     let mut cell_col: Option<usize> = None;
+    let mut event_count = 0;
 
     loop {
-        match reader.read_event() {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
             Ok(Event::Start(e)) => {
                 let local = local_xml_name(e.name().as_ref());
                 match local.as_str() {
@@ -4320,7 +4425,7 @@ fn parse_worksheet_rows(xml: &str, shared_strings: &[String]) -> Vec<Vec<String>
         }
     }
 
-    rows
+    Ok(rows)
 }
 
 fn cell_reference_column(reference: &str) -> Option<usize> {
@@ -14288,6 +14393,10 @@ mod tests {
     use super::*;
     use std::io::{Cursor, Write};
 
+    fn test_office_context() -> OfficeContext {
+        OfficeContext::new(None)
+    }
+
     #[test]
     fn utf8_text_truncation_stays_on_char_boundary() {
         let mut bytes = vec![b'a'; MAX_TEXT_BYTES - 1];
@@ -14454,8 +14563,23 @@ mod tests {
     }
 
     #[test]
+    fn office_xml_parser_honors_cancellation() {
+        let xml = format!(
+            "<w:document xmlns:w=\"w\"><w:body>{}</w:body></w:document>",
+            "<w:p><w:r><w:t>x</w:t></w:r></w:p>".repeat(128)
+        );
+        let context = OfficeContext::new(Some(always_cancel));
+
+        assert!(matches!(
+            extract_wordprocessing_text(&context, &xml),
+            Err(OfficeReadError::Cancelled)
+        ));
+    }
+
+    #[test]
     fn ppt_text_extraction_preserves_paragraphs_tabs_and_breaks() {
-        let text = extract_ppt_text(
+        let context = test_office_context();
+        let text = extract_ppt_text(&context,
             r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp><p:txBody>
                     <a:p><a:r><a:t>Title</a:t></a:r></a:p>
@@ -14463,7 +14587,8 @@ mod tests {
                     <a:p><a:r><a:t>Line 1</a:t></a:r><a:br/><a:r><a:t>Line 2</a:t></a:r></a:p>
                 </p:txBody></p:sp>
             </p:sld>"#,
-        );
+        )
+        .expect("ppt text");
 
         assert_eq!(text, "Title\nLeft\tRight\nLine 1\nLine 2");
     }
@@ -14541,20 +14666,23 @@ mod tests {
 
     #[test]
     fn docx_text_extraction_marks_headings() {
-        let text = extract_wordprocessing_text(
+        let context = test_office_context();
+        let text = extract_wordprocessing_text(&context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Overview</w:t></w:r></w:p>
                 <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Details</w:t></w:r></w:p>
                 <w:p><w:r><w:t>Body copy</w:t></w:r></w:p>
             </w:body></w:document>"#,
-        );
+        )
+        .expect("docx text");
 
         assert_eq!(text, "# Overview\n### Details\nBody copy");
     }
 
     #[test]
     fn docx_text_extraction_formats_table_rows() {
-        let text = extract_wordprocessing_text(
+        let context = test_office_context();
+        let text = extract_wordprocessing_text(&context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:tbl>
                     <w:tr>
@@ -14567,20 +14695,23 @@ mod tests {
                     </w:tr>
                 </w:tbl>
             </w:body></w:document>"#,
-        );
+        )
+        .expect("docx text");
 
         assert_eq!(text, "| Name | Value |\n| Rows | 42 |");
     }
 
     #[test]
     fn docx_text_extraction_marks_page_and_section_breaks() {
-        let text = extract_wordprocessing_text(
+        let context = test_office_context();
+        let text = extract_wordprocessing_text(&context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:p><w:r><w:t>First page</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>Second page</w:t></w:r></w:p>
                 <w:sectPr/>
                 <w:p><w:r><w:t>Next section</w:t></w:r></w:p>
             </w:body></w:document>"#,
-        );
+        )
+        .expect("docx text");
 
         assert!(text.contains("First page\n[page break]\nSecond page"));
         assert!(text.contains("[section break]\nNext section"));
@@ -14588,12 +14719,14 @@ mod tests {
 
     #[test]
     fn docx_text_extraction_marks_numbered_paragraphs_as_list_items() {
-        let text = extract_wordprocessing_text(
+        let context = test_office_context();
+        let text = extract_wordprocessing_text(&context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>First</w:t></w:r></w:p>
                 <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
             </w:body></w:document>"#,
-        );
+        )
+        .expect("docx text");
 
         assert_eq!(text, "- First\n- Second");
     }
@@ -15134,9 +15267,11 @@ mod tests {
 
     #[test]
     fn xlsx_merge_regions_preserve_spans() {
-        let regions = parse_xlsx_merge_regions(
+        let context = test_office_context();
+        let regions = parse_xlsx_merge_regions(&context,
             r#"<worksheet><mergeCells><mergeCell ref="B2:D4"/></mergeCells></worksheet>"#,
-        );
+        )
+        .expect("merge regions");
 
         let region = regions.get(&(1, 1)).expect("merged region");
         assert_eq!(region.row_span, 3);
@@ -15147,9 +15282,11 @@ mod tests {
 
     #[test]
     fn xlsx_freeze_pane_reads_split_counts() {
-        let (rows, columns) = parse_xlsx_freeze_pane(
+        let context = test_office_context();
+        let (rows, columns) = parse_xlsx_freeze_pane(&context,
             r#"<worksheet><sheetViews><sheetView><pane xSplit="2" ySplit="1" state="frozen"/></sheetView></sheetViews></worksheet>"#,
-        );
+        )
+        .expect("freeze pane");
 
         assert_eq!(rows, Some(1));
         assert_eq!(columns, Some(2));
@@ -15157,7 +15294,8 @@ mod tests {
 
     #[test]
     fn xlsx_style_number_formats_include_custom_and_builtin_formats() {
-        let formats = parse_xlsx_style_number_formats(
+        let context = test_office_context();
+        let formats = parse_xlsx_style_number_formats(&context,
             r#"<styleSheet>
                 <numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts>
                 <cellXfs count="3">
@@ -15166,7 +15304,8 @@ mod tests {
                     <xf numFmtId="164"/>
                 </cellXfs>
             </styleSheet>"#,
-        );
+        )
+        .expect("style number formats");
 
         assert_eq!(formats.get(0), Some(&None));
         assert_eq!(formats.get(1), Some(&Some("m/d/yy".to_string())));
@@ -15175,7 +15314,8 @@ mod tests {
 
     #[test]
     fn xlsx_styles_include_fill_colors() {
-        let styles = parse_xlsx_styles(
+        let context = test_office_context();
+        let styles = parse_xlsx_styles(&context,
             r#"<styleSheet>
                 <fonts count="2">
                     <font><sz val="11"/></font>
@@ -15191,7 +15331,8 @@ mod tests {
                     <xf numFmtId="14" fillId="2" fontId="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
                 </cellXfs>
             </styleSheet>"#,
-        );
+        )
+        .expect("styles");
 
         assert_eq!(
             styles.get(0).and_then(|style| style.fill_color.as_deref()),
