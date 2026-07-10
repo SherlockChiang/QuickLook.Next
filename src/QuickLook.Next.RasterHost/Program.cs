@@ -384,7 +384,8 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
     uint targetWidth,
     uint targetHeight)
 {
-    if (PreferSystemImageDecoder(path))
+    bool systemDecodeAttempted = PreferSystemImageDecoder(path);
+    if (systemDecodeAttempted)
     {
         using var systemTrace = DiagLog.TraceScope("RasterHost", $"system image decode path={path}", 250);
         var systemImage = await DecodeSystemImageWithTimeoutAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
@@ -394,11 +395,12 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
 
     NativeDecodedImage? nativeImage;
     using (DiagLog.TraceScope("RasterHost", $"native image decode target={targetWidth}x{targetHeight} path={path}", 250))
-        nativeImage = await NativeImageDecoder.TryDecodeAsync(path, timeout, cancellationToken, targetWidth, targetHeight);
+        nativeImage = await NativeImageDecoder.TryDecodeAsync(
+            path, timeout, cancellationToken, targetWidth, targetHeight, systemDecodeAttempted);
     if (nativeImage is not null)
         return nativeImage;
 
-    return PreferSystemImageDecoder(path)
+    return systemDecodeAttempted
         ? null
         : await DecodeSystemFallbackAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
 }

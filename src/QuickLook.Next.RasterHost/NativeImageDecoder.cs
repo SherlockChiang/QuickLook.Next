@@ -56,7 +56,8 @@ internal static class NativeImageDecoder
         TimeSpan timeout,
         CancellationToken cancellationToken,
         uint targetWidth = 0,
-        uint targetHeight = 0)
+        uint targetHeight = 0,
+        bool systemDecodeAlreadyFailed = false)
     {
         if (IsTooLarge(path))
             return null;
@@ -64,7 +65,7 @@ internal static class NativeImageDecoder
         cancellationToken.ThrowIfCancellationRequested();
 
         bool systemPreferred = ShouldPreferSystemDecoder(path);
-        if (systemPreferred)
+        if (systemPreferred && !systemDecodeAlreadyFailed)
         {
             NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
             if (systemImage is not null)
@@ -83,6 +84,13 @@ internal static class NativeImageDecoder
             targetWidth = BoundSystemFailureFallbackTarget(targetWidth);
             targetHeight = BoundSystemFailureFallbackTarget(targetHeight);
         }
+        else if (systemPreferred)
+        {
+            if (ShouldRequireSystemDecoder(path) || ShouldSkipNativeFallbackAfterSystemFailure(path))
+                return null;
+            targetWidth = BoundSystemFailureFallbackTarget(targetWidth);
+            targetHeight = BoundSystemFailureFallbackTarget(targetHeight);
+        }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
@@ -97,7 +105,9 @@ internal static class NativeImageDecoder
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return nativeImage ?? await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
+        return nativeImage ?? (systemDecodeAlreadyFailed
+            ? null
+            : await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight));
     }
 
     private static async Task<NativeDecodedImage?> DecodeOnGateAsync(
