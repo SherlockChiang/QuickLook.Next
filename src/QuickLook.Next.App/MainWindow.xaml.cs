@@ -672,6 +672,10 @@ public sealed partial class MainWindow : Window
             else if (!forceAnimatedFirstFrameRaster)
             {
                 nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
+                if (nativeReady is null && probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase))
+                    nativeReady = await Task.Run(
+                        () => FallbackFileProbe.TryCreateTextPreview($"managed-{generation}", path, previewToken),
+                        previewToken);
             }
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;

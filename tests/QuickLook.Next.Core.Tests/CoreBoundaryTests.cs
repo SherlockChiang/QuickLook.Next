@@ -35,6 +35,34 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Fallback_text_preview_decodes_windows_1252_config()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "legacy.ini");
+        File.WriteAllBytes(path, [.. "name=caf"u8.ToArray(), 0xE9]);
+
+        PreviewReady ready = Assert.IsType<PreviewReady>(
+            FallbackFileProbe.TryCreateTextPreview("request", path, CancellationToken.None));
+
+        Assert.Equal("name=café", ready.TextContent);
+        Assert.Equal("ini", ready.TextLanguage);
+    }
+
+    [Fact]
+    public void Fallback_text_preview_is_bounded()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "large.config");
+        File.WriteAllText(path, new string('a', 512 * 1024 + 10));
+
+        PreviewReady ready = Assert.IsType<PreviewReady>(
+            FallbackFileProbe.TryCreateTextPreview("request", path, CancellationToken.None));
+
+        Assert.EndsWith("[Preview truncated at 524288 bytes]", ready.TextContent);
+        Assert.Equal("xml", ready.TextLanguage);
+    }
+
+    [Fact]
     public void ProtocolJson_round_trips_hero_raster_message()
     {
         var message = new HeroRasterExtracted("0".PadLeft(32, '0'), "C:\\temp\\hero.bgra", 32, 24);
