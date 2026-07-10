@@ -6,4 +6,7 @@
     <Project Path="src/QuickLook.Next.ParserHost/QuickLook.Next.ParserHost.csproj" />
     <Project Path="src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj" />
+  </Folder>
 </Solution>

@@ -130,7 +130,7 @@ internal sealed class ParserHostSupervisor
         {
             await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
-            return response is ArchiveEntryExtracted extracted && IsArchiveExtractTempPath(extracted.TempPath)
+            return response is ArchiveEntryExtracted extracted && TempHandoffPaths.IsArchiveExtractPath(extracted.TempPath)
                 ? extracted.TempPath
                 : null;
         }
@@ -282,41 +282,11 @@ internal sealed class ParserHostSupervisor
         try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
     }
 
-    private static bool IsArchiveExtractTempPath(string path)
-    {
-        const int maxPathChars = 32 * 1024;
-        if (string.IsNullOrWhiteSpace(path) || path.Length > maxPathChars)
-            return false;
-
-        try
-        {
-            string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "QuickLookNext", "archive-preview"));
-            string fullPath = Path.GetFullPath(path);
-            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
-            if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
-                || !File.Exists(fullPath)
-                || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0
-                || (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
-                return false;
-
-            string? extractionDirectory = Path.GetDirectoryName(fullPath);
-            return extractionDirectory is not null
-                && string.Equals(Path.GetDirectoryName(extractionDirectory), root, StringComparison.OrdinalIgnoreCase)
-                && Path.GetFileName(extractionDirectory).StartsWith("extract-", StringComparison.Ordinal)
-                && Path.GetFileName(fullPath).StartsWith("entry-", StringComparison.Ordinal)
-                && (File.GetAttributes(extractionDirectory) & FileAttributes.ReparsePoint) == 0;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            return false;
-        }
-    }
-
     private static NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
     {
         const int maxRasterBytes = 16 * 1024 * 1024;
         const int maxDimension = 4096;
-        if (!IsHeroRasterTempPath(extracted.TempPath, extracted.RequestId))
+        if (!TempHandoffPaths.IsHeroRasterPath(extracted.TempPath, extracted.RequestId))
             return null;
 
         try
@@ -351,38 +321,6 @@ internal sealed class ParserHostSupervisor
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
         {
             return null;
-        }
-    }
-
-    private static bool IsHeroRasterTempPath(string path, string requestId)
-    {
-        const int maxPathChars = 32 * 1024;
-        if (string.IsNullOrWhiteSpace(path) || path.Length > maxPathChars)
-            return false;
-
-        try
-        {
-            string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster"));
-            string fullPath = Path.GetFullPath(path);
-            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
-            if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
-                || !File.Exists(fullPath)
-                || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0
-                || (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
-                return false;
-
-            string? directory = Path.GetDirectoryName(fullPath);
-            return directory is not null
-                && string.Equals(Path.GetDirectoryName(directory), root, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(Path.GetFileName(directory), "raster-" + requestId, StringComparison.Ordinal)
-                && requestId.Length == 32
-                && requestId.All(static c => char.IsAsciiHexDigit(c))
-                && string.Equals(Path.GetFileName(fullPath), "hero.bgra", StringComparison.Ordinal)
-                && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            return false;
         }
     }
 
