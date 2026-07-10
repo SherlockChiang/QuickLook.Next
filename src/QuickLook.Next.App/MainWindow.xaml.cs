@@ -173,6 +173,8 @@ public sealed partial class MainWindow : Window
         [4] = "High gain down",
     };
     private enum PreviewInfoRailTab { Info, Exif, More }
+    private enum PreviewFailureKind { Content, TimedOut, Service, Surface }
+    private readonly record struct PreviewFailure(PreviewFailureKind Kind, bool CanRetry);
 
     // Show the top status text (file name / errors) only while debugging; normal use is chromeless.
     private const bool ShowStatusBar = false;
@@ -415,7 +417,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", "intent handler FAILED: " + ex);
-            StatusText.Text = ShowErrorPreview(ex.Message);
+            DiagLog.Write("App", "intent error: " + ex.Message);
+            StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
             RevealPreviewWindow(activate: false);
         }
     }
@@ -661,15 +664,25 @@ public sealed partial class MainWindow : Window
                 PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                 PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
                 PreviewReady r => ShowRasterPreview(r),
-                PreviewError er => ShowErrorPreview(er.Message),
+                PreviewError er => ShowHostError(er),
                 _ => "?",
             };
             RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
-            StatusText.Text = ShowErrorPreview(UiStrings.PreviewTimedOut);
+            DiagLog.Write("App", "preview timed out: " + ex.Message);
+            StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.TimedOut, true));
             RevealPreviewWindow(activate: false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            DiagLog.Write("App", "preview service failed: " + ex);
+            if (IsPreviewGenerationCurrent(generation, previewToken))
+            {
+                StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Service, true));
+                RevealPreviewWindow(activate: false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -867,20 +880,35 @@ public sealed partial class MainWindow : Window
         return UiStrings.EmptyValue;
     }
 
-    private string ShowErrorPreview(string message)
+    private string ShowHostError(PreviewError error)
+    {
+        DiagLog.Write("App", "host preview error: " + error.Message);
+        return ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
+    }
+
+    private string ShowErrorPreview(PreviewFailure failure)
     {
         _panelController.ShowError();
-        ErrorText.Text = string.IsNullOrWhiteSpace(message) ? UiStrings.PreviewUnavailableMessage : message;
-        PreviewTitleText.Text = UiStrings.PreviewUnavailableTitle;
+        (string title, string message) = failure.Kind switch
+        {
+            PreviewFailureKind.TimedOut => (UiStrings.PreviewTimedOutTitle, UiStrings.PreviewTimedOutMessage),
+            PreviewFailureKind.Service => (UiStrings.PreviewServiceUnavailableTitle, UiStrings.PreviewServiceUnavailableMessage),
+            PreviewFailureKind.Surface => (UiStrings.PreviewDisplayFailedTitle, UiStrings.PreviewDisplayFailedMessage),
+            _ => (UiStrings.PreviewContentFailedTitle, UiStrings.PreviewContentFailedMessage),
+        };
+        ErrorText.Text = message;
+        PreviewTitleText.Text = title;
         PreviewMetaText.Text = ErrorText.Text;
         PreviewKindPillText.Text = UiStrings.ErrorKind;
-        ErrorActionsPanel.Visibility = string.IsNullOrWhiteSpace(_previewSession.CurrentPath)
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        bool hasPath = !string.IsNullOrWhiteSpace(_previewSession.CurrentPath);
+        ErrorActionsPanel.Visibility = hasPath ? Visibility.Visible : Visibility.Collapsed;
+        ErrorRetryButton.Visibility = hasPath && failure.CanRetry ? Visibility.Visible : Visibility.Collapsed;
         ResizeWindowForContent(520, 300, MaxTextWindowWidth, MaxTextWindowHeight);
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (ErrorActionsPanel.Visibility == Visibility.Visible)
+            if (ErrorRetryButton.Visibility == Visibility.Visible)
+                ErrorRetryButton.Focus(FocusState.Programmatic);
+            else if (ErrorActionsPanel.Visibility == Visibility.Visible)
                 ErrorOpenFileButton.Focus(FocusState.Programmatic);
         });
         return "error: " + ErrorText.Text;
@@ -918,7 +946,7 @@ public sealed partial class MainWindow : Window
             if (compositor is null)
             {
                 DiagLog.Write("App", "surface ignored: compositor unavailable");
-                StatusText.Text = UiStrings.SurfaceFailed;
+                ShowSurfaceFailure(surface.RequestId, UiStrings.SurfaceFailed);
                 return;
             }
 
@@ -952,10 +980,10 @@ public sealed partial class MainWindow : Window
 
             var attachWatch = Stopwatch.StartNew();
             handleConsumed = true;
-            if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
-            {
-                StatusText.Text = error ?? UiStrings.SurfaceFailed;
-                return;
+                if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
+                {
+                    ShowSurfaceFailure(surface.RequestId, error ?? UiStrings.SurfaceFailed);
+                    return;
             }
             attachWatch.Stop();
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
@@ -979,6 +1007,18 @@ public sealed partial class MainWindow : Window
             if (!handleConsumed)
                 CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
         }
+    }
+
+    private void ShowSurfaceFailure(string requestId, string message)
+    {
+        if (!_previewSession.IsCurrentRequest(requestId))
+            return;
+
+        DiagLog.Write("App", "surface preview failed: " + message);
+        _previewSession.SetRequestId(null);
+        _ = CloseCurrentAsync(requestId);
+        StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Surface, false));
+        RevealPreviewWindow(activate: false);
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
@@ -2229,6 +2269,13 @@ public sealed partial class MainWindow : Window
 
     private void OnOpenPreviewFileClick(object sender, RoutedEventArgs e)
         => OpenCurrentPreviewPath(revealInExplorer: false);
+
+    private async void OnRetryPreviewClick(object sender, RoutedEventArgs e)
+    {
+        string? path = _previewSession.CurrentPath;
+        if (!string.IsNullOrWhiteSpace(path))
+            await PreviewWindowPathAsync(path);
+    }
 
     private async void OnCopyPreviewFileClick(object sender, RoutedEventArgs e)
     {

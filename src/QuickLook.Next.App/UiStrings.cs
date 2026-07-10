@@ -17,6 +17,15 @@ internal static class UiStrings
     public static string PreviewTimedOut => Get(nameof(PreviewTimedOut), "preview timed out");
     public static string PdfPageFailed => Get(nameof(PdfPageFailed), "pdf page failed");
     public static string SurfaceFailed => Get(nameof(SurfaceFailed), "surface failed");
+    public static string PreviewTimedOutTitle => Get(nameof(PreviewTimedOutTitle), "Preview timed out");
+    public static string PreviewTimedOutMessage => Get(nameof(PreviewTimedOutMessage), "The preview took too long. Try again.");
+    public static string PreviewServiceUnavailableTitle => Get(nameof(PreviewServiceUnavailableTitle), "Preview service unavailable");
+    public static string PreviewServiceUnavailableMessage => Get(nameof(PreviewServiceUnavailableMessage), "The preview service disconnected or restarted. Try again.");
+    public static string PreviewDisplayFailedTitle => Get(nameof(PreviewDisplayFailedTitle), "Unable to display preview");
+    public static string PreviewDisplayFailedMessage => Get(nameof(PreviewDisplayFailedMessage), "The preview could not be displayed on this device.");
+    public static string PreviewContentFailedTitle => Get(nameof(PreviewContentFailedTitle), "Preview unavailable");
+    public static string PreviewContentFailedMessage => Get(nameof(PreviewContentFailedMessage), "This file could not be previewed.");
+    public static string RetryPreview => Get(nameof(RetryPreview), "Try again");
     public static string PathCopied => Get(nameof(PathCopied), "Path copied");
     public static string FileCopied => Get(nameof(FileCopied), "File copied");
     public static string NoExifData => Get(nameof(NoExifData), "No EXIF data");
