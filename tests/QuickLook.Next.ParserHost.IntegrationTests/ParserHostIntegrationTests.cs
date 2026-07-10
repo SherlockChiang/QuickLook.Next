@@ -308,6 +308,58 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Package_hero_raster_close_removes_bgra_handoff()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string apkPath = Path.Combine(tempDirectory, "hero.apk");
+        using (var archive = ZipFile.Open(apkPath, ZipArchiveMode.Create))
+        {
+            byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mP4z8DwnxLMMGrAqAGjBgwXAwAwxP4QisZM5QAAAABJRU5ErkJggg==");
+            using Stream stream = archive.CreateEntry("res/mipmap-hdpi/ic_launcher.png").Open();
+            stream.Write(png);
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        string? handoffPath = null;
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new HeroRasterExtract(requestId, apkPath, "package"), timeout.Token);
+            HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
+            handoffPath = extracted.TempPath;
+            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
+            Assert.Equal(16, extracted.Width);
+            Assert.Equal(16, extracted.Height);
+            Assert.True(TempHandoffPaths.IsHeroRasterPath(handoffPath, requestId));
+            byte[] raster = await File.ReadAllBytesAsync(handoffPath, timeout.Token);
+            Assert.Equal(16, BitConverter.ToInt32(raster, 0));
+            Assert.Equal(16, BitConverter.ToInt32(raster, 4));
+            Assert.Equal(8 + 16 * 16 * 4, raster.Length);
+
+            await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Pipe_disconnect_removes_unclosed_handoffs()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
