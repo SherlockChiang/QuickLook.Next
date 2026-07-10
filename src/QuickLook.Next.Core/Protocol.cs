@@ -4,7 +4,7 @@ using QuickLook.Next.Contracts;
 namespace QuickLook.Next.Core;
 
 /// <summary>
-/// App ⇄ RasterHost control-channel messages (line-delimited JSON over a named pipe).
+/// App ⇄ preview-host control-channel messages (line-delimited JSON over a named pipe).
 /// Bulk pixels never travel here — they flow through the shared composition surface referenced by
 /// <see cref="PreviewSurface"/>. Validated by Spike 1 (see spikes/spike1-composition/SPIKE1_FINDINGS.md).
 ///
@@ -23,6 +23,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewPageOpen), "preview.page.open")]
 [JsonDerivedType(typeof(PreviewPageClose), "preview.page.close")]
 [JsonDerivedType(typeof(PreviewClose), "preview.close")]
+[JsonDerivedType(typeof(ArchiveEntryExtract), "archive.entry.extract")]
+[JsonDerivedType(typeof(ArchiveEntryExtracted), "archive.entry.extracted")]
+[JsonDerivedType(typeof(ArchiveEntryExtractClose), "archive.entry.extract.close")]
 public abstract record ControlMessage;
 
 /// <summary>App → Host on connect: authenticates the launch and lets the host duplicate surface handles into the App.</summary>
@@ -76,3 +79,12 @@ public sealed record PreviewPageClose(string RequestId, int PageIndex) : Control
 
 /// <summary>App → Host: tear down a preview.</summary>
 public sealed record PreviewClose(string RequestId) : ControlMessage;
+
+/// <summary>App → ParserHost: extract one archive listing entry into the native bounded temp cache.</summary>
+public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, string EntryPath) : ControlMessage;
+
+/// <summary>ParserHost → App: terminal successful archive entry extraction.</summary>
+public sealed record ArchiveEntryExtracted(string RequestId, string TempPath) : ControlMessage;
+
+/// <summary>App → ParserHost: cancel an archive entry extraction.</summary>
+public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage;

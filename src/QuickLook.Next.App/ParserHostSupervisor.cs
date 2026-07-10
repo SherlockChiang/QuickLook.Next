@@ -93,6 +93,26 @@ internal sealed class ParserHostSupervisor
 
     public Task CloseAsync(string requestId) => _channel?.SendAsync(new PreviewClose(requestId)) ?? Task.CompletedTask;
 
+    public async Task<string?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
+    {
+        if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
+        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        try
+        {
+            await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
+            ControlMessage response = await completion.WaitAsync(cancellationToken);
+            return response is ArchiveEntryExtracted extracted && IsArchiveExtractTempPath(extracted.TempPath)
+                ? extracted.TempPath
+                : null;
+        }
+        finally
+        {
+            _pending.Cancel(requestId);
+            try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(requestId)) ?? Task.CompletedTask); }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        }
+    }
+
     private async Task ReadLoopAsync(PipeChannel channel, int generation)
     {
         try
@@ -107,6 +127,7 @@ internal sealed class ParserHostSupervisor
                         break;
                     case PreviewReady ready: _pending.TryComplete(ready.RequestId, ready); break;
                     case PreviewError error: _pending.TryComplete(error.RequestId, error); break;
+                    case ArchiveEntryExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
                 }
             }
         }
@@ -145,6 +166,36 @@ internal sealed class ParserHostSupervisor
     private void TryKillHost()
     {
         try { if (_host is { HasExited: false }) _host.Kill(); } catch { }
+    }
+
+    private static bool IsArchiveExtractTempPath(string path)
+    {
+        const int maxPathChars = 32 * 1024;
+        if (string.IsNullOrWhiteSpace(path) || path.Length > maxPathChars)
+            return false;
+
+        try
+        {
+            string root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "QuickLookNext", "archive-preview"));
+            string fullPath = Path.GetFullPath(path);
+            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)
+                || !File.Exists(fullPath)
+                || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0
+                || (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+                return false;
+
+            string? extractionDirectory = Path.GetDirectoryName(fullPath);
+            return extractionDirectory is not null
+                && string.Equals(Path.GetDirectoryName(extractionDirectory), root, StringComparison.OrdinalIgnoreCase)
+                && Path.GetFileName(extractionDirectory).StartsWith("extract-", StringComparison.Ordinal)
+                && Path.GetFileName(fullPath).StartsWith("entry-", StringComparison.Ordinal)
+                && (File.GetAttributes(extractionDirectory) & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

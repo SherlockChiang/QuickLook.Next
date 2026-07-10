@@ -1274,7 +1274,8 @@ public sealed partial class MainWindow : Window
             && listing.ListingKind.Equals("archive", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(listing.RootPath))
         {
-            path = await Task.Run(() => _native.TryExtractArchiveEntry(listing.RootPath, row.Path), CurrentPreviewToken);
+            await EnsureParserHostStartedAsync();
+            path = await _parserSupervisor!.ExtractArchiveEntryAsync(listing.RootPath, row.Path, CurrentPreviewToken);
         }
 
         if (string.IsNullOrWhiteSpace(path))

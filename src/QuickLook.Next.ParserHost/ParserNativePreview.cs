@@ -21,6 +21,15 @@ internal static class ParserNativePreview
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_archive_entry(
+        byte[] archivePathUtf8,
+        nuint archivePathLen,
+        byte[] entryPathUtf8,
+        nuint entryPathLen,
+        byte[] outBuf,
+        nuint outCap);
+
     public static string? TryPreview(string kind, string path, CancellationToken cancellationToken)
     {
         NativePreviewCall call = kind.Equals("office", StringComparison.OrdinalIgnoreCase)
@@ -61,6 +70,35 @@ internal static class ParserNativePreview
         }
 
         return null;
+    }
+
+    public static string? TryExtractArchiveEntry(string archivePath, string entryPath, CancellationToken cancellationToken)
+    {
+        const int maxPathBytes = 32 * 1024;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] archiveBytes = Encoding.UTF8.GetBytes(archivePath);
+            byte[] entryBytes = Encoding.UTF8.GetBytes(entryPath);
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(maxPathBytes);
+            try
+            {
+                int length = ql_extract_archive_entry(
+                    archiveBytes, (nuint)archiveBytes.Length,
+                    entryBytes, (nuint)entryBytes.Length,
+                    buffer, (nuint)maxPathBytes);
+                cancellationToken.ThrowIfCancellationRequested();
+                return length > 0 && length <= maxPathBytes
+                    ? Encoding.UTF8.GetString(buffer, 0, length)
+                    : null;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
     }
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);

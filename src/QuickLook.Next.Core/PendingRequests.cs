@@ -58,6 +58,17 @@ public sealed class PendingRequests
         return false;
     }
 
+    /// <summary>Remove a request that the caller stopped awaiting before its terminal response arrives.</summary>
+    public bool Cancel(string requestId)
+    {
+        if (_pending.TryRemove(requestId, out var e))
+        {
+            e.Dispose();
+            return e.Tcs.TrySetCanceled();
+        }
+        return false;
+    }
+
     /// <summary>Fail every outstanding request (e.g. the host crashed and the channel broke).</summary>
     public void FailAll(Exception reason)
     {

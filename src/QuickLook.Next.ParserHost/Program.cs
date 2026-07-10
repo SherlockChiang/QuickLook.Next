@@ -24,7 +24,7 @@ catch (Exception ex)
 }
 
 using var channelLifetime = channel;
-var opens = new ConcurrentDictionary<string, CancellationTokenSource>();
+var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
 bool authenticated = false;
 
 while (true)
@@ -52,10 +52,10 @@ while (true)
             return;
 
         case PreviewOpen open when authenticated:
-            foreach (string requestId in opens.Keys)
+            foreach (string requestId in requests.Keys)
                 Cancel(requestId);
             var cts = new CancellationTokenSource();
-            if (!opens.TryAdd(open.RequestId, cts))
+            if (!requests.TryAdd(open.RequestId, cts))
             {
                 cts.Dispose();
                 break;
@@ -85,7 +85,7 @@ while (true)
                 }
                 finally
                 {
-                    if (opens.TryRemove(open.RequestId, out var current))
+                    if (requests.TryRemove(open.RequestId, out var current))
                         current.Dispose();
                 }
             });
@@ -94,15 +94,51 @@ while (true)
         case PreviewClose close:
             Cancel(close.RequestId);
             break;
+
+        case ArchiveEntryExtract extract:
+            var extractCts = new CancellationTokenSource();
+            if (!requests.TryAdd(extract.RequestId, extractCts))
+            {
+                extractCts.Dispose();
+                break;
+            }
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    string? path = ParserNativePreview.TryExtractArchiveEntry(extract.ArchivePath, extract.EntryPath, extractCts.Token);
+                    extractCts.Token.ThrowIfCancellationRequested();
+                    if (string.IsNullOrWhiteSpace(path))
+                        await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
+                    else
+                        await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("ParserHost", $"archive entry extraction failed request={extract.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (requests.TryRemove(extract.RequestId, out var current))
+                        current.Dispose();
+                }
+            });
+            break;
+
+        case ArchiveEntryExtractClose close:
+            Cancel(close.RequestId);
+            break;
     }
 }
 
-foreach (string requestId in opens.Keys)
+foreach (string requestId in requests.Keys)
     Cancel(requestId);
 
 void Cancel(string requestId)
 {
-    if (opens.TryGetValue(requestId, out var cts))
+    if (requests.TryGetValue(requestId, out var cts))
     {
         try { cts.Cancel(); } catch (ObjectDisposedException) { }
     }
