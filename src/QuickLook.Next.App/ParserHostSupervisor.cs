@@ -20,7 +20,7 @@ internal sealed class ParserHostSupervisor
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
     private Process? _host;
-    private ParserHostJob? _job;
+    private HostProcessJob? _job;
     private string? _sessionToken;
     private int _generation;
     private bool _stopping;
@@ -64,7 +64,7 @@ internal sealed class ParserHostSupervisor
         startInfo.ArgumentList.Add(pipeName);
         startInfo.ArgumentList.Add("--session-token");
         startInfo.ArgumentList.Add(_sessionToken);
-        var job = new ParserHostJob((nint)(512L * 1024 * 1024));
+        var job = new HostProcessJob((nint)(512L * 1024 * 1024));
         try
         {
             _host = Process.Start(startInfo) ?? throw new InvalidOperationException("ParserHost process did not start");

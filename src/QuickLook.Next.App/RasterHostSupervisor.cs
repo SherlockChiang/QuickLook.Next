@@ -25,6 +25,7 @@ internal sealed class RasterHostSupervisor
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
     private Process? _host;
+    private HostProcessJob? _job;
     private string? _sessionToken;
     private int _generation;
     private int _restartAttempts;
@@ -56,6 +57,8 @@ internal sealed class RasterHostSupervisor
         // Dispose the old channel + process + pipe before creating new ones (prevents handle leaks on restart).
         _channel?.Dispose();
         _channel = null;
+        try { _job?.Dispose(); } catch { }
+        _job = null;
         try { _host?.Dispose(); } catch { }
         _host = null;
         _server?.Dispose();
@@ -75,9 +78,21 @@ internal sealed class RasterHostSupervisor
         psi.ArgumentList.Add(pipeName);
         psi.ArgumentList.Add("--session-token");
         psi.ArgumentList.Add(_sessionToken);
-        _host = Process.Start(psi);
-        if (_host is null)
-            throw new InvalidOperationException("RasterHost process did not start");
+        var job = new HostProcessJob((nint)(1024L * 1024 * 1024));
+        try
+        {
+            _host = Process.Start(psi) ?? throw new InvalidOperationException("RasterHost process did not start");
+            job.Assign(_host);
+            _job = job;
+        }
+        catch
+        {
+            try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
+            try { _host?.Dispose(); } catch { }
+            _host = null;
+            job.Dispose();
+            throw;
+        }
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, _backgroundEfficiencyEnabled, "App");
         if (_host is not null) { _host.EnableRaisingEvents = true; _host.Exited += (_, _) => OnHostExited(gen); }
         DiagLog.Write("App", $"host pid={_host?.Id}; waiting for pipe connection");
@@ -362,6 +377,8 @@ internal sealed class RasterHostSupervisor
 
     private void TryKillHost()
     {
+        try { _job?.Dispose(); } catch { }
+        _job = null;
         try
         {
             if (_host is { HasExited: false })

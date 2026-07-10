@@ -5,8 +5,8 @@ using Microsoft.Win32.SafeHandles;
 
 namespace QuickLook.Next.App;
 
-/// <summary>Owns the resource boundary for one ParserHost process tree.</summary>
-internal sealed class ParserHostJob : IDisposable
+/// <summary>Owns the resource boundary for one isolated host process tree.</summary>
+internal sealed class HostProcessJob : IDisposable
 {
     private const uint ActiveProcess = 0x00000008;
     private const uint ProcessMemory = 0x00000100;
@@ -15,7 +15,7 @@ internal sealed class ParserHostJob : IDisposable
     private const int ExtendedLimitInformation = 9;
     private SafeJobHandle? _handle;
 
-    public ParserHostJob(nint memoryLimit)
+    public HostProcessJob(nint memoryLimit)
     {
         _handle = CreateJobObject(nint.Zero, null);
         if (_handle.IsInvalid)
@@ -43,7 +43,7 @@ internal sealed class ParserHostJob : IDisposable
 
     public void Assign(Process process)
     {
-        SafeJobHandle handle = _handle ?? throw new ObjectDisposedException(nameof(ParserHostJob));
+        SafeJobHandle handle = _handle ?? throw new ObjectDisposedException(nameof(HostProcessJob));
         if (!AssignProcessToJobObject(handle, process.Handle))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed");
     }
