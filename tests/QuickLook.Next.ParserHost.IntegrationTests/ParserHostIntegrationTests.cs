@@ -13,6 +13,32 @@ public sealed class ParserHostIntegrationTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     [Fact]
+    public async Task Host_rejects_bad_session_token_without_becoming_ready()
+    {
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token + "bad"), timeout.Token);
+
+            Assert.Null(await channel.ReceiveAsync(timeout.Token));
+            await host.WaitForExitAsync(timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+        }
+    }
+
+    [Fact]
     public async Task Authenticated_host_previews_generated_zip()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
@@ -28,13 +54,7 @@ public sealed class ParserHostIntegrationTests
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
-        using Process host = Process.Start(new ProcessStartInfo(hostPath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            ArgumentList = { "--pipe", pipeName, "--session-token", token },
-        }) ?? throw new InvalidOperationException("ParserHost did not start");
+        using Process host = StartHost(pipeName, token);
 
         try
         {
@@ -60,8 +80,25 @@ public sealed class ParserHostIntegrationTests
         finally
         {
             try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); } catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            await StopHostAsync(host);
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }
+    }
+
+    private static Process StartHost(string pipeName, string token)
+    {
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
+        return Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("ParserHost did not start");
+    }
+
+    private static async Task StopHostAsync(Process host)
+    {
+        try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch { try { host.Kill(entireProcessTree: true); } catch { } }
     }
 }
