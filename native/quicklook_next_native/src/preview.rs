@@ -5,9 +5,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
 use image::GenericImageView;
@@ -11741,6 +11741,9 @@ fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
 // ── Archive preview ──────────────────────────────────────────────────────────
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
+const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
+const MAX_TAR_SCAN_BYTES: u64 = 512 * 1024 * 1024;
+const TAR_SCAN_DEADLINE: Duration = Duration::from_secs(4);
 const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE_EXTRACT_ROOTS: usize = 32;
 const ARCHIVE_EXTRACT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
@@ -11788,18 +11791,18 @@ pub fn render_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
     }
     let lower = path.to_ascii_lowercase();
     if is_package_path(&lower) {
-        return render_package(path);
+        return render_package(path, cancel_cb);
     }
     if TAR_GZ_EXTS.iter().any(|e| lower.ends_with(e)) {
-        return render_tar_gz_archive(path);
+        return render_tar_gz_archive(path, cancel_cb);
     }
     if TAR_EXTS.iter().any(|e| lower.ends_with(e)) {
-        return render_tar_archive(path);
+        return render_tar_archive(path, cancel_cb);
     }
     if GZ_EXTS.iter().any(|e| lower.ends_with(e)) && !lower.ends_with(".tar.gz") {
         return render_gzip_member(path);
     }
-    render_zip_archive(path)
+    render_zip_archive(path, cancel_cb)
 }
 
 pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Option<String> {
@@ -11954,7 +11957,7 @@ fn is_package_path(lower_path: &str) -> bool {
     .any(|e| lower_path.ends_with(e))
 }
 
-fn render_package(path: &str) -> String {
+fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let filename = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -11987,7 +11990,11 @@ fn render_package(path: &str) -> String {
     let mut native_abis = BTreeMap::<String, ()>::new();
     let mut appx_manifest: Option<String> = None;
 
-    for i in 0..zip.len() {
+    let partial = zip.len() > MAX_ARCHIVE_SCAN_ENTRIES;
+    for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
+        if preview_cancelled(cancel_cb) {
+            return String::new();
+        }
         let mut entry = match zip.by_index_raw(i) {
             Ok(e) => e,
             Err(_) => continue,
@@ -12092,6 +12099,9 @@ fn render_package(path: &str) -> String {
         "Preview image: {}\n",
         if has_icon { "found" } else { "system fallback" }
     ));
+    if partial {
+        text.push_str("Listing scan stopped after 10,000 entries.\n");
+    }
 
     if platform == "Android" {
         if dex_count > 0 {
@@ -12740,7 +12750,7 @@ fn bytes_to_lossy(bytes: &[u8]) -> String {
         .to_string()
 }
 
-fn render_zip_archive(path: &str) -> String {
+fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
@@ -12763,7 +12773,10 @@ fn render_zip_archive(path: &str) -> String {
     let mut seen = 0usize;
     let mut partial = false;
 
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
+        if preview_cancelled(cancel_cb) {
+            return String::new();
+        }
         let entry = match zip.by_index_raw(i) {
             Ok(e) => e,
             Err(_) => continue,
@@ -12832,6 +12845,9 @@ fn render_zip_archive(path: &str) -> String {
             }
         }
     }
+    if zip.len() > MAX_ARCHIVE_SCAN_ENTRIES {
+        partial = true;
+    }
 
     archive_listing_json(
         filename,
@@ -12845,28 +12861,70 @@ fn render_zip_archive(path: &str) -> String {
     )
 }
 
-fn render_tar_archive(path: &str) -> String {
+fn render_tar_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
     };
-    render_tar_entries(path, "archive", file)
+    render_tar_entries(path, "archive", file, cancel_cb)
 }
 
-fn render_tar_gz_archive(path: &str) -> String {
+fn render_tar_gz_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return String::new(),
     };
-    render_tar_entries(path, "archive", GzDecoder::new(file))
+    render_tar_entries(path, "archive", GzDecoder::new(file), cancel_cb)
 }
 
-fn render_tar_entries<R: Read>(path: &str, kind: &str, reader: R) -> String {
+struct TarScanReader<R> {
+    reader: R,
+    remaining: u64,
+    deadline: Instant,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+}
+
+impl<R> TarScanReader<R> {
+    fn new(reader: R, cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
+        Self {
+            reader,
+            remaining: MAX_TAR_SCAN_BYTES,
+            deadline: Instant::now() + TAR_SCAN_DEADLINE,
+            cancel_cb,
+        }
+    }
+
+    fn stopped(&self) -> bool {
+        self.remaining == 0 || Instant::now() >= self.deadline || preview_cancelled(self.cancel_cb)
+    }
+}
+
+impl<R: Read> Read for TarScanReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.stopped() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "tar scan budget reached",
+            ));
+        }
+        let limit = self.remaining.min(buf.len() as u64) as usize;
+        let read = self.reader.read(&mut buf[..limit])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
+}
+
+fn render_tar_entries<R: Read>(
+    path: &str,
+    kind: &str,
+    reader: R,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> String {
     let filename = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    let mut archive = TarArchive::new(reader);
+    let mut archive = TarArchive::new(TarScanReader::new(reader, cancel_cb));
     let mut entries: BTreeMap<String, (String, String, bool, i64, i64, i64)> = BTreeMap::new();
     let mut file_count = 0u64;
     let mut uncompressed = 0i64;
@@ -12878,7 +12936,23 @@ fn render_tar_entries<R: Read>(path: &str, kind: &str, reader: R) -> String {
         Err(_) => return String::new(),
     };
 
-    for entry in archive_entries.flatten() {
+    let mut scanned = 0usize;
+    for entry in archive_entries {
+        if preview_cancelled(cancel_cb) {
+            return String::new();
+        }
+        if scanned == MAX_ARCHIVE_SCAN_ENTRIES {
+            partial = true;
+            break;
+        }
+        scanned += 1;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                partial = true;
+                break;
+            }
+        };
         let path_buf = match entry.path() {
             Ok(p) => p.into_owned(),
             Err(_) => continue,
@@ -13523,6 +13597,57 @@ mod tests {
         let mut reader = Cursor::new(vec![1, 2, 3, 4, 5]);
 
         assert!(read_limited_to_end(&mut reader, 4).is_none());
+    }
+
+    #[test]
+    fn tar_scan_reader_stops_at_decompressed_byte_budget() {
+        let mut reader = TarScanReader {
+            reader: Cursor::new(vec![1, 2, 3, 4, 5]),
+            remaining: 4,
+            deadline: Instant::now() + Duration::from_secs(1),
+            cancel_cb: None,
+        };
+        let mut buffer = [0u8; 8];
+
+        assert_eq!(reader.read(&mut buffer).expect("read within budget"), 4);
+        assert_eq!(
+            reader
+                .read(&mut buffer)
+                .expect_err("budget exhaustion")
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+    }
+
+    extern "C" fn always_cancel() -> bool {
+        true
+    }
+
+    #[test]
+    fn tar_scan_reader_honors_cancellation() {
+        let mut reader = TarScanReader::new(Cursor::new(vec![1]), Some(always_cancel));
+        let mut buffer = [0u8; 1];
+
+        assert_eq!(
+            reader.read(&mut buffer).expect_err("cancelled scan").kind(),
+            io::ErrorKind::Interrupted
+        );
+    }
+
+    #[test]
+    fn tar_scan_reader_honors_deadline() {
+        let mut reader = TarScanReader {
+            reader: Cursor::new(vec![1]),
+            remaining: 1,
+            deadline: Instant::now() - Duration::from_secs(1),
+            cancel_cb: None,
+        };
+        let mut buffer = [0u8; 1];
+
+        assert_eq!(
+            reader.read(&mut buffer).expect_err("expired scan").kind(),
+            io::ErrorKind::Interrupted
+        );
     }
 
     #[test]
