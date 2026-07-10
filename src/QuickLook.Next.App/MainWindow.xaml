@@ -51,6 +51,13 @@
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="#E61F1F1F" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#D41F1F1F" />
                     </ResourceDictionary>
+                    <ResourceDictionary x:Key="HighContrast">
+                        <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                        <SolidColorBrush x:Key="PreviewSurfaceBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                        <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                        <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
         </Grid.Resources>

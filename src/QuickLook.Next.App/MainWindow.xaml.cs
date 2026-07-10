@@ -20,6 +20,7 @@ using Windows.Graphics;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
+using Windows.UI.ViewManagement;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -76,6 +77,8 @@ public sealed partial class MainWindow : Window
     private bool _imageFilmstripSuppressClick;
     private Windows.Foundation.Point _imageFilmstripDragStart;
     private double _imageFilmstripDragStartOffset;
+    private readonly UISettings _uiSettings = new();
+    private readonly AccessibilitySettings _accessibilitySettings = new();
 
     private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -253,6 +256,8 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = UiStrings.AppName;
         TrySetBackdrop();
+        _uiSettings.ColorValuesChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals);
+        _accessibilitySettings.HighContrastChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals);
         _previewKeyboardHook = new PreviewKeyboardHook(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ShouldHandleSpaceAsPreviewClose,
@@ -919,6 +924,9 @@ public sealed partial class MainWindow : Window
     {
         PreviewContentHost.Opacity = 1;
         PreviewContentHost.IsHitTestVisible = true;
+        if (PrefersReducedMotion)
+            return;
+
         var visual = ElementCompositionPreview.GetElementVisual(PreviewContentHost);
         var compositor = visual.Compositor;
         var animation = compositor.CreateScalarKeyFrameAnimation();
@@ -2482,9 +2490,19 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            SystemBackdrop = new MicaBackdrop();
+            SystemBackdrop = PrefersReducedTransparency ? null : new MicaBackdrop();
         }
-        catch { /* no backdrop on older systems */ }
+        catch { SystemBackdrop = null; }
+    }
+
+    private bool IsHighContrast => _accessibilitySettings.HighContrast;
+    private bool PrefersReducedTransparency => IsHighContrast || !_uiSettings.AdvancedEffectsEnabled;
+    private bool PrefersReducedMotion => !_uiSettings.AnimationsEnabled;
+
+    private void ApplyAccessibilityVisuals()
+    {
+        TrySetBackdrop();
+        UpdateTitleBarColors();
     }
 
     private void UpdateTitleBarColors()
@@ -2494,6 +2512,18 @@ public sealed partial class MainWindow : Window
             if (AppWindowTitleBar.IsCustomizationSupported())
             {
                 var titleBar = GetAppWindow().TitleBar;
+                if (IsHighContrast)
+                {
+                    titleBar.ButtonForegroundColor = null;
+                    titleBar.ButtonHoverForegroundColor = null;
+                    titleBar.ButtonHoverBackgroundColor = null;
+                    titleBar.ButtonPressedForegroundColor = null;
+                    titleBar.ButtonPressedBackgroundColor = null;
+                    titleBar.ButtonInactiveForegroundColor = null;
+                    titleBar.ButtonInactiveBackgroundColor = null;
+                    titleBar.ButtonBackgroundColor = null;
+                    return;
+                }
                 bool isDark = RootGrid.ActualTheme == ElementTheme.Dark;
 
                 if (isDark)
