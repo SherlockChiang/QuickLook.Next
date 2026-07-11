@@ -318,12 +318,12 @@ public sealed partial class MainWindow : Window
         RootGrid.ActualThemeChanged += (s, e) =>
         {
             UpdateTitleBarColors();
-            ApplyImageCheckerboardBackdrops();
+            ApplyImagePreviewBackgrounds();
             ApplyWindowIcon();
             RefreshTrayIcon();
         };
         UpdateTitleBarColors();
-        ApplyImageCheckerboardBackdrops();
+        ApplyImagePreviewBackgrounds();
         _listingPresenter.UpdateSortHeaders();
     }
 
@@ -1341,56 +1341,19 @@ public sealed partial class MainWindow : Window
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        ApplyImageCheckerboardBackdrop(PreviewRoot);
         _rasterPresenter?.UpdateLayout();
     }
 
     private void OnAnimatedImageRootSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        ApplyImageCheckerboardBackdrop(AnimatedImagePreviewRoot);
         _animatedImagePresenter?.ScheduleLayoutUpdate();
     }
 
-    private void ApplyImageCheckerboardBackdrops()
+    private void ApplyImagePreviewBackgrounds()
     {
-        ApplyImageCheckerboardBackdrop(PreviewRoot);
-        ApplyImageCheckerboardBackdrop(AnimatedImagePreviewRoot);
-    }
-
-    private void ApplyImageCheckerboardBackdrop(Border border)
-    {
-        int width = (int)Math.Ceiling(border.ActualWidth);
-        int height = (int)Math.Ceiling(border.ActualHeight);
-        if (width <= 0 || height <= 0)
-            return;
-
-        const int cell = 16;
-        var bitmap = new WriteableBitmap(width, height);
-        byte light = RootGrid.ActualTheme == ElementTheme.Dark ? (byte)58 : (byte)230;
-        byte dark = RootGrid.ActualTheme == ElementTheme.Dark ? (byte)44 : (byte)208;
-        byte[] pixels = new byte[width * height * 4];
-        for (int y = 0; y < height; y++)
-        {
-            int row = y / cell;
-            for (int x = 0; x < width; x++)
-            {
-                byte tone = ((x / cell + row) & 1) == 0 ? light : dark;
-                int offset = (y * width + x) * 4;
-                pixels[offset] = tone;
-                pixels[offset + 1] = tone;
-                pixels[offset + 2] = tone;
-                pixels[offset + 3] = 255;
-            }
-        }
-
-        using (Stream stream = bitmap.PixelBuffer.AsStream())
-            stream.Write(pixels, 0, pixels.Length);
-        bitmap.Invalidate();
-        border.Background = new ImageBrush
-        {
-            ImageSource = bitmap,
-            Stretch = Stretch.Fill,
-        };
+        var background = new SolidColorBrush(Microsoft.UI.Colors.Black);
+        PreviewRoot.Background = background;
+        AnimatedImagePreviewRoot.Background = background;
     }
 
     private void OnPreviousPdfPageClick(object sender, RoutedEventArgs e)
@@ -2646,28 +2609,7 @@ public sealed partial class MainWindow : Window
         if (!IsPreviewActiveForClose() || _isModalDialogOpen)
             return false;
 
-        object? focused = RootGrid.XamlRoot is { } xamlRoot
-            ? FocusManager.GetFocusedElement(xamlRoot)
-            : null;
-        return focused is not DependencyObject focusedElement || !SpaceActivatesFocusedControl(focusedElement);
-    }
-
-    private static bool SpaceActivatesFocusedControl(DependencyObject focusedElement)
-    {
-        for (DependencyObject? current = focusedElement; current is not null; current = VisualTreeHelper.GetParent(current))
-        {
-            if (current is TextBox
-                or RichEditBox
-                or PasswordBox
-                or ToggleSwitch
-                or Microsoft.UI.Xaml.Controls.Primitives.ButtonBase
-                or Microsoft.UI.Xaml.Controls.Primitives.SelectorItem
-                or Microsoft.UI.Xaml.Controls.Primitives.RangeBase)
-            {
-                return true;
-            }
-        }
-        return false;
+        return true;
     }
 
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
