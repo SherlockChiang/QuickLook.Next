@@ -34,7 +34,7 @@ using var channelLifetime = channel;
 using var producer = new CompositionProducer();
 using var idleTrimmer = new IdleTrimmer(producer);
 var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
-var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex), CancellationTokenSource>();
+var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 var surfacePublishGate = new SemaphoreSlim(1, 1);
@@ -119,16 +119,18 @@ while (true)
 
         case PreviewPageOpen page when IsValidRequestId(page.RequestId)
                                        && page.PageIndex >= 0
+                                       && page.PageGeneration > 0
                                        && double.IsFinite(page.Scale)
                                        && page.Scale > 0:
             _ = HandlePageOpenAsync(page);
             break;
 
         case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
-                                             && pageClose.PageIndex >= 0:
-            CancelPageRender(pageClose.RequestId, pageClose.PageIndex);
+                                             && pageClose.PageIndex >= 0
+                                             && pageClose.PageGeneration > 0:
+            CancelPageRender(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration);
             _ = Task.Delay(250).ContinueWith(
-                _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex),
+                _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration),
                 TaskContinuationOptions.OnlyOnRanToCompletion);
             break;
 
@@ -221,9 +223,9 @@ void CancelOpen(string requestId)
     try { cts.Cancel(); } catch { }
 }
 
-void CancelPageRender(string requestId, int pageIndex)
+void CancelPageRender(string requestId, int pageIndex, long pageGeneration)
 {
-    var key = (requestId, pageIndex);
+    var key = (requestId, pageIndex, pageGeneration);
     if (!pdfPageRenderCts.TryRemove(key, out var cts))
         return;
 
@@ -442,7 +444,7 @@ static bool PreferSystemImageDecoder(string path)
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)
 {
-    var key = (page.RequestId, page.PageIndex);
+    var key = (page.RequestId, page.PageIndex, page.PageGeneration);
     var pageCts = new CancellationTokenSource();
     if (!pdfPageRenderCts.TryAdd(key, pageCts))
     {
@@ -455,7 +457,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     {
         if (!pdfSessions.TryGetValue(page.RequestId, out var session))
         {
-            await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, false, "PDF session is no longer available"));
+            await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, page.PageGeneration, false, "PDF session is no longer available"));
             return;
         }
 
@@ -466,12 +468,14 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
             return;
 
         var uploadWatch = Stopwatch.StartNew();
-        long handle = producer.CreatePresentedPageSurface(page.RequestId, page.PageIndex, rendered.Bgra, rendered.Width, rendered.Height);
+        long handle = producer.CreatePresentedPageSurface(
+            page.RequestId, page.PageIndex, page.PageGeneration, rendered.Bgra, rendered.Width, rendered.Height);
         uploadWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
         var sendWatch = Stopwatch.StartNew();
         await channel.SendAsync(new PreviewSurface(
-            page.RequestId, handle, (uint)rendered.Width, (uint)rendered.Height, 96.0, "B8G8R8A8_UNORM", page.PageIndex));
+            page.RequestId, handle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
+            "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration));
         sendWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page surface send {sendWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}");
     }
@@ -482,17 +486,17 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     catch (TimeoutException ex)
     {
         DiagLog.Write("RasterHost", $"page render timed out: request={page.RequestId} page={page.PageIndex}");
-        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, true, ex.Message));
+        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, page.PageGeneration, true, ex.Message));
     }
     catch (Exception ex)
     {
         DiagLog.Write("RasterHost", $"page render failed: {ex.Message}");
-        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, false, ex.Message));
+        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, page.PageGeneration, false, ex.Message));
     }
     finally
     {
-        ((ICollection<KeyValuePair<(string RequestId, int PageIndex), CancellationTokenSource>>)pdfPageRenderCts)
-            .Remove(new KeyValuePair<(string RequestId, int PageIndex), CancellationTokenSource>(key, pageCts));
+        ((ICollection<KeyValuePair<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>>)pdfPageRenderCts)
+            .Remove(new KeyValuePair<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>(key, pageCts));
         pageCts.Dispose();
     }
 }

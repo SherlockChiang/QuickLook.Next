@@ -28,7 +28,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
     private IDXGIFactoryMedia _factory = null!;
     private IDXGISwapChain1? _swapchain;
     private readonly List<IDXGISwapChain1> _liveSwapchains = new();
-    private readonly Dictionary<(string RequestId, int PageIndex), IDXGISwapChain1> _pageSwapchains = new();
+    private readonly Dictionary<(string RequestId, int PageIndex, long PageGeneration), IDXGISwapChain1> _pageSwapchains = new();
     private readonly List<IDXGISwapChain1> _retired = new(); // closed previews, freed on the next open
     private HANDLE _appProc;
 
@@ -120,7 +120,8 @@ internal sealed unsafe class CompositionProducer : IDisposable
     }
 
     /// <summary>Page surface keyed by request and page, so stale closes cannot release a newer preview.</summary>
-    public long CreatePresentedPageSurface(string requestId, int pageIndex, byte[] bgra, int width, int height)
+    public long CreatePresentedPageSurface(
+        string requestId, int pageIndex, long pageGeneration, byte[] bgra, int width, int height)
     {
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         int expected = checked(width * height * 4);
@@ -130,7 +131,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
         var (surface, sc) = CreateSwapchain((uint)width, (uint)height);
         lock (_sync)
         {
-            var key = (requestId, pageIndex);
+            var key = (requestId, pageIndex, pageGeneration);
             if (_pageSwapchains.Remove(key, out var old)) ReleaseCom(old);
             _pageSwapchains[key] = sc;
             PresentPixelsCore(sc, bgra, width, height);
@@ -138,11 +139,11 @@ internal sealed unsafe class CompositionProducer : IDisposable
         return DuplicateToApp(surface);
     }
 
-    public void ReleasePage(string requestId, int pageIndex)
+    public void ReleasePage(string requestId, int pageIndex, long pageGeneration)
     {
         lock (_sync)
         {
-            if (_pageSwapchains.Remove((requestId, pageIndex), out var sc)) ReleaseCom(sc);
+            if (_pageSwapchains.Remove((requestId, pageIndex, pageGeneration), out var sc)) ReleaseCom(sc);
         }
     }
 

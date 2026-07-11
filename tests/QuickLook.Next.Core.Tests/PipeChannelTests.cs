@@ -13,7 +13,7 @@ public sealed class PipeChannelTests
         await using var pipes = await ConnectedPipePair.CreateAsync();
         using var sender = new PipeChannel(pipes.Server);
         using var receiver = new PipeChannel(pipes.Client);
-        var expected = new PreviewPageError("request", 7, true, "render timed out");
+        var expected = new PreviewPageError("request", 7, 42, true, "render timed out");
 
         Task<ControlMessage?> receive = receiver.ReceiveAsync();
         await sender.SendAsync(expected).WaitAsync(Timeout);

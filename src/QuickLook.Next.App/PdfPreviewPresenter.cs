@@ -42,6 +42,7 @@ internal sealed class PdfPreviewPresenter
     private readonly Dictionary<int, Border> _pageHosts = new();
     private readonly HashSet<int> _requestedPages = new();
     private readonly Dictionary<int, PdfPageState> _pageStates = new();
+    private readonly Dictionary<int, long> _pageGenerations = new();
     private readonly Dictionary<int, long> _pageLastTouched = new();
 
     private string? _requestId;
@@ -54,6 +55,7 @@ internal sealed class PdfPreviewPresenter
     private double[] _pageTopOffsets = [];
     private double _lastScrollOffset;
     private int _renderVersion;
+    private long _nextPageGeneration;
 
     public PdfPreviewPresenter(
         ScrollViewer scrollViewer,
@@ -144,6 +146,13 @@ internal sealed class PdfPreviewPresenter
             CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
             return true;
         }
+        if (surface.PageGeneration <= 0
+            || !_pageGenerations.TryGetValue(surface.PageIndex, out long currentGeneration)
+            || currentGeneration != surface.PageGeneration)
+        {
+            CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
+            return true;
+        }
         if (_pageStates.TryGetValue(surface.PageIndex, out PdfPageState state) && state == PdfPageState.Released)
         {
             CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
@@ -200,10 +209,12 @@ internal sealed class PdfPreviewPresenter
         {
             if (!_requestedPages.Contains(index))
             {
+                long pageGeneration = checked(++_nextPageGeneration);
+                _pageGenerations[index] = pageGeneration;
                 _requestedPages.Add(index);
                 TouchPage(index);
                 SetPageState(index, PdfPageState.Requested);
-                _ = RenderPageAsync(supervisor, _requestId, index, _scale);
+                _ = RenderPageAsync(supervisor, _requestId, index, pageGeneration, _scale);
             }
             else
             {
@@ -226,7 +237,8 @@ internal sealed class PdfPreviewPresenter
         string? requestId = _requestId;
         RasterHostSupervisor? supervisor = requestId is null ? null : _supervisorProvider();
         foreach (int pageIndex in _requestedPages.ToArray())
-            _ = supervisor?.ClosePageAsync(requestId!, pageIndex);
+            if (_pageGenerations.TryGetValue(pageIndex, out long pageGeneration))
+                _ = supervisor?.ClosePageAsync(requestId!, pageIndex, pageGeneration);
 
         foreach (var host in _pageHosts.Values)
         {
@@ -237,6 +249,7 @@ internal sealed class PdfPreviewPresenter
         _pageHosts.Clear();
         _requestedPages.Clear();
         _pageStates.Clear();
+        _pageGenerations.Clear();
         _pageLastTouched.Clear();
         _touchTick = 0;
         _currentPageIndex = 0;
@@ -432,24 +445,33 @@ internal sealed class PdfPreviewPresenter
             DisposePageVisual(host);
         }
 
-        if (_requestId is not null)
-            _ = _supervisorProvider()?.ClosePageAsync(_requestId, pageIndex);
+        if (_requestId is not null && _pageGenerations.TryGetValue(pageIndex, out long pageGeneration))
+            _ = _supervisorProvider()?.ClosePageAsync(_requestId, pageIndex, pageGeneration);
         SetPageState(pageIndex, PdfPageState.Released);
     }
 
-    private async Task RenderPageAsync(RasterHostSupervisor supervisor, string requestId, int pageIndex, double scale)
+    private async Task RenderPageAsync(
+        RasterHostSupervisor supervisor,
+        string requestId,
+        int pageIndex,
+        long pageGeneration,
+        double scale)
     {
-        if (!string.Equals(_requestId, requestId, StringComparison.Ordinal))
+        if (!string.Equals(_requestId, requestId, StringComparison.Ordinal)
+            || !_pageGenerations.TryGetValue(pageIndex, out long currentGeneration)
+            || currentGeneration != pageGeneration)
             return;
 
         SetPageState(pageIndex, PdfPageState.Rendering);
         try
         {
-            await supervisor.RenderPageAsync(requestId, pageIndex, scale);
+            await supervisor.RenderPageAsync(requestId, pageIndex, pageGeneration, scale);
         }
         catch
         {
             if (string.Equals(_requestId, requestId, StringComparison.Ordinal)
+                && _pageGenerations.TryGetValue(pageIndex, out currentGeneration)
+                && currentGeneration == pageGeneration
                 && _pageStates.TryGetValue(pageIndex, out PdfPageState state)
                 && state == PdfPageState.Rendering)
             {

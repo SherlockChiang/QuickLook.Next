@@ -23,7 +23,7 @@ internal sealed class RasterHostSupervisor
     private readonly DispatcherQueue _ui;
     private readonly PendingRequests _pending = new();
     private readonly ConcurrentDictionary<string, byte> _cloudOriginRequests = new();
-    private readonly ConcurrentDictionary<(string RequestId, int PageIndex), byte> _pendingCloudPages = new();
+    private readonly ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), byte> _pendingCloudPages = new();
 
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -206,7 +206,7 @@ internal sealed class RasterHostSupervisor
                 break;
             case PreviewSurface surface:
                 if (surface.PageIndex >= 0)
-                    _pendingCloudPages.TryRemove((surface.RequestId, surface.PageIndex), out _);
+                    _pendingCloudPages.TryRemove((surface.RequestId, surface.PageIndex, surface.PageGeneration), out _);
                 _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface));
                 break;
             case PreviewReady ready:
@@ -217,9 +217,9 @@ internal sealed class RasterHostSupervisor
                 _pending.TryComplete(error.RequestId, error);
                 break;
             case PreviewPageError pageError:
-                if (_pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex), out _)
+                if (_pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex, pageError.PageGeneration), out _)
                     && pageError.TimedOut)
-                    RecycleHost(pageError.RequestId, $"cloud PDF page timed out: page={pageError.PageIndex}");
+                    RecycleHost(pageError.RequestId, $"cloud PDF page timed out: page={pageError.PageIndex}; generation={pageError.PageGeneration}");
                 break;
         }
     }
@@ -293,9 +293,9 @@ internal sealed class RasterHostSupervisor
         }
     }
 
-    public async Task RenderPageAsync(string requestId, int pageIndex, double scale)
+    public async Task RenderPageAsync(string requestId, int pageIndex, long pageGeneration, double scale)
     {
-        var key = (requestId, pageIndex);
+        var key = (requestId, pageIndex, pageGeneration);
         bool trackCloudPage = _cloudOriginRequests.ContainsKey(requestId);
         if (trackCloudPage)
             _pendingCloudPages[key] = 0;
@@ -304,7 +304,7 @@ internal sealed class RasterHostSupervisor
             try
             {
                 DiagLog.Write("App", $"host send page open request={requestId}; page={pageIndex}; scale={scale:0.###}");
-                await _channel.SendAsync(new PreviewPageOpen(requestId, pageIndex, scale));
+                await _channel.SendAsync(new PreviewPageOpen(requestId, pageIndex, pageGeneration, scale));
             }
             catch
             {
@@ -317,17 +317,17 @@ internal sealed class RasterHostSupervisor
             _pendingCloudPages.TryRemove(key, out _);
     }
 
-    public async Task ClosePageAsync(string requestId, int pageIndex)
+    public async Task ClosePageAsync(string requestId, int pageIndex, long pageGeneration)
     {
-        if (_pendingCloudPages.TryRemove((requestId, pageIndex), out _))
+        if (_pendingCloudPages.TryRemove((requestId, pageIndex, pageGeneration), out _))
         {
-            RecycleHost(requestId, $"cloud PDF page canceled: page={pageIndex}");
+            RecycleHost(requestId, $"cloud PDF page canceled: page={pageIndex}; generation={pageGeneration}");
             return;
         }
         if (_channel is not null)
         {
             DiagLog.Write("App", $"host send page close request={requestId}; page={pageIndex}");
-            await _channel.SendAsync(new PreviewPageClose(requestId, pageIndex));
+            await _channel.SendAsync(new PreviewPageClose(requestId, pageIndex, pageGeneration));
         }
     }
 

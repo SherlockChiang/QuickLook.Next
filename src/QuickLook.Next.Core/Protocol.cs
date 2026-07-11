@@ -50,7 +50,8 @@ public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe)
 
 /// <summary>Host → App: the shared composition surface handle (already duplicated into the App process).</summary>
 public sealed record PreviewSurface(
-    string RequestId, long SharedHandle, uint Width, uint Height, double Dpi, string Format, int PageIndex = -1) : ControlMessage;
+    string RequestId, long SharedHandle, uint Width, uint Height, double Dpi, string Format,
+    int PageIndex = -1, long PageGeneration = 0) : ControlMessage;
 
 /// <summary>Host → App: terminal success for a RequestId.</summary>
 public sealed record PreviewReady(
@@ -80,13 +81,14 @@ public sealed record PreviewError(string RequestId, string Message) : ControlMes
 public sealed record PreviewResize(string RequestId, uint Width, uint Height, double Dpi) : ControlMessage;
 
 /// <summary>App → Host: render one page from an already-open document preview.</summary>
-public sealed record PreviewPageOpen(string RequestId, int PageIndex, double Scale) : ControlMessage;
+public sealed record PreviewPageOpen(string RequestId, int PageIndex, long PageGeneration, double Scale) : ControlMessage;
 
 /// <summary>App → Host: a page scrolled out of the keep-alive window; release its GPU surface.</summary>
-public sealed record PreviewPageClose(string RequestId, int PageIndex) : ControlMessage;
+public sealed record PreviewPageClose(string RequestId, int PageIndex, long PageGeneration) : ControlMessage;
 
 /// <summary>Host → App: one requested page failed before publishing a surface.</summary>
-public sealed record PreviewPageError(string RequestId, int PageIndex, bool TimedOut, string Message) : ControlMessage;
+public sealed record PreviewPageError(
+    string RequestId, int PageIndex, long PageGeneration, bool TimedOut, string Message) : ControlMessage;
 
 /// <summary>App → Host: tear down a preview.</summary>
 public sealed record PreviewClose(string RequestId) : ControlMessage;
