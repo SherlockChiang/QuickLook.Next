@@ -38,15 +38,13 @@ jobs:
       - name: Reject an existing manual release tag
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          git ls-remote --exit-code --tags origin "refs/tags/${{ steps.version.outputs.tag }}" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            throw "Tag ${{ steps.version.outputs.tag }} already exists. Increment VERSION before publishing."
-          }
-          if ($LASTEXITCODE -ne 2) {
+          $remoteTag = git ls-remote --tags origin "refs/tags/${{ steps.version.outputs.tag }}"
+          if ($LASTEXITCODE -ne 0) {
             throw "Could not check whether the release tag exists."
+          }
+          if ($remoteTag) {
+            throw "Tag ${{ steps.version.outputs.tag }} already exists. Increment VERSION before publishing."
           }
 
       - name: Restore release signing certificate
