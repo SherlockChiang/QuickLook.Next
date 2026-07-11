@@ -1,119 +1,87 @@
-# Build and Pack QuickLook.Next as an MSIX package.
 param(
-    [string]$version = "1.0.0.0",
-    [switch]$CreateDevCertificate
+    [string]$VersionPrefix = "",
+    [string]$VersionSuffix = "",
+    [string]$CertificatePath = "",
+    [string]$CertificatePassword = "",
+    [switch]$CreateDevelopmentCertificate,
+    [switch]$SkipSystemImageSmoke
 )
+
 $ErrorActionPreference = "Stop"
-$root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
-$dist = Join-Path $root "dist"
+$root = Split-Path $PSScriptRoot -Parent
+$versionFile = Join-Path $root "VERSION"
+if (-not $VersionPrefix) { $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
+if ($VersionPrefix -notmatch '^\d+\.\d+\.\d+$') { throw "VersionPrefix must use X.Y.Z format." }
 
-Write-Host "== Step 1: Rebuilding and assembling release files ==" -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot "pack-release.ps1")
+$artifacts = Join-Path $root "artifacts"
+$msixRoot = Join-Path $root "msix"
+$installerRoot = Join-Path $root "installer"
+$manifestTemplate = Join-Path $root "packaging\AppxManifest.xml"
+$numericVersion = "$VersionPrefix.0"
+$packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else { $VersionPrefix }
+$msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
+$installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
 
-Write-Host "== Step 2: Creating and resizing App Assets ==" -ForegroundColor Cyan
-$sourceIcon = Join-Path $root "src\QuickLook.Next.App\Assets\QuickLookNext.png"
-if (-not (Test-Path $sourceIcon)) {
-    & (Join-Path $PSScriptRoot "generate-icons.ps1")
+Remove-Item -LiteralPath $msixRoot -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $installerRoot -Recurse -Force -ErrorAction SilentlyContinue
+& (Join-Path $PSScriptRoot "pack-release.ps1") -VersionPrefix $VersionPrefix -VersionSuffix $VersionSuffix -SkipSystemImageSmoke:$SkipSystemImageSmoke
+if ($LASTEXITCODE -ne 0) { throw "Release packaging failed." }
+
+New-Item -ItemType Directory -Path $msixRoot, $installerRoot -Force | Out-Null
+Copy-Item -Path (Join-Path $root "dist\*") -Destination $msixRoot -Recurse -Force
+
+[xml]$manifest = Get-Content -LiteralPath $manifestTemplate -Raw
+$manifest.Package.Identity.Version = $numericVersion
+$manifest.Save((Join-Path $msixRoot "AppxManifest.xml"))
+
+$sdkBin = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Directory |
+    Where-Object Name -Match '^\d+\.\d+\.\d+\.\d+$' |
+    Sort-Object { [version]$_.Name } -Descending |
+    ForEach-Object { Join-Path $_.FullName "x64" } |
+    Where-Object { Test-Path (Join-Path $_ "makeappx.exe") } |
+    Select-Object -First 1
+if (-not $sdkBin) { throw "Windows SDK MakeAppx.exe was not found." }
+
+if ($CreateDevelopmentCertificate -and (-not $CertificatePath -or -not (Test-Path -LiteralPath $CertificatePath))) {
+    if (-not $CertificatePath) { $CertificatePath = Join-Path $artifacts "QuickLook.Next-Development.pfx" }
+    $CertificatePassword = [guid]::NewGuid().ToString("N")
+    $securePassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
+    $certificate = New-SelfSignedCertificate -Type Custom -Subject "CN=QuickLook Next Development" `
+        -KeyUsage DigitalSignature -FriendlyName "QuickLook Next Development" `
+        -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
+    Export-PfxCertificate -Cert $certificate -FilePath $CertificatePath -Password $securePassword | Out-Null
+    Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)"
 }
-& (Join-Path $PSScriptRoot "resize-icons.ps1") -sourcePath $sourceIcon -assetsDir (Join-Path $dist "Assets")
+if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "A signing certificate is required." }
 
-Write-Host "== Step 3: Generating AppxManifest.xml ==" -ForegroundColor Cyan
-$manifestContent = @"
-<?xml version="1.0" encoding="utf-8"?>
-<Package 
-    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" 
-    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" 
-    xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
-    
-    <Identity Name="QuickLook.Next" Version="$version" Publisher="CN=QuickLookNextDev" ProcessorArchitecture="x64" />
-    
-    <Properties>
-        <DisplayName>QuickLook Next</DisplayName>
-        <PublisherDisplayName>QuickLook Next Dev</PublisherDisplayName>
-        <Description>Sleek modern file preview utility for Windows.</Description>
-        <Logo>Assets\StoreLogo.png</Logo>
-    </Properties>
-    
-    <Resources>
-        <Resource Language="en-us" />
-    </Resources>
-    
-    <Dependencies>
-        <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22621.0" />
-    </Dependencies>
-    
-    <Capabilities>
-        <rescap:Capability Name="runFullTrust"/>
-    </Capabilities>
-    
-    <Applications>
-        <Application Id="App" Executable="QuickLook.Next.App.exe" EntryPoint="Windows.FullTrustApplication">
-            <uap:VisualElements 
-                DisplayName="QuickLook Next" 
-                Square150x150Logo="Assets\Square150x150Logo.png" 
-                Square44x44Logo="Assets\Square44x44Logo.png" 
-                Description="QuickLook Next App"
-                BackgroundColor="transparent" />
-            <Extensions>
-                <desktop:Extension Category="windows.startupTask" Executable="QuickLook.Next.App.exe" EntryPoint="Windows.FullTrustApplication">
-                    <desktop:StartupTask TaskId="QuickLookNextStartup" Enabled="false" DisplayName="QuickLook Next" />
-                </desktop:Extension>
-            </Extensions>
-        </Application>
-    </Applications>
-</Package>
-"@
+$msixPath = Join-Path $artifacts $msixName
+Remove-Item -LiteralPath $msixPath -Force -ErrorAction SilentlyContinue
+& (Join-Path $sdkBin "makeappx.exe") pack /d $msixRoot /p $msixPath /o
+if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed." }
 
-[System.IO.File]::WriteAllText((Join-Path $dist "AppxManifest.xml"), $manifestContent, [System.Text.Encoding]::UTF8)
-Write-Host "Manifest created at $dist\AppxManifest.xml"
+& (Join-Path $sdkBin "signtool.exe") sign /fd SHA256 /f $CertificatePath /p $CertificatePassword $msixPath
+if ($LASTEXITCODE -ne 0) { throw "SignTool failed." }
 
-Write-Host "== Step 4: Locating Windows SDK Packaging Tools ==" -ForegroundColor Cyan
-$makeAppx = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "makeappx.exe" -Recurse -File -ErrorAction SilentlyContinue | 
-             Where-Object { $_.FullName -match "\\x64\\" } | 
-             Sort-Object LastWriteTime -Descending | 
-             Select-Object -First 1).FullName
+$publicCertificate = Join-Path $installerRoot "QuickLook.Next-Development.cer"
+$securePassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
+$certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+    $CertificatePath,
+    $CertificatePassword,
+    [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+[System.IO.File]::WriteAllBytes($publicCertificate, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
-$signTool = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -File -ErrorAction SilentlyContinue | 
-             Where-Object { $_.FullName -match "\\x64\\" } | 
-             Sort-Object LastWriteTime -Descending | 
-             Select-Object -First 1).FullName
+Copy-Item -LiteralPath $msixPath -Destination $installerRoot
+Copy-Item -LiteralPath (Join-Path $root "packaging\Install.ps1") -Destination $installerRoot
+Get-ChildItem -LiteralPath (Join-Path $root "packaging") -Filter "*.cmd" |
+    Copy-Item -Destination $installerRoot
+Copy-Item -LiteralPath (Join-Path $root "packaging\README.txt") -Destination $installerRoot
 
-if (-not $makeAppx) {
-    Write-Error "Could not locate makeappx.exe. Please ensure Windows 10/11 SDK is installed."
-    exit 1
-}
-Write-Host "Found MakeAppx: $makeAppx"
-if (-not $signTool) {
-    Write-Warning "Could not locate signtool.exe. Package will not be signed automatically."
-} else {
-    Write-Host "Found SignTool: $signTool"
-}
-
-Write-Host "== Step 5: Packaging directory to MSIX ==" -ForegroundColor Cyan
-$msixPath = Join-Path $dist "QuickLook.Next.msix"
-if (Test-Path $msixPath) { Remove-Item $msixPath -Force }
-
-& $makeAppx pack /d $dist /p $msixPath /o
-Write-Host "MSIX package created at $msixPath" -ForegroundColor Green
-
-if ($signTool) {
-    Write-Host "== Step 6: Finding Developer Certificate ==" -ForegroundColor Cyan
-    $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq "CN=QuickLookNextDev" } | Select-Object -First 1
-    if (-not $cert -and $CreateDevCertificate) {
-        Write-Host "Creating self-signed developer certificate..."
-        $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=QuickLookNextDev" -KeyAlgorithm RSA -KeyLength 2048 -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3") -KeyExportPolicy Exportable
-    }
-    if ($cert) {
-        # Developer-only signing; this script must not be used for public release signing.
-        $certPath = Join-Path $dist "QuickLookNextDev.cer"
-        Export-Certificate -Cert $cert -FilePath $certPath -Type CERT | Out-Null
-        Write-Host "== Step 7: Signing MSIX Package with a developer certificate ==" -ForegroundColor Cyan
-        & $signTool sign /a /s My /n "QuickLookNextDev" /fd SHA256 $msixPath
-        Write-Host "Developer-signed MSIX created at $msixPath" -ForegroundColor Green
-    } else {
-        Write-Warning "Package is unsigned. Re-run with -CreateDevCertificate only for local development, or sign with a production certificate outside this script."
-    }
-} else {
-    Write-Warning "Package created but not signed. To install it, you must sign it manually or enable Developer Mode and use Add-AppxPackage."
-}
+$installerPath = Join-Path $artifacts $installerName
+Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $installerPath -CompressionLevel Optimal
+$hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash  $installerName" | Set-Content -LiteralPath "$installerPath.sha256" -Encoding ascii
+Remove-Item -LiteralPath $msixRoot -Recurse -Force
+Remove-Item -LiteralPath $installerRoot -Recurse -Force
+Write-Host "Installer created: $installerPath" -ForegroundColor Green

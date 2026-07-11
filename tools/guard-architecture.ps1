@@ -26,7 +26,7 @@ function Get-RelativePath([string]$path) {
 
 function Test-IsGeneratedPath([string]$path) {
     $normalized = $path.Replace('/', '\')
-    return $normalized -match '\\(bin|obj|target|dist)\\' `
+    return $normalized -match '\\(bin|obj|target|dist|msix|installer|artifacts)\\' `
         -or $normalized -match '\\packages\.lock\.json$' `
         -or $normalized -match '\\QuickLook old\\' `
         -or $normalized -match '\\spikes\\' `

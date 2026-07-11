@@ -62,11 +62,11 @@ jobs:
           cargo install cargo-audit --locked
           cargo audit --file native/quicklook_next_native/Cargo.lock
 
-      - name: Build release package
+      - name: Build MSIX installer
         shell: pwsh
         run: |
           dotnet restore QuickLook.Next.slnx --locked-mode
-          ./tools/pack-release.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}" -SkipSystemImageSmoke
+          ./tools/pack-msix.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}" -CreateDevelopmentCertificate -SkipSystemImageSmoke
 
       - name: Generate CycloneDX NuGet SBOM
         shell: pwsh
@@ -115,25 +115,14 @@ jobs:
             -Destination artifacts\sbom\QuickLook.Next-$env:BETA_VERSION-cargo.cdx.json `
             -Force
 
-      - name: Write release metadata
+      - name: Resolve installer assets
         shell: pwsh
         run: |
-          @"
-          QuickLook Next $env:BETA_VERSION
-          Commit: $env:GITHUB_SHA
-          Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
-          Signing: unsigned ZIP; verify the published SHA-256 before use.
-          "@.Trim() | Set-Content -LiteralPath dist/BETA_VERSION.txt -Encoding UTF8
-
-      - name: Archive package
-        shell: pwsh
-        run: |
-          Copy-Item -LiteralPath artifacts\sbom -Destination dist\sbom -Recurse -Force
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          $zipPath = "artifacts/QuickLook.Next-$env:BETA_VERSION-win-x64.zip"
-          Compress-Archive -Path dist/* -DestinationPath $zipPath -Force
+          $zipPath = "artifacts/QuickLook.Next-Installer-$env:BETA_VERSION-win-x64.zip"
           $checksumPath = "$zipPath.sha256"
-          (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLowerInvariant() | Set-Content -LiteralPath $checksumPath -NoNewline
+          if (-not (Test-Path -LiteralPath $zipPath) -or -not (Test-Path -LiteralPath $checksumPath)) {
+            throw "MSIX installer assets were not created."
+          }
           "RELEASE_ASSET=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "CHECKSUM_ASSET=$checksumPath" | Out-File -FilePath $env:GITHUB_ENV -Append
 

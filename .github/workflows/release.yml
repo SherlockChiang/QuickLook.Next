@@ -48,9 +48,9 @@ jobs:
           dotnet build QuickLook.Next.slnx -c Release --no-restore
           dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 
-      - name: Package portable release
+      - name: Package MSIX installer
         shell: pwsh
-        run: ./tools/pack-release.ps1 -SkipSystemImageSmoke
+        run: ./tools/pack-msix.ps1 -CreateDevelopmentCertificate -SkipSystemImageSmoke
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -63,18 +63,24 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: QuickLook.Next-${{ github.ref_name }}-win-x64
-          path: artifacts/*
+          path: |
+            artifacts/QuickLook.Next-Installer-*.zip
+            artifacts/QuickLook.Next-Installer-*.zip.sha256
+            artifacts/*.spdx.json
           if-no-files-found: error
 
       - name: Attest release archive
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: artifacts/*.zip
+          subject-path: artifacts/QuickLook.Next-Installer-*.zip
 
       - name: Publish GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/*
+          files: |
+            artifacts/QuickLook.Next-Installer-*.zip
+            artifacts/QuickLook.Next-Installer-*.zip.sha256
+            artifacts/*.spdx.json

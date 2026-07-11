@@ -25,6 +25,8 @@ artifacts/
 out/
 dist/
 dist*/
+msix/
+installer/
 agent.md
 
 *.pdb

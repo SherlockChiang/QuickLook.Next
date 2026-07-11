@@ -21,23 +21,23 @@ QuickLook Next is a fast, native Windows file previewer built with WinUI 3, Rust
 
 ## Download
 
-Download the latest `QuickLook.Next-*-win-x64.zip` from [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases).
+Download the latest `QuickLook.Next-Installer-*-win-x64.zip` from [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases).
 
-1. Extract the ZIP to a folder you can keep, such as `%LOCALAPPDATA%\Programs\QuickLook.Next`.
-2. Run `QuickLook.Next.App.exe`.
-3. Leave the tray app running, select a file in File Explorer, and press **Space**.
+1. Extract the Installer ZIP.
+2. Double-click `Install.cmd` and follow the prompts. The package includes a signed MSIX and its project development certificate.
+3. Start QuickLook Next from the Start menu, select a file in File Explorer, and press **Space**.
 
-The release is portable and does not currently include an installer or automatic updater. Do not run the executable directly from inside the ZIP.
+The certificate is installed only for the current user. QuickLook Next can be removed later from **Windows Settings > Apps**. Microsoft Store distribution and automatic updates are planned for a later test release.
 
 ### Windows Warning
 
 Current builds are not Authenticode-signed. Windows SmartScreen may show an "unrecognized app" warning. Verify the downloaded ZIP against the accompanying `.sha256` file before running it:
 
 ```powershell
-Get-FileHash .\QuickLook.Next-0.1.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\QuickLook.Next-Installer-0.2.0-win-x64.zip -Algorithm SHA256
 ```
 
-Compare the displayed hash with the first value in `QuickLook.Next-0.1.0-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
+Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.0-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
 
 ## Using QuickLook Next
 
@@ -125,10 +125,10 @@ cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
 cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
 dotnet build QuickLook.Next.slnx -c Release --no-restore
 dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
-.\tools\pack-release.ps1
+.\tools\pack-msix.ps1 -CreateDevelopmentCertificate
 ```
 
-The packaged ZIP and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging.
+The Installer ZIP, signed MSIX, certificate, and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging. Development certificates are for testing only; Store releases will use the Partner Center identity.
 
 ## Architecture
 

@@ -21,23 +21,23 @@ QuickLook Next 是使用 WinUI 3、Rust 和 GPU 合成表面构建的原生 Wind
 
 ## 下载与运行
 
-从 [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases) 下载最新的 `QuickLook.Next-*-win-x64.zip`。
+从 [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases) 下载最新的 `QuickLook.Next-Installer-*-win-x64.zip`。
 
-1. 将 ZIP 解压到一个长期保留的目录，例如 `%LOCALAPPDATA%\Programs\QuickLook.Next`。
-2. 运行 `QuickLook.Next.App.exe`。
-3. 保持托盘程序运行，在文件资源管理器中选中文件，然后按 **空格键**。
+1. 解压 Installer ZIP。
+2. 双击 `Install-ZH-CN.cmd` 并按提示操作。安装包内含已签名的 MSIX 和对应的项目开发证书。
+3. 从开始菜单启动 QuickLook Next，在文件资源管理器中选中文件，然后按 **空格键**。
 
-当前版本为免安装版，暂时没有安装程序和自动更新。请勿直接在 ZIP 压缩包内部运行程序。
+证书只会安装到当前用户。以后可在 **Windows 设置 > 应用** 中卸载 QuickLook Next。Microsoft Store 测试版和自动更新将在后续版本提供。
 
 ### Windows 安全提示
 
 当前版本尚未进行 Authenticode 代码签名，Windows SmartScreen 可能显示“无法识别的应用”提示。运行前请使用同一 Release 中的 `.sha256` 文件核对 ZIP：
 
 ```powershell
-Get-FileHash .\QuickLook.Next-0.1.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\QuickLook.Next-Installer-0.2.0-win-x64.zip -Algorithm SHA256
 ```
 
-将输出值与 `QuickLook.Next-0.1.0-win-x64.zip.sha256` 第一列比较。只有哈希一致且文件确实来自本仓库 Releases 页面时才应继续运行。
+将输出值与 `QuickLook.Next-Installer-0.2.0-win-x64.zip.sha256` 第一列比较。只有哈希一致且文件确实来自本仓库 Releases 页面时才应继续运行。
 
 ## 使用方法
 
@@ -125,10 +125,10 @@ cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
 cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
 dotnet build QuickLook.Next.slnx -c Release --no-restore
 dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
-.\tools\pack-release.ps1
+.\tools\pack-msix.ps1 -CreateDevelopmentCertificate
 ```
 
-版本化 ZIP 和校验文件会生成到 `artifacts/`，打包过程同时运行架构和图片语料守卫。
+Installer ZIP、已签名 MSIX、证书和校验文件会生成到 `artifacts/`，打包过程同时运行架构和图片语料守卫。开发证书仅用于测试；商店版本将改用 Partner Center 身份。
 
 ## 架构概览
 
