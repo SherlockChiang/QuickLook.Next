@@ -38,7 +38,7 @@ public sealed partial class MainWindow : Window
     private const double RasterToolbarHeight = 162;
     private const double CompactRasterChromeWidth = 720;
     private const double RasterContentMargin = 14;
-    private const int SwitchDebounceMs = 110;
+    private const int SwitchDebounceMs = 30;
     private const int ImageSidecarLoadDelayMs = 180;
     private const int WindowsImageMetadataSupplementDelayMs = 850;
     private const int DuplicateOpenCloseGuardMs = 750;
