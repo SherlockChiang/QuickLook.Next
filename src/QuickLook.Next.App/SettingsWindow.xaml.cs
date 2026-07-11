@@ -15,6 +15,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Func<string> _resolveIconPath;
     private readonly Action _settingsChanged;
     private bool _initializing = true;
+    private bool _resizePending;
 
     public SettingsWindow(Func<string> resolveIconPath, Action settingsChanged)
     {
@@ -27,6 +28,7 @@ public sealed partial class SettingsWindow : Window
         Title = UiStrings.SettingsTitle;
         ApplyStrings();
         ApplyWindowAppearance();
+        Activated += OnActivated;
 
         AutoStartToggle.IsOn = AutoStart.IsEnabled();
         LanguageCombo.SelectedIndex = AppSettings.Current.Language switch
@@ -42,8 +44,6 @@ public sealed partial class SettingsWindow : Window
     {
         TitleBarText.Text = UiStrings.SettingsTitle;
         SettingsHeading.Text = UiStrings.SettingsTitle;
-        GeneralNav.Content = UiStrings.SettingsGeneral;
-        AboutNav.Content = UiStrings.SettingsAbout;
         GeneralHeading.Text = UiStrings.SettingsGeneral;
         GeneralDescription.Text = UiStrings.SettingsGeneralDescription;
         AutoStartTitle.Text = UiStrings.SettingsAutoStart;
@@ -67,7 +67,6 @@ public sealed partial class SettingsWindow : Window
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WindowId windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         AppWindow appWindow = AppWindow.GetFromWindowId(windowId);
-        appWindow.Resize(new SizeInt32(880, 700));
         appWindow.SetIcon(_resolveIconPath());
         if (appWindow.Presenter is OverlappedPresenter presenter)
         {
@@ -76,9 +75,45 @@ public sealed partial class SettingsWindow : Window
             presenter.SetBorderAndTitleBar(true, true);
         }
 
-        string iconPath = _resolveIconPath();
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.png");
         if (File.Exists(iconPath))
             AppIcon.Source = new BitmapImage(new Uri(iconPath));
+    }
+
+    private void OnActivated(object sender, WindowActivatedEventArgs args)
+    {
+        Activated -= OnActivated;
+        QueueResizeToContent();
+    }
+
+    private void OnContentSizeChanged(object sender, SizeChangedEventArgs e) => QueueResizeToContent();
+
+    private void QueueResizeToContent()
+    {
+        if (_resizePending)
+            return;
+        _resizePending = true;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            _resizePending = false;
+            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            WindowId windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            AppWindow appWindow = AppWindow.GetFromWindowId(windowId);
+            DisplayArea? display = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
+            if (display is null)
+                return;
+
+            RectInt32 work = display.WorkArea;
+            int width = Math.Min(720, Math.Max(420, work.Width - 32));
+            RootGrid.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
+            int height = Math.Min((int)Math.Ceiling(RootGrid.DesiredSize.Height), Math.Max(360, work.Height - 32));
+            var bounds = new RectInt32(
+                work.X + (work.Width - width) / 2,
+                work.Y + (work.Height - height) / 2,
+                width,
+                height);
+            appWindow.MoveAndResize(bounds);
+        });
     }
 
     private void OnAutoStartToggled(object sender, RoutedEventArgs e)
@@ -95,6 +130,7 @@ public sealed partial class SettingsWindow : Window
         RestartInfo.Title = UiStrings.SettingsSaveFailed;
         RestartInfo.Message = requested ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
         RestartInfo.IsOpen = true;
+        QueueResizeToContent();
     }
 
     private void OnLanguageSelectionChanged(object sender, SelectionChangedEventArgs e)
