@@ -722,30 +722,7 @@ public sealed partial class MainWindow : Window
                 DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={plan.PlaybackMode}; {plan.Width}x{plan.Height}");
                 if (plan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
                 {
-                    DiagLog.Write("App", $"preview animated image using native frame playback gen={generation}; {plan.Width}x{plan.Height}");
-                    string animatedExt = System.IO.Path.GetExtension(path);
-                    if (animatedExt.Equals(".gif", StringComparison.OrdinalIgnoreCase) || animatedExt.Equals(".webp", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var animatedTargetSize = GetRasterDecodeTargetSize();
-                        NativeAnimationFrames? frames = animatedExt.Equals(".webp", StringComparison.OrdinalIgnoreCase)
-                            ? await Task.Run(() => _native.TryDecodeWebPFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken)
-                            : await Task.Run(() => _native.TryDecodeGifFrames(path, animatedTargetSize.Width, animatedTargetSize.Height), previewToken);
-                        if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                        if (frames is not null)
-                        {
-                            var gifReady = new PreviewReady(
-                                $"gif-native-{generation}",
-                                "image",
-                                System.IO.Path.GetFileName(path),
-                                plan.Width,
-                                plan.Height);
-                            _previewSession.CommitPath(path);
-                            _previewSession.SetRequestId(null);
-                            StatusText.Text = ShowNativeAnimatedImagePreview(gifReady, path, frames);
-                            RevealPreviewWindow(ShouldActivatePreview(gifReady));
-                            return;
-                        }
-                    }
+                    DiagLog.Write("App", $"preview animated image staging raster first frame gen={generation}; {plan.Width}x{plan.Height}");
                     forceAnimatedFirstFrameRaster = true;
                 }
                 else
@@ -850,6 +827,16 @@ public sealed partial class MainWindow : Window
                 _ => "?",
             };
             RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
+            if (result is PreviewReady rasterReady
+                && animatedPlan is { PlaybackMode: AnimatedImagePlaybackMode.NativeFramePlayback } nativeAnimationPlan)
+            {
+                _ = TryUpgradeRasterToNativeAnimationAsync(
+                    path,
+                    generation,
+                    previewToken,
+                    requestId,
+                    nativeAnimationPlan);
+            }
         }
         catch (TimeoutException ex)
         {
@@ -883,6 +870,50 @@ public sealed partial class MainWindow : Window
 
     private bool IsPreviewGenerationCurrent(int generation, CancellationToken cancellationToken)
         => _previewSession.IsCurrent(generation, cancellationToken);
+
+    private async Task TryUpgradeRasterToNativeAnimationAsync(
+        string path,
+        int generation,
+        CancellationToken cancellationToken,
+        string rasterRequestId,
+        AnimatedImageRenderPlan plan)
+    {
+        try
+        {
+            string extension = System.IO.Path.GetExtension(path);
+            var targetSize = GetRasterDecodeTargetSize();
+            NativeAnimationFrames? frames = extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+                ? await Task.Run(() => _native.TryDecodeWebPFrames(path, targetSize.Width, targetSize.Height), cancellationToken)
+                : extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                    ? await Task.Run(() => _native.TryDecodeGifFrames(path, targetSize.Width, targetSize.Height), cancellationToken)
+                    : null;
+
+            if (frames is null
+                || !IsPreviewGenerationCurrent(generation, cancellationToken)
+                || !_previewSession.IsCurrentPath(path)
+                || !_previewSession.IsCurrentRequest(rasterRequestId))
+            {
+                return;
+            }
+
+            var ready = new PreviewReady(
+                $"animated-native-{generation}",
+                "image",
+                System.IO.Path.GetFileName(path),
+                plan.Width,
+                plan.Height);
+            _previewSession.SetRequestId(null);
+            StatusText.Text = ShowNativeAnimatedImagePreview(ready, path, frames, scheduleSidecars: false);
+            await CloseCurrentAsync(rasterRequestId);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", $"animated image upgrade failed gen={generation}; {ex.GetType().Name}: {ex.Message}");
+        }
+    }
 
     private void BeginPreviewTransition()
     {
@@ -1403,7 +1434,11 @@ public sealed partial class MainWindow : Window
         return result.Status;
     }
 
-    private string ShowNativeAnimatedImagePreview(PreviewReady ready, string path, NativeAnimationFrames frames)
+    private string ShowNativeAnimatedImagePreview(
+        PreviewReady ready,
+        string path,
+        NativeAnimationFrames frames,
+        bool scheduleSidecars = true)
     {
         UpdatePreviewChrome(ready, showRasterTools: true);
         _panelController.ShowAnimatedImage();
@@ -1412,7 +1447,8 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         UpdateImageAnimationPlaybackButton();
         ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        ScheduleImageSidecarLoads(ready);
+        if (scheduleSidecars)
+            ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
 
