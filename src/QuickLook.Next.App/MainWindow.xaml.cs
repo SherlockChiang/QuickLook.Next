@@ -2648,7 +2648,25 @@ public sealed partial class MainWindow : Window
         object? focused = RootGrid.XamlRoot is { } xamlRoot
             ? FocusManager.GetFocusedElement(xamlRoot)
             : null;
-        return focused is not Control;
+        return focused is not DependencyObject focusedElement || !SpaceActivatesFocusedControl(focusedElement);
+    }
+
+    private static bool SpaceActivatesFocusedControl(DependencyObject focusedElement)
+    {
+        for (DependencyObject? current = focusedElement; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is TextBox
+                or RichEditBox
+                or PasswordBox
+                or ToggleSwitch
+                or Microsoft.UI.Xaml.Controls.Primitives.ButtonBase
+                or Microsoft.UI.Xaml.Controls.Primitives.SelectorItem
+                or Microsoft.UI.Xaml.Controls.Primitives.RangeBase)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void OnOpenFileLocationClick(object sender, RoutedEventArgs e)
