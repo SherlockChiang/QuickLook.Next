@@ -366,9 +366,11 @@ public sealed partial class MainWindow : Window
 
     private void OnNativeIntent(NativeIntent intent)
     {
+        long enqueuedAt = Stopwatch.GetTimestamp();
         DispatcherQueue.TryEnqueue(() =>
         {
-            DiagLog.Write("App", $"native intent={intent.Intent}; path={intent.PrimaryPath ?? "<none>"}; visible={_previewVisible}");
+            double queueDelayMs = Stopwatch.GetElapsedTime(enqueuedAt).TotalMilliseconds;
+            DiagLog.Write("App", $"native intent={intent.Intent}; path={intent.PrimaryPath ?? "<none>"}; visible={_previewVisible}; uiQueue={queueDelayMs:0.0}ms");
             if (intent.Intent == PreviewIntent.Switch)
                 DebounceSwitchIntent(intent);
             else
