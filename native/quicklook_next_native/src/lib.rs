@@ -2297,7 +2297,7 @@ pub extern "C" fn ql_preview_text_cancelable(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_text(path);
+    let json = preview::render_text(path, cancel_cb);
     if cancel_requested(cancel_cb) {
         return -3;
     }

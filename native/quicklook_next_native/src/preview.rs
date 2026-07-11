@@ -1239,7 +1239,8 @@ fn known_text_filenames() -> &'static [(&'static str, &'static str, &'static str
 
 /// Produce JSON for a text preview: `{"kind":"text","title":"...","format":"...","language":"...","text":"..."}`.
 /// Returns empty string on failure.
-pub fn render_text(path: &str) -> String {
+pub fn render_text(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -1265,6 +1266,7 @@ pub fn render_text(path: &str) -> String {
         Some(result) => result,
         None => return String::new(),
     };
+    if preview_cancelled(cancel_cb) { return String::new(); }
 
     // BOM-aware Unicode first, then strict UTF-8 and Windows-1252 for legacy configuration files.
     let text = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
@@ -1280,8 +1282,9 @@ pub fn render_text(path: &str) -> String {
     };
 
     let mut text = text.into_owned();
+    if preview_cancelled(cancel_cb) { return String::new(); }
     if format == "markdown" {
-        return render_markdown_json(filename, &text, truncated);
+        return render_markdown_json(filename, &text, truncated, cancel_cb);
     }
     if language == "csv" || language == "tsv" {
         return render_delimited_table_json(
@@ -1290,6 +1293,7 @@ pub fn render_text(path: &str) -> String {
             if language == "tsv" { '\t' } else { ',' },
             language,
             truncated,
+            cancel_cb,
         );
     }
 
@@ -1318,8 +1322,14 @@ pub fn render_text(path: &str) -> String {
     })
 }
 
-fn render_markdown_json(filename: &str, text: &str, input_truncated: bool) -> String {
-    let (blocks, parse_partial) = parse_markdown_blocks(text);
+fn render_markdown_json(
+    filename: &str,
+    text: &str,
+    input_truncated: bool,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> String {
+    let (blocks, parse_partial) = parse_markdown_blocks(text, cancel_cb);
+    if preview_cancelled(cancel_cb) { return String::new(); }
     to_json(&PreviewReadyDto {
         kind: "markdown".to_string(),
         title: filename.to_string(),
@@ -1340,7 +1350,10 @@ fn render_markdown_json(filename: &str, text: &str, input_truncated: bool) -> St
     })
 }
 
-fn parse_markdown_blocks(text: &str) -> (Vec<PreviewMarkdownBlockDto>, bool) {
+fn parse_markdown_blocks(
+    text: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> (Vec<PreviewMarkdownBlockDto>, bool) {
     let lines = text.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = lines.split('\n').collect();
     let mut blocks = Vec::new();
@@ -1348,6 +1361,7 @@ fn parse_markdown_blocks(text: &str) -> (Vec<PreviewMarkdownBlockDto>, bool) {
     let mut partial = false;
 
     while i < lines.len() {
+        if preview_cancelled(cancel_cb) { break; }
         if blocks.len() >= MAX_MARKDOWN_BLOCKS {
             partial = true;
             break;
@@ -1364,6 +1378,7 @@ fn parse_markdown_blocks(text: &str) -> (Vec<PreviewMarkdownBlockDto>, bool) {
             i += 1;
             let mut code = String::new();
             while i < lines.len() {
+                if preview_cancelled(cancel_cb) { break; }
                 if lines[i].trim_start().starts_with("```") {
                     i += 1;
                     break;
@@ -1730,9 +1745,11 @@ fn render_delimited_table_json(
     delimiter: char,
     format: &str,
     input_truncated: bool,
+    cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> String {
     let (mut records, total_records, total_columns, parse_partial) =
-        parse_delimited_records(text, delimiter);
+        parse_delimited_records(text, delimiter, cancel_cb);
+    if preview_cancelled(cancel_cb) { return String::new(); }
     if records.is_empty() {
         records.push(vec![String::new()]);
     }
@@ -1788,7 +1805,11 @@ fn render_delimited_table_json(
     })
 }
 
-fn parse_delimited_records(text: &str, delimiter: char) -> (Vec<Vec<String>>, usize, usize, bool) {
+fn parse_delimited_records(
+    text: &str,
+    delimiter: char,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> (Vec<Vec<String>>, usize, usize, bool) {
     let mut records = Vec::new();
     let mut row = Vec::new();
     let mut cell = String::new();
@@ -1798,8 +1819,11 @@ fn parse_delimited_records(text: &str, delimiter: char) -> (Vec<Vec<String>>, us
     let mut in_quotes = false;
     let mut saw_any = false;
     let mut chars = text.chars().peekable();
+    let mut processed = 0usize;
 
     while let Some(ch) = chars.next() {
+        processed += 1;
+        if processed & 0x0fff == 0 && preview_cancelled(cancel_cb) { break; }
         saw_any = true;
         if in_quotes {
             if ch == '"' {
@@ -14540,7 +14564,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&path, b"name=caf\xE9").expect("write Windows-1252 config");
-        let json = render_text(path.to_str().unwrap());
+        let json = render_text(path.to_str().unwrap(), None);
         let _ = std::fs::remove_file(path);
 
         assert!(json.contains("name=café"));
@@ -15522,7 +15546,7 @@ mod tests {
 
     #[test]
     fn markdown_parser_emits_heading_and_inline_ast() {
-        let (blocks, partial) = parse_markdown_blocks("# Hello **QuickLook** and `Rust`");
+        let (blocks, partial) = parse_markdown_blocks("# Hello **QuickLook** and `Rust`", None);
 
         assert!(!partial);
         assert_eq!(blocks.len(), 1);
@@ -15535,7 +15559,7 @@ mod tests {
     #[test]
     fn markdown_parser_does_not_panic_on_non_ascii() {
         let (blocks, partial) =
-            parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。");
+            parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。", None);
         assert!(!partial);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].kind, "heading");
@@ -15547,7 +15571,7 @@ mod tests {
     #[test]
     fn markdown_parser_emits_lists_quotes_and_code() {
         let (blocks, partial) =
-            parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```");
+            parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```", None);
 
         assert!(!partial);
         assert_eq!(blocks[0].kind, "blockquote");
@@ -15559,7 +15583,7 @@ mod tests {
 
     #[test]
     fn markdown_parser_emits_tables() {
-        let (blocks, partial) = parse_markdown_blocks("| A | B |\n|---|---|\n| 1 | 2 |");
+        let (blocks, partial) = parse_markdown_blocks("| A | B |\n|---|---|\n| 1 | 2 |", None);
 
         assert!(!partial);
         assert_eq!(blocks.len(), 1);
