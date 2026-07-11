@@ -1163,7 +1163,7 @@ public sealed partial class MainWindow : Window
             compositor.CreateCubicBezierEasingFunction(
                 new Vector2(0.1f, 0.9f),
                 new Vector2(0.2f, 1f)));
-        animation.Duration = TimeSpan.FromMilliseconds(180);
+        animation.Duration = TimeSpan.FromMilliseconds(110);
         visual.StartAnimation("Opacity", animation);
     }
 
