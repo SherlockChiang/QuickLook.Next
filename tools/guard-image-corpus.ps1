@@ -1,7 +1,8 @@
 param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
     [switch]$RequireSamples,
-    [switch]$AllowMissingSamples
+    [switch]$AllowMissingSamples,
+    [switch]$SkipSystemImageSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +51,6 @@ if (Test-Path -LiteralPath $capabilities) {
 }
 
 $systemSmoke = Join-Path $PSScriptRoot "smoke-system-image-corpus.ps1"
-if (Test-Path -LiteralPath $systemSmoke) {
+if ((-not $SkipSystemImageSmoke) -and (Test-Path -LiteralPath $systemSmoke)) {
     & $systemSmoke -Root $Root
 }

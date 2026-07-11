@@ -3,7 +3,8 @@
 param(
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
-    [string]$ArtifactsDirectory = ""
+    [string]$ArtifactsDirectory = "",
+    [switch]$SkipSystemImageSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +56,7 @@ Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
 Copy-Clean (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm") "$dist\RasterHost"
 Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$dist\ParserHost"
 
-& (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist
+& (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist -SkipSystemImageSmoke:$SkipSystemImageSmoke
 
 $size = [math]::Round(((Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB))
 $packageVersion = if ($VersionPrefix) { $VersionPrefix } else { "dev" }

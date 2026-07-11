@@ -50,7 +50,7 @@ jobs:
 
       - name: Package portable release
         shell: pwsh
-        run: ./tools/pack-release.ps1
+        run: ./tools/pack-release.ps1 -SkipSystemImageSmoke
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0

@@ -1,7 +1,8 @@
 param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
     [string]$DistDir = (Join-Path (Split-Path $PSScriptRoot -Parent) "dist"),
-    [switch]$SkipDist
+    [switch]$SkipDist,
+    [switch]$SkipSystemImageSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -203,5 +204,5 @@ if (Test-Path $thumbnailPriorityGuard) {
 
 $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
 if (Test-Path $imageCorpusGuard) {
-    & $imageCorpusGuard -Root $Root
+    & $imageCorpusGuard -Root $Root -SkipSystemImageSmoke:$SkipSystemImageSmoke
 }

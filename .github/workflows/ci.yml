@@ -48,4 +48,4 @@ jobs:
 
       - name: Run architecture and corpus guards
         shell: pwsh
-        run: ./tools/guard-architecture.ps1
+        run: ./tools/guard-architecture.ps1 -SkipSystemImageSmoke

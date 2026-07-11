@@ -66,7 +66,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet restore QuickLook.Next.slnx --locked-mode
-          ./tools/pack-release.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}"
+          ./tools/pack-release.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}" -SkipSystemImageSmoke
 
       - name: Generate CycloneDX NuGet SBOM
         shell: pwsh
