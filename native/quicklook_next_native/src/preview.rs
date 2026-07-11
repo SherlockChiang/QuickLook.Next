@@ -11988,13 +11988,14 @@ fn subsystem_name(subsystem: u16) -> &'static str {
 
 // ── Ebook preview ───────────────────────────────────────────────────────────
 
-pub fn render_ebook(path: &str) -> String {
+pub fn render_ebook(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".epub") {
-        return render_epub(path);
+        return render_epub(path, cancel_cb);
     }
     if lower.ends_with(".fb2") {
-        return render_fb2(path);
+        return render_fb2(path, cancel_cb);
     }
     render_binary_ebook_info(path)
 }
@@ -12018,7 +12019,8 @@ struct EpubManifestItem {
     media_type: String,
 }
 
-fn render_epub(path: &str) -> String {
+fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let filename = file_name(path);
     let mut zip = match open_zip(path) {
         Some(zip) => zip,
@@ -12029,12 +12031,13 @@ fn render_epub(path: &str) -> String {
     let rootfile = container
         .as_deref()
         .and_then(parse_epub_rootfile)
-        .or_else(|| find_epub_opf_path(&mut zip))
+        .or_else(|| find_epub_opf_path(&mut zip, cancel_cb))
         .unwrap_or_else(|| "content.opf".to_string());
 
     let Some(opf_xml) = read_zip_text(&mut zip, &rootfile, MAX_EBOOK_XML_BYTES) else {
-        return render_archive(path, None);
+        return render_archive(path, cancel_cb);
     };
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let opf = parse_epub_opf(&opf_xml);
     let title = first_non_empty_owned([opf.title.as_str(), filename]).to_string();
     let base_dir = rootfile
@@ -12060,6 +12063,7 @@ fn render_epub(path: &str) -> String {
     if !opf.spine.is_empty() {
         markdown.push_str("\n## Contents\n\n");
         for idref in opf.spine.iter().take(40) {
+            if preview_cancelled(cancel_cb) { return String::new(); }
             if let Some(item) = opf.manifest.get(idref) {
                 markdown.push_str("- ");
                 markdown.push_str(&markdown_escape_line(&ebook_item_label(&item.href)));
@@ -12070,6 +12074,7 @@ fn render_epub(path: &str) -> String {
 
     let mut extracted = 0usize;
     for idref in &opf.spine {
+        if preview_cancelled(cancel_cb) { return String::new(); }
         if extracted >= MAX_EBOOK_CHAPTERS || markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
             break;
         }
@@ -12084,6 +12089,7 @@ fn render_epub(path: &str) -> String {
         else {
             continue;
         };
+        if preview_cancelled(cancel_cb) { return String::new(); }
         let chapter = extract_xhtml_markdown(&chapter_xml, &ebook_item_label(&item.href));
         if chapter.trim().is_empty() {
             continue;
@@ -12126,8 +12132,12 @@ fn parse_epub_rootfile(xml: &str) -> Option<String> {
     first
 }
 
-fn find_epub_opf_path(zip: &mut ZipArchive<fs::File>) -> Option<String> {
+fn find_epub_opf_path(
+    zip: &mut ZipArchive<fs::File>,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<String> {
     for i in 0..zip.len().min(512) {
+        if preview_cancelled(cancel_cb) { return None; }
         let entry = zip.by_index_raw(i).ok()?;
         let name = entry.name().replace('\\', "/");
         if name.to_ascii_lowercase().ends_with(".opf") {
@@ -12379,7 +12389,8 @@ fn flush_ebook_block(
     out.push_str("\n\n");
 }
 
-fn render_fb2(path: &str) -> String {
+fn render_fb2(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let filename = file_name(path);
     let Some(bytes) = read_file_prefix(path, MAX_EBOOK_XML_BYTES as usize) else {
         return String::new();

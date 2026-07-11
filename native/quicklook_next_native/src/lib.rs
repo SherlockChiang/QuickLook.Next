@@ -2514,7 +2514,7 @@ pub extern "C" fn ql_preview_ebook_cancelable(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_ebook(path);
+    let json = preview::render_ebook(path, cancel_cb);
     if cancel_requested(cancel_cb) {
         return -3;
     }
