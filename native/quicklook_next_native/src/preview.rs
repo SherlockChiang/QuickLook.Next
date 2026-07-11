@@ -13135,7 +13135,11 @@ fn first_non_empty<'a, const N: usize>(values: [Option<&'a str>; N]) -> Option<&
     values.into_iter().flatten().find(|v| !v.trim().is_empty())
 }
 
-pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+pub fn extract_office_image_bgra(
+    path: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    if preview_cancelled(cancel_cb) { return None; }
     let file = fs::File::open(path).ok()?;
     let mut zip = ZipArchive::new(file).ok()?;
     let roots = office_media_roots_for_path(path);
@@ -13145,6 +13149,7 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
 
     let mut candidates = Vec::new();
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        if preview_cancelled(cancel_cb) { return None; }
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -13165,8 +13170,9 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
-    let mut context = OfficeContext::new(None);
+    let mut context = OfficeContext::new(cancel_cb);
     for (path_score, name) in candidates.into_iter().take(24) {
+        if preview_cancelled(cancel_cb) { return None; }
         let bytes = match read_office_zip_bytes(
             &mut context,
             &mut zip,
@@ -13182,6 +13188,7 @@ pub fn extract_office_image_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
             Ok(img) => img,
             Err(_) => continue,
         };
+        if preview_cancelled(cancel_cb) { return None; }
         let (original_width, original_height) = image.dimensions();
         if original_width < 8 || original_height < 8 {
             continue;
@@ -13231,7 +13238,11 @@ fn office_image_candidate_score(lower: &str, size: u64) -> i32 {
     score + ((size.min(4 * 1024 * 1024) / 4096) as i32).min(256)
 }
 
-pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+pub fn extract_package_icon_bgra(
+    path: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    if preview_cancelled(cancel_cb) { return None; }
     let file = fs::File::open(path).ok()?;
     let mut zip = ZipArchive::new(file).ok()?;
     let mut candidates = Vec::new();
@@ -13242,6 +13253,7 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
         .unwrap_or_default();
 
     for i in 0..zip.len() {
+        if preview_cancelled(cancel_cb) { return None; }
         let entry = zip.by_index_raw(i).ok()?;
         let raw_name = entry.name().to_string();
         let normalized_name = raw_name.replace('\\', "/");
@@ -13255,6 +13267,7 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
 
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     for (path_score, name) in candidates.into_iter().take(32) {
+        if preview_cancelled(cancel_cb) { return None; }
         let mut entry = zip.by_name(&name).ok()?;
         let Some(bytes) = read_limited_to_end(&mut entry, MAX_PACKAGE_ICON_BYTES) else {
             continue;
@@ -13263,6 +13276,7 @@ pub fn extract_package_icon_bgra(path: &str) -> Option<(u32, u32, Vec<u8>)> {
             Ok(img) => img,
             Err(_) => continue,
         };
+        if preview_cancelled(cancel_cb) { return None; }
         let (original_width, original_height) = image.dimensions();
         if original_width < 16 || original_height < 16 {
             continue;

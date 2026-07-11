@@ -1446,6 +1446,29 @@ mod tests {
     }
 
     #[test]
+    fn hero_exports_honor_cancellation_before_file_access() {
+        let path = b"missing.zip";
+        let mut output = [0u8; 16];
+        let calls = [
+            ql_extract_package_icon_cancelable,
+            ql_extract_office_image_cancelable,
+        ];
+
+        for call in calls {
+            assert_eq!(
+                call(
+                    path.as_ptr(),
+                    path.len(),
+                    output.as_mut_ptr(),
+                    output.len(),
+                    Some(always_cancel),
+                ),
+                -3
+            );
+        }
+    }
+
+    #[test]
     fn thumbnail_flags_reject_unknown_bits() {
         assert!(thumbnail_flags_valid(0));
         assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY));
@@ -2046,7 +2069,7 @@ pub extern "C" fn ql_extract_package_icon(
         None => return -1,
     };
 
-    let (w, h, bgra) = match preview::extract_package_icon_bgra(path) {
+    let (w, h, bgra) = match preview::extract_package_icon_bgra(path, None) {
         Some(x) => x,
         None => return -2,
     };
@@ -2054,6 +2077,34 @@ pub extern "C" fn ql_extract_package_icon(
     if out.is_null() || out_cap < total {
         return -(total as i32);
     }
+    unsafe {
+        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
+    }
+    total as i32
+}
+
+#[no_mangle]
+pub extern "C" fn ql_extract_package_icon_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    if cancel_requested(cancel_cb) { return -3; }
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let (w, h, bgra) = match preview::extract_package_icon_bgra(path, cancel_cb) {
+        Some(value) => value,
+        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+    };
+    if cancel_requested(cancel_cb) { return -3; }
+    let total = 8 + bgra.len();
+    if out.is_null() || out_cap < total { return -(total as i32); }
     unsafe {
         std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
         std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
@@ -2076,7 +2127,7 @@ pub extern "C" fn ql_extract_office_image(
         None => return -1,
     };
 
-    let (w, h, bgra) = match preview::extract_office_image_bgra(path) {
+    let (w, h, bgra) = match preview::extract_office_image_bgra(path, None) {
         Some(x) => x,
         None => return -2,
     };
@@ -2084,6 +2135,34 @@ pub extern "C" fn ql_extract_office_image(
     if out.is_null() || out_cap < total {
         return -(total as i32);
     }
+    unsafe {
+        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
+        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
+        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
+    }
+    total as i32
+}
+
+#[no_mangle]
+pub extern "C" fn ql_extract_office_image_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    if cancel_requested(cancel_cb) { return -3; }
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let (w, h, bgra) = match preview::extract_office_image_bgra(path, cancel_cb) {
+        Some(value) => value,
+        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+    };
+    if cancel_requested(cancel_cb) { return -3; }
+    let total = 8 + bgra.len();
+    if out.is_null() || out_cap < total { return -(total as i32); }
     unsafe {
         std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
         std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);

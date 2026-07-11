@@ -64,9 +64,13 @@ internal static class ParserNativePreview
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_package_icon_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_office_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
     public static string? TryPreview(string kind, string path, CancellationToken cancellationToken)
     {
@@ -153,10 +157,10 @@ internal static class ParserNativePreview
 
     public static byte[]? TryExtractHeroRaster(string kind, string path, CancellationToken cancellationToken)
     {
-        NativeRasterCall? call = kind.Equals("package", StringComparison.OrdinalIgnoreCase)
-            ? ql_extract_package_icon
+        NativeCancelableRasterCall? call = kind.Equals("package", StringComparison.OrdinalIgnoreCase)
+            ? ql_extract_package_icon_cancelable
             : kind.Equals("office", StringComparison.OrdinalIgnoreCase)
-            ? ql_extract_office_image
+            ? ql_extract_office_image_cancelable
             : null;
         if (call is null)
             return null;
@@ -164,6 +168,7 @@ internal static class ParserNativePreview
         try
         {
             byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+            NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
             int capacity = 2 * 1024 * 1024;
             while (capacity <= MaxRasterBytes)
             {
@@ -171,7 +176,7 @@ internal static class ParserNativePreview
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
-                    int length = call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity);
+                    int length = call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (length < 0)
                     {
@@ -191,6 +196,7 @@ internal static class ParserNativePreview
                 finally
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
+                    GC.KeepAlive(cancel);
                 }
             }
         }
@@ -222,4 +228,5 @@ internal static class ParserNativePreview
 
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    private delegate int NativeCancelableRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 }
