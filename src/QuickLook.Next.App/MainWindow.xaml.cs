@@ -1232,7 +1232,7 @@ public sealed partial class MainWindow : Window
             return;
 
         StatusText.Text = error.TimedOut
-            ? $"PDF page {error.PageIndex + 1:N0} timed out"
+            ? $"PDF page {error.PageIndex + 1:N0} timed out; reopen the file to retry"
             : $"PDF page {error.PageIndex + 1:N0} failed: {error.Message}";
     }
 
