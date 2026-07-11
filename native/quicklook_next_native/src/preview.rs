@@ -13460,7 +13460,8 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
 
 // ── Torrent preview ─────────────────────────────────────────────────────────
 
-pub fn render_torrent(path: &str) -> String {
+pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let (size, modified_unix) = file_size_modified(path);
     if size < 0 || size as u64 > MAX_TORRENT_BYTES {
         return render_info(path, "torrent", size, modified_unix);
@@ -13470,7 +13471,8 @@ pub fn render_torrent(path: &str) -> String {
         Ok(b) => b,
         Err(_) => return String::new(),
     };
-    let root = match parse_bencode(&bytes) {
+    if preview_cancelled(cancel_cb) { return String::new(); }
+    let root = match parse_bencode(&bytes, cancel_cb) {
         Some((value, _)) => value,
         None => return String::new(),
     };
@@ -13506,6 +13508,7 @@ pub fn render_torrent(path: &str) -> String {
 
     if let Some(BValue::List(files)) = info.get(b"files".as_slice()) {
         for file in files {
+            if preview_cancelled(cancel_cb) { return String::new(); }
             let BValue::Dict(file_dict) = file else {
                 continue;
             };
@@ -13579,6 +13582,7 @@ pub fn render_torrent(path: &str) -> String {
 
     let mut items = Vec::with_capacity(entries.len());
     for (path, (name, parent, is_folder, size, packed, modified)) in &entries {
+        if preview_cancelled(cancel_cb) { return String::new(); }
         items.push(PreviewListingItemDto {
             name: name.clone(),
             path: path.clone(),
@@ -13605,6 +13609,7 @@ pub fn render_torrent(path: &str) -> String {
         summary.push_str(&format!(" - {announce}"));
     }
 
+    if preview_cancelled(cancel_cb) { return String::new(); }
     to_json(&PreviewReadyDto {
         kind: "torrent".to_string(),
         title: format!("{name} - {} files", format_number(file_count as i64)),
@@ -13625,11 +13630,17 @@ pub fn render_torrent(path: &str) -> String {
     })
 }
 
-fn parse_bencode(bytes: &[u8]) -> Option<(BValue, usize)> {
-    parse_bencode_at(bytes, 0)
+fn parse_bencode(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) -> Option<(BValue, usize)> {
+    if preview_cancelled(cancel_cb) { return None; }
+    parse_bencode_at(bytes, 0, cancel_cb)
 }
 
-fn parse_bencode_at(bytes: &[u8], mut i: usize) -> Option<(BValue, usize)> {
+fn parse_bencode_at(
+    bytes: &[u8],
+    mut i: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(BValue, usize)> {
+    if preview_cancelled(cancel_cb) { return None; }
     match *bytes.get(i)? {
         b'i' => {
             i += 1;
@@ -13644,7 +13655,8 @@ fn parse_bencode_at(bytes: &[u8], mut i: usize) -> Option<(BValue, usize)> {
             i += 1;
             let mut values = Vec::new();
             while *bytes.get(i)? != b'e' {
-                let (value, next) = parse_bencode_at(bytes, i)?;
+                if preview_cancelled(cancel_cb) { return None; }
+                let (value, next) = parse_bencode_at(bytes, i, cancel_cb)?;
                 values.push(value);
                 i = next;
             }
@@ -13654,8 +13666,9 @@ fn parse_bencode_at(bytes: &[u8], mut i: usize) -> Option<(BValue, usize)> {
             i += 1;
             let mut values = BTreeMap::new();
             while *bytes.get(i)? != b'e' {
+                if preview_cancelled(cancel_cb) { return None; }
                 let (key, next) = parse_bytes_at(bytes, i)?;
-                let (value, next) = parse_bencode_at(bytes, next)?;
+                let (value, next) = parse_bencode_at(bytes, next, cancel_cb)?;
                 values.insert(key, value);
                 i = next;
             }
