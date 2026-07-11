@@ -10201,7 +10201,8 @@ fn format_duration(seconds: f64) -> String {
 
 // ── Executable preview ──────────────────────────────────────────────────────
 
-pub fn render_executable(path: &str) -> String {
+pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
+    if preview_cancelled(cancel_cb) { return String::new(); }
     let filename = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -10211,10 +10212,12 @@ pub fn render_executable(path: &str) -> String {
         Some(b) => b,
         None => return String::new(),
     };
+    if preview_cancelled(cancel_cb) { return String::new(); }
 
-    let Some(pe) = parse_pe_headers(&bytes) else {
+    let Some(pe) = parse_pe_headers(&bytes, cancel_cb) else {
         return render_info(path, "executable", size, modified_unix);
     };
+    if preview_cancelled(cancel_cb) { return String::new(); }
 
     let mut text = String::new();
     text.push_str(&format!("Name: {filename}\n"));
@@ -10474,7 +10477,8 @@ struct PeClrSummary {
     custom_attributes: u32,
 }
 
-fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
+fn parse_pe_headers(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) -> Option<PeSummary> {
+    if preview_cancelled(cancel_cb) { return None; }
     if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
         return None;
     }
@@ -10510,14 +10514,17 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
     let data_directories = read_u32(bytes, data_directories_offset).unwrap_or(0);
     let directories =
         parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
+    if preview_cancelled(cancel_cb) { return None; }
     let section_table = opt + opt_size;
     let section_names = parse_pe_section_names(bytes, section_table, sections);
     let section_summaries = parse_pe_sections(bytes, section_table, sections);
+    if preview_cancelled(cancel_cb) { return None; }
     let imports = directories
         .iter()
         .find(|directory| directory.name == "Import")
         .map(|directory| parse_pe_import_dlls(bytes, &section_summaries, directory.address))
         .unwrap_or_default();
+    if preview_cancelled(cancel_cb) { return None; }
     let imported_functions = directories
         .iter()
         .find(|directory| directory.name == "Import")
@@ -10525,11 +10532,13 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
             parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B)
         })
         .unwrap_or_default();
+    if preview_cancelled(cancel_cb) { return None; }
     let exports = directories
         .iter()
         .find(|directory| directory.name == "Export")
         .map(|directory| parse_pe_export_names(bytes, &section_summaries, directory.address))
         .unwrap_or_default();
+    if preview_cancelled(cancel_cb) { return None; }
     let export_details = directories
         .iter()
         .find(|directory| directory.name == "Export")
@@ -10537,6 +10546,7 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
             parse_pe_export_details(bytes, &section_summaries, directory.address, directory.size)
         })
         .unwrap_or_default();
+    if preview_cancelled(cancel_cb) { return None; }
     let version_resource = directories
         .iter()
         .find(|directory| directory.name == "Resource")
@@ -10555,15 +10565,18 @@ fn parse_pe_headers(bytes: &[u8]) -> Option<PeSummary> {
         .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)))
         .and_then(parse_pe_fixed_version);
     let has_version_resource = version_resource.is_some();
+    if preview_cancelled(cancel_cb) { return None; }
     let certificate = directories
         .iter()
         .find(|directory| directory.name == "Certificate")
         .and_then(|directory| parse_pe_certificate(bytes, directory.address));
+    if preview_cancelled(cancel_cb) { return None; }
     let clr = directories
         .iter()
         .find(|directory| directory.name == "CLR")
         .and_then(|directory| pe_rva_to_file_offset(&section_summaries, directory.address))
         .and_then(|offset| parse_pe_clr_header(bytes, &section_summaries, offset));
+    if preview_cancelled(cancel_cb) { return None; }
 
     Some(PeSummary {
         machine: machine_name(machine),
@@ -17216,7 +17229,7 @@ mod tests {
         bytes[0x1828..0x182D].copy_from_slice(&[0x06, 0x03, 0x55, 0x04, 0x03]);
         bytes[0x182D..0x183D].copy_from_slice(b"\x0C\x0EQuickLook Test");
 
-        let pe = parse_pe_headers(&bytes).expect("pe summary");
+        let pe = parse_pe_headers(&bytes, None).expect("pe summary");
 
         assert_eq!(pe.machine, "x64");
         assert_eq!(pe.image_base, 0x1400_0000);

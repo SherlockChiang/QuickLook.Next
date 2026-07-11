@@ -2396,7 +2396,7 @@ pub extern "C" fn ql_preview_executable_cancelable(
         Some(s) => s,
         None => return 0,
     };
-    let json = preview::render_executable(path);
+    let json = preview::render_executable(path, cancel_cb);
     if cancel_requested(cancel_cb) {
         return -3;
     }
