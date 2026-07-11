@@ -883,9 +883,9 @@ public sealed partial class MainWindow : Window
             string extension = System.IO.Path.GetExtension(path);
             var targetSize = GetRasterDecodeTargetSize();
             NativeAnimationFrames? frames = extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
-                ? await Task.Run(() => _native.TryDecodeWebPFrames(path, targetSize.Width, targetSize.Height), cancellationToken)
+                ? await Task.Run(() => _native.TryDecodeWebPFrames(path, targetSize.Width, targetSize.Height, cancellationToken), cancellationToken)
                 : extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-                    ? await Task.Run(() => _native.TryDecodeGifFrames(path, targetSize.Width, targetSize.Height), cancellationToken)
+                    ? await Task.Run(() => _native.TryDecodeGifFrames(path, targetSize.Width, targetSize.Height, cancellationToken), cancellationToken)
                     : null;
 
             if (frames is null

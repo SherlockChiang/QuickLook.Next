@@ -842,37 +842,34 @@ pub extern "C" fn ql_decode_gif_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_decode_gif_frames_sized_cancelable(path_utf8, path_len, target_width, target_height, out, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_decode_gif_frames_sized_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return -1,
     };
-    let (width, height, frames) = match decode_gif_frames_bgra(path, target_width, target_height) {
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
+    let (width, height, frames) = match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
         Some(decoded) => decoded,
-        None => return -2,
+        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
     };
-
-    let frame_bytes = (width as usize).saturating_mul(height as usize).saturating_mul(4);
-    let total = 12usize.saturating_add(frames.len().saturating_mul(4usize.saturating_add(frame_bytes)));
-    if total > i32::MAX as usize {
-        return -2;
+    if cancel_requested(cancel_cb) {
+        return -3;
     }
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
-
-    unsafe {
-        std::ptr::copy_nonoverlapping((frames.len() as u32).to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(8), 4);
-        let mut offset = 12usize;
-        for (delay_ms, bgra) in frames {
-            std::ptr::copy_nonoverlapping(delay_ms.to_le_bytes().as_ptr(), out.add(offset), 4);
-            offset += 4;
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(offset), bgra.len());
-            offset += bgra.len();
-        }
-    }
-    total as i32
+    write_animation_frames(width, height, frames, out, out_cap)
 }
 
 #[no_mangle]
@@ -884,14 +881,33 @@ pub extern "C" fn ql_decode_webp_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_decode_webp_frames_sized_cancelable(path_utf8, path_len, target_width, target_height, out, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_decode_webp_frames_sized_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return -1,
     };
-    let (width, height, frames) = match decode_webp_frames_bgra(path, target_width, target_height) {
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
+    let (width, height, frames) = match decode_webp_frames_bgra(path, target_width, target_height, cancel_cb) {
         Some(decoded) => decoded,
-        None => return -2,
+        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
     };
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_animation_frames(width, height, frames, out, out_cap)
 }
 
@@ -995,7 +1011,8 @@ fn decode_image_bgra(
     Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
 }
 
-fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
@@ -1027,11 +1044,13 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
     let mut previous_rect = (0u16, 0u16, 0u16, 0u16);
     let mut previous_canvas: Option<Vec<u8>> = None;
     while decoded.len() < max_frames {
+        if cancel_requested(cancel_cb) { return None; }
         apply_gif_disposal(&mut canvas, previous_disposal, previous_rect, previous_canvas.take(), original_width);
         let frame = match reader.read_next_frame().ok()? {
             Some(frame) => frame,
             None => break,
         };
+        if cancel_requested(cancel_cb) { return None; }
         let delay_ms = u32::from(frame.delay).saturating_mul(10).clamp(20, 1_000);
         let saved_canvas = if frame.dispose == gif::DisposalMethod::Previous { Some(canvas.clone()) } else { None };
         composite_rgba_over_at(
@@ -1051,7 +1070,8 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
         };
         let rgba = raster.to_rgba8();
         let mut bgra = Vec::with_capacity(frame_bytes);
-        for px in rgba.chunks_exact(4) {
+        for (index, px) in rgba.chunks_exact(4).enumerate() {
+            if index % 65_536 == 0 && cancel_requested(cancel_cb) { return None; }
             let r = px[0] as u32;
             let g = px[1] as u32;
             let b = px[2] as u32;
@@ -1066,20 +1086,31 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32) -> 
         previous_rect = (frame.left, frame.top, frame.width, frame.height);
         previous_canvas = saved_canvas;
     }
+    if cancel_requested(cancel_cb) { return None; }
     Some((width, height, decoded))
 }
 
-fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
     let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(file)).ok()?;
-    let frames = match decoder.into_frames().collect_frames() {
-        Ok(frames) if !frames.is_empty() => frames,
-        _ => {
-            let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, None)?;
-            return Some((width, height, vec![(100, bgra)]));
+    let mut frames = Vec::new();
+    for frame in decoder.into_frames() {
+        if cancel_requested(cancel_cb) { return None; }
+        match frame {
+            Ok(frame) => frames.push(frame),
+            Err(_) => {
+                let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
+                return Some((width, height, vec![(100, bgra)]));
+            }
         }
-    };
-    decode_animation_frames_bgra(frames, target_width, target_height)
+        if frames.len() >= MAX_ANIMATED_FRAMES { break; }
+    }
+    if frames.is_empty() {
+        let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
+        return Some((width, height, vec![(100, bgra)]));
+    }
+    decode_animation_frames_bgra(frames, target_width, target_height, cancel_cb)
 }
 
 fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
@@ -1107,7 +1138,8 @@ fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, 
     total as i32
 }
 
-fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, target_height: u32) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) { return None; }
     let first = frames.first()?;
     let original_width = first.buffer().width();
     let original_height = first.buffer().height();
@@ -1132,6 +1164,7 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
 
     let mut decoded = Vec::new();
     for frame in frames.into_iter().take(max_frames) {
+        if cancel_requested(cancel_cb) { return None; }
         let (num, den) = frame.delay().numer_denom_ms();
         let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
         let rgba = frame.into_buffer();
@@ -1142,7 +1175,8 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
         };
         let rgba = raster.to_rgba8();
         let mut bgra = Vec::with_capacity(frame_bytes);
-        for px in rgba.chunks_exact(4) {
+        for (index, px) in rgba.chunks_exact(4).enumerate() {
+            if index % 65_536 == 0 && cancel_requested(cancel_cb) { return None; }
             let r = px[0] as u32;
             let g = px[1] as u32;
             let b = px[2] as u32;
@@ -1154,6 +1188,7 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
         }
         decoded.push((delay_ms, bgra));
     }
+    if cancel_requested(cancel_cb) { return None; }
     Some((width, height, decoded))
 }
 
@@ -1435,6 +1470,25 @@ mod tests {
     }
 
     #[test]
+    fn animation_exports_honor_cancellation_before_file_access() {
+        let path = b"missing.gif";
+        let mut output = [0u8; 16];
+
+        assert_eq!(
+            ql_decode_gif_frames_sized_cancelable(
+                path.as_ptr(), path.len(), 0, 0, output.as_mut_ptr(), output.len(), Some(always_cancel),
+            ),
+            -3
+        );
+        assert_eq!(
+            ql_decode_webp_frames_sized_cancelable(
+                path.as_ptr(), path.len(), 0, 0, output.as_mut_ptr(), output.len(), Some(always_cancel),
+            ),
+            -3
+        );
+    }
+
+    #[test]
     fn archive_entry_export_honors_cancellation_before_file_access() {
         let archive = b"missing.zip";
         let entry = b"entry.txt";
@@ -1669,7 +1723,7 @@ mod tests {
         let pixels = [10u8, 20, 30, 255, 200, 210, 220, 255];
         image::save_buffer(&path, &pixels, 2, 1, image::ColorType::Rgba8).expect("write webp");
 
-        let decoded = decode_webp_frames_bgra(path.to_str().unwrap(), 0, 0).expect("decode webp frames");
+        let decoded = decode_webp_frames_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode webp frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.0, 2);
@@ -1696,14 +1750,14 @@ mod tests {
         for file in ["gif-disposal-background.gif", "gif-disposal-previous.gif"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                let frames = decode_gif_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external gif sample");
+                let frames = decode_gif_frames_bgra(path.to_str().unwrap(), 512, 512, None).expect("decode external gif sample");
                 assert!(!frames.2.is_empty());
             }
         }
         for file in ["webp-animated.webp", "webp-animated-alpha.webp", "webp-animated-blend.webp"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512).expect("decode external webp sample");
+                let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512, None).expect("decode external webp sample");
                 assert!(frames.2.len() > 1, "animated WebP sample should decode multiple frames: {file}");
                 assert_eq!(webp_external_golden(file), Some((frames.0, frames.1, frames.2.len(), fnv1a64(&frames.2[0].1), fnv1a64(&frames.2.last().unwrap().1))));
             }
@@ -1772,7 +1826,7 @@ mod tests {
     fn native_gif_frame_extraction_returns_bounded_frames() {
         let path = write_two_frame_gif();
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 1, 1).expect("decode gif frames");
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 1, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.0, 1);
@@ -1786,7 +1840,7 @@ mod tests {
     fn native_gif_frame_extraction_honors_background_disposal() {
         let path = write_disposal_gif(gif::DisposalMethod::Background);
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1).expect("decode gif frames");
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.2.len(), 3);
@@ -1797,7 +1851,7 @@ mod tests {
     fn native_gif_frame_extraction_honors_previous_disposal() {
         let path = write_disposal_gif(gif::DisposalMethod::Previous);
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1).expect("decode gif frames");
+        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.2.len(), 3);
