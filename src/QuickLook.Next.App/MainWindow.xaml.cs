@@ -593,6 +593,7 @@ public sealed partial class MainWindow : Window
         Title = System.IO.Path.GetFileName(path);
         PreviewTitleText.Text = Title;
         StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
+        ShowPreviewLoadingShell();
         try
         {
             await CloseCurrentAsync();
@@ -864,6 +865,16 @@ public sealed partial class MainWindow : Window
         LoadingRing.IsActive = true;
     }
 
+    private void ShowPreviewLoadingShell()
+    {
+        if (_previewVisible && !_previewTemporarilyHidden)
+            return;
+
+        using var trace = DiagLog.TraceScope("App", "preview loading shell show", 50);
+        ShowPreviewWindow(activate: false, resizeToDefault: true);
+        _previewTemporarilyHidden = false;
+    }
+
     private void RevealPreviewWindow(bool activate)
     {
         DiagLog.Write("App", $"preview reveal; activate={activate}; visible={_previewVisible}; tempHidden={_previewTemporarilyHidden}");
@@ -891,6 +902,8 @@ public sealed partial class MainWindow : Window
             EnsureCompositor();
         }
         FadeInPreviewContent();
+        _lastPreviewRevealTick = Environment.TickCount64;
+        _lastPreviewRevealPath = _previewSession.CurrentPath;
     }
 
     private bool ShouldIgnoreDuplicateOpenClose(string path)
@@ -2862,11 +2875,10 @@ public sealed partial class MainWindow : Window
         _windowController.Raise(activate);
         EnsureCompositor();
         _previewVisible = true;
-        _lastPreviewRevealTick = Environment.TickCount64;
-        _lastPreviewRevealPath = _previewSession.CurrentPath;
         SetBackgroundEfficiency(enabled: false);
         _native.SetPreviewVisible(true);
-        PreviewContentHost.Opacity = 1;
+        if (!_previewRevealPending)
+            PreviewContentHost.Opacity = 1;
     }
 
     private void HidePreviewWindow()
