@@ -51,7 +51,7 @@ internal sealed class RasterHostSupervisor
         _ui = ui;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
     {
         using var trace = DiagLog.TraceScope("App", "host start", 500);
         _stopping = false;
@@ -149,7 +149,7 @@ internal sealed class RasterHostSupervisor
         try
         {
             if (!IsConnected)
-                await StartAsync(cancellationToken);
+                await StartCoreAsync(cancellationToken);
         }
         finally
         {
@@ -397,8 +397,16 @@ internal sealed class RasterHostSupervisor
     {
         try
         {
-            if (IsRestartContextCurrent(gen, requestId, path))
-                await StartAsync();
+            await _startLock.WaitAsync();
+            try
+            {
+                if (!IsConnected && IsRestartContextCurrent(gen, requestId, path))
+                    await StartCoreAsync(CancellationToken.None);
+            }
+            finally
+            {
+                _startLock.Release();
+            }
         }
         catch (Exception ex)
         {
