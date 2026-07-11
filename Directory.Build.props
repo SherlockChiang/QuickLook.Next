@@ -9,7 +9,8 @@
     <PlatformTarget>x64</PlatformTarget>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Company>QuickLook Next</Company>
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)VERSION'))</VersionFile>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</VersionPrefix>
     <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
     <FileVersion>$(VersionPrefix).0</FileVersion>
     <InformationalVersion Condition="'$(VersionSuffix)' == ''">$(VersionPrefix)</InformationalVersion>

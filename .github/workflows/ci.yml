@@ -26,26 +26,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Restore locked dependencies
+      - name: Run release checks
         shell: pwsh
-        run: dotnet restore QuickLook.Next.slnx --locked-mode
-
-      - name: Test native library
-        shell: pwsh
-        run: cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
-
-      - name: Build native release library
-        shell: pwsh
-        run: cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
-
-      - name: Build solution
-        shell: pwsh
-        run: dotnet build QuickLook.Next.slnx -c Release --no-restore
-
-      - name: Test solution
-        shell: pwsh
-        run: dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
-
-      - name: Run architecture and corpus guards
-        shell: pwsh
-        run: ./tools/guard-architecture.ps1 -SkipSystemImageSmoke
+        run: ./tools/release.ps1 -SkipPackage -SkipSystemImageSmoke

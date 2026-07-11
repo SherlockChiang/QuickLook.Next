@@ -24,45 +24,46 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Validate release version
-        if: github.event_name == 'push'
+      - name: Resolve release version
+        id: version
         shell: pwsh
         run: |
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
-          if ("v$version" -ne "${{ github.ref_name }}") {
+          if ("${{ github.event_name }}" -eq "push" -and "v$version" -ne "${{ github.ref_name }}") {
             throw "Tag ${{ github.ref_name }} does not match VERSION ($version)."
           }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
 
-      - name: Restore locked dependencies
+      - name: Reject an existing manual release tag
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
-        run: dotnet restore QuickLook.Next.slnx --locked-mode
-
-      - name: Test native library
-        shell: pwsh
-        run: cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
-
-      - name: Test solution
-        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
-          dotnet build QuickLook.Next.slnx -c Release --no-restore
-          dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+          git ls-remote --exit-code --tags origin "refs/tags/${{ steps.version.outputs.tag }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag ${{ steps.version.outputs.tag }} already exists. Increment VERSION before publishing."
+          }
+          if ($LASTEXITCODE -ne 2) {
+            throw "Could not check whether the release tag exists."
+          }
 
-      - name: Package MSIX installer
+      - name: Test and package release
         shell: pwsh
-        run: ./tools/pack-msix.ps1 -CreateDevelopmentCertificate -SkipSystemImageSmoke
+        run: ./tools/release.ps1 -ExpectedVersion "${{ steps.version.outputs.version }}" -CreateDevelopmentCertificate -SkipSystemImageSmoke
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
           path: dist
           format: spdx-json
-          output-file: artifacts/QuickLook.Next-${{ github.ref_name }}-win-x64.spdx.json
+          output-file: artifacts/QuickLook.Next-${{ steps.version.outputs.tag }}-win-x64.spdx.json
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: QuickLook.Next-${{ github.ref_name }}-win-x64
+          name: QuickLook.Next-${{ steps.version.outputs.tag }}-win-x64
           path: |
             artifacts/QuickLook.Next-Installer-*.zip
             artifacts/QuickLook.Next-Installer-*.zip.sha256
@@ -70,15 +71,15 @@ jobs:
           if-no-files-found: error
 
       - name: Attest release archive
-        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: artifacts/QuickLook.Next-Installer-*.zip
 
       - name: Publish GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
             artifacts/QuickLook.Next-Installer-*.zip
