@@ -70,6 +70,7 @@ public sealed partial class MainWindow : Window
     private readonly PreviewSession _previewSession = new();
     private FileProbe? _currentProbe;
     private bool _currentPreviewWasCloudPlaceholder;
+    private ArchiveEntryHandoff? _currentArchiveEntryHandoff;
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
     private bool _previewVisible;
@@ -449,13 +450,21 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async Task CloseCurrentAsync(string? requestId = null)
     {
+        ArchiveEntryHandoff? archiveHandoff = Interlocked.Exchange(ref _currentArchiveEntryHandoff, null);
         var id = requestId ?? _previewSession.CurrentRequestId;
-        if (id is null) return;
+        if (id is null)
+        {
+            if (archiveHandoff is not null && _parserSupervisor is not null)
+                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+            return;
+        }
         if (requestId is null || string.Equals(_previewSession.CurrentRequestId, id, StringComparison.Ordinal))
             _previewSession.SetRequestId(null);
         if (!_requestHosts.Remove(id, out PreviewHostOwner owner))
         {
             DiagLog.Write("App", $"close skip: request has no host owner; request={id}");
+            if (archiveHandoff is not null && _parserSupervisor is not null)
+                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
             return;
         }
 
@@ -474,6 +483,11 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
             DiagLog.Write("App", $"close ignored after host disconnect; request={id}; {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            if (archiveHandoff is not null && _parserSupervisor is not null)
+                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
         }
     }
 
@@ -557,10 +571,13 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private Task PreviewWindowPathAsync(string path)
-        => PreviewPathAsync(path, PreviewNavigationSource.WindowNavigation);
+    private Task PreviewWindowPathAsync(string path, ArchiveEntryHandoff? archiveHandoff = null)
+        => PreviewPathAsync(path, PreviewNavigationSource.WindowNavigation, archiveHandoff);
 
-    private async Task PreviewPathAsync(string path, PreviewNavigationSource source)
+    private async Task PreviewPathAsync(
+        string path,
+        PreviewNavigationSource source,
+        ArchiveEntryHandoff? archiveHandoff = null)
     {
         PreviewSessionSnapshot session = _previewSession.Begin(path, source);
         int generation = session.Generation;
@@ -568,6 +585,7 @@ public sealed partial class MainWindow : Window
         using var previewTrace = DiagLog.TraceScope("App", $"preview path source={source} gen={generation} path={path}", 250);
         BeginPreviewTransition();
         ResetPreview();
+        bool archiveHandoffTransferred = false;
         _currentProbe = null;
         _currentPreviewWasCloudPlaceholder = false;
         Title = System.IO.Path.GetFileName(path);
@@ -577,6 +595,8 @@ public sealed partial class MainWindow : Window
         {
             await CloseCurrentAsync();
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+            _currentArchiveEntryHandoff = archiveHandoff;
+            archiveHandoffTransferred = archiveHandoff is not null;
             CloudFileAvailability availability = await Task.Run(() => CloudFileStatus.GetAvailability(path), previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             bool mayRequireHydration = availability != CloudFileAvailability.Local;
@@ -815,6 +835,11 @@ public sealed partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             DiagLog.Write("App", $"preview canceled: path={path}");
+        }
+        finally
+        {
+            if (archiveHandoff is not null && !archiveHandoffTransferred && _parserSupervisor is not null)
+                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
         }
     }
 
@@ -1410,19 +1435,24 @@ public sealed partial class MainWindow : Window
     private async Task PreviewListingItemAsync(PreviewListing? listing, ListingRow row)
     {
         string? path = row.NativePath;
+        ArchiveEntryHandoff? archiveHandoff = null;
         if (string.IsNullOrWhiteSpace(path)
             && listing is not null
             && listing.ListingKind.Equals("archive", StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(listing.RootPath))
         {
             await EnsureParserHostStartedAsync();
-            path = await _parserSupervisor!.ExtractArchiveEntryAsync(listing.RootPath, row.Path, CurrentPreviewToken);
+            archiveHandoff = await _parserSupervisor!.ExtractArchiveEntryAsync(listing.RootPath, row.Path, CurrentPreviewToken);
+            if (archiveHandoff is not null)
+            {
+                path = archiveHandoff.Path;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await PreviewWindowPathAsync(path);
+        await PreviewWindowPathAsync(path, archiveHandoff);
     }
 
     private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)

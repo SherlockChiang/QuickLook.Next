@@ -157,7 +157,7 @@ internal sealed class ParserHostSupervisor
         }
     }
 
-    public async Task<string?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
+    public async Task<ArchiveEntryHandoff?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
@@ -166,16 +166,20 @@ internal sealed class ParserHostSupervisor
         {
             await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
-            return response is ArchiveEntryExtracted extracted && TempHandoffPaths.IsArchiveExtractPath(extracted.TempPath)
-                ? extracted.TempPath
-                : null;
+            if (response is ArchiveEntryExtracted extracted && TempHandoffPaths.IsArchiveExtractPath(extracted.TempPath))
+                return new ArchiveEntryHandoff(requestId, extracted.TempPath);
+            return null;
         }
         finally
         {
             _pending.Cancel(requestId);
-            try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(requestId)) ?? Task.CompletedTask); }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
         }
+    }
+
+    public async Task ReleaseArchiveEntryAsync(ArchiveEntryHandoff handoff)
+    {
+        try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(handoff.RequestId)) ?? Task.CompletedTask); }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
     }
 
     public async Task<NativeRasterImage?> ExtractHeroRasterAsync(string path, string kind, CancellationToken cancellationToken)
@@ -377,3 +381,5 @@ internal sealed class ParserHostSupervisor
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeClientProcessId(nint pipe, out uint clientProcessId);
 }
+
+internal sealed record ArchiveEntryHandoff(string RequestId, string Path);
