@@ -68,6 +68,7 @@ public sealed partial class MainWindow : Window
     private PreviewKeyboardHook? _previewKeyboardHook;
     private UiThreadWatchdog? _uiWatchdog;
     private readonly PreviewSession _previewSession = new();
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private FileProbe? _currentProbe;
     private bool _currentPreviewWasCloudPlaceholder;
     private ArchiveEntryHandoff? _currentArchiveEntryHandoff;
@@ -304,6 +305,7 @@ public sealed partial class MainWindow : Window
         ImageFilmstripList.PointerWheelChanged += OnImageFilmstripPointerWheelChanged;
         Closed += (_, _) =>
         {
+            _lifetimeCts.Cancel();
             _uiWatchdog?.Dispose();
             _previewKeyboardHook?.Dispose();
             RemoveTrayIcon();
@@ -346,6 +348,7 @@ public sealed partial class MainWindow : Window
             _native.Start(OnNativeIntent);
             StatusText.Text = UiStrings.Ready.ToLowerInvariant();
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
+            _ = PrewarmPreviewHostsAsync(_lifetimeCts.Token);
         }
         catch (Exception ex)
         {
@@ -361,6 +364,27 @@ public sealed partial class MainWindow : Window
             }
             StatusText.Text = UiStrings.StartupErrorPrefix + ex.Message;
             ShowPreviewWindow(activate: true);
+        }
+    }
+
+    private async Task PrewarmPreviewHostsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(1500, cancellationToken);
+            using (DiagLog.TraceScope("App", "ParserHost idle prewarm", 500))
+                await EnsureParserHostStartedAsync(cancellationToken);
+
+            await Task.Delay(1500, cancellationToken);
+            using (DiagLog.TraceScope("App", "RasterHost idle prewarm", 750))
+                await EnsureRasterHostStartedAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "preview host prewarm failed: " + ex.Message);
         }
     }
 
