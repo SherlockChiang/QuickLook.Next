@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.301
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore locked dependencies
+        shell: pwsh
+        run: dotnet restore QuickLook.Next.slnx --locked-mode
+
+      - name: Test native library
+        shell: pwsh
+        run: cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
+
+      - name: Build native release library
+        shell: pwsh
+        run: cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
+
+      - name: Build solution
+        shell: pwsh
+        run: dotnet build QuickLook.Next.slnx -c Release --no-restore
+
+      - name: Test solution
+        shell: pwsh
+        run: dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+
+      - name: Run architecture and corpus guards
+        shell: pwsh
+        run: ./tools/guard-architecture.ps1

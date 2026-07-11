@@ -2,7 +2,8 @@
 # The default release path is Rust/App/RasterHost/ParserHost only; legacy .NET plugins are intentionally excluded.
 param(
     [string]$VersionPrefix = "",
-    [string]$VersionSuffix = ""
+    [string]$VersionSuffix = "",
+    [string]$ArtifactsDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +11,7 @@ $root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
 $dist = Join-Path $root "dist"
 $tfm  = "net10.0-windows10.0.19041.0\win-x64"
 $versionFile = Join-Path $root "VERSION"
+$artifacts = if ($ArtifactsDirectory) { $ArtifactsDirectory } else { Join-Path $root "artifacts" }
 
 if (-not $VersionPrefix -and (Test-Path $versionFile)) {
     $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim()
@@ -56,4 +58,18 @@ Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$
 & (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist
 
 $size = [math]::Round(((Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB))
-Write-Host "== done: $dist ($size MB) ==" -ForegroundColor Green
+$packageVersion = if ($VersionPrefix) { $VersionPrefix } else { "dev" }
+if ($VersionSuffix) { $packageVersion = "$packageVersion-$VersionSuffix" }
+$archiveName = "QuickLook.Next-$packageVersion-win-x64.zip"
+$archivePath = Join-Path $artifacts $archiveName
+$checksumPath = "$archivePath.sha256"
+
+Write-Host "== creating release archive ==" -ForegroundColor Cyan
+New-Item -ItemType Directory -Force $artifacts | Out-Null
+if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+if (Test-Path $checksumPath) { Remove-Item $checksumPath -Force }
+Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $archivePath -CompressionLevel Optimal
+$hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash  $archiveName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
+
+Write-Host "== done: $archivePath ($size MB unpacked) ==" -ForegroundColor Green

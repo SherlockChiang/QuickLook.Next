@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.301
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release version
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match VERSION ($version)."
+          }
+
+      - name: Restore locked dependencies
+        shell: pwsh
+        run: dotnet restore QuickLook.Next.slnx --locked-mode
+
+      - name: Test native library
+        shell: pwsh
+        run: cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
+
+      - name: Test solution
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
+          dotnet build QuickLook.Next.slnx -c Release --no-restore
+          dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+
+      - name: Package portable release
+        shell: pwsh
+        run: ./tools/pack-release.ps1
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: artifacts/QuickLook.Next-${{ github.ref_name }}-win-x64.spdx.json
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickLook.Next-${{ github.ref_name }}-win-x64
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Attest release archive
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/*.zip
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
