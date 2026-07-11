@@ -24,20 +24,20 @@ QuickLook Next is a fast, native Windows file previewer built with WinUI 3, Rust
 Download the latest `QuickLook.Next-Installer-*-win-x64.zip` from [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases).
 
 1. Extract the Installer ZIP.
-2. Double-click `Install.cmd` and follow the prompts. The package includes a signed MSIX and its project development certificate.
+2. Double-click `Install.cmd`, approve the UAC prompt, and follow the instructions. The package includes a signed MSIX and its project development certificate.
 3. Start QuickLook Next from the Start menu, select a file in File Explorer, and press **Space**.
 
-The certificate is installed only for the current user. QuickLook Next can be removed later from **Windows Settings > Apps**. Microsoft Store distribution and automatic updates are planned for a later test release.
+The development certificate is installed into the local computer's **Trusted People** store, which requires administrator approval for sideloaded MSIX packages. QuickLook Next can be removed later from **Windows Settings > Apps**. Microsoft Store distribution will remove this certificate-installation step in a later test release.
 
 ### Windows Warning
 
 Current builds are not Authenticode-signed. Windows SmartScreen may show an "unrecognized app" warning. Verify the downloaded ZIP against the accompanying `.sha256` file before running it:
 
 ```powershell
-Get-FileHash .\QuickLook.Next-Installer-0.2.1-win-x64.zip -Algorithm SHA256
+Get-FileHash .\QuickLook.Next-Installer-0.2.2-win-x64.zip -Algorithm SHA256
 ```
 
-Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.1-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
+Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.2-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
 
 ## Using QuickLook Next
 
