@@ -1396,6 +1396,35 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    extern "C" fn always_cancel() -> bool {
+        true
+    }
+
+    #[test]
+    fn simple_preview_exports_honor_cancellation_before_file_access() {
+        let path = b"missing.file";
+        let mut output = [0u8; 16];
+        let calls = [
+            ql_preview_text_cancelable,
+            ql_preview_ebook_cancelable,
+            ql_preview_executable_cancelable,
+            ql_preview_torrent_cancelable,
+        ];
+
+        for call in calls {
+            assert_eq!(
+                call(
+                    path.as_ptr(),
+                    path.len(),
+                    output.as_mut_ptr(),
+                    output.len(),
+                    Some(always_cancel),
+                ),
+                -3
+            );
+        }
+    }
+
     #[test]
     fn thumbnail_flags_reject_unknown_bits() {
         assert!(thumbnail_flags_valid(0));
@@ -2148,14 +2177,31 @@ pub extern "C" fn ql_preview_text(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_preview_text_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return -3;
     }
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return 0,
     };
     let json = preview::render_text(path);
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -2230,14 +2276,31 @@ pub extern "C" fn ql_preview_executable(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_preview_executable_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return -3;
     }
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return 0,
     };
     let json = preview::render_executable(path);
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -2297,14 +2360,31 @@ pub extern "C" fn ql_preview_ebook(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_preview_ebook_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return -3;
     }
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return 0,
     };
     let json = preview::render_ebook(path);
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_json_out(&json, out_buf, out_cap)
 }
 
@@ -2316,14 +2396,31 @@ pub extern "C" fn ql_preview_torrent(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_preview_torrent_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
     if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
         return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return -3;
     }
     let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
         Some(s) => s,
         None => return 0,
     };
     let json = preview::render_torrent(path);
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_json_out(&json, out_buf, out_cap)
 }
 
