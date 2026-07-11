@@ -152,7 +152,7 @@ internal sealed class ParserHostSupervisor
             if (recycleHost)
             {
                 DiagLog.Write("App", $"recycling ParserHost after cloud preview cancellation: request={requestId}");
-                TryKillHost();
+                RecycleHost("cloud preview canceled while opening");
             }
         }
     }
@@ -216,7 +216,7 @@ internal sealed class ParserHostSupervisor
             int generation = _generation;
             LogHostResources("timeout", generation);
             DiagLog.Write("App", $"ParserHost request timed out; terminating host: request={requestId}; gen={generation}; timeoutCount={timeoutCount}");
-            TryKillHost();
+            RecycleHost($"request timed out: {requestId}");
         }
         catch
         {
@@ -254,6 +254,8 @@ internal sealed class ParserHostSupervisor
         }
         catch (Exception ex)
         {
+            if (generation != _generation)
+                return;
             _ready.TrySetException(ex);
             _recycleOnCancel.Clear();
             _pending.FailAll(ex);
@@ -333,6 +335,20 @@ internal sealed class ParserHostSupervisor
         try { _job?.Dispose(); } catch { }
         _job = null;
         try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
+    }
+
+    private void RecycleHost(string reason)
+    {
+        DiagLog.Write("App", $"ParserHost recycle: reason={reason}; gen={_generation}");
+        ++_generation;
+        _recycleOnCancel.Clear();
+        _pending.FailAll(new OperationCanceledException(reason));
+        _ready.TrySetCanceled();
+        try { _channel?.Dispose(); } catch { }
+        _channel = null;
+        try { _server?.Dispose(); } catch { }
+        _server = null;
+        TryKillHost();
     }
 
     private static NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
