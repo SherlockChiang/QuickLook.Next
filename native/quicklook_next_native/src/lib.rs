@@ -413,13 +413,8 @@ fn do_selection_and_emit(tag: &str) {
 /// space in another app doesn't trigger a preview from a lingering Explorer selection.
 unsafe fn get_explorer_selection() -> Result<Vec<String>> {
     let foreground = GetForegroundWindow();
-    let preview_visible = PREVIEW_VISIBLE.load(Ordering::SeqCst);
     let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
     let count = shell_windows.Count()?;
-    emit(&format!(
-        "DBG windows={count} fg=0x{:X} visible={preview_visible}",
-        foreground.0 as isize
-    ));
 
     for i in 0..count {
         let idx = VARIANT::from(i);
@@ -434,15 +429,9 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
         let hwnd = HWND(wb.HWND().unwrap_or(SHANDLE_PTR(0)).0 as *mut _);
         if hwnd == foreground {
             let paths = read_window_selection(&wb).unwrap_or_default();
-            emit(&format!(
-                "DBG win=0x{:X} sel={} (foreground)",
-                hwnd.0 as isize,
-                paths.len()
-            ));
             return Ok(paths);
         }
     }
-    emit("DBG foreground is not Explorer — ignoring space");
     Ok(Vec::new())
 }
 
@@ -453,16 +442,14 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     let folder_view: IFolderView = view.cast()?;
     let items: IShellItemArray = folder_view.Items(SVGIO_SELECTION)?;
     let n = items.GetCount()?;
-    let mut out = Vec::with_capacity(n as usize);
-    for k in 0..n {
-        let item = items.GetItemAt(k)?;
-        let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
-        out.push(
-            pw.0.to_string()
-                .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?,
-        );
+    if n == 0 {
+        return Ok(Vec::new());
     }
-    Ok(out)
+    let item = items.GetItemAt(0)?;
+    let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
+    let path = pw.0.to_string()
+        .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?;
+    Ok(vec![path])
 }
 
 struct PwstrGuard(PWSTR);
