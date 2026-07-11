@@ -1,119 +1,149 @@
 # QuickLook Next
 
-Rebuild of QuickLook on a process-isolated, GPU-composited, plugin-extensible architecture.
-Every boundary here was validated by a runnable spike first (see `../spikes/`).
+[简体中文](README_CN.md)
 
-## Layout
-```
-QuickLook.Next/
-  Directory.Build.props                 shared .NET settings (net10, x64, nullable)
-  QuickLook.Next.slnx
-  native/
-    quicklook_next_native/              Rust cdylib — Win32/Shell/COM + hotkey + FFI  (Spike 3)
-  src/
-    QuickLook.Next.Contracts/           control DTOs + legacy plugin-facing contracts
-    QuickLook.Next.Core/                stable control protocol + FFI intents + pipe channel + watchdog
-    QuickLook.Next.ParserHost/          JSON-only native archive/package/Office parser process
-    QuickLook.Next.RasterHost/          .NET RasterHost process: D3D surfaces + PDF/thumbnail bridges  (Spike 1)
-    QuickLook.Next.App/                 WinUI 3 shell: native bridge + supervision + composition consumer  (Spikes 1+3)
-  plugins/                              legacy/reference .NET plugin sources (reference-only)
-  docs/review-readiness.md              reviewer-facing status, verification, and known remaining work
-```
+Preview files in Windows Explorer with a single press of the Space bar.
 
-## Dependency direction
-`Contracts` ← `Core` ← (`App`, `ParserHost`, `RasterHost`). Rust ↔ App/hosts is C ABI; App ⇄ hosts is IPC
-(control pipe + shared composition surface).
+QuickLook Next is a fast, native Windows file previewer built with WinUI 3, Rust, and GPU-composited surfaces. It keeps complex parsers and raster decoders in restricted helper processes so a damaged or unusually large file cannot easily take down the main app.
 
-## Rust-first ownership
-Rust is the source of truth for native input, Explorer selection, file probing, shell thumbnails, image
-decoding, and lightweight content previews. The App calls Rust directly for text and folder previews.
-Archive, package, and Office structured previews execute in ParserHost. Package icons and Office embedded
-hero rasters are extracted there and handed back through validated, bounded temp files, never raw pixels
-on the control pipe. Raster image previews decode
-to BGRA in Rust, then RasterHost uploads those pixels to a shared D3D surface.
+> QuickLook Next is under active development. The current release is a portable, unsigned Windows build intended for early users and testers.
 
-.NET remains intentional only where it is currently a frontend or surface-hosting component:
-- WinUI 3 window, tray menu, title bar, presenter-driven preview UI, media element, and input gestures.
-- Composition interop and shared-surface consumption in the App.
-- RasterHost D3D composition surface production, PDF page rendering through `Windows.Data.Pdf`, image
-  raster upload, and shell-thumbnail fallback.
+## Highlights
 
-The old .NET text/archive/info/image plugins are compatibility scaffolding, not the preferred
-architecture. They are kept under `plugins/` as reference source only: they are not included in the
-default solution, not copied by the release packager, and not used as a default plugin discovery path.
-New preview business logic should land in `native/quicklook_next_native/src/preview.rs` or a narrow
-Rust C ABI returning structured JSON/BGRA for the WinUI shell and RasterHost to render. Do not
-reintroduce WebView/HTML output for Office previews.
+- Press **Space** in File Explorer to open or close a preview.
+- Use **arrow keys** to move between Explorer selections while the preview is open.
+- Preview images, animated GIF/WebP, PDF, text and source files, Markdown, CSV, folders, archives, Office documents, media, fonts, packages, certificates, executables, SQLite databases, ebooks, mail, and other common formats.
+- View image metadata and EXIF details, zoom images, browse neighboring images, and open the original file or its location.
+- Play supported local audio and video without launching another app.
+- Keep archive, Office, ebook, executable, and raster work outside the UI process.
+- Avoid silently downloading online-only cloud files. Cloud placeholders use metadata-only previews unless content access is explicitly safe.
+- Follow Windows accessibility settings, including high contrast and reduced motion.
 
-Office previews intentionally use acceptable approximate rendering instead of a full Office engine.
-For PPT/XLSX, prioritize layout reconstruction: slide/sheet dimensions, text boxes, cell positions,
-row/column sizing, relationships, and embedded images. Perfect style parity, macros, animations,
-formula recalculation, and full Office compatibility are outside the default preview boundary.
+## Download
 
-## Process boundaries
-- **App ⇄ native (Rust):** in-process FFI. `quicklook_next_native` installs the WH_KEYBOARD_LL hook and
-  reads the Explorer selection, then calls back with high-level intent lines decoded into `NativeIntent`.
-- **App ⇄ RasterHost:** named-pipe **control channel** (line-delimited JSON, `ControlMessage` in
-  `Core/Protocol.cs`) + a **shared composition surface** for pixels (never base64 over the pipe).
-  Invariant: every `RequestId` ends in exactly one of `preview.ready | preview.error | timeout`
-  (`PendingRequests` + per-request watchdog).
+Download the latest `QuickLook.Next-*-win-x64.zip` from [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases).
 
-Handshake: App (pipe server) launches Host → `hello{appPid}` → Host `host.ready{adapterLuid}` →
-`preview.open{requestId,path,probe}` → `preview.surface{handle,…}` + `preview.ready{…}`. Resize →
-`preview.resize` → new `preview.surface`. Host crash → App restarts it (supervisor).
+1. Extract the ZIP to a folder you can keep, such as `%LOCALAPPDATA%\Programs\QuickLook.Next`.
+2. Run `QuickLook.Next.App.exe`.
+3. Leave the tray app running, select a file in File Explorer, and press **Space**.
 
-- **App ⇄ ParserHost:** separately authenticated named-pipe JSON control channel. The App verifies the
-  connecting child PID and sends a random session token in `hello`; ParserHost responds `parser.ready`.
-  It accepts archive/package/Office `preview.open` requests and returns bounded structured
-   `preview.ready` JSON only, never composition surfaces. Its bounded hero rasters use a validated
-   temp-file handoff rather than control-pipe pixel payloads. It is lazy-started and stopped on app shutdown.
+The release is portable and does not currently include an installer or automatic updater. Do not run the executable directly from inside the ZIP.
 
-## Build / checks
-```
-# native (needs MSVC C++ Build Tools — see spikes/spike3-native/SPIKE3_FINDINGS.md)
-cargo build --release --manifest-path native/quicklook_next_native/Cargo.toml
-# .NET solution
-dotnet build QuickLook.Next.slnx -c Debug
-# native smoke
-powershell -ExecutionPolicy Bypass -File tools/smoke-native.ps1
-# architecture guard
-powershell -ExecutionPolicy Bypass -File tools/guard-architecture.ps1
+### Windows Warning
+
+Current builds are not Authenticode-signed. Windows SmartScreen may show an "unrecognized app" warning. Verify the downloaded ZIP against the accompanying `.sha256` file before running it:
+
+```powershell
+Get-FileHash .\QuickLook.Next-0.1.0-win-x64.zip -Algorithm SHA256
 ```
 
-For review handoff notes, fixed boundaries, and targeted verification commands, see
-[`docs/review-readiness.md`](docs/review-readiness.md).
+Compare the displayed hash with the first value in `QuickLook.Next-0.1.0-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
 
-## Current status
-Wired & compiling now: the five projects, the full control protocol, the FFI bridge, tray-background
-startup, no-activate preview behavior, Explorer selection switching, RasterHost supervision + restart,
-the composition producer/consumer, App-direct media playback, and the raster paths:
-Rust image decode or Windows PDF render → BGRA pixels → RasterHost D3D texture → shared composition
-surface.
+## Using QuickLook Next
 
-RasterHost is lazy-started: text, Office metadata/layout, archive/folder listings, package metadata,
-certificates, executables, and other lightweight Rust previews do not start the surface host. ParserHost
-is likewise lazy-started only for archive/package/Office structured previews. RasterHost is
-started only when a preview needs a D3D surface, PDF page rasterization, or shell thumbnail fallback.
+| Action | Shortcut |
+| --- | --- |
+| Open or close preview | `Space` |
+| Close preview | `Esc` |
+| Preview previous or next Explorer item | Arrow keys |
+| Zoom image | Mouse wheel or `+` / `-` |
+| Reset image view | `Home` or `Ctrl+0` |
+| Navigate neighboring images | `Left` / `Right` while the image window is focused |
 
-Professional/specialized formats are prioritized by likely real-user frequency and cost:
-fonts and SQLite/database files first; media keeps playback while showing lightweight container info
-in the preview chrome; ELF/minidump headers follow for developer diagnostics; Mail/CHM receive safe
-header-level previews without WebView or full container extraction.
+Clicking the preview does not prevent Space from closing it. When focus is inside a text field, button, list item, toggle, or slider, Space keeps the standard Windows control behavior.
 
-The WinUI shell is split into focused presenters/controllers for text, listing, Office layout,
-raster/image surfaces, PDF page virtualization/cache, media playback, and topmost/no-activate window
-behavior. MainWindow remains the application coordinator: native intents, request cancellation,
-RasterHost pipe lifetime, panel switching, and window placement.
+The tray menu provides startup and exit controls. Closing a preview hides the window but leaves QuickLook Next available in the tray.
 
-The default release path is Rust/App/ParserHost/RasterHost only. `tools/guard-architecture.ps1` enforces the
-current boundaries: no WebView/WebView2, no default .NET preview plugin path or project reference, no
-RasterHost plugin registry/loader, and no legacy .NET preview plugins in release output.
+## Supported Content
 
-## Remaining work
-1. Split preview panel visibility/reset choreography out of `MainWindow`.
-2. Move the remaining dynamic/accessibility labels into resource-backed strings as the UI copy stabilizes.
-3. Keep improving Rust-native document fidelity, especially PPT/XLSX approximate layout reconstruction.
-4. Add broader real-world smoke assets for Office, PDF, package, certificate, image, archive, folder, and text previews.
-5. Push cancellation deeper into native decode/listing loops after the current App-side generation guard.
+Support depends partly on codecs installed in Windows, but the built-in paths cover the most common cases:
 
-See `../spikes/spike{1,2,3}-*/SPIKE*_FINDINGS.md` for the validated recipes behind each piece.
+- **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF; system-codec fallback for formats such as HEIC and AVIF.
+- **Documents:** PDF, DOCX, XLSX, PPTX, EPUB, FB2, Markdown, plain text, source code, configuration files, and CSV.
+- **Archives and packages:** ZIP and other supported archives, application/package metadata, archive browsing, and nested entry previews.
+- **Media:** common local audio/video formats supported by Windows Media Foundation, with lightweight container metadata.
+- **Developer and specialist files:** PE/EXE/DLL, ELF, minidump, certificates, fonts, SQLite, Torrent, mail, and CHM metadata.
+- **Folders:** bounded directory listings with safe thumbnail scheduling.
+
+Office previews are intentionally approximate and do not run Microsoft Office, macros, formula recalculation, embedded scripts, or a browser engine. Exact fidelity varies with document complexity.
+
+## Cloud Files
+
+QuickLook Next treats online-only OneDrive and other cloud placeholders conservatively:
+
+- Opening a preview does not automatically hydrate an online-only file.
+- Metadata-only information is shown when content availability is uncertain.
+- Decorative thumbnails, sidecars, and media playback do not trigger hidden secondary reads.
+- Local files and already-hydrated cloud files receive the full preview experience.
+
+An explicit download experience and progress UI are planned for a later release.
+
+## Requirements
+
+- Windows 10 version 1809 or later, or Windows 11.
+- x64 processor.
+- File Explorer. Other file managers are not currently integrated with the global Space shortcut.
+- A GPU and driver supported by the Windows composition stack.
+
+The portable release includes the Windows App SDK runtime components required by the app. Some image and media formats still require optional codecs from Windows or the Microsoft Store.
+
+## Troubleshooting
+
+### Space does nothing
+
+- Confirm `QuickLook.Next.App.exe` is running and its tray icon is present.
+- Make sure File Explorer is the foreground window and a file is selected.
+- Space is intentionally not intercepted while renaming a file or typing in an Explorer text field.
+- Exit any older QuickLook Next instance from the tray before starting a newly extracted build.
+
+### A format shows metadata instead of full content
+
+- The file may be an online-only cloud placeholder.
+- Windows may not have the required system codec.
+- The parser may have reached a safety limit or timeout. Reopen the file to retry.
+
+### Report a problem
+
+Open a [GitHub issue](https://github.com/SherlockChiang/QuickLook.Next/issues) with:
+
+- Windows version and QuickLook Next version.
+- File type and approximate size. Do not upload private files.
+- What you expected and what happened.
+- Reproduction steps and relevant logs, if available.
+
+## Building From Source
+
+Prerequisites:
+
+- Windows x64 with Visual Studio Build Tools and the Desktop C++/MSVC toolchain.
+- .NET SDK version specified by [`global.json`](global.json).
+- Stable Rust MSVC toolchain.
+
+```powershell
+dotnet restore QuickLook.Next.slnx --locked-mode
+cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
+cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
+dotnet build QuickLook.Next.slnx -c Release --no-restore
+dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+.\tools\pack-release.ps1
+```
+
+The packaged ZIP and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging.
+
+## Architecture
+
+- `QuickLook.Next.App`: WinUI 3 shell, preview presenters, input, and process supervision.
+- `quicklook_next_native`: Rust file probing, Explorer integration, native parsers, thumbnails, and image decoding.
+- `QuickLook.Next.ParserHost`: isolated structured parsing for archives, Office files, ebooks, executables, and related formats.
+- `QuickLook.Next.RasterHost`: isolated image/PDF/system-codec rendering and shared GPU surfaces.
+- App/host IPC uses authenticated, current-user-only named pipes with request generation and cancellation guards.
+
+See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries, verification details, and known remaining work.
+
+## Security
+
+Please avoid filing public issues for undisclosed security vulnerabilities. Until a private security policy is published, contact the repository owner through their GitHub profile with a minimal description and no sensitive sample files.
+
+## License
+
+A project license has not yet been published. Source availability does not grant redistribution or modification rights beyond those provided by applicable law. A formal license is planned before a stable release.
