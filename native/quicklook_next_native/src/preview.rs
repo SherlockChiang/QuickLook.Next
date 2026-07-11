@@ -10267,15 +10267,6 @@ pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>)
     if !pe.section_names.is_empty() {
         text.push_str(&format!("Section names: {}\n", pe.section_names.join(", ")));
     }
-    if !pe.imports.is_empty() {
-        text.push_str(&format!("Imports: {}\n", pe.imports.join(", ")));
-    }
-    if !pe.imported_functions.is_empty() {
-        text.push_str(&format!(
-            "Imported functions: {}\n",
-            pe.imported_functions.join(", ")
-        ));
-    }
     if !pe.exports.is_empty() {
         text.push_str(&format!("Exports: {}\n", pe.exports.join(", ")));
     }
