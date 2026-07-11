@@ -21,6 +21,9 @@ $numericVersion = "$VersionPrefix.0"
 $packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else { $VersionPrefix }
 $msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
 $installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
+$installScript = Join-Path $root "packaging\Install.ps1"
+
+& (Join-Path $PSScriptRoot "test-installer-script.ps1") -Path $installScript
 
 Remove-Item -LiteralPath $msixRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $installerRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -72,7 +75,7 @@ $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Cert
 [System.IO.File]::WriteAllBytes($publicCertificate, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
 Copy-Item -LiteralPath $msixPath -Destination $installerRoot
-Copy-Item -LiteralPath (Join-Path $root "packaging\Install.ps1") -Destination $installerRoot
+Copy-Item -LiteralPath $installScript -Destination $installerRoot
 Get-ChildItem -LiteralPath (Join-Path $root "packaging") -Filter "*.cmd" |
     Copy-Item -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $root "packaging\README.txt") -Destination $installerRoot

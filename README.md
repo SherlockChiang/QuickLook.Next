@@ -34,10 +34,10 @@ The certificate is installed only for the current user. QuickLook Next can be re
 Current builds are not Authenticode-signed. Windows SmartScreen may show an "unrecognized app" warning. Verify the downloaded ZIP against the accompanying `.sha256` file before running it:
 
 ```powershell
-Get-FileHash .\QuickLook.Next-Installer-0.2.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\QuickLook.Next-Installer-0.2.1-win-x64.zip -Algorithm SHA256
 ```
 
-Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.0-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
+Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.1-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
 
 ## Using QuickLook Next
 

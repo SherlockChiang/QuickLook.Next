@@ -34,10 +34,10 @@ QuickLook Next 是使用 WinUI 3、Rust 和 GPU 合成表面构建的原生 Wind
 当前版本尚未进行 Authenticode 代码签名，Windows SmartScreen 可能显示“无法识别的应用”提示。运行前请使用同一 Release 中的 `.sha256` 文件核对 ZIP：
 
 ```powershell
-Get-FileHash .\QuickLook.Next-Installer-0.2.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\QuickLook.Next-Installer-0.2.1-win-x64.zip -Algorithm SHA256
 ```
 
-将输出值与 `QuickLook.Next-Installer-0.2.0-win-x64.zip.sha256` 第一列比较。只有哈希一致且文件确实来自本仓库 Releases 页面时才应继续运行。
+将输出值与 `QuickLook.Next-Installer-0.2.1-win-x64.zip.sha256` 第一列比较。只有哈希一致且文件确实来自本仓库 Releases 页面时才应继续运行。
 
 ## 使用方法
 
