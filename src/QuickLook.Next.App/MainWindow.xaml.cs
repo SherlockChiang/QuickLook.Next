@@ -1563,13 +1563,14 @@ public sealed partial class MainWindow : Window
         bool cloudOrigin,
         CancellationToken token)
     {
+        if (cloudOrigin)
+            return null;
+
         if (IsPackagePreview(ready, path))
         {
             await EnsureParserHostStartedAsync();
             NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(path, "package", token);
-            return icon ?? (cloudOrigin
-                ? null
-                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token));
+            return icon ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
         }
 
         if (IsOfficePreviewWithImages(ready))
@@ -1579,14 +1580,10 @@ public sealed partial class MainWindow : Window
         }
 
         if (IsExecutablePreview(ready, path))
-            return cloudOrigin
-                ? null
-                : await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
+            return await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
 
         if (ready.Kind == "certificate")
-            return cloudOrigin
-                ? null
-                : await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
+            return await _thumbnailScheduler.LoadAsync(path, 256, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
 
         return null;
     }
