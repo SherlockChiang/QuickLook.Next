@@ -59,6 +59,10 @@ const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 
+thread_local! {
+    static SHELL_WINDOWS_CACHE: std::cell::RefCell<Option<IShellWindows>> = const { std::cell::RefCell::new(None) };
+}
+
 // A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
@@ -413,8 +417,15 @@ fn do_selection_and_emit(tag: &str) {
 /// space in another app doesn't trigger a preview from a lingering Explorer selection.
 unsafe fn get_explorer_selection() -> Result<Vec<String>> {
     let foreground = GetForegroundWindow();
-    let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
-    let count = shell_windows.Count()?;
+    let mut shell_windows = cached_shell_windows()?;
+    let count = match shell_windows.Count() {
+        Ok(count) => count,
+        Err(_) => {
+            SHELL_WINDOWS_CACHE.with(|cache| *cache.borrow_mut() = None);
+            shell_windows = cached_shell_windows()?;
+            shell_windows.Count()?
+        }
+    };
 
     for i in 0..count {
         let idx = VARIANT::from(i);
@@ -450,6 +461,17 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     let path = pw.0.to_string()
         .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?;
     Ok(vec![path])
+}
+
+unsafe fn cached_shell_windows() -> Result<IShellWindows> {
+    SHELL_WINDOWS_CACHE.with(|cache| {
+        if let Some(shell_windows) = cache.borrow().as_ref() {
+            return Ok(shell_windows.clone());
+        }
+        let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
+        *cache.borrow_mut() = Some(shell_windows.clone());
+        Ok(shell_windows)
+    })
 }
 
 struct PwstrGuard(PWSTR);
