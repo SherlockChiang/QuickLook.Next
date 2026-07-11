@@ -596,11 +596,15 @@ public sealed partial class MainWindow : Window
         ShowPreviewLoadingShell();
         try
         {
-            await CloseCurrentAsync();
+            Task closeTask = CloseCurrentAsync();
+            Task<CloudFileAvailability> availabilityTask = Task.Run(
+                () => CloudFileStatus.GetAvailability(path),
+                previewToken);
+            await Task.WhenAll(closeTask, availabilityTask);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentArchiveEntryHandoff = archiveHandoff;
             archiveHandoffTransferred = archiveHandoff is not null;
-            CloudFileAvailability availability = await Task.Run(() => CloudFileStatus.GetAvailability(path), previewToken);
+            CloudFileAvailability availability = await availabilityTask;
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             bool mayRequireHydration = availability != CloudFileAvailability.Local;
             _currentPreviewWasCloudPlaceholder = mayRequireHydration;
