@@ -10,6 +10,24 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $version = (Get-Content -LiteralPath (Join-Path $root "VERSION") -Raw).Trim()
+$localSigningDirectory = Join-Path $root ".signing"
+$localCertificatePath = Join-Path $localSigningDirectory "QuickLook.Next-Release.pfx"
+if ($CreateDevelopmentCertificate) {
+    if (-not (Test-Path -LiteralPath $localCertificatePath)) {
+        throw "Release signing is not initialized. Run ./tools/setup-release-signing.ps1 -ConfigureGitHub once."
+    }
+    Write-Warning "-CreateDevelopmentCertificate is deprecated; reusing the fixed release certificate."
+    $CreateDevelopmentCertificate = $false
+}
+if (-not $CertificatePath) {
+    $CertificatePath = $localCertificatePath
+}
+if (-not $CertificatePassword) {
+    $passwordPath = Join-Path $localSigningDirectory "QuickLook.Next-Release.password"
+    if (Test-Path -LiteralPath $passwordPath) {
+        $CertificatePassword = (Get-Content -LiteralPath $passwordPath -Raw).Trim()
+    }
+}
 
 & (Join-Path $PSScriptRoot "test-release-version.ps1") -ExpectedVersion $ExpectedVersion
 

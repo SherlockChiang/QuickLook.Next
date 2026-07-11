@@ -3,6 +3,7 @@ param(
     [string]$VersionSuffix = "",
     [string]$CertificatePath = "",
     [string]$CertificatePassword = "",
+    [string]$ExpectedCertificatePath = "",
     [switch]$CreateDevelopmentCertificate,
     [switch]$SkipSystemImageSmoke
 )
@@ -22,6 +23,7 @@ $packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else {
 $msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
 $installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
 $installScript = Join-Path $root "packaging\Install.ps1"
+if (-not $ExpectedCertificatePath) { $ExpectedCertificatePath = Join-Path $root "packaging\QuickLook.Next-Release.cer" }
 
 & (Join-Path $PSScriptRoot "test-installer-script.ps1") -Path $installScript
 
@@ -58,6 +60,18 @@ if ($CreateDevelopmentCertificate -and (-not $CertificatePath -or -not (Test-Pat
 }
 if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "A signing certificate is required." }
 
+$signingCertificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
+    $CertificatePath,
+    $CertificatePassword,
+    [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+if (-not $CreateDevelopmentCertificate) {
+    if (-not (Test-Path -LiteralPath $ExpectedCertificatePath)) { throw "The trusted release certificate is missing: $ExpectedCertificatePath" }
+    $expectedCertificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ExpectedCertificatePath)
+    if ($signingCertificate.Thumbprint -ne $expectedCertificate.Thumbprint) {
+        throw "Signing certificate $($signingCertificate.Thumbprint) does not match trusted release certificate $($expectedCertificate.Thumbprint)."
+    }
+}
+
 $msixPath = Join-Path $artifacts $msixName
 Remove-Item -LiteralPath $msixPath -Force -ErrorAction SilentlyContinue
 & (Join-Path $sdkBin "makeappx.exe") pack /d $msixRoot /p $msixPath /o
@@ -68,11 +82,7 @@ if ($LASTEXITCODE -ne 0) { throw "SignTool failed." }
 
 $publicCertificate = Join-Path $installerRoot "QuickLook.Next-Development.cer"
 $securePassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
-$certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(
-    $CertificatePath,
-    $CertificatePassword,
-    [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
-[System.IO.File]::WriteAllBytes($publicCertificate, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+[System.IO.File]::WriteAllBytes($publicCertificate, $signingCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
 Copy-Item -LiteralPath $msixPath -Destination $installerRoot
 Copy-Item -LiteralPath $installScript -Destination $installerRoot

@@ -49,9 +49,22 @@ jobs:
             throw "Could not check whether the release tag exists."
           }
 
+      - name: Restore release signing certificate
+        shell: pwsh
+        env:
+          RELEASE_PFX_BASE64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+        run: |
+          if (-not $env:RELEASE_PFX_BASE64) {
+            throw "QUICKLOOK_RELEASE_PFX_BASE64 is not configured."
+          }
+          New-Item -ItemType Directory -Path .signing -Force | Out-Null
+          [IO.File]::WriteAllBytes(".signing/QuickLook.Next-Release.pfx", [Convert]::FromBase64String($env:RELEASE_PFX_BASE64))
+
       - name: Test and package release
         shell: pwsh
-        run: ./tools/release.ps1 -ExpectedVersion "${{ steps.version.outputs.version }}" -CreateDevelopmentCertificate -SkipSystemImageSmoke
+        env:
+          RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
+        run: ./tools/release.ps1 -ExpectedVersion "${{ steps.version.outputs.version }}" -CertificatePath ".signing/QuickLook.Next-Release.pfx" -CertificatePassword "$env:RELEASE_PFX_PASSWORD" -SkipSystemImageSmoke
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0

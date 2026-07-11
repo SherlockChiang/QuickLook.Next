@@ -27,6 +27,7 @@ dist/
 dist*/
 msix/
 installer/
+.signing/
 agent.md
 
 *.pdb
