@@ -2890,7 +2890,7 @@ public sealed partial class MainWindow : Window
             ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
         if (openingFromHidden)
             CenterPreviewWindowInCurrentDisplay(appWindow);
-        try { appWindow.Show(activate); }
+        try { appWindow.Show(false); }
         catch
         {
             if (activate) Activate();
