@@ -35,10 +35,30 @@ internal static class UiStrings
     public static string NoExifData => Get(nameof(NoExifData), "No EXIF data");
 
     public static string TrayShowPreview => Get(nameof(TrayShowPreview), "Show preview");
+    public static string TraySettings => Get(nameof(TraySettings), "Settings");
     public static string TrayAutoStart => Get(nameof(TrayAutoStart), "Start with Windows");
     public static string TrayExit => Get(nameof(TrayExit), "Exit QuickLook Next");
     public static string AutoStartEnableFailed => Get(nameof(AutoStartEnableFailed), "Could not enable start with Windows");
     public static string AutoStartDisableFailed => Get(nameof(AutoStartDisableFailed), "Could not disable start with Windows");
+    public static string SettingsTitle => Get(nameof(SettingsTitle), "Settings");
+    public static string SettingsGeneral => Get(nameof(SettingsGeneral), "General");
+    public static string SettingsGeneralDescription => Get(nameof(SettingsGeneralDescription), "Choose how QuickLook Next behaves in Windows.");
+    public static string SettingsAutoStart => Get(nameof(SettingsAutoStart), "Start with Windows");
+    public static string SettingsAutoStartDescription => Get(nameof(SettingsAutoStartDescription), "Keep QuickLook Next ready in the notification area after you sign in.");
+    public static string SettingsLanguage => Get(nameof(SettingsLanguage), "Language");
+    public static string SettingsLanguageDescription => Get(nameof(SettingsLanguageDescription), "Choose the language used by the app and tray menu.");
+    public static string SettingsSystemLanguage => Get(nameof(SettingsSystemLanguage), "Use system language");
+    public static string SettingsRestartTitle => Get(nameof(SettingsRestartTitle), "Restart required");
+    public static string SettingsRestartMessage => Get(nameof(SettingsRestartMessage), "Exit QuickLook Next from the tray and start it again to apply the language.");
+    public static string SettingsAbout => Get(nameof(SettingsAbout), "About");
+    public static string SettingsAboutDescription => Get(nameof(SettingsAboutDescription), "Version, project source, and release information.");
+    public static string SettingsVersionFormat => Get(nameof(SettingsVersionFormat), "Version {0}");
+    public static string SettingsProjectSource => Get(nameof(SettingsProjectSource), "QuickLook Next is an open-source project developed on GitHub. Builds published by this project originate from the repository below.");
+    public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
+    public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
+    public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "The project has not yet published a formal software license. See the repository for the current terms and source history.");
+    public static string SettingsSaveFailed => Get(nameof(SettingsSaveFailed), "Setting not saved");
+    public static string SettingsSaveFailedMessage => Get(nameof(SettingsSaveFailedMessage), "QuickLook Next could not save this setting.");
 
     public static string ListingReading => Get(nameof(ListingReading), "Reading folder...");
     public static string ListingError => Get(nameof(ListingError), "Could not read this folder");

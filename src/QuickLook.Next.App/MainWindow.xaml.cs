@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
     private MediaPreviewPresenter? _mediaPresenter;
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
+    private SettingsWindow? _settingsWindow;
     private RasterHostSupervisor? _supervisor;
     private ParserHostSupervisor? _parserSupervisor;
     private readonly Dictionary<string, PreviewHostOwner> _requestHosts = new(StringComparer.Ordinal);
@@ -3015,9 +3016,20 @@ public sealed partial class MainWindow : Window
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ResolveAppIconPath,
             () => ShowPreviewWindow(activate: true),
+            ShowSettingsWindow,
             ExitApp,
             message => StatusText.Text = message);
         _trayIcon.Ensure();
+    }
+
+    private void ShowSettingsWindow()
+    {
+        if (_settingsWindow is null)
+        {
+            _settingsWindow = new SettingsWindow(ResolveAppIconPath, RefreshTrayIcon);
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        }
+        _settingsWindow.Activate();
     }
 
     private void RemoveTrayIcon()
@@ -3042,6 +3054,7 @@ public sealed partial class MainWindow : Window
     private void ExitApp()
     {
         RemoveTrayIcon();
+        _settingsWindow?.Close();
         _supervisor?.Stop();
         _parserSupervisor?.Stop();
         try { Microsoft.UI.Xaml.Application.Current.Exit(); }

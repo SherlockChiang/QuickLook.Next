@@ -10,6 +10,7 @@ public partial class App : Application
     public App()
     {
         DiagLog.Init(System.IO.Path.Combine(AppContext.BaseDirectory, "app.log"));
+        AppSettings.ApplyLanguage();
         UnhandledException += (_, e) => DiagLog.Write("App", "xaml unhandled: " + e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => DiagLog.Write("App", "domain unhandled: " + e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) => DiagLog.Write("App", "task unobserved: " + e.Exception);

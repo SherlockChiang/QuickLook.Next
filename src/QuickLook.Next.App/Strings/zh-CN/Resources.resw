@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppName" xml:space="preserve"><value>QuickLook Next</value></data>
+  <data name="TrayShowPreview" xml:space="preserve"><value>显示预览</value></data>
+  <data name="TraySettings" xml:space="preserve"><value>设置</value></data>
+  <data name="TrayAutoStart" xml:space="preserve"><value>开机自启</value></data>
+  <data name="TrayExit" xml:space="preserve"><value>退出 QuickLook Next</value></data>
+  <data name="AutoStartEnableFailed" xml:space="preserve"><value>无法启用开机自启</value></data>
+  <data name="AutoStartDisableFailed" xml:space="preserve"><value>无法关闭开机自启</value></data>
+  <data name="SettingsTitle" xml:space="preserve"><value>设置</value></data>
+  <data name="SettingsGeneral" xml:space="preserve"><value>常规</value></data>
+  <data name="SettingsGeneralDescription" xml:space="preserve"><value>选择 QuickLook Next 在 Windows 中的运行方式。</value></data>
+  <data name="SettingsAutoStart" xml:space="preserve"><value>开机自启</value></data>
+  <data name="SettingsAutoStartDescription" xml:space="preserve"><value>登录 Windows 后在通知区域保持 QuickLook Next 就绪。</value></data>
+  <data name="SettingsLanguage" xml:space="preserve"><value>语言</value></data>
+  <data name="SettingsLanguageDescription" xml:space="preserve"><value>选择应用和托盘菜单使用的语言。</value></data>
+  <data name="SettingsSystemLanguage" xml:space="preserve"><value>跟随系统语言</value></data>
+  <data name="SettingsRestartTitle" xml:space="preserve"><value>需要重启</value></data>
+  <data name="SettingsRestartMessage" xml:space="preserve"><value>请从托盘退出 QuickLook Next 并重新启动，以应用新的语言。</value></data>
+  <data name="SettingsAbout" xml:space="preserve"><value>关于</value></data>
+  <data name="SettingsAboutDescription" xml:space="preserve"><value>查看版本、项目来源和发布信息。</value></data>
+  <data name="SettingsVersionFormat" xml:space="preserve"><value>版本 {0}</value></data>
+  <data name="SettingsProjectSource" xml:space="preserve"><value>QuickLook Next 是在 GitHub 上开发的开源项目。本项目发布的构建来源于下方代码仓库。</value></data>
+  <data name="SettingsOpenGitHub" xml:space="preserve"><value>打开 GitHub 项目</value></data>
+  <data name="SettingsViewReleases" xml:space="preserve"><value>查看发布版本</value></data>
+  <data name="SettingsLicenseNotice" xml:space="preserve"><value>项目尚未发布正式软件许可证，请前往代码仓库查看当前条款和源码历史。</value></data>
+  <data name="SettingsSaveFailed" xml:space="preserve"><value>设置未保存</value></data>
+  <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next 无法保存此设置。</value></data>
+</root>

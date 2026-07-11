@@ -133,20 +133,42 @@
     <value>0 / 0</value>
   </data>
   <data name="TrayShowPreview" xml:space="preserve">
-    <value>显示预览</value>
+    <value>Show preview</value>
+  </data>
+  <data name="TraySettings" xml:space="preserve">
+    <value>Settings</value>
   </data>
   <data name="TrayAutoStart" xml:space="preserve">
-    <value>开机自启</value>
+    <value>Start with Windows</value>
   </data>
   <data name="TrayExit" xml:space="preserve">
-    <value>退出 QuickLook Next</value>
+    <value>Exit QuickLook Next</value>
   </data>
   <data name="AutoStartEnableFailed" xml:space="preserve">
-    <value>开机自启开启失败</value>
+    <value>Could not enable start with Windows</value>
   </data>
   <data name="AutoStartDisableFailed" xml:space="preserve">
-    <value>开机自启关闭失败</value>
+    <value>Could not disable start with Windows</value>
   </data>
+  <data name="SettingsTitle" xml:space="preserve"><value>Settings</value></data>
+  <data name="SettingsGeneral" xml:space="preserve"><value>General</value></data>
+  <data name="SettingsGeneralDescription" xml:space="preserve"><value>Choose how QuickLook Next behaves in Windows.</value></data>
+  <data name="SettingsAutoStart" xml:space="preserve"><value>Start with Windows</value></data>
+  <data name="SettingsAutoStartDescription" xml:space="preserve"><value>Keep QuickLook Next ready in the notification area after you sign in.</value></data>
+  <data name="SettingsLanguage" xml:space="preserve"><value>Language</value></data>
+  <data name="SettingsLanguageDescription" xml:space="preserve"><value>Choose the language used by the app and tray menu.</value></data>
+  <data name="SettingsSystemLanguage" xml:space="preserve"><value>Use system language</value></data>
+  <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
+  <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
+  <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>
+  <data name="SettingsAboutDescription" xml:space="preserve"><value>Version, project source, and release information.</value></data>
+  <data name="SettingsVersionFormat" xml:space="preserve"><value>Version {0}</value></data>
+  <data name="SettingsProjectSource" xml:space="preserve"><value>QuickLook Next is an open-source project developed on GitHub. Builds published by this project originate from the repository below.</value></data>
+  <data name="SettingsOpenGitHub" xml:space="preserve"><value>Open GitHub project</value></data>
+  <data name="SettingsViewReleases" xml:space="preserve"><value>View releases</value></data>
+  <data name="SettingsLicenseNotice" xml:space="preserve"><value>The project has not yet published a formal software license. See the repository for the current terms and source history.</value></data>
+  <data name="SettingsSaveFailed" xml:space="preserve"><value>Setting not saved</value></data>
+  <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next could not save this setting.</value></data>
   <data name="FolderTypeDisplay" xml:space="preserve">
     <value>文件夹</value>
   </data>

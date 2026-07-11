@@ -8,6 +8,7 @@ internal sealed class TrayIconManager
     private readonly nint _hwnd;
     private readonly Func<string> _resolveIconPath;
     private readonly Action _showPreview;
+    private readonly Action _showSettings;
     private readonly Action _exitApp;
     private readonly Action<string> _setStatus;
 
@@ -22,12 +23,14 @@ internal sealed class TrayIconManager
         nint hwnd,
         Func<string> resolveIconPath,
         Action showPreview,
+        Action showSettings,
         Action exitApp,
         Action<string> setStatus)
     {
         _hwnd = hwnd;
         _resolveIconPath = resolveIconPath;
         _showPreview = showPreview;
+        _showSettings = showSettings;
         _exitApp = exitApp;
         _setStatus = setStatus;
     }
@@ -158,6 +161,7 @@ internal sealed class TrayIconManager
         try
         {
             AppendMenu(menu, MF_STRING, TrayCommandShowPreview, UiStrings.TrayShowPreview);
+            AppendMenu(menu, MF_STRING, TrayCommandSettings, UiStrings.TraySettings);
             AppendMenu(menu, MF_STRING | (AutoStart.IsEnabled() ? MF_CHECKED : MF_UNCHECKED), TrayCommandAutoStart, UiStrings.TrayAutoStart);
             AppendMenu(menu, MF_SEPARATOR, UIntPtr.Zero, string.Empty);
             AppendMenu(menu, MF_STRING, TrayCommandExit, UiStrings.TrayExit);
@@ -180,6 +184,9 @@ internal sealed class TrayIconManager
                     break;
                 case TrayCommandAutoStartValue:
                     ToggleAutoStart();
+                    break;
+                case TrayCommandSettingsValue:
+                    _showSettings();
                     break;
                 case TrayCommandExitValue:
                     _exitApp();
@@ -256,9 +263,11 @@ internal sealed class TrayIconManager
     private const uint TrayCommandShowPreviewValue = 1;
     private const uint TrayCommandAutoStartValue = 2;
     private const uint TrayCommandExitValue = 3;
+    private const uint TrayCommandSettingsValue = 4;
     private static readonly UIntPtr TrayCommandShowPreview = new(TrayCommandShowPreviewValue);
     private static readonly UIntPtr TrayCommandAutoStart = new(TrayCommandAutoStartValue);
     private static readonly UIntPtr TrayCommandExit = new(TrayCommandExitValue);
+    private static readonly UIntPtr TrayCommandSettings = new(TrayCommandSettingsValue);
     private static readonly nint IDI_APPLICATION = new(32512);
     private static readonly nint WM_LBUTTONDBLCLK = new(0x0203);
     private static readonly nint WM_RBUTTONUP = new(0x0205);
