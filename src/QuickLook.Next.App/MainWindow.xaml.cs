@@ -82,6 +82,7 @@ public sealed partial class MainWindow : Window
     private bool _keyboardCloseQueued;
     private bool _isModalDialogOpen;
     private long _lastPreviewRevealTick;
+    private long _loadingShellShowStarted;
     private string? _lastPreviewRevealPath;
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
@@ -901,8 +902,20 @@ public sealed partial class MainWindow : Window
             return;
 
         using var trace = DiagLog.TraceScope("App", "preview loading shell show", 50);
+        _loadingShellShowStarted = Stopwatch.GetTimestamp();
+        CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
+        CompositionTarget.Rendering += OnLoadingShellFirstFrame;
         ShowPreviewWindow(activate: false, resizeToDefault: true);
         _previewTemporarilyHidden = false;
+    }
+
+    private void OnLoadingShellFirstFrame(object? sender, object e)
+    {
+        CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
+        long started = _loadingShellShowStarted;
+        _loadingShellShowStarted = 0;
+        if (started != 0)
+            DiagLog.Write("App", $"loading shell first frame {Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.0}ms");
     }
 
     private void RevealPreviewWindow(bool activate)
