@@ -42,6 +42,7 @@ internal sealed class RasterHostSupervisor
 
     /// <summary>Raised on the UI thread when the host hands over a (new) shared surface to compose.</summary>
     public event Action<PreviewSurface>? SurfaceReceived;
+    public event Action<PreviewPageError>? PageErrorReceived;
 
     public long AdapterLuid { get; private set; }
 
@@ -220,6 +221,7 @@ internal sealed class RasterHostSupervisor
                 if (_pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex, pageError.PageGeneration), out _)
                     && pageError.TimedOut)
                     RecycleHost(pageError.RequestId, $"cloud PDF page timed out: page={pageError.PageIndex}; generation={pageError.PageGeneration}");
+                _ui.TryEnqueue(() => PageErrorReceived?.Invoke(pageError));
                 break;
         }
     }

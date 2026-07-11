@@ -18,6 +18,7 @@ internal sealed class PdfPreviewPresenter
         Rendering,
         Rendered,
         Released,
+        Failed,
     }
 
     private const double PageTargetWidth = 860;
@@ -177,6 +178,17 @@ internal sealed class PdfPreviewPresenter
         sprite.Brush = brush;
         ElementCompositionPreview.SetElementChildVisual(pageHost, sprite);
         _dispatcherQueue.TryEnqueue(() => pageHost.InvalidateArrange());
+        return true;
+    }
+
+    public bool HandlePageError(PreviewPageError error)
+    {
+        if (!string.Equals(_requestId, error.RequestId, StringComparison.Ordinal)
+            || !_pageGenerations.TryGetValue(error.PageIndex, out long currentGeneration)
+            || currentGeneration != error.PageGeneration)
+            return false;
+
+        SetPageState(error.PageIndex, PdfPageState.Failed);
         return true;
     }
 

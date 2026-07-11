@@ -342,6 +342,7 @@ public sealed partial class MainWindow : Window
             _supervisor = new RasterHostSupervisor(ResolveHostExePath(), DispatcherQueue);
             _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
             _supervisor.SurfaceReceived += OnSurfaceReceived;
+            _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _native.Start(OnNativeIntent);
             StatusText.Text = UiStrings.Ready.ToLowerInvariant();
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
@@ -509,6 +510,7 @@ public sealed partial class MainWindow : Window
             _supervisor = new RasterHostSupervisor(ResolveHostExePath(), DispatcherQueue);
             _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
             _supervisor.SurfaceReceived += OnSurfaceReceived;
+            _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
         }
 
         await _supervisor.EnsureStartedAsync(cancellationToken);
@@ -1221,6 +1223,17 @@ public sealed partial class MainWindow : Window
             if (!handleConsumed)
                 CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
         }
+    }
+
+    private void OnPdfPageErrorReceived(PreviewPageError error)
+    {
+        if (!_previewSession.IsCurrentRequest(error.RequestId)
+            || _pdfPresenter?.HandlePageError(error) != true)
+            return;
+
+        StatusText.Text = error.TimedOut
+            ? $"PDF page {error.PageIndex + 1:N0} timed out"
+            : $"PDF page {error.PageIndex + 1:N0} failed: {error.Message}";
     }
 
     private void ShowSurfaceFailure(string requestId, string message)
