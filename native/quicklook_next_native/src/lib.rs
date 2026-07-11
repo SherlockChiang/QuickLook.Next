@@ -1426,6 +1426,26 @@ mod tests {
     }
 
     #[test]
+    fn archive_entry_export_honors_cancellation_before_file_access() {
+        let archive = b"missing.zip";
+        let entry = b"entry.txt";
+        let mut output = [0u8; 16];
+
+        assert_eq!(
+            ql_extract_archive_entry_cancelable(
+                archive.as_ptr(),
+                archive.len(),
+                entry.as_ptr(),
+                entry.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                Some(always_cancel),
+            ),
+            -3
+        );
+    }
+
+    #[test]
     fn thumbnail_flags_reject_unknown_bits() {
         assert!(thumbnail_flags_valid(0));
         assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY));
@@ -2346,9 +2366,43 @@ pub extern "C" fn ql_extract_archive_entry(
         Some(s) => s,
         None => return 0,
     };
-    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path) else {
+    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, None) else {
         return 0;
     };
+    write_json_out(&path, out_buf, out_cap)
+}
+
+#[no_mangle]
+pub extern "C" fn ql_extract_archive_entry_cancelable(
+    archive_path_utf8: *const u8,
+    archive_path_len: usize,
+    entry_path_utf8: *const u8,
+    entry_path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0
+    {
+        return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
+    let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, cancel_cb) else {
+        return if cancel_requested(cancel_cb) { -3 } else { 0 };
+    };
+    if cancel_requested(cancel_cb) {
+        return -3;
+    }
     write_json_out(&path, out_buf, out_cap)
 }
 

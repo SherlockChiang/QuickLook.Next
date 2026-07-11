@@ -53,6 +53,16 @@ internal static class ParserNativePreview
         nuint outCap);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_archive_entry_cancelable(
+        byte[] archivePathUtf8,
+        nuint archivePathLen,
+        byte[] entryPathUtf8,
+        nuint entryPathLen,
+        byte[] outBuf,
+        nuint outCap,
+        NativeCancelCallback? cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -118,13 +128,15 @@ internal static class ParserNativePreview
             cancellationToken.ThrowIfCancellationRequested();
             byte[] archiveBytes = Encoding.UTF8.GetBytes(archivePath);
             byte[] entryBytes = Encoding.UTF8.GetBytes(entryPath);
+            NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
             byte[] buffer = ArrayPool<byte>.Shared.Rent(maxPathBytes);
             try
             {
-                int length = ql_extract_archive_entry(
+                int length = ql_extract_archive_entry_cancelable(
                     archiveBytes, (nuint)archiveBytes.Length,
                     entryBytes, (nuint)entryBytes.Length,
-                    buffer, (nuint)maxPathBytes);
+                    buffer, (nuint)maxPathBytes, cancel);
+                cancellationToken.ThrowIfCancellationRequested();
                 return length > 0 && length <= maxPathBytes
                     ? Encoding.UTF8.GetString(buffer, 0, length)
                     : null;
@@ -132,6 +144,7 @@ internal static class ParserNativePreview
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
+                GC.KeepAlive(cancel);
             }
         }
         catch (OperationCanceledException) { throw; }

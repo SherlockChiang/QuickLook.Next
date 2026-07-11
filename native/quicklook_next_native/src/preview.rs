@@ -12628,7 +12628,14 @@ pub fn render_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
     render_zip_archive(path, cancel_cb)
 }
 
-pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Option<String> {
+pub fn extract_archive_entry_to_temp(
+    archive_path: &str,
+    entry_path: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<String> {
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let lower = archive_path.to_ascii_lowercase();
     if TAR_EXTS.iter().any(|e| lower.ends_with(e))
         || TAR_GZ_EXTS.iter().any(|e| lower.ends_with(e))
@@ -12639,13 +12646,33 @@ pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Op
 
     let normalized = normalize_archive_entry_path(entry_path)?;
     let file = fs::File::open(archive_path).ok()?;
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let mut zip = ZipArchive::new(file).ok()?;
     let mut entry = zip.by_name(&normalized).ok()?;
     if entry.is_dir() || entry.size() > MAX_ARCHIVE_EXTRACT_BYTES {
         return None;
     }
 
-    let bytes = read_limited_to_end(&mut entry, MAX_ARCHIVE_EXTRACT_BYTES)?;
+    let mut bytes = Vec::with_capacity((entry.size() as usize).min(1024 * 1024));
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if preview_cancelled(cancel_cb) {
+            return None;
+        }
+        let read = entry.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        if bytes.len().checked_add(read)? > MAX_ARCHIVE_EXTRACT_BYTES as usize {
+            return None;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let root = create_archive_extract_root()?;
     let target = root.join(archive_extract_output_name(&normalized));
     let mut output = match fs::OpenOptions::new()
@@ -12659,12 +12686,21 @@ pub fn extract_archive_entry_to_temp(archive_path: &str, entry_path: &str) -> Op
             return None;
         }
     };
+    if preview_cancelled(cancel_cb) {
+        drop(output);
+        let _ = fs::remove_dir_all(&root);
+        return None;
+    }
     if output.write_all(&bytes).is_err() {
         drop(output);
         let _ = fs::remove_dir_all(&root);
         return None;
     }
     drop(output);
+    if preview_cancelled(cancel_cb) {
+        let _ = fs::remove_dir_all(&root);
+        return None;
+    }
     target.to_str().map(|s| s.to_string())
 }
 
