@@ -1216,16 +1216,10 @@ public sealed partial class MainWindow : Window
             }
             attachWatch.Stop();
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (!_previewSession.IsCurrentRequest(surface.RequestId))
-                    return;
-
-                var layoutWatch = Stopwatch.StartNew();
-                _rasterPresenter.UpdateLayout();
-                layoutWatch.Stop();
-                DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
-            });
+            var layoutWatch = Stopwatch.StartNew();
+            _rasterPresenter.UpdateLayout();
+            layoutWatch.Stop();
+            DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
         }
         catch (Exception ex)
         {
