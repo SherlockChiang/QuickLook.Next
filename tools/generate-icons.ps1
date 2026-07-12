@@ -88,20 +88,18 @@ function Draw-QuickLookAppIcon {
     $g.Clear([System.Drawing.Color]::Transparent)
 
     $s = [float]$size
-    $tile = New-RoundedRectPath ($s * 0.06) ($s * 0.06) ($s * 0.88) ($s * 0.88) ($s * 0.22)
     $gradient = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
         [System.Drawing.RectangleF]::new(0, 0, $s, $s),
         [System.Drawing.Color]::FromArgb(255, 20, 118, 255),
         [System.Drawing.Color]::FromArgb(255, 13, 204, 154),
         35.0)
-    $g.FillPath($gradient, $tile)
 
-    $shine = New-RoundedRectPath ($s * 0.12) ($s * 0.12) ($s * 0.76) ($s * 0.76) ($s * 0.17)
-    $shinePen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(92, 255, 255, 255), [Math]::Max(1.0, $s * 0.035))
-    $shinePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $shinePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $shinePen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-    $g.DrawPath($shinePen, $shine)
+    $outline = New-RoundedRectPath ($s * 0.11) ($s * 0.11) ($s * 0.78) ($s * 0.78) ($s * 0.17)
+    $outlinePen = [System.Drawing.Pen]::new($gradient, [Math]::Max(1.5, $s * 0.070))
+    $outlinePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $outlinePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $outlinePen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.DrawPath($outlinePen, $outline)
 
     $bolt = [System.Drawing.PointF[]]@(
         [System.Drawing.PointF]::new($s * 0.59, $s * 0.18),
@@ -111,10 +109,9 @@ function Draw-QuickLookAppIcon {
         [System.Drawing.PointF]::new($s * 0.75, $s * 0.40),
         [System.Drawing.PointF]::new($s * 0.56, $s * 0.40)
     )
-    $boltBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
-    $g.FillPolygon($boltBrush, $bolt)
+    $g.FillPolygon($gradient, $bolt)
 
-    foreach ($item in @($tile, $gradient, $shine, $shinePen, $boltBrush, $g)) {
+    foreach ($item in @($gradient, $outline, $outlinePen, $g)) {
         if ($item -is [System.IDisposable]) { $item.Dispose() }
     }
 
