@@ -25,15 +25,24 @@ internal sealed class OfficePreviewPresenter
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
+    private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
+    private PreviewReady? _lastReady;
+    private (double Width, double Height) _lastMaxContent;
 
-    public OfficePreviewPresenter(ScrollViewer scrollViewer, StackPanel pagesPanel)
+    public OfficePreviewPresenter(
+        ScrollViewer scrollViewer,
+        StackPanel pagesPanel,
+        Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast)
     {
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
+        _getHighContrast = getHighContrast;
     }
 
     public OfficePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
+        _lastReady = ready;
+        _lastMaxContent = maxContent;
         OfficeLayout layout = ready.OfficeLayout!;
 
         _pagesPanel.Children.Clear();
@@ -55,7 +64,13 @@ internal sealed class OfficePreviewPresenter
         return new OfficePreviewResult($"{ready.Kind}: {ready.Title}", contentWidth, contentHeight);
     }
 
-    private static FrameworkElement CreatePageView(OfficeLayout layout, OfficePage page, double maxPageWidth)
+    public void RefreshPalette()
+    {
+        if (_lastReady is not null)
+            Render(_lastReady, _lastMaxContent);
+    }
+
+    private FrameworkElement CreatePageView(OfficeLayout layout, OfficePage page, double maxPageWidth)
     {
         double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
         double pageHeight = Math.Max(180, page.Height > 0 ? page.Height : layout.Height);
@@ -73,11 +88,11 @@ internal sealed class OfficePreviewPresenter
         {
             Text = page.Title,
             FontSize = 12,
-            Foreground = UiGrayBrush,
+            Foreground = ForegroundBrush(UiGrayBrush),
             Margin = new Thickness(2, 0, 0, 0),
         });
 
-        SolidColorBrush pageBrush = BrushFromHex(page.BackgroundColor) ?? OfficeWhiteBrush;
+        SolidColorBrush pageBrush = DocumentBrush(page.BackgroundColor) ?? BackgroundBrush(OfficeWhiteBrush);
         var canvas = new Canvas
         {
             Width = viewWidth,
@@ -101,7 +116,7 @@ internal sealed class OfficePreviewPresenter
             Width = viewWidth,
             Height = viewHeight,
             Background = pageBrush,
-            BorderBrush = OfficeBorderBrush,
+            BorderBrush = ForegroundBrush(OfficeBorderBrush),
             BorderThickness = new Thickness(1),
             Child = canvas,
         });
@@ -116,7 +131,7 @@ internal sealed class OfficePreviewPresenter
         return Math.Clamp(target, 0.35, 1.0);
     }
 
-    private static void AddWorkbookHeaders(
+    private void AddWorkbookHeaders(
         Canvas canvas,
         OfficePage page,
         double scale,
@@ -129,8 +144,8 @@ internal sealed class OfficePreviewPresenter
         {
             Width = rowHeaderWidth,
             Height = columnHeaderHeight,
-            Background = OfficeHeaderBrush,
-            BorderBrush = OfficeCellBorderBrush,
+            Background = BackgroundBrush(OfficeHeaderBrush),
+            BorderBrush = ForegroundBrush(OfficeCellBorderBrush),
             BorderThickness = new Thickness(0, 0, 1, 1),
         });
 
@@ -164,7 +179,7 @@ internal sealed class OfficePreviewPresenter
         {
             Width = contentWidth,
             Height = 1,
-            Background = OfficeCellBorderBrush,
+            Background = ForegroundBrush(OfficeCellBorderBrush),
         };
         Canvas.SetLeft(bottomLine, rowHeaderWidth);
         Canvas.SetTop(bottomLine, columnHeaderHeight + contentHeight);
@@ -174,27 +189,27 @@ internal sealed class OfficePreviewPresenter
         {
             Width = 1,
             Height = contentHeight,
-            Background = OfficeCellBorderBrush,
+            Background = ForegroundBrush(OfficeCellBorderBrush),
         };
         Canvas.SetLeft(rightLine, rowHeaderWidth + contentWidth);
         Canvas.SetTop(rightLine, columnHeaderHeight);
         canvas.Children.Add(rightLine);
     }
 
-    private static Border CreateHeaderCell(string text, double width, double height)
+    private Border CreateHeaderCell(string text, double width, double height)
     {
         return new Border
         {
             Width = Math.Max(12, width),
             Height = Math.Max(12, height),
-            Background = OfficeHeaderBrush,
-            BorderBrush = OfficeCellBorderBrush,
+            Background = BackgroundBrush(OfficeHeaderBrush),
+            BorderBrush = ForegroundBrush(OfficeCellBorderBrush),
             BorderThickness = new Thickness(0, 0, 1, 1),
             Child = new TextBlock
             {
                 Text = text,
                 FontSize = 11,
-                Foreground = OfficeHeaderTextBrush,
+                Foreground = ForegroundBrush(OfficeHeaderTextBrush),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextAlignment = TextAlignment.Center,
@@ -215,7 +230,7 @@ internal sealed class OfficePreviewPresenter
         return name;
     }
 
-    private static void AddCell(Canvas canvas, OfficeCell cell, double scale, double offsetX, double offsetY)
+    private void AddCell(Canvas canvas, OfficeCell cell, double scale, double offsetX, double offsetY)
     {
         double width = Math.Max(12, cell.Width * scale);
         double height = Math.Max(12, cell.Height * scale);
@@ -224,10 +239,10 @@ internal sealed class OfficePreviewPresenter
         {
             Width = width,
             Height = height,
-            BorderBrush = OfficeCellBorderBrush,
+            BorderBrush = ForegroundBrush(OfficeCellBorderBrush),
             BorderThickness = merged ? new Thickness(1.2) : new Thickness(0, 0, 1, 1),
             Padding = new Thickness(5, 2, 5, 2),
-            Background = BrushFromHex(cell.FillColor)
+            Background = DocumentBrush(cell.FillColor)
                 ?? (merged ? new SolidColorBrush(ColorHelper.FromArgb(255, 252, 253, 255)) : null),
             Child = new TextBlock
             {
@@ -239,7 +254,7 @@ internal sealed class OfficePreviewPresenter
                 MaxHeight = Math.Max(4, height - 4),
                 TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
                 TextTrimming = TextTrimming.WordEllipsis,
-                Foreground = BrushFromHex(cell.TextColor) ?? OfficeBlackBrush,
+                Foreground = DocumentBrush(cell.TextColor) ?? ForegroundBrush(OfficeBlackBrush),
                 TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
                 HorizontalAlignment = HorizontalAlignmentFor(cell.HorizontalAlignment),
                 VerticalAlignment = VerticalAlignmentFor(cell.VerticalAlignment),
@@ -278,7 +293,7 @@ internal sealed class OfficePreviewPresenter
             _ => VerticalAlignment.Center,
         };
 
-    private static void AddFreezePaneIndicators(
+    private void AddFreezePaneIndicators(
         Canvas canvas,
         OfficePage page,
         double scale,
@@ -314,7 +329,7 @@ internal sealed class OfficePreviewPresenter
         }
     }
 
-    private static void AddLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind, double offsetX, double offsetY)
+    private void AddLayoutItem(Canvas canvas, OfficeLayoutItem item, double scale, string layoutKind, double offsetX, double offsetY)
     {
         double x = offsetX + item.X * scale;
         double y = offsetY + item.Y * scale;
@@ -346,8 +361,8 @@ internal sealed class OfficePreviewPresenter
 
         if (!string.IsNullOrWhiteSpace(item.Text))
         {
-            Brush? fill = BrushFromHex(item.FillColor);
-            Brush? stroke = BrushFromHex(item.StrokeColor);
+            Brush? fill = DocumentBrush(item.FillColor);
+            Brush? stroke = DocumentBrush(item.StrokeColor);
             var textBox = new Border
             {
                 Width = width,
@@ -366,7 +381,7 @@ internal sealed class OfficePreviewPresenter
                     FontStyle = item.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
                     TextWrapping = TextWrapping.Wrap,
                     TextTrimming = TextTrimming.WordEllipsis,
-                    Foreground = OfficeBlackBrush,
+                    Foreground = ForegroundBrush(OfficeBlackBrush),
                     MaxWidth = width,
                     MaxHeight = height,
                 },
@@ -377,10 +392,10 @@ internal sealed class OfficePreviewPresenter
         }
     }
 
-    private static void AddShape(Canvas canvas, OfficeLayoutItem item, double x, double y, double width, double height)
+    private void AddShape(Canvas canvas, OfficeLayoutItem item, double x, double y, double width, double height)
     {
-        Brush fill = BrushFromHex(item.FillColor) ?? new SolidColorBrush(ColorHelper.FromArgb(28, 0, 0, 0));
-        Brush stroke = BrushFromHex(item.StrokeColor) ?? OfficeBorderBrush;
+        Brush fill = DocumentBrush(item.FillColor) ?? BackgroundBrush(new SolidColorBrush(ColorHelper.FromArgb(28, 0, 0, 0)));
+        Brush stroke = DocumentBrush(item.StrokeColor) ?? ForegroundBrush(OfficeBorderBrush);
         string shape = item.Shape?.ToLowerInvariant() ?? "rect";
 
         FrameworkElement element = shape switch
@@ -450,6 +465,21 @@ internal sealed class OfficePreviewPresenter
 
     private static SolidColorBrush? BrushFromHex(string? value)
         => TryColorFromHex(value, out Windows.UI.Color color) ? new SolidColorBrush(color) : null;
+
+    private SolidColorBrush? DocumentBrush(string? value)
+        => _getHighContrast().Enabled ? null : BrushFromHex(value);
+
+    private SolidColorBrush BackgroundBrush(SolidColorBrush fallback)
+    {
+        var highContrast = _getHighContrast();
+        return highContrast.Enabled ? new SolidColorBrush(highContrast.Background) : fallback;
+    }
+
+    private SolidColorBrush ForegroundBrush(SolidColorBrush fallback)
+    {
+        var highContrast = _getHighContrast();
+        return highContrast.Enabled ? new SolidColorBrush(highContrast.Foreground) : fallback;
+    }
 
     private static bool TryColorFromHex(string? value, out Windows.UI.Color color)
     {

@@ -224,7 +224,10 @@ public sealed partial class MainWindow : Window
             TableGrid,
             () => RootGrid.ActualTheme,
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
-        _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
+        _officePresenter = new OfficePreviewPresenter(
+            OfficeScrollViewer,
+            OfficePagesPanel,
+            () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
         _imageSidecarController = new ImageSidecarController(
@@ -2851,6 +2854,7 @@ public sealed partial class MainWindow : Window
         TrySetBackdrop();
         UpdateTitleBarColors();
         _tablePresenter?.RefreshPalette();
+        _officePresenter?.RefreshPalette();
     }
 
     private void UpdateTitleBarColors()
