@@ -218,9 +218,9 @@ internal sealed class RasterHostSupervisor
                 _pending.TryComplete(error.RequestId, error);
                 break;
             case PreviewPageError pageError:
-                if (_pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex, pageError.PageGeneration), out _)
-                    && pageError.TimedOut)
-                    RecycleHost(pageError.RequestId, $"cloud PDF page timed out: page={pageError.PageIndex}; generation={pageError.PageGeneration}");
+                _pendingCloudPages.TryRemove((pageError.RequestId, pageError.PageIndex, pageError.PageGeneration), out _);
+                if (pageError.TimedOut)
+                    RecycleHost(pageError.RequestId, $"PDF page timed out: page={pageError.PageIndex}; generation={pageError.PageGeneration}");
                 _ui.TryEnqueue(() => PageErrorReceived?.Invoke(pageError));
                 break;
         }
