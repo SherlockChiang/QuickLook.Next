@@ -4,14 +4,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  attestations: write
-  id-token: write
+  contents: read
 
 jobs:
-  beta-release:
+  build:
     name: Build beta release
     runs-on: windows-latest
+    outputs:
+      beta-version: ${{ steps.version.outputs.beta-version }}
+      release-tag: ${{ steps.version.outputs.release-tag }}
 
     steps:
       - name: Checkout
@@ -29,6 +30,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Resolve beta version
+        id: version
         shell: pwsh
         run: |
           $baseVersion = (Get-Content -LiteralPath VERSION -Raw).Trim()
@@ -40,6 +42,8 @@ jobs:
           "BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
           "BETA_VERSION=$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_TAG=v$betaVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "beta-version=$betaVersion" >> $env:GITHUB_OUTPUT
+          "release-tag=v$betaVersion" >> $env:GITHUB_OUTPUT
 
       - name: Test native layer
         shell: pwsh
@@ -59,14 +63,32 @@ jobs:
       - name: Audit Rust dependencies
         shell: pwsh
         run: |
-          cargo install cargo-audit --locked
+          cargo install cargo-audit --version 0.21.2 --locked
           cargo audit --file native/quicklook_next_native/Cargo.lock
+
+      - name: Restore release signing certificate
+        shell: pwsh
+        env:
+          RELEASE_PFX_BASE64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+        run: |
+          if (-not $env:RELEASE_PFX_BASE64) {
+            throw "QUICKLOOK_RELEASE_PFX_BASE64 is not configured."
+          }
+          New-Item -ItemType Directory -Path .signing -Force | Out-Null
+          [IO.File]::WriteAllBytes(".signing/QuickLook.Next-Release.pfx", [Convert]::FromBase64String($env:RELEASE_PFX_BASE64))
 
       - name: Build MSIX installer
         shell: pwsh
+        env:
+          RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
         run: |
           dotnet restore QuickLook.Next.slnx --locked-mode
-          ./tools/pack-msix.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}" -CreateDevelopmentCertificate -SkipSystemImageSmoke
+          ./tools/pack-msix.ps1 -VersionPrefix "$env:BASE_VERSION" -VersionSuffix "beta.${{ github.run_number }}" -CertificatePath ".signing/QuickLook.Next-Release.pfx" -CertificatePassword "$env:RELEASE_PFX_PASSWORD" -SkipSystemImageSmoke
+
+      - name: Delete release signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath ".signing" -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Generate CycloneDX NuGet SBOM
         shell: pwsh
@@ -136,12 +158,27 @@ jobs:
             artifacts/sbom/*.cdx.json
           if-no-files-found: error
 
+  publish:
+    name: Publish beta release
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Download signed build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: QuickLook.Next-${{ needs.build.outputs.beta-version }}-win-x64
+          path: artifacts
+
       - name: Attest release package and SBOMs
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: |
-            ${{ env.RELEASE_ASSET }}
-            ${{ env.CHECKSUM_ASSET }}
+            artifacts/QuickLook.Next-Installer-*.zip
+            artifacts/QuickLook.Next-Installer-*.zip.sha256
             artifacts/sbom/*.cdx.json
 
       - name: Publish GitHub prerelease
@@ -149,18 +186,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $betaVersion = "${{ needs.build.outputs.beta-version }}"
+          $releaseTag = "${{ needs.build.outputs.release-tag }}"
           $notes = @"
           Automated beta build from commit $env:GITHUB_SHA.
 
-          Version: $env:BETA_VERSION
-          Base version: $env:BASE_VERSION
+          Version: $betaVersion
 
           The ZIP, checksum, and SBOM release assets have GitHub Artifact Attestations.
           Verify a downloaded asset with: gh attestation verify <asset-path> --repo $env:GITHUB_REPOSITORY
           "@
 
-          gh release create $env:RELEASE_TAG $env:RELEASE_ASSET $env:CHECKSUM_ASSET artifacts/sbom/*.cdx.json `
+          gh release create $releaseTag artifacts/QuickLook.Next-Installer-*.zip artifacts/QuickLook.Next-Installer-*.zip.sha256 artifacts/sbom/*.cdx.json `
             --target $env:GITHUB_SHA `
-            --title "QuickLook Next $env:BETA_VERSION" `
+            --title "QuickLook Next $betaVersion" `
             --notes $notes `
             --prerelease
