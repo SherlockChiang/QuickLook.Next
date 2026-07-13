@@ -7,8 +7,15 @@ namespace QuickLook.Next.Core;
 /// <summary>Minimal file logger for bring-up diagnostics. (Replace with proper logging later.)</summary>
 public static class DiagLog
 {
-    private static readonly Channel<string> Lines = Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private const int MaxQueuedLines = 4096;
+    private const long MaxLogBytes = 4 * 1024 * 1024;
+    private static readonly Channel<string> Lines = Channel.CreateBounded<string>(
+        new BoundedChannelOptions(MaxQueuedLines)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
     private static readonly object StartLock = new();
     private static string _path = "";
     private static Task? _writerTask;
@@ -70,6 +77,16 @@ public static class DiagLog
                 string path = _path;
                 if (path.Length == 0)
                     continue;
+                try
+                {
+                    if (new FileInfo(path).Length >= MaxLogBytes)
+                    {
+                        string previous = path + ".previous";
+                        File.Delete(previous);
+                        File.Move(path, previous);
+                    }
+                }
+                catch { }
 
                 var text = new StringBuilder();
                 foreach (string line in batch)
