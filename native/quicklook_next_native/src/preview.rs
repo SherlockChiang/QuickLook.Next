@@ -13291,7 +13291,7 @@ pub fn extract_package_icon_bgra(
         .map(|summary| expand_appx_icon_candidates(&summary.icon_paths))
         .unwrap_or_default();
 
-    for i in 0..zip.len() {
+    for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) { return None; }
         let entry = zip.by_index_raw(i).ok()?;
         let raw_name = entry.name().to_string();
@@ -13300,6 +13300,9 @@ pub fn extract_package_icon_bgra(
             + manifest_icon_candidate_score(&normalized_name, &manifest_icons);
         if score > 0 && entry.size() <= MAX_PACKAGE_ICON_BYTES {
             candidates.push((score, raw_name));
+            if candidates.len() >= 256 {
+                break;
+            }
         }
     }
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
