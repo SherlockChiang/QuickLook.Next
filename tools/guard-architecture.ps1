@@ -232,6 +232,9 @@ if (Test-Path $mainWindowPath) {
     if ($mainWindowText -notmatch 'BeginPinnedParserOpen\(path, probe\)') {
         Add-Failure "Local ParserHost previews must enter through a pinned source handle"
     }
+    if ($mainWindowText -notmatch 'BeginPinnedRasterOpen\(path, probe, targetSize\.Width, targetSize\.Height\)') {
+        Add-Failure "Local RasterHost previews must retain a pinned source handle"
+    }
 }
 
 $rasterHostRoot = Join-Path $Root "src/QuickLook.Next.RasterHost"

@@ -827,13 +827,15 @@ public sealed partial class MainWindow : Window
             await EnsureRasterHostStartedAsync(previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
-            var (requestId, completion) = _supervisor!.BeginOpen(
-                path,
-                probe,
-                targetSize.Width,
-                targetSize.Height,
-                mayRequireHydration ? CloudPreviewTimeout : null,
-                recycleHostOnCancel: mayRequireHydration);
+            var (requestId, completion) = mayRequireHydration
+                ? _supervisor!.BeginOpen(
+                    path,
+                    probe,
+                    targetSize.Width,
+                    targetSize.Height,
+                    CloudPreviewTimeout,
+                    recycleHostOnCancel: true)
+                : BeginPinnedRasterOpen(path, probe, targetSize.Width, targetSize.Height);
             _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
@@ -3118,6 +3120,30 @@ public sealed partial class MainWindow : Window
             }
             _currentProbe = verifiedProbe;
             return _parserSupervisor!.BeginOpenHandle(path, verifiedProbe, pinned.Handle, pinned.Length);
+        }
+    }
+
+    private (string RequestId, Task<ControlMessage> Completion) BeginPinnedRasterOpen(
+        string path, FileProbe initialProbe, uint targetWidth, uint targetHeight)
+    {
+        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        try
+        {
+            FileProbe verifiedProbe = _native.ProbeFile(path) ?? BuildProbe(path);
+            if (verifiedProbe.Size != pinned.Length
+                || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Preview file changed while establishing the RasterHost boundary.");
+            }
+            _currentProbe = verifiedProbe;
+            var request = _supervisor!.BeginPinnedOpen(
+                path, verifiedProbe, pinned.Handle, targetWidth, targetHeight);
+            pinned.Handle = null!;
+            return request;
+        }
+        finally
+        {
+            pinned.Handle?.Dispose();
         }
     }
 

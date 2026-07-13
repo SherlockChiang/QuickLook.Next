@@ -35,6 +35,8 @@ public sealed class RasterHostAnimationTests
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
             string path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif");
+            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            using var pinnedInputHandle = pinnedInput.Handle;
             string previewRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             var probe = new FileProbe(path, ".gif", File.ReadAllBytes(path)[..6])
             {
@@ -46,6 +48,7 @@ public sealed class RasterHostAnimationTests
                 TargetWidth = 256,
                 TargetHeight = 256,
             }, timeout.Token);
+            Assert.Throws<IOException>(() => File.WriteAllBytes(path, [0]));
 
             PreviewReady? previewReady = null;
             while (previewReady is null)
