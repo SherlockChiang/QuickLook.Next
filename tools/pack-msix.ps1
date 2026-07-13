@@ -80,7 +80,7 @@ if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed." }
 & (Join-Path $sdkBin "signtool.exe") sign /fd SHA256 /f $CertificatePath /p $CertificatePassword $msixPath
 if ($LASTEXITCODE -ne 0) { throw "SignTool failed." }
 
-$publicCertificate = Join-Path $installerRoot "QuickLook.Next-Development.cer"
+$publicCertificate = Join-Path $installerRoot "QuickLook.Next-Release.cer"
 $securePassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
 [System.IO.File]::WriteAllBytes($publicCertificate, $signingCertificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 

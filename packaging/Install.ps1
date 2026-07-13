@@ -2,8 +2,11 @@ param([switch]$Chinese)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$certificate = Get-ChildItem -LiteralPath $root -Filter "*.cer" | Select-Object -First 1
-$package = Get-ChildItem -LiteralPath $root -Filter "*.msix" | Select-Object -First 1
+$expectedThumbprint = "56123984E128B7C931FE05898DE086B67CD156CC"
+$certificatePath = Join-Path $root "QuickLook.Next-Release.cer"
+$certificate = if (Test-Path -LiteralPath $certificatePath) { Get-Item -LiteralPath $certificatePath } else { $null }
+$packages = @(Get-ChildItem -LiteralPath $root -Filter "QuickLook.Next-*-win-x64.msix")
+$package = if ($packages.Count -eq 1) { $packages[0] } else { $null }
 
 function From-CodePoints([int[]]$CodePoints) {
     return -join ($CodePoints | ForEach-Object { [char]$_ })
@@ -33,7 +36,10 @@ if ($signature.Status -ne "UnknownError" -and $signature.Status -ne "Valid") {
 }
 
 $expected = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certificate.FullName)
-if ($signature.SignerCertificate -and $signature.SignerCertificate.Thumbprint -ne $expected.Thumbprint) {
+if ($expected.Thumbprint -ne $expectedThumbprint) {
+    throw (Localized "The included certificate is not the QuickLook Next release certificate." @(0x968F,0x9644,0x8BC1,0x4E66,0x4E0D,0x662F,0x0020,0x0051,0x0075,0x0069,0x0063,0x006B,0x004C,0x006F,0x006F,0x006B,0x0020,0x004E,0x0065,0x0078,0x0074,0x0020,0x53D1,0x5E03,0x8BC1,0x4E66,0x3002))
+}
+if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint) {
     throw (Localized "The MSIX signature does not match the included certificate." @(0x004D,0x0053,0x0049,0x0058,0x0020,0x7B7E,0x540D,0x4E0E,0x968F,0x9644,0x8BC1,0x4E66,0x4E0D,0x5339,0x914D,0x3002))
 }
 
