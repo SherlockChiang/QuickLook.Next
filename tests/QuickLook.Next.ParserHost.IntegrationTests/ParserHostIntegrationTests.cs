@@ -147,6 +147,70 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Handle_open_keeps_original_text_when_source_path_is_replaced()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string path = Path.Combine(tempDirectory, "pinned.txt");
+        const string original = "original pinned content";
+        File.WriteAllText(path, original);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(path, ".txt", "original"u8.ToArray())
+            {
+                Kind = "text",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
+            pinned.Handle.Dispose();
+
+            while (true)
+            {
+                try
+                {
+                    File.WriteAllText(path, "replacement content");
+                    break;
+                }
+                catch (IOException)
+                {
+                    await Task.Delay(25, timeout.Token);
+                }
+            }
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Contains(original, ready.TextContent);
+            Assert.DoesNotContain("replacement content", ready.TextContent);
+
+            string anchorPath = Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "parser-input", "input-" + requestId, "source.txt");
+            Assert.True(File.Exists(anchorPath));
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => !File.Exists(anchorPath), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Authenticated_host_previews_certificate_file()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));

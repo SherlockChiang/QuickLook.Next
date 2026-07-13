@@ -38,6 +38,43 @@ public static class WindowsHandleTransfer
         return (handle, length);
     }
 
+    public static (SafeFileHandle Handle, long Length) OpenPinnedReadOnlyFile(string path)
+    {
+        SafeFileHandle handle = CreateFile(path, GenericRead, FileShareRead, 0, OpenExisting, 0, 0);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not pin the preview file.");
+        }
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length < 0)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Could not validate the pinned preview file.");
+        }
+        return (handle, length);
+    }
+
+    public static long DuplicateFileToProcess(SafeFileHandle source, SafeProcessHandle targetProcess)
+    {
+        if (!DuplicateHandle(GetCurrentProcess(), source, targetProcess, out nint duplicate, 0, false, DuplicateSameAccess))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not duplicate the preview file into the host.");
+        return duplicate.ToInt64();
+    }
+
+    public static SafeFileHandle TakeLocalFileHandle(long value, long expectedLength)
+    {
+        nint raw = checked((nint)value);
+        if (raw == 0 || raw == -1)
+            throw new InvalidDataException("Received an invalid local file handle.");
+        var handle = new SafeFileHandle(raw, ownsHandle: true);
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length != expectedLength)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Preview input was not the expected disk file.");
+        }
+        return handle;
+    }
+
     public static SafeFileHandle DuplicateFileFromProcess(SafeProcessHandle sourceProcess, long sourceHandle, long expectedLength)
     {
         nint remoteHandle = checked((nint)sourceHandle);
@@ -85,6 +122,12 @@ public static class WindowsHandleTransfer
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DuplicateHandle(
         SafeProcessHandle sourceProcess, nint sourceHandle, nint targetProcess,
+        out nint targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(
+        nint sourceProcess, SafeFileHandle sourceHandle, SafeProcessHandle targetProcess,
         out nint targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
 
 }

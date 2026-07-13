@@ -118,6 +118,46 @@ internal sealed class ParserHostSupervisor
         return (requestId, completion);
     }
 
+    public (string RequestId, Task<ControlMessage> Completion) BeginOpenHandle(
+        string logicalPath,
+        FileProbe probe,
+        Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
+        long sourceLength,
+        TimeSpan? timeout = null)
+    {
+        if (_channel is null || _host is null) throw new InvalidOperationException("ParserHost not connected");
+        var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
+        long hostHandle;
+        try
+        {
+            hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(sourceHandle, _host.SafeHandle);
+        }
+        catch
+        {
+            _pending.Cancel(requestId);
+            throw;
+        }
+        _ = SendOpenHandleAsync(requestId, hostHandle, sourceLength, logicalPath, probe);
+        return (requestId, completion);
+    }
+
+    private async Task SendOpenHandleAsync(
+        string requestId, long sourceHandle, long sourceLength, string logicalPath, FileProbe probe)
+    {
+        try
+        {
+            await (_channel?.SendAsync(new PreviewOpenHandle(
+                requestId, sourceHandle, sourceLength, logicalPath, probe))
+                ?? Task.FromException(new InvalidOperationException("ParserHost not connected")));
+        }
+        catch (Exception ex)
+        {
+            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            RecycleHost("handle preview request could not be delivered");
+        }
+    }
+
     private async Task SendOpenAsync(string requestId, string path, FileProbe probe)
     {
         try { await (_channel?.SendAsync(new PreviewOpen(requestId, path, probe)) ?? Task.FromException(new InvalidOperationException("ParserHost not connected"))); }
@@ -184,14 +224,18 @@ internal sealed class ParserHostSupervisor
         finally { handoff.Dispose(); }
     }
 
-    public async Task<NativeRasterImage?> ExtractHeroRasterAsync(string path, string kind, CancellationToken cancellationToken)
+    public async Task<NativeRasterImage?> ExtractHeroRasterAsync(
+        string path, string kind, string? parentPreviewRequestId, CancellationToken cancellationToken)
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
         try
         {
-            await _channel.SendAsync(new HeroRasterExtract(requestId, path, kind), cancellationToken);
+            await _channel.SendAsync(new HeroRasterExtract(requestId, path, kind)
+            {
+                ParentPreviewRequestId = parentPreviewRequestId,
+            }, cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
             return response is HeroRasterExtracted extracted
                 ? ReadHeroRaster(extracted)

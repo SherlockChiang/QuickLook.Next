@@ -152,6 +152,27 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_preview_open_handle_message()
+    {
+        var probe = new FileProbe("C:\\logical.txt", ".txt", "text"u8.ToArray())
+        {
+            Kind = "text",
+            Size = 4,
+        };
+        var message = new PreviewOpenHandle("3".PadLeft(32, '3'), 1234, 4, probe.Path, probe);
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"preview.open.handle\"", json);
+        PreviewOpenHandle roundTrip = Assert.IsType<PreviewOpenHandle>(ProtocolJson.Deserialize(json));
+        Assert.Equal(message.RequestId, roundTrip.RequestId);
+        Assert.Equal(message.SourceHandle, roundTrip.SourceHandle);
+        Assert.Equal(message.SourceLength, roundTrip.SourceLength);
+        Assert.Equal(message.LogicalPath, roundTrip.LogicalPath);
+        Assert.Equal(message.Probe.Kind, roundTrip.Probe.Kind);
+        Assert.Equal(message.Probe.MagicPrefix, roundTrip.Probe.MagicPrefix);
+    }
+
+    [Fact]
     public async Task Pending_request_times_out_and_rejects_late_result()
     {
         var pending = new PendingRequests();

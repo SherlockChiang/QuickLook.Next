@@ -226,6 +226,14 @@ if (Test-Path $parserSupervisor) {
     }
 }
 
+$mainWindowPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
+if (Test-Path $mainWindowPath) {
+    $mainWindowText = Get-Content -LiteralPath $mainWindowPath -Raw
+    if ($mainWindowText -notmatch 'BeginPinnedParserOpen\(path, probe\)') {
+        Add-Failure "Local ParserHost previews must enter through a pinned source handle"
+    }
+}
+
 $rasterHostRoot = Join-Path $Root "src/QuickLook.Next.RasterHost"
 if (Test-Path $rasterHostRoot) {
     $rasterHostText = (Get-ChildItem -LiteralPath $rasterHostRoot -File -Filter "*.cs" |

@@ -775,11 +775,13 @@ public sealed partial class MainWindow : Window
             {
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                var (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(
-                    path,
-                    probe,
-                    mayRequireHydration ? CloudPreviewTimeout : null,
-                    recycleHostOnCancel: mayRequireHydration);
+                (string parserRequestId, Task<ControlMessage> parserCompletion) = mayRequireHydration
+                    ? _parserSupervisor!.BeginOpen(
+                        path,
+                        probe,
+                        CloudPreviewTimeout,
+                        recycleHostOnCancel: true)
+                    : BeginPinnedParserOpen(path, probe);
                 _requestHosts[parserRequestId] = PreviewHostOwner.Parser;
                 _previewSession.SetRequestId(parserRequestId);
                 _previewSession.CommitPath(path);
@@ -1657,14 +1659,16 @@ public sealed partial class MainWindow : Window
         if (IsPackagePreview(ready, path))
         {
             await EnsureParserHostStartedAsync();
-            NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(path, "package", token);
+            NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(
+                path, "package", _previewSession.CurrentRequestId, token);
             return icon ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
         }
 
         if (IsOfficePreviewWithImages(ready))
         {
             await EnsureParserHostStartedAsync();
-            return await _parserSupervisor!.ExtractHeroRasterAsync(path, "office", token);
+            return await _parserSupervisor!.ExtractHeroRasterAsync(
+                path, "office", _previewSession.CurrentRequestId, token);
         }
 
         if (IsExecutablePreview(ready, path))
@@ -3097,7 +3101,25 @@ public sealed partial class MainWindow : Window
     private static bool IsParserHostPreview(FileProbe probe)
         => probe.Kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
            || probe.Kind.Equals("package", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("office", StringComparison.OrdinalIgnoreCase);
+           || probe.Kind.Equals("office", StringComparison.OrdinalIgnoreCase)
+           || IsCloudParserHostPreview(probe);
+
+    private (string RequestId, Task<ControlMessage> Completion) BeginPinnedParserOpen(string path, FileProbe initialProbe)
+    {
+        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        using (pinned.Handle)
+        {
+            FileProbe verifiedProbe = _native.ProbeFile(path) ?? BuildProbe(path);
+            if (verifiedProbe.Size != pinned.Length
+                || !IsParserHostPreview(verifiedProbe)
+                || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Preview file changed while establishing the ParserHost boundary.");
+            }
+            _currentProbe = verifiedProbe;
+            return _parserSupervisor!.BeginOpenHandle(path, verifiedProbe, pinned.Handle, pinned.Length);
+        }
+    }
 
     private static bool IsCloudParserHostPreview(FileProbe probe)
         => probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase)

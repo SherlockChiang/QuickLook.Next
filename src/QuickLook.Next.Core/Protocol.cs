@@ -16,6 +16,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(HostReady), "host.ready")]
 [JsonDerivedType(typeof(ParserReady), "parser.ready")]
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
+[JsonDerivedType(typeof(PreviewOpenHandle), "preview.open.handle")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewSurfaceRelease), "preview.surface.release")]
 [JsonDerivedType(typeof(PreviewReady), "preview.ready")]
@@ -45,14 +46,18 @@ public sealed record HostReady(long AdapterLuid) : ControlMessage;
 /// <summary>ParserHost → App after the authenticated handshake completes.</summary>
 public sealed record ParserReady : ControlMessage;
 
-/// <summary>App → Host: open a file. Probe comes from the Rust native layer.</summary>
+/// <summary>App → Host: open a path. Used for cloud fail-closed metadata and compatibility paths.</summary>
 public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe) : ControlMessage
 {
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
 }
 
-/// <summary>Host → App: the shared composition surface handle (already duplicated into the App process).</summary>
+/// <summary>App → ParserHost: open the exact read-only file object duplicated into the host.</summary>
+public sealed record PreviewOpenHandle(
+    string RequestId, long SourceHandle, long SourceLength, string LogicalPath, FileProbe Probe) : ControlMessage;
+
+/// <summary>RasterHost → App: a host-local composition handle that the App must copy and release.</summary>
 public sealed record PreviewSurface(
     string RequestId, long SharedHandle, uint Width, uint Height, double Dpi, string Format,
     int PageIndex = -1, long PageGeneration = 0) : ControlMessage
@@ -114,7 +119,10 @@ public sealed record ArchiveEntryExtracted(
 public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage;
 
 /// <summary>App → ParserHost: extract a package icon or Office embedded image into a bounded temp raster.</summary>
-public sealed record HeroRasterExtract(string RequestId, string Path, string Kind) : ControlMessage;
+public sealed record HeroRasterExtract(string RequestId, string Path, string Kind) : ControlMessage
+{
+    public string? ParentPreviewRequestId { get; init; }
+}
 
 /// <summary>ParserHost → App: a bounded BGRA raster is ready at TempPath; pixels never use the control pipe.</summary>
 public sealed record HeroRasterExtracted(string RequestId, long FileHandle, long PacketLength, int Width, int Height) : ControlMessage;

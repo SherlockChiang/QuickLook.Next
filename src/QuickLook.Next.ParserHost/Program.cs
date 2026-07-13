@@ -10,6 +10,7 @@ DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "parser-host.log"));
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
 CleanupStaleHeroRasters();
+CleanupStalePreviewInputs();
 
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
@@ -31,6 +32,7 @@ var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
+var previewInputs = new ConcurrentDictionary<string, (string Path, FileStream Anchor)>();
 bool authenticated = false;
 string? activePreviewRequestId = null;
 
@@ -75,7 +77,10 @@ while (true)
                                    && !string.IsNullOrWhiteSpace(open.Path)
                                    && IsValidProbe(open.Probe):
             if (activePreviewRequestId is not null)
+            {
                 Cancel(activePreviewRequestId);
+                DeletePreviewInput(activePreviewRequestId);
+            }
             var cts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, cts))
             {
@@ -120,8 +125,77 @@ while (true)
             });
             break;
 
+        case PreviewOpenHandle open when IsValidRequestId(open.RequestId)
+                                           && open.SourceLength is >= 0 and <= 256L * 1024 * 1024
+                                           && !string.IsNullOrWhiteSpace(open.LogicalPath)
+                                           && IsValidProbe(open.Probe):
+            if (activePreviewRequestId is not null)
+            {
+                Cancel(activePreviewRequestId);
+                DeletePreviewInput(activePreviewRequestId);
+            }
+            var handleCts = new CancellationTokenSource();
+            if (!requests.TryAdd(open.RequestId, handleCts))
+            {
+                handleCts.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
+            activePreviewRequestId = open.RequestId;
+            _ = Task.Run(async () =>
+            {
+                bool published = false;
+                try
+                {
+                    using var sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength);
+                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, sourceHandle, open.SourceLength);
+                    if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
+                    {
+                        input?.Anchor.Dispose();
+                        if (input is not null) DeletePreviewInputPath(input.Value.Path);
+                        await channel.SendAsync(new PreviewError(open.RequestId, "Could not anchor preview input."));
+                        return;
+                    }
+                    handleCts.Token.ThrowIfCancellationRequested();
+                    string kind = open.Probe.Kind.ToLowerInvariant();
+                    if (kind is not ("archive" or "package" or "office" or "text" or "ebook" or "executable" or "torrent" or "certificate"))
+                    {
+                        await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
+                        return;
+                    }
+                    if (kind == "certificate")
+                    {
+                        await channel.SendAsync(CertificatePreview.Create(open.RequestId, input.Value.Path, open.SourceLength));
+                        published = true;
+                        return;
+                    }
+                    string? json = ParserNativePreview.TryPreview(kind, input.Value.Path, handleCts.Token);
+                    handleCts.Token.ThrowIfCancellationRequested();
+                    if (!PreviewReadyJson.TryParse(open.RequestId, json ?? "", out PreviewReady? ready, out string? error))
+                        await channel.SendAsync(new PreviewError(open.RequestId, error ?? "Native parser returned no preview."));
+                    else
+                    {
+                        await channel.SendAsync(ready!);
+                        published = true;
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("ParserHost", $"handle open failed request={open.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (requests.TryRemove(open.RequestId, out var current)) current.Dispose();
+                    if (!published) DeletePreviewInput(open.RequestId);
+                }
+            });
+            break;
+
         case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
+            DeletePreviewInput(close.RequestId);
             break;
 
         case ArchiveEntryExtract extract when IsValidRequestId(extract.RequestId)
@@ -259,7 +333,22 @@ while (true)
                 string? tempPath = null;
                 try
                 {
-                    byte[]? raster = ParserNativePreview.TryExtractHeroRaster(extract.Kind, extract.Path, heroCts.Token);
+                    string heroPath;
+                    if (extract.ParentPreviewRequestId is { } parentRequestId)
+                    {
+                        if (!IsValidRequestId(parentRequestId)
+                            || !previewInputs.TryGetValue(parentRequestId, out var parentInput))
+                        {
+                            await channel.SendAsync(new PreviewError(extract.RequestId, "Parent preview input is unavailable."));
+                            return;
+                        }
+                        heroPath = parentInput.Path;
+                    }
+                    else
+                    {
+                        heroPath = extract.Path;
+                    }
+                    byte[]? raster = ParserNativePreview.TryExtractHeroRaster(extract.Kind, heroPath, heroCts.Token);
                     heroCts.Token.ThrowIfCancellationRequested();
                     if (raster is null || !ParserNativePreview.IsValidRaster(raster, raster.Length))
                     {
@@ -349,6 +438,8 @@ foreach (var raster in heroRasters.Values)
     raster.Handle.Dispose();
     DeleteHeroRaster(raster.Path);
 }
+foreach (string requestId in previewInputs.Keys)
+    DeletePreviewInput(requestId);
 
 void Cancel(string requestId)
 {
@@ -446,6 +537,79 @@ static void CleanupStaleHeroRasters()
             if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
                 Directory.Delete(directory, recursive: true);
         }
+    }
+    catch { }
+}
+
+static void CleanupStalePreviewInputs()
+{
+    try
+    {
+        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-input");
+        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return;
+        foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
+                Directory.Delete(directory, recursive: true);
+    }
+    catch { }
+}
+
+(string Path, FileStream Anchor)? CreatePreviewInput(
+    string requestId,
+    string logicalPath,
+    Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
+    long sourceLength)
+{
+    string extension = Path.GetExtension(logicalPath);
+    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
+        extension = "";
+    string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-input");
+    string directory = Path.Combine(root, "input-" + requestId);
+    string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
+    try
+    {
+        Directory.CreateDirectory(root);
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) return null;
+        Directory.CreateDirectory(directory);
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return null;
+        using var source = new FileStream(sourceHandle, FileAccess.Read);
+        var anchor = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+        try
+        {
+            source.CopyTo(anchor);
+            anchor.Flush(flushToDisk: true);
+            if (anchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
+            anchor.Position = 0;
+            return (path, anchor);
+        }
+        catch
+        {
+            anchor.Dispose();
+            throw;
+        }
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+    {
+        DeletePreviewInputPath(path);
+        return null;
+    }
+}
+
+void DeletePreviewInput(string requestId)
+{
+    if (!previewInputs.TryRemove(requestId, out var input)) return;
+    input.Anchor.Dispose();
+    DeletePreviewInputPath(input.Path);
+}
+
+static void DeletePreviewInputPath(string path)
+{
+    try
+    {
+        File.Delete(path);
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null) Directory.Delete(directory, recursive: false);
     }
     catch { }
 }
