@@ -56,6 +56,42 @@ Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
 Copy-Clean (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm") "$dist\RasterHost"
 Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$dist\ParserHost"
 
+Write-Host "== pruning unused optional runtime payloads ==" -ForegroundColor Cyan
+$optionalPayloadPatterns = @(
+    "DirectML.dll",
+    "onnxruntime.dll",
+    "Microsoft.ML.OnnxRuntime.dll",
+    "Microsoft.Windows.AI.*",
+    "Microsoft.Windows.Workloads*",
+    "Microsoft.Graphics.Imaging*",
+    "Microsoft.Graphics.Internal.Imaging*",
+    "Microsoft.Graphics.ImagingInternal*",
+    "Microsoft.Windows.Vision*",
+    "Microsoft.Windows.Internal.Vision*",
+    "Microsoft.Windows.ImageCreationInternal*",
+    "Microsoft.Windows.Internal.ImageCreation*",
+    "Microsoft.Windows.Internal.AI.*",
+    "Microsoft.Windows.SemanticSearch*",
+    "Microsoft.Windows.Internal.SemanticSearch*",
+    "Microsoft.Windows.Private.Workloads*",
+    "NPUDetect.dll",
+    "PerceptiveStreaming.dll",
+    "SessionHandleIPCProxyStub.dll",
+    "System.Numerics.Tensors.dll",
+    "workloads*.json"
+)
+foreach ($pattern in $optionalPayloadPatterns) {
+    Get-ChildItem -LiteralPath $dist -Filter $pattern -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force
+}
+
+$retainedLocaleDirectories = @("en-US", "en-us", "zh-CN")
+Get-ChildItem -LiteralPath $dist -Directory | Where-Object {
+    Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.ui.xaml.dll.mui") -PathType Leaf
+} | Where-Object {
+    $retainedLocaleDirectories -notcontains $_.Name
+} | Remove-Item -Recurse -Force
+
 & (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist -SkipSystemImageSmoke:$SkipSystemImageSmoke
 
 $size = [math]::Round(((Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB))
