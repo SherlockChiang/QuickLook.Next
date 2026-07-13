@@ -139,24 +139,20 @@ internal sealed class PdfPreviewSession : IDisposable
                 return false;
             }
 
-            byte[] bytes = File.ReadAllBytes(path);
-            if (bytes.Length <= 8)
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            Span<byte> header = stackalloc byte[8];
+            stream.ReadExactly(header);
+            int width = BitConverter.ToInt32(header[..4]);
+            int height = BitConverter.ToInt32(header[4..]);
+            long expectedBytes = (long)width * height * 4;
+            if (width <= 0 || height <= 0 || expectedBytes > int.MaxValue || stream.Length - 8 != expectedBytes)
             {
                 result = default;
                 return false;
             }
 
-            int width = BitConverter.ToInt32(bytes, 0);
-            int height = BitConverter.ToInt32(bytes, 4);
-            int pixelBytes = bytes.Length - 8;
-            if (width <= 0 || height <= 0 || pixelBytes != width * height * 4)
-            {
-                result = default;
-                return false;
-            }
-
-            var bgra = new byte[pixelBytes];
-            System.Buffer.BlockCopy(bytes, 8, bgra, 0, pixelBytes);
+            var bgra = new byte[(int)expectedBytes];
+            stream.ReadExactly(bgra);
             File.SetLastAccessTimeUtc(path, DateTime.UtcNow);
             result = (bgra, width, height);
             return true;
