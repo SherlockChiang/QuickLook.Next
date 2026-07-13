@@ -151,6 +151,23 @@ if ($SkipDist) {
 elseif (Test-Path $DistDir) {
     $distFiles = @(Get-ChildItem -LiteralPath $DistDir -Recurse -File)
     $pluginNamePattern = 'QuickLook\.Next\.Plugin\.'
+    $maxDistBytes = 170MB
+    $distBytes = ($distFiles | Measure-Object Length -Sum).Sum
+    if ($distBytes -gt $maxDistBytes) {
+        Add-Failure "release output is too large: $([math]::Round($distBytes / 1MB, 1)) MB > $([math]::Round($maxDistBytes / 1MB, 1)) MB"
+    }
+
+    $forbiddenPayloadPattern = '^(onnxruntime|DirectML|Microsoft\.ML\.OnnxRuntime|Microsoft\.Windows\.AI\.|Microsoft\.Windows\.Workloads|NPUDetect)'
+    foreach ($file in $distFiles | Where-Object { $_.Name -match $forbiddenPayloadPattern }) {
+        Add-Failure "unused optional runtime entered release output: $($file.Name)"
+    }
+
+    $localeDirectories = @(Get-ChildItem -LiteralPath $DistDir -Directory | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.ui.xaml.dll.mui") -PathType Leaf
+    })
+    if ($localeDirectories.Count -gt 2) {
+        Add-Failure "release output contains unexpected WinUI locales: $($localeDirectories.Name -join ', ')"
+    }
 
     foreach ($file in $distFiles) {
         $distRoot = [System.IO.Path]::GetFullPath($DistDir).TrimEnd('\', '/')
