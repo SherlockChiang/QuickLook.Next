@@ -170,7 +170,7 @@
   <data name="SettingsSaveFailed" xml:space="preserve"><value>Setting not saved</value></data>
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next could not save this setting.</value></data>
   <data name="FolderTypeDisplay" xml:space="preserve">
-    <value>文件夹</value>
+    <value>Folder</value>
   </data>
   <data name="CertificateHeroSubtitle" xml:space="preserve">
     <value>Certificate</value>

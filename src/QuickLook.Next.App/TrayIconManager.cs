@@ -16,6 +16,7 @@ internal sealed class TrayIconManager
     private WndProcDelegate? _wndProc;
     private nint _oldWndProc;
     private nint _trayIconHandle;
+    private uint _taskbarCreatedMessage;
     private bool _ownsTrayIconHandle;
     private string? _trayIconPath;
 
@@ -134,11 +135,19 @@ internal sealed class TrayIconManager
     {
         if (_wndProc is not null) return;
         _wndProc = TrayWndProc;
+        _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
         _oldWndProc = SetWindowLongPtr(_hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_wndProc));
     }
 
     private nint TrayWndProc(nint hwnd, uint msg, nint wParam, nint lParam)
     {
+        if (_taskbarCreatedMessage != 0 && msg == _taskbarCreatedMessage)
+        {
+            _trayIconAdded = false;
+            Ensure();
+            return nint.Zero;
+        }
+
         if (msg == WM_TRAYICON)
         {
             if (lParam == WM_LBUTTONDBLCLK)
@@ -309,4 +318,7 @@ internal sealed class TrayIconManager
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool PostMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterWindowMessage(string lpString);
 }
