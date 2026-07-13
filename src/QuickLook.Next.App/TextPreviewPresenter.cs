@@ -28,12 +28,15 @@ internal sealed class TextPreviewPresenter
     private readonly ListView _textListView;
     private readonly FrameworkElement _textPreviewContainer;
     private readonly Func<ElementTheme> _getTheme;
+    private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
     private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = [];
     private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
     private int _renderVersion;
+    private PreviewReady? _lastReady;
+    private (double Width, double Height) _lastMaxContent;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -42,7 +45,8 @@ internal sealed class TextPreviewPresenter
         FrameworkElement textPreviewContainer,
         Border outlinePanel,
         ListView outlineList,
-        Func<ElementTheme> getTheme)
+        Func<ElementTheme> getTheme,
+        Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast)
     {
         _textBlock = textBlock;
         _scrollViewer = scrollViewer;
@@ -51,6 +55,7 @@ internal sealed class TextPreviewPresenter
         _outlinePanel = outlinePanel;
         _outlineList = outlineList;
         _getTheme = getTheme;
+        _getHighContrast = getHighContrast;
         _defaultScrollMargin = textPreviewContainer.Margin;
         _outlineList.ItemsSource = _outlineItems;
         _outlineList.ItemClick += OnOutlineItemClick;
@@ -60,6 +65,8 @@ internal sealed class TextPreviewPresenter
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
+        _lastReady = ready;
+        _lastMaxContent = maxContent;
         string text = TrimForDisplay(ready.TextContent ?? "");
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
@@ -104,11 +111,19 @@ internal sealed class TextPreviewPresenter
 
     public void Clear()
     {
+        _lastReady = null;
         _renderVersion++;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
         ClearOutline();
         ApplyOutlineVisibility();
+    }
+
+    public void RefreshPalette()
+    {
+        _tokenBrushes.Clear();
+        if (_lastReady is not null)
+            Render(_lastReady, _lastMaxContent);
     }
 
     private void RenderMarkdownDocument(PreviewMarkdown document)
@@ -825,6 +840,9 @@ internal sealed class TextPreviewPresenter
 
     private SolidColorBrush BrushFor(TokenKind kind)
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled)
+            return new SolidColorBrush(highContrast.Foreground);
         bool dark = _getTheme() != ElementTheme.Light;
         if (_brushThemeDark != dark) { _tokenBrushes.Clear(); _brushThemeDark = dark; }
         if (_tokenBrushes.TryGetValue(kind, out var brush))
@@ -940,30 +958,40 @@ internal sealed class TextPreviewPresenter
 
     private static Windows.UI.Color Rgb(byte r, byte g, byte b) => ColorHelper.FromArgb(255, r, g, b);
 
-    private static Windows.UI.Color ThemeTextColor()
+    private Windows.UI.Color ThemeTextColor()
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled) return highContrast.Foreground;
         return ThemeResourceColor("TextFillColorPrimaryBrush", Colors.Gainsboro);
     }
 
-    private static Windows.UI.Color ThemeTextColorSecondary()
+    private Windows.UI.Color ThemeTextColorSecondary()
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled) return highContrast.Foreground;
         return ThemeResourceColor("TextFillColorSecondaryBrush", Colors.Gray);
     }
 
-    private static Windows.UI.Color ThemeSurfaceBorderColor()
+    private Windows.UI.Color ThemeSurfaceBorderColor()
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled) return highContrast.Foreground;
         try { return (Windows.UI.Color)Application.Current.Resources["CardStrokeColorDefault"]; }
         catch { return Colors.LightGray; }
     }
 
-    private static Windows.UI.Color ThemeCodeBackground()
+    private Windows.UI.Color ThemeCodeBackground()
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled) return highContrast.Background;
         try { return (Windows.UI.Color)Application.Current.Resources["ControlFillColorDefault"]; }
         catch { return Colors.Transparent; }
     }
 
-    private static Windows.UI.Color ThemeHeaderBackground()
+    private Windows.UI.Color ThemeHeaderBackground()
     {
+        var highContrast = _getHighContrast();
+        if (highContrast.Enabled) return highContrast.Background;
         try { return (Windows.UI.Color)Application.Current.Resources["ControlFillColorSecondary"]; }
         catch { return Colors.Transparent; }
     }

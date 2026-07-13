@@ -216,7 +216,15 @@ public sealed partial class MainWindow : Window
             ImageFilmstrip,
             OfficePagesPanel);
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
-        _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, TextListView, TextPreviewContainer, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
+        _textPresenter = new TextPreviewPresenter(
+            TextPreviewBlock,
+            TextScrollViewer,
+            TextListView,
+            TextPreviewContainer,
+            MarkdownOutlinePanel,
+            MarkdownOutlineList,
+            () => RootGrid.ActualTheme,
+            () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _tablePresenter = new TablePreviewPresenter(
             TableScrollViewer,
             TableTitleText,
@@ -2855,6 +2863,7 @@ public sealed partial class MainWindow : Window
         UpdateTitleBarColors();
         _tablePresenter?.RefreshPalette();
         _officePresenter?.RefreshPalette();
+        _textPresenter?.RefreshPalette();
     }
 
     private void UpdateTitleBarColors()
