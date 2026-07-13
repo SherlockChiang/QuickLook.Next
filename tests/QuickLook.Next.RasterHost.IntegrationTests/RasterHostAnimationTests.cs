@@ -69,13 +69,19 @@ public sealed class RasterHostAnimationTests
             Assert.InRange(frames.FrameCount, 2, 120);
             Assert.InRange(frames.Width, 1, 1024);
             Assert.InRange(frames.Height, 1, 1024);
-            Assert.True(TempHandoffPaths.IsRasterAnimationPath(frames.TempPath, animationRequestId));
-            Assert.Equal(frames.PacketLength, new FileInfo(frames.TempPath).Length);
+            using var frameHandle = WindowsHandleTransfer.TakeReceivedFileHandle(frames.FileHandle);
+            using var frameStream = new FileStream(frameHandle, FileAccess.Read);
+            Assert.Equal(frames.PacketLength, frameStream.Length);
+            Span<byte> header = stackalloc byte[12];
+            frameStream.ReadExactly(header);
+            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(header[..4]));
 
-            string directory = Path.GetDirectoryName(frames.TempPath)!;
+            string packetPath = Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "raster-animation", "frames-" + animationRequestId, "frames.bin");
             await channel.SendAsync(new PreviewAnimationFramesClose(animationRequestId), timeout.Token);
-            await WaitForMissingAsync(frames.TempPath, timeout.Token);
-            Assert.False(Directory.Exists(directory));
+            while (File.Exists(packetPath))
+                await Task.Delay(25, timeout.Token);
+            Assert.True(frameStream.CanRead);
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
         }
         finally
@@ -86,9 +92,4 @@ public sealed class RasterHostAnimationTests
         }
     }
 
-    private static async Task WaitForMissingAsync(string path, CancellationToken cancellationToken)
-    {
-        while (File.Exists(path))
-            await Task.Delay(25, cancellationToken);
-    }
 }

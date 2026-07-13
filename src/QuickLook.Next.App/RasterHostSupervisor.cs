@@ -214,7 +214,8 @@ internal sealed class RasterHostSupervisor
                 _pending.TryComplete(ready.RequestId, ready);
                 break;
             case PreviewAnimationFramesReady animation:
-                _pending.TryComplete(animation.RequestId, animation);
+                if (!_pending.TryComplete(animation.RequestId, animation))
+                    WindowsHandleTransfer.CloseReceivedFileHandle(animation.FileHandle);
                 break;
             case PreviewError error:
                 RemoveCloudRequestState(error.RequestId);
@@ -353,9 +354,13 @@ internal sealed class RasterHostSupervisor
             ControlMessage terminal = await completion.WaitAsync(cancellationToken);
             if (terminal is PreviewError)
                 return null;
-            if (terminal is not PreviewAnimationFramesReady ready
-                || !string.Equals(ready.PreviewRequestId, previewRequestId, StringComparison.Ordinal))
+            if (terminal is not PreviewAnimationFramesReady ready)
                 return null;
+            if (!string.Equals(ready.PreviewRequestId, previewRequestId, StringComparison.Ordinal))
+            {
+                WindowsHandleTransfer.CloseReceivedFileHandle(ready.FileHandle);
+                return null;
+            }
             return ReadAnimationFrames(ready);
         }
         catch (TimeoutException)
@@ -378,16 +383,15 @@ internal sealed class RasterHostSupervisor
     private static NativeAnimationFrames? ReadAnimationFrames(PreviewAnimationFramesReady ready)
     {
         const long maxPacketBytes = 64L * 1024 * 1024 + 12;
-        if (!TempHandoffPaths.IsRasterAnimationPath(ready.TempPath, ready.RequestId)
-            || ready.PacketLength <= 12 || ready.PacketLength > maxPacketBytes
-            || ready.FrameCount is <= 0 or > 120
-            || ready.Width is <= 0 or > 1024
-            || ready.Height is <= 0 or > 1024)
-            return null;
-
         try
         {
-            using var stream = new FileStream(ready.TempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var handle = WindowsHandleTransfer.TakeReceivedFileHandle(ready.FileHandle);
+            if (ready.PacketLength <= 12 || ready.PacketLength > maxPacketBytes
+                || ready.FrameCount is <= 0 or > 120
+                || ready.Width is <= 0 or > 1024
+                || ready.Height is <= 0 or > 1024)
+                return null;
+            using var stream = new FileStream(handle, FileAccess.Read);
             if (stream.Length != ready.PacketLength)
                 return null;
             Span<byte> header = stackalloc byte[12];

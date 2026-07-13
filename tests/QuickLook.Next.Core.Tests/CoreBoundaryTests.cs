@@ -132,7 +132,7 @@ public sealed class CoreBoundaryTests : IDisposable
     public void ProtocolJson_round_trips_animation_handoff_message()
     {
         var message = new PreviewAnimationFramesReady(
-            "0".PadLeft(32, '0'), "1".PadLeft(32, '1'), "C:\\temp\\frames.bin", 3, 32, 24, 9232);
+            "0".PadLeft(32, '0'), "1".PadLeft(32, '1'), 1234, 3, 32, 24, 9232);
         string json = ProtocolJson.Serialize(message);
 
         Assert.Contains("\"type\":\"preview.animation.ready\"", json);

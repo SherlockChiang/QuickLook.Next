@@ -20,6 +20,11 @@ public sealed class RasterHostAuthenticationTests
         => AssertRejectedAsync((channel, _, cancellationToken) =>
             channel.SendAsync(new PreviewClose("unauthenticated"), cancellationToken));
 
+    [Fact]
+    public Task Host_rejects_authenticated_message_with_wrong_app_process_id()
+        => AssertRejectedAsync((channel, token, cancellationToken) =>
+            channel.SendAsync(new Hello(int.MaxValue, token), cancellationToken));
+
     private static async Task AssertRejectedAsync(Func<PipeChannel, string, CancellationToken, Task> send)
     {
         string pipeName = $"quicklook_next_raster_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";

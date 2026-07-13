@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 using QuickLook.Next.RasterHost;
 
@@ -45,6 +46,7 @@ var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
+SafeProcessHandle? appProcess = null;
 string? activeRequestId = null;
 PreviewOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
@@ -73,6 +75,7 @@ while (true)
                 }
                 try
                 {
+                    appProcess = WindowsHandleTransfer.OpenAuthenticatedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
                     producer.Initialize(hello.AppProcessId);
                     await channel.SendAsync(new HostReady(producer.AdapterLuid));
                     authenticated = true;
@@ -196,6 +199,7 @@ foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
 foreach (string tempPath in animationPackets.Values)
     DeleteAnimationPacket(tempPath);
+appProcess?.Dispose();
 
 void StartOpen(PreviewOpen open)
 {
@@ -291,9 +295,14 @@ void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
                 cts.Token.ThrowIfCancellationRequested();
                 if (!string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal))
                     return;
+                if (appProcess is null || appProcess.IsInvalid)
+                    throw new InvalidOperationException("App handle-transfer process is unavailable.");
+                var transferred = WindowsHandleTransfer.DuplicateReadOnlyFile(tempPath, appProcess);
+                if (transferred.Length != packet.LongLength)
+                    throw new InvalidDataException("Animation packet changed before handle transfer.");
                 animationPackets[animation.RequestId] = tempPath;
                 await channel.SendAsync(new PreviewAnimationFramesReady(
-                    animation.RequestId, animation.PreviewRequestId, tempPath, count, width, height, packet.LongLength));
+                    animation.RequestId, animation.PreviewRequestId, transferred.Handle, count, width, height, transferred.Length));
                 tempPath = null;
             }
             finally

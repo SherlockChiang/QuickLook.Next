@@ -120,7 +120,7 @@ public sealed record PreviewAnimationFramesOpen(
 
 /// <summary>RasterHost → App: a bounded animation frame packet is ready in host-owned temporary storage.</summary>
 public sealed record PreviewAnimationFramesReady(
-    string RequestId, string PreviewRequestId, string TempPath, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
+    string RequestId, string PreviewRequestId, long FileHandle, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
 
 /// <summary>App → RasterHost: release an animation frame packet after consumption.</summary>
 public sealed record PreviewAnimationFramesClose(string RequestId) : ControlMessage;
