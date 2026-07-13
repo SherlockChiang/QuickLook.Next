@@ -243,6 +243,11 @@ if (Test-Path $performanceBoundsGuard) {
     & $performanceBoundsGuard -Root $Root
 }
 
+$restrictedHostLaunchSmoke = Join-Path $PSScriptRoot "smoke-restricted-host-launch.ps1"
+if (Test-Path $restrictedHostLaunchSmoke) {
+    & $restrictedHostLaunchSmoke -Root $Root
+}
+
 $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
 if (Test-Path $imageCorpusGuard) {
     & $imageCorpusGuard -Root $Root -SkipSystemImageSmoke:$SkipSystemImageSmoke

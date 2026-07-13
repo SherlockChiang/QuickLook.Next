@@ -42,9 +42,12 @@ internal sealed class HostProcessJob : IDisposable
     }
 
     public void Assign(Process process)
+        => Assign(process.Handle);
+
+    public void Assign(nint process)
     {
         SafeJobHandle handle = _handle ?? throw new ObjectDisposedException(nameof(HostProcessJob));
-        if (!AssignProcessToJobObject(handle, process.Handle))
+        if (!AssignProcessToJobObject(handle, process))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed");
     }
 

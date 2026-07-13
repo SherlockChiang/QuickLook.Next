@@ -72,21 +72,11 @@ internal sealed class RasterHostSupervisor
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 
         DiagLog.Write("App", $"launching host: {_hostExePath} (exists={File.Exists(_hostExePath)})");
-        var psi = new ProcessStartInfo(_hostExePath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-        };
-        psi.ArgumentList.Add("--pipe");
-        psi.ArgumentList.Add(pipeName);
-        psi.ArgumentList.Add("--session-token");
-        psi.ArgumentList.Add(_sessionToken);
         var job = new HostProcessJob((nint)(1024L * 1024 * 1024));
         try
         {
-            _host = Process.Start(psi) ?? throw new InvalidOperationException("RasterHost process did not start");
-            job.Assign(_host);
+            _host = HostProcessLauncher.StartRestricted(
+                _hostExePath, ["--pipe", pipeName, "--session-token", _sessionToken], job);
             _job = job;
         }
         catch

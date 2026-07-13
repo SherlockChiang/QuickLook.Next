@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -10,8 +11,27 @@ public static class Program
     private static Mutex? _singleInstanceMutex;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (args is ["--restricted-host-probe-child"])
+        {
+            if (!HostProcessLauncher.IsCurrentProcessInJob()
+                || !HostProcessLauncher.CurrentProcessHasOnlyTraversalPrivilege())
+                Thread.Sleep(TimeSpan.FromSeconds(30));
+            return;
+        }
+        if (args is ["--smoke-restricted-host-launch"])
+        {
+            using var job = new HostProcessJob((nint)(128L * 1024 * 1024));
+            using Process child = HostProcessLauncher.StartRestricted(
+                Environment.ProcessPath ?? throw new InvalidOperationException("Current process path is unavailable."),
+                ["--restricted-host-probe-child"],
+                job);
+            child.WaitForExit(10_000);
+            Environment.ExitCode = child.HasExited ? 0 : 3;
+            return;
+        }
+
         // Single-instance guard: if another instance is already running (holding the named pipe),
         // exit immediately instead of becoming a broken tray-zombie process.
         _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Global\QuickLook.Next.App", out bool createdNew);

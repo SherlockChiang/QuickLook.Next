@@ -61,16 +61,11 @@ internal sealed class ParserHostSupervisor
         _sessionToken = RandomNumberGenerator.GetHexString(32);
         _server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        var startInfo = new ProcessStartInfo(_hostExePath) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
-        startInfo.ArgumentList.Add("--pipe");
-        startInfo.ArgumentList.Add(pipeName);
-        startInfo.ArgumentList.Add("--session-token");
-        startInfo.ArgumentList.Add(_sessionToken);
         var job = new HostProcessJob((nint)(512L * 1024 * 1024));
         try
         {
-            _host = Process.Start(startInfo) ?? throw new InvalidOperationException("ParserHost process did not start");
-            job.Assign(_host);
+            _host = HostProcessLauncher.StartRestricted(
+                _hostExePath, ["--pipe", pipeName, "--session-token", _sessionToken], job);
             _job = job;
         }
         catch
