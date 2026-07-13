@@ -26,6 +26,9 @@ internal sealed class OfficePreviewPresenter
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
+    private readonly List<PageSlot> _pageSlots = [];
+    private OfficeLayout? _layout;
+    private double _maxPageWidth;
     private PreviewReady? _lastReady;
     private (double Width, double Height) _lastMaxContent;
 
@@ -37,6 +40,8 @@ internal sealed class OfficePreviewPresenter
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
         _getHighContrast = getHighContrast;
+        _scrollViewer.ViewChanged += (_, _) => UpdateVirtualPages();
+        _scrollViewer.SizeChanged += (_, _) => UpdateVirtualPages();
     }
 
     public OfficePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -44,13 +49,24 @@ internal sealed class OfficePreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         OfficeLayout layout = ready.OfficeLayout!;
+        _layout = layout;
 
         _pagesPanel.Children.Clear();
+        _pageSlots.Clear();
         _scrollViewer.ChangeView(0, 0, null, true);
 
         double maxPageWidth = Math.Max(360, maxContent.Width - 72);
-        foreach (OfficePage page in layout.Pages.Take(16))
-            _pagesPanel.Children.Add(CreatePageView(layout, page, maxPageWidth));
+        _maxPageWidth = maxPageWidth;
+        foreach ((OfficePage page, int index) in layout.Pages.Take(16).Select((page, index) => (page, index)))
+        {
+            Border host = CreatePageHost(layout, page, maxPageWidth);
+            var slot = new PageSlot(page, host);
+            _pageSlots.Add(slot);
+            _pagesPanel.Children.Add(host);
+            if (index < 2)
+                Materialize(slot);
+        }
+        _pagesPanel.DispatcherQueue.TryEnqueue(UpdateVirtualPages);
 
         var first = layout.Pages.FirstOrDefault();
         double firstWidth = first?.Width > 0 ? first.Width : layout.Width;
@@ -68,6 +84,55 @@ internal sealed class OfficePreviewPresenter
     {
         if (_lastReady is not null)
             Render(_lastReady, _lastMaxContent);
+    }
+
+    private static Border CreatePageHost(OfficeLayout layout, OfficePage page, double maxPageWidth)
+    {
+        double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
+        double pageHeight = Math.Max(180, page.Height > 0 ? page.Height : layout.Height);
+        double scale = LayoutScale(layout, pageWidth, maxPageWidth);
+        bool isWorkbook = layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase);
+        double viewWidth = pageWidth * scale + (isWorkbook ? 42 : 0);
+        double viewHeight = pageHeight * scale + (isWorkbook ? 24 : 0);
+        return new Border
+        {
+            Width = viewWidth,
+            Height = viewHeight + 24,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+    }
+
+    private void UpdateVirtualPages()
+    {
+        if (_layout is null || _pageSlots.Count == 0)
+            return;
+
+        double viewport = _scrollViewer.ViewportHeight;
+        if (!double.IsFinite(viewport) || viewport <= 0)
+            return;
+        double margin = viewport;
+        foreach (PageSlot slot in _pageSlots)
+        {
+            try
+            {
+                double top = slot.Host.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point()).Y;
+                bool nearby = top < viewport + margin && top + slot.Host.Height > -margin;
+                if (nearby)
+                    Materialize(slot);
+                else
+                    slot.Host.Child = null;
+            }
+            catch
+            {
+                Materialize(slot);
+            }
+        }
+    }
+
+    private void Materialize(PageSlot slot)
+    {
+        if (slot.Host.Child is null && _layout is not null)
+            slot.Host.Child = CreatePageView(_layout, slot.Page, _maxPageWidth);
     }
 
     private FrameworkElement CreatePageView(OfficeLayout layout, OfficePage page, double maxPageWidth)
@@ -480,6 +545,8 @@ internal sealed class OfficePreviewPresenter
         var highContrast = _getHighContrast();
         return highContrast.Enabled ? new SolidColorBrush(highContrast.Foreground) : fallback;
     }
+
+    private sealed record PageSlot(OfficePage Page, Border Host);
 
     private static bool TryColorFromHex(string? value, out Windows.UI.Color color)
     {
