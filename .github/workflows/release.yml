@@ -6,23 +6,26 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: windows-2025
     timeout-minutes: 40
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.1.7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.6.0
         with:
           dotnet-version: 10.0.301
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.96.0
+          targets: x86_64-pc-windows-msvc
 
       - name: Resolve release version
         id: version
@@ -64,15 +67,20 @@ jobs:
           RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
         run: ./tools/release.ps1 -ExpectedVersion "${{ steps.version.outputs.version }}" -CertificatePath ".signing/QuickLook.Next-Release.pfx" -CertificatePassword "$env:RELEASE_PFX_PASSWORD" -SkipSystemImageSmoke
 
+      - name: Delete release signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath ".signing" -Recurse -Force -ErrorAction SilentlyContinue
+
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: dist
           format: spdx-json
           output-file: artifacts/QuickLook.Next-${{ steps.version.outputs.tag }}-win-x64.spdx.json
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: QuickLook.Next-${{ steps.version.outputs.tag }}-win-x64
           path: |
@@ -81,15 +89,29 @@ jobs:
             artifacts/*.spdx.json
           if-no-files-found: error
 
+  publish:
+    needs: build
+    runs-on: windows-2025
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: QuickLook.Next-${{ needs.build.outputs.tag }}-win-x64
+          path: artifacts
+
       - name: Attest release archive
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: artifacts/QuickLook.Next-Installer-*.zip
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.build.outputs.tag }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
