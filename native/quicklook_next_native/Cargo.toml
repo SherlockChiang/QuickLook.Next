@@ -1,6 +1,6 @@
 [package]
 name = "quicklook_next_native"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "QuickLook Next native layer: global hotkey state machine, Explorer selection, Win32/Shell/COM."
 

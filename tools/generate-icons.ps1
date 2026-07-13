@@ -244,4 +244,9 @@ Save-AppPng 150 (Join-Path $outputDir "Square150x150Logo.png")
 Save-AppPng 50  (Join-Path $outputDir "StoreLogo.png")
 Save-AppPng 44  (Join-Path $outputDir "Square44x44Logo.png")
 
+# Windows uses unplated target-size assets for the taskbar and app list without adding a theme-colored tile.
+foreach ($size in @(16, 20, 24, 30, 32, 36, 40, 44, 48, 60, 64, 72, 80, 96, 256)) {
+    Save-AppPng $size (Join-Path $outputDir "Square44x44Logo.targetsize-$($size)_altform-unplated.png")
+}
+
 Write-Host "Generated theme-aware QuickLook Next icons in $outputDir"
