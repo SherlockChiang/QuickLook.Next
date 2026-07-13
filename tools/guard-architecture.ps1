@@ -198,6 +198,22 @@ if (Test-Path $appNativeBridge) {
     }
 }
 
+# Rule 7: every supported locale must define the same resource keys.
+$englishResources = Join-Path $Root "src\QuickLook.Next.App\Strings\en-US\Resources.resw"
+$chineseResources = Join-Path $Root "src\QuickLook.Next.App\Strings\zh-CN\Resources.resw"
+if ((Test-Path $englishResources) -and (Test-Path $chineseResources)) {
+    [xml]$english = Get-Content -LiteralPath $englishResources -Raw
+    [xml]$chinese = Get-Content -LiteralPath $chineseResources -Raw
+    $englishKeys = @($english.root.data | ForEach-Object { $_.name })
+    $chineseKeys = @($chinese.root.data | ForEach-Object { $_.name })
+    foreach ($key in $englishKeys | Where-Object { $_ -notin $chineseKeys }) {
+        Add-Failure "zh-CN resource is missing key: $key"
+    }
+    foreach ($key in $chineseKeys | Where-Object { $_ -notin $englishKeys }) {
+        Add-Failure "en-US resource is missing key: $key"
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Architecture guard failed:" -ForegroundColor Red
