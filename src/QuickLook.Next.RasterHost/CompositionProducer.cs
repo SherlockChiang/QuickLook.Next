@@ -5,14 +5,13 @@ using Windows.Win32.Graphics.Direct3D;
 using Windows.Win32.Graphics.Direct3D11;
 using Windows.Win32.Graphics.Dxgi;
 using Windows.Win32.Graphics.Dxgi.Common;
-using Windows.Win32.System.Threading;
 
 namespace QuickLook.Next.RasterHost;
 
 /// <summary>
 /// Producer side of the cross-process composition boundary (validated in Spike 1). Creates a shareable
-/// DirectComposition surface handle backed by a composition swap chain, duplicates the handle into the
-/// App process, and renders into it. The App composes the handle into its WinUI 3 visual tree; the OS
+/// DirectComposition surface handle backed by a composition swap chain. The App copies the handle from
+/// this process and composes it into its WinUI 3 visual tree; the OS
 /// compositor pulls presented frames on vsync — no per-frame IPC.
 ///
 /// Raster providers hand the host premultiplied BGRA bytes; the host uploads those bytes to a D3D
@@ -21,6 +20,7 @@ namespace QuickLook.Next.RasterHost;
 internal sealed unsafe class CompositionProducer : IDisposable
 {
     private const uint COMPOSITIONOBJECT_ALL_ACCESS = 0x0003;
+    private const int MaxPendingSurfaceTransfers = 128;
 
     private readonly object _sync = new();
     private ID3D11Device _device = null!;
@@ -30,11 +30,11 @@ internal sealed unsafe class CompositionProducer : IDisposable
     private readonly List<IDXGISwapChain1> _liveSwapchains = new();
     private readonly Dictionary<(string RequestId, int PageIndex, long PageGeneration), IDXGISwapChain1> _pageSwapchains = new();
     private readonly List<IDXGISwapChain1> _retired = new(); // closed previews, freed on the next open
-    private HANDLE _appProc;
+    private readonly Dictionary<string, HANDLE> _surfaceTransfers = new(StringComparer.Ordinal);
 
     public long AdapterLuid { get; private set; }
 
-    public void Initialize(int appProcessId)
+    public void Initialize()
     {
         ReadOnlySpan<D3D_FEATURE_LEVEL> levels = stackalloc[]
         {
@@ -58,13 +58,6 @@ internal sealed unsafe class CompositionProducer : IDisposable
             throw new InvalidOperationException($"CreateDXGIFactory2 failed 0x{hr.Value:X8}");
         _factory = (IDXGIFactoryMedia)factoryObj;
 
-        if (appProcessId != 0)
-        {
-            _appProc = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_DUP_HANDLE, false, (uint)appProcessId);
-            if ((nint)_appProc.Value == 0)
-                throw new InvalidOperationException("OpenProcess(App) failed");
-        }
-
     }
 
     private static long ReadAdapterLuid(ID3D11Device device)
@@ -82,7 +75,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
         }
     }
 
-    public long CreateSurface(uint width, uint height)
+    public SurfaceTransfer CreateSurface(uint width, uint height)
     {
         var (surface, sc) = CreateSwapchain(width, height);
         lock (_sync)
@@ -100,10 +93,10 @@ internal sealed unsafe class CompositionProducer : IDisposable
             _swapchain = sc;
             _liveSwapchains.Add(sc);
         }
-        return DuplicateToApp(surface);
+        return RetainSurfaceTransfer(surface);
     }
 
-    public long CreatePresentedSurface(byte[] bgra, int width, int height)
+    public SurfaceTransfer CreatePresentedSurface(byte[] bgra, int width, int height)
     {
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         int expected = checked(width * height * 4);
@@ -116,11 +109,11 @@ internal sealed unsafe class CompositionProducer : IDisposable
             _liveSwapchains.Add(sc);
             PresentPixelsCore(sc, bgra, width, height);
         }
-        return DuplicateToApp(surface);
+        return RetainSurfaceTransfer(surface);
     }
 
     /// <summary>Page surface keyed by request and page, so stale closes cannot release a newer preview.</summary>
-    public long CreatePresentedPageSurface(
+    public SurfaceTransfer CreatePresentedPageSurface(
         string requestId, int pageIndex, long pageGeneration, byte[] bgra, int width, int height)
     {
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
@@ -136,7 +129,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
             _pageSwapchains[key] = sc;
             PresentPixelsCore(sc, bgra, width, height);
         }
-        return DuplicateToApp(surface);
+        return RetainSurfaceTransfer(surface);
     }
 
     public void ReleasePage(string requestId, int pageIndex, long pageGeneration)
@@ -176,18 +169,26 @@ internal sealed unsafe class CompositionProducer : IDisposable
         return (surface, sc);
     }
 
-    private long DuplicateToApp(HANDLE surface)
+    private SurfaceTransfer RetainSurfaceTransfer(HANDLE surface)
     {
-        HANDLE dup;
-        BOOL ok = PInvoke.DuplicateHandle(
-            PInvoke.GetCurrentProcess(), surface, _appProc, &dup, 0, false,
-            DUPLICATE_HANDLE_OPTIONS.DUPLICATE_SAME_ACCESS);
-        // The swapchain (created from this handle) holds its own reference to the composition surface, and
-        // the App now owns a duplicated handle — so the host's original handle is no longer needed. Close
-        // it, or one kernel handle leaks for every surface and every PDF page rendered.
-        PInvoke.CloseHandle(surface);
-        if (!ok) throw new InvalidOperationException("DuplicateHandle into App failed");
-        return (long)(nint)dup.Value;
+        string transferId = Guid.NewGuid().ToString("n");
+        lock (_sync)
+        {
+            if (_surfaceTransfers.Count >= MaxPendingSurfaceTransfers)
+            {
+                PInvoke.CloseHandle(surface);
+                throw new InvalidOperationException("Too many unacknowledged surface transfers.");
+            }
+            _surfaceTransfers.Add(transferId, surface);
+        }
+        return new SurfaceTransfer(transferId, (long)(nint)surface.Value);
+    }
+
+    public void ReleaseSurfaceTransfer(string transferId)
+    {
+        lock (_sync)
+            if (_surfaceTransfers.Remove(transferId, out HANDLE surface))
+                PInvoke.CloseHandle(surface);
     }
 
     public void PresentPixels(byte[] bgra, int width, int height)
@@ -295,14 +296,14 @@ internal sealed unsafe class CompositionProducer : IDisposable
             foreach (var sc in _liveSwapchains) ReleaseCom(sc);
             _swapchain = null;
             _liveSwapchains.Clear();
+            foreach (HANDLE surface in _surfaceTransfers.Values) PInvoke.CloseHandle(surface);
+            _surfaceTransfers.Clear();
         }
     }
 
     public void Dispose()
     {
         Reset();
-        if ((nint)_appProc.Value != 0) PInvoke.CloseHandle(_appProc);
-        _appProc = default;
         ReleaseCom(_factory);
         ReleaseCom(_ctx);
         ReleaseCom(_device);
@@ -311,3 +312,5 @@ internal sealed unsafe class CompositionProducer : IDisposable
         _device = null!;
     }
 }
+
+internal readonly record struct SurfaceTransfer(string TransferId, long HostHandle);

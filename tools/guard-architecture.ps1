@@ -210,6 +210,15 @@ if (Test-Path $parserHostProgram) {
     }
 }
 
+$rasterHostRoot = Join-Path $Root "src/QuickLook.Next.RasterHost"
+if (Test-Path $rasterHostRoot) {
+    $rasterHostText = (Get-ChildItem -LiteralPath $rasterHostRoot -File -Filter "*.cs" |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    if ($rasterHostText -match 'OpenAuthenticatedPipeServerProcess|PROCESS_DUP_HANDLE|OpenProcess\s*\(') {
+        Add-Failure "RasterHost must not receive a handle to the App process"
+    }
+}
+
 # Rule 8: every supported locale must define the same resource keys.
 $englishResources = Join-Path $Root "src\QuickLook.Next.App\Strings\en-US\Resources.resw"
 $chineseResources = Join-Path $Root "src\QuickLook.Next.App\Strings\zh-CN\Resources.resw"

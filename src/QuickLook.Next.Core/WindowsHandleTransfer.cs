@@ -6,26 +6,12 @@ namespace QuickLook.Next.Core;
 
 public static class WindowsHandleTransfer
 {
-    private const uint ProcessDuplicateHandle = 0x0040;
     private const uint GenericRead = 0x80000000;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareDelete = 0x00000004;
     private const uint OpenExisting = 3;
     private const uint DuplicateSameAccess = 0x00000002;
     private const uint FileTypeDisk = 0x0001;
-
-    public static SafeProcessHandle OpenAuthenticatedPipeServerProcess(SafePipeHandle pipe, int expectedProcessId)
-    {
-        uint serverProcessId = VerifyNamedPipeServerProcess(pipe, expectedProcessId);
-
-        SafeProcessHandle process = OpenProcess(ProcessDuplicateHandle, false, serverProcessId);
-        if (process.IsInvalid)
-        {
-            process.Dispose();
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the App process for handle transfer.");
-        }
-        return process;
-    }
 
     public static uint VerifyNamedPipeServerProcess(SafePipeHandle pipe, int expectedProcessId)
     {
@@ -67,12 +53,18 @@ public static class WindowsHandleTransfer
         return handle;
     }
 
+    public static nint DuplicateHandleFromProcess(SafeProcessHandle sourceProcess, long sourceHandle)
+    {
+        nint remoteHandle = checked((nint)sourceHandle);
+        if (remoteHandle == 0 || remoteHandle == -1
+            || !DuplicateHandle(sourceProcess, remoteHandle, GetCurrentProcess(), out nint duplicate, 0, false, DuplicateSameAccess))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not duplicate the handle from the host.");
+        return duplicate;
+    }
+
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern SafeProcessHandle OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFile(

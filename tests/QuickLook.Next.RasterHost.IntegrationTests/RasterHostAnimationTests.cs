@@ -55,6 +55,15 @@ public sealed class RasterHostAnimationTests
                 ControlMessage message = received;
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
+                if (message is PreviewSurface surface)
+                {
+                    Assert.Matches("^[0-9a-f]{32}$", surface.TransferId);
+                    using var localSurfaceHandle = new Microsoft.Win32.SafeHandles.SafeFileHandle(
+                        WindowsHandleTransfer.DuplicateHandleFromProcess(host.SafeHandle, surface.SharedHandle),
+                        ownsHandle: true);
+                    Assert.False(localSurfaceHandle.IsInvalid);
+                    await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), timeout.Token);
+                }
                 previewReady = message as PreviewReady;
             }
 

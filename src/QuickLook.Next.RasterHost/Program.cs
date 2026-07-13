@@ -46,7 +46,6 @@ var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
-SafeProcessHandle? appProcess = null;
 string? activeRequestId = null;
 PreviewOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
@@ -75,8 +74,8 @@ while (true)
                 }
                 try
                 {
-                    appProcess = WindowsHandleTransfer.OpenAuthenticatedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
-                    producer.Initialize(hello.AppProcessId);
+                    WindowsHandleTransfer.VerifyNamedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
+                    producer.Initialize();
                     await channel.SendAsync(new HostReady(producer.AdapterLuid));
                     authenticated = true;
                 }
@@ -124,6 +123,10 @@ while (true)
                 await CloseAnimationAsync(animationClose.RequestId);
                 break;
 
+            case PreviewSurfaceRelease release when IsValidRequestId(release.TransferId):
+                producer.ReleaseSurfaceTransfer(release.TransferId);
+                break;
+
         case PreviewResize resize:
             if (!string.Equals(resize.RequestId, activeRequestId, StringComparison.Ordinal)
                 || resize.Width == 0 || resize.Height == 0
@@ -134,9 +137,12 @@ while (true)
                 DiagLog.Write("RasterHost", $"rejected invalid resize: request={resize.RequestId} size={resize.Width}x{resize.Height} dpi={resize.Dpi}");
                 break;
             }
-            long rh = producer.CreateSurface(resize.Width, resize.Height);
+            SurfaceTransfer rh = producer.CreateSurface(resize.Width, resize.Height);
             await channel.SendAsync(new PreviewSurface(
-                resize.RequestId, rh, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM"));
+                resize.RequestId, rh.HostHandle, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM")
+            {
+                TransferId = rh.TransferId,
+            });
             break;
 
         case PreviewPageOpen page when IsValidRequestId(page.RequestId)
@@ -202,7 +208,6 @@ foreach (var packet in animationPackets.Values)
     packet.Handle.Dispose();
     DeleteAnimationPacket(packet.Path);
 }
-appProcess?.Dispose();
 
 void StartOpen(PreviewOpen open)
 {
@@ -462,11 +467,14 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
                         return;
-                    long imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                    SurfaceTransfer imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
                     uploadWatch.Stop();
                     DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
                     await channel.SendAsync(new PreviewSurface(
-                        open.RequestId, imageHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM"));
+                        open.RequestId, imageHandle.HostHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM")
+                    {
+                        TransferId = imageHandle.TransferId,
+                    });
                     string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
                         ? Path.GetFileName(open.Path)
                         : $"{Path.GetFileName(open.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
@@ -492,9 +500,12 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
                     return;
-                long fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
+                SurfaceTransfer fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
                 await channel.SendAsync(new PreviewSurface(
-                    open.RequestId, fallbackHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM"));
+                    open.RequestId, fallbackHandle.HostHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM")
+                {
+                    TransferId = fallbackHandle.TransferId,
+                });
                 await channel.SendAsync(new PreviewReady(
                     open.RequestId, "thumbnail", Path.GetFileName(open.Path), fallbackThumb.Width, fallbackThumb.Height));
             }
@@ -622,14 +633,17 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
             return;
 
         var uploadWatch = Stopwatch.StartNew();
-        long handle = producer.CreatePresentedPageSurface(
+        SurfaceTransfer handle = producer.CreatePresentedPageSurface(
             page.RequestId, page.PageIndex, page.PageGeneration, rendered.Bgra, rendered.Width, rendered.Height);
         uploadWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
         var sendWatch = Stopwatch.StartNew();
         await channel.SendAsync(new PreviewSurface(
-            page.RequestId, handle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
-            "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration));
+            page.RequestId, handle.HostHandle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
+            "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration)
+        {
+            TransferId = handle.TransferId,
+        });
         sendWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page surface send {sendWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}");
     }

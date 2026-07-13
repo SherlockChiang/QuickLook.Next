@@ -17,6 +17,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(ParserReady), "parser.ready")]
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
+[JsonDerivedType(typeof(PreviewSurfaceRelease), "preview.surface.release")]
 [JsonDerivedType(typeof(PreviewReady), "preview.ready")]
 [JsonDerivedType(typeof(PreviewError), "preview.error")]
 [JsonDerivedType(typeof(PreviewResize), "preview.resize")]
@@ -54,7 +55,13 @@ public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe)
 /// <summary>Host → App: the shared composition surface handle (already duplicated into the App process).</summary>
 public sealed record PreviewSurface(
     string RequestId, long SharedHandle, uint Width, uint Height, double Dpi, string Format,
-    int PageIndex = -1, long PageGeneration = 0) : ControlMessage;
+    int PageIndex = -1, long PageGeneration = 0) : ControlMessage
+{
+    public string TransferId { get; init; } = "";
+}
+
+/// <summary>App → RasterHost: the host-local surface handle was copied or rejected and can be closed.</summary>
+public sealed record PreviewSurfaceRelease(string TransferId) : ControlMessage;
 
 /// <summary>Host → App: terminal success for a RequestId.</summary>
 public sealed record PreviewReady(

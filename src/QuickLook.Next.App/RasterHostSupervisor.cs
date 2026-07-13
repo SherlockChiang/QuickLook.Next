@@ -196,9 +196,7 @@ internal sealed class RasterHostSupervisor
                 _ready.TrySetResult();
                 break;
             case PreviewSurface surface:
-                if (surface.PageIndex >= 0)
-                    _pendingCloudPages.TryRemove((surface.RequestId, surface.PageIndex, surface.PageGeneration), out _);
-                _ui.TryEnqueue(() => SurfaceReceived?.Invoke(surface));
+                ReceiveSurface(surface);
                 break;
             case PreviewReady ready:
                 _pending.TryComplete(ready.RequestId, ready);
@@ -217,6 +215,58 @@ internal sealed class RasterHostSupervisor
                 _ui.TryEnqueue(() => PageErrorReceived?.Invoke(pageError));
                 break;
         }
+    }
+
+    private void ReceiveSurface(PreviewSurface surface)
+    {
+        nint localHandle = 0;
+        try
+        {
+            if (surface.TransferId.Length != 32 || !surface.TransferId.All(static c => char.IsAsciiHexDigit(c)))
+                throw new InvalidDataException("RasterHost sent an invalid surface transfer ID.");
+            if (_host is null)
+                throw new InvalidOperationException("RasterHost process is unavailable.");
+            localHandle = WindowsHandleTransfer.DuplicateHandleFromProcess(_host.SafeHandle, surface.SharedHandle);
+            var localSurface = surface with { SharedHandle = localHandle.ToInt64() };
+            if (surface.PageIndex >= 0)
+                _pendingCloudPages.TryRemove((surface.RequestId, surface.PageIndex, surface.PageGeneration), out _);
+            if (!_ui.TryEnqueue(() =>
+                {
+                    Action<PreviewSurface>? handler = SurfaceReceived;
+                    if (handler is null)
+                        CompositionInterop.CloseSharedHandle((nint)localSurface.SharedHandle);
+                    else
+                        handler(localSurface);
+                }))
+            {
+                CompositionInterop.CloseSharedHandle(localHandle);
+                localHandle = 0;
+            }
+            else
+            {
+                localHandle = 0; // UI callback owns the App-local handle.
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", $"surface handle transfer failed: request={surface.RequestId}; {ex.Message}");
+        }
+        finally
+        {
+            if (localHandle != 0)
+                CompositionInterop.CloseSharedHandle(localHandle);
+            _ = ReleaseSurfaceTransferAsync(surface.TransferId);
+        }
+    }
+
+    private async Task ReleaseSurfaceTransferAsync(string transferId)
+    {
+        try
+        {
+            if (_channel is not null && transferId.Length == 32)
+                await _channel.SendAsync(new PreviewSurfaceRelease(transferId));
+        }
+        catch { }
     }
 
     /// <summary>Open a file for preview; resolves on PreviewReady, PreviewError, or a watchdog timeout.</summary>
