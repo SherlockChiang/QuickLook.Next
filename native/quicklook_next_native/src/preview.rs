@@ -10410,7 +10410,9 @@ struct PeSummary {
     data_directories: u32,
     section_names: Vec<String>,
     directories: Vec<PeDataDirectory>,
+    #[cfg(test)]
     imports: Vec<String>,
+    #[cfg(test)]
     imported_functions: Vec<String>,
     exports: Vec<String>,
     export_details: Vec<String>,
@@ -10510,12 +10512,13 @@ fn parse_pe_headers(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) ->
     let section_names = parse_pe_section_names(bytes, section_table, sections);
     let section_summaries = parse_pe_sections(bytes, section_table, sections);
     if preview_cancelled(cancel_cb) { return None; }
+    #[cfg(test)]
     let imports = directories
         .iter()
         .find(|directory| directory.name == "Import")
         .map(|directory| parse_pe_import_dlls(bytes, &section_summaries, directory.address))
         .unwrap_or_default();
-    if preview_cancelled(cancel_cb) { return None; }
+    #[cfg(test)]
     let imported_functions = directories
         .iter()
         .find(|directory| directory.name == "Import")
@@ -10523,7 +10526,6 @@ fn parse_pe_headers(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) ->
             parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B)
         })
         .unwrap_or_default();
-    if preview_cancelled(cancel_cb) { return None; }
     let exports = directories
         .iter()
         .find(|directory| directory.name == "Export")
@@ -10589,7 +10591,9 @@ fn parse_pe_headers(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) ->
         data_directories,
         section_names,
         directories,
+        #[cfg(test)]
         imports,
+        #[cfg(test)]
         imported_functions,
         exports,
         export_details,
@@ -10675,6 +10679,7 @@ fn parse_pe_sections(bytes: &[u8], section_table: usize, sections: u16) -> Vec<P
     summaries
 }
 
+#[cfg(test)]
 fn parse_pe_import_dlls(
     bytes: &[u8],
     sections: &[PeSectionSummary],
@@ -10710,6 +10715,7 @@ fn parse_pe_import_dlls(
     imports
 }
 
+#[cfg(test)]
 fn parse_pe_import_functions(
     bytes: &[u8],
     sections: &[PeSectionSummary],
@@ -10744,6 +10750,7 @@ fn parse_pe_import_functions(
     functions
 }
 
+#[cfg(test)]
 fn append_pe_import_thunks(
     bytes: &[u8],
     sections: &[PeSectionSummary],
