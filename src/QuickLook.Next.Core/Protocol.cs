@@ -109,7 +109,7 @@ public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage
 public sealed record HeroRasterExtract(string RequestId, string Path, string Kind) : ControlMessage;
 
 /// <summary>ParserHost → App: a bounded BGRA raster is ready at TempPath; pixels never use the control pipe.</summary>
-public sealed record HeroRasterExtracted(string RequestId, string TempPath, int Width, int Height) : ControlMessage;
+public sealed record HeroRasterExtracted(string RequestId, long FileHandle, long PacketLength, int Width, int Height) : ControlMessage;
 
 /// <summary>App → ParserHost: release a hero-raster temp handoff after the App has consumed it.</summary>
 public sealed record HeroRasterExtractClose(string RequestId) : ControlMessage;

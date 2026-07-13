@@ -248,7 +248,10 @@ internal sealed class ParserHostSupervisor
                         _pending.TryComplete(error.RequestId, error);
                         break;
                     case ArchiveEntryExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
-                    case HeroRasterExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
+                    case HeroRasterExtracted extracted:
+                        if (!_pending.TryComplete(extracted.RequestId, extracted))
+                            WindowsHandleTransfer.CloseReceivedFileHandle(extracted.FileHandle);
+                        break;
                 }
             }
         }
@@ -355,13 +358,13 @@ internal sealed class ParserHostSupervisor
     {
         const int maxRasterBytes = 16 * 1024 * 1024;
         const int maxDimension = 4096;
-        if (!TempHandoffPaths.IsHeroRasterPath(extracted.TempPath, extracted.RequestId))
-            return null;
-
         try
         {
-            using var stream = new FileStream(extracted.TempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (stream.Length is <= 8 or > maxRasterBytes)
+            using var handle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            if (extracted.PacketLength is <= 8 or > maxRasterBytes)
+                return null;
+            using var stream = new FileStream(handle, FileAccess.Read);
+            if (stream.Length != extracted.PacketLength)
                 return null;
 
             byte[] raster = new byte[checked((int)stream.Length)];

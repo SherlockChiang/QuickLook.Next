@@ -45,6 +45,11 @@ public sealed class ParserHostIntegrationTests
             channel.SendAsync(new PreviewClose(Guid.NewGuid().ToString("n")), cancellationToken));
 
     [Fact]
+    public Task Host_rejects_authenticated_message_with_wrong_app_process_id()
+        => AssertRejectedAsync((channel, token, cancellationToken) =>
+            channel.SendAsync(new Hello(int.MaxValue, token), cancellationToken));
+
+    [Fact]
     public Task Host_rejects_repeated_authentication()
         => AssertRejectedAsync(async (channel, token, cancellationToken) =>
         {
@@ -373,18 +378,22 @@ public sealed class ParserHostIntegrationTests
             string requestId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(requestId, docxPath, "office"), timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = extracted.TempPath;
+            handoffPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(8, extracted.Width);
             Assert.Equal(8, extracted.Height);
-            Assert.True(TempHandoffPaths.IsHeroRasterPath(handoffPath, requestId));
-            byte[] raster = await File.ReadAllBytesAsync(handoffPath, timeout.Token);
+            using var heroHandle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            using var heroStream = new FileStream(heroHandle, FileAccess.Read);
+            Assert.Equal(extracted.PacketLength, heroStream.Length);
+            var raster = new byte[heroStream.Length];
+            heroStream.ReadExactly(raster);
             Assert.Equal(8, BitConverter.ToInt32(raster, 0));
             Assert.Equal(8, BitConverter.ToInt32(raster, 4));
             Assert.Equal(8 + 8 * 8 * 4, raster.Length);
 
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+            Assert.True(heroStream.CanRead);
         }
         finally
         {
@@ -425,18 +434,22 @@ public sealed class ParserHostIntegrationTests
             string requestId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(requestId, apkPath, "package"), timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = extracted.TempPath;
+            handoffPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(16, extracted.Width);
             Assert.Equal(16, extracted.Height);
-            Assert.True(TempHandoffPaths.IsHeroRasterPath(handoffPath, requestId));
-            byte[] raster = await File.ReadAllBytesAsync(handoffPath, timeout.Token);
+            using var heroHandle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            using var heroStream = new FileStream(heroHandle, FileAccess.Read);
+            Assert.Equal(extracted.PacketLength, heroStream.Length);
+            var raster = new byte[heroStream.Length];
+            heroStream.ReadExactly(raster);
             Assert.Equal(16, BitConverter.ToInt32(raster, 0));
             Assert.Equal(16, BitConverter.ToInt32(raster, 4));
             Assert.Equal(8 + 16 * 16 * 4, raster.Length);
 
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+            Assert.True(heroStream.CanRead);
         }
         finally
         {
@@ -471,6 +484,7 @@ public sealed class ParserHostIntegrationTests
         using Process host = StartHost(pipeName, token);
         string? archivePath = null;
         string? rasterPath = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? rasterHandle = null;
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -484,7 +498,9 @@ public sealed class ParserHostIntegrationTests
             archivePath = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token)).TempPath;
             string rasterId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(rasterId, docxPath, "office"), timeout.Token);
-            rasterPath = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token)).TempPath;
+            HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
+            rasterHandle = WindowsHandleTransfer.TakeReceivedFileHandle(raster.FileHandle);
+            rasterPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + rasterId, "hero.bgra");
             Assert.True(File.Exists(archivePath));
             Assert.True(File.Exists(rasterPath));
 
@@ -495,6 +511,7 @@ public sealed class ParserHostIntegrationTests
         }
         finally
         {
+            rasterHandle?.Dispose();
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
             if (archivePath is not null) try { Directory.Delete(Path.GetDirectoryName(archivePath)!, recursive: true); } catch { }

@@ -121,7 +121,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [Fact]
     public void ProtocolJson_round_trips_hero_raster_message()
     {
-        var message = new HeroRasterExtracted("0".PadLeft(32, '0'), "C:\\temp\\hero.bgra", 32, 24);
+        var message = new HeroRasterExtracted("0".PadLeft(32, '0'), 1234, 3080, 32, 24);
         string json = ProtocolJson.Serialize(message);
 
         Assert.Contains("\"type\":\"hero.raster.extracted\"", json);

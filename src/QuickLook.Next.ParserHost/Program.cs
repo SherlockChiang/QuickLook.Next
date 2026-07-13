@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 using QuickLook.Next.ParserHost;
 
@@ -32,6 +33,7 @@ var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, string>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 bool authenticated = false;
+SafeProcessHandle? appProcess = null;
 string? activePreviewRequestId = null;
 
 while (true)
@@ -48,6 +50,15 @@ while (true)
                 || !string.Equals(hello.SessionToken, sessionToken, StringComparison.Ordinal))
             {
                 DiagLog.Write("ParserHost", "rejected unauthenticated pipe client");
+                return;
+            }
+            try
+            {
+                appProcess = WindowsHandleTransfer.OpenAuthenticatedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Write("ParserHost", "rejected App process identity: " + ex.Message);
                 return;
             }
             authenticated = true;
@@ -261,8 +272,14 @@ while (true)
                     try
                     {
                         heroCts.Token.ThrowIfCancellationRequested();
+                        if (appProcess is null || appProcess.IsInvalid)
+                            throw new InvalidOperationException("App handle-transfer process is unavailable.");
+                        var transferred = WindowsHandleTransfer.DuplicateReadOnlyFile(tempPath, appProcess);
+                        if (transferred.Length != raster.LongLength)
+                            throw new InvalidDataException("Hero raster changed before handle transfer.");
                         heroRasters[extract.RequestId] = tempPath;
-                        await channel.SendAsync(new HeroRasterExtracted(extract.RequestId, tempPath, width, height));
+                        await channel.SendAsync(new HeroRasterExtracted(
+                            extract.RequestId, transferred.Handle, transferred.Length, width, height));
                         tempPath = null; // retained until the App acknowledges consumption.
                     }
                     finally
@@ -313,6 +330,7 @@ foreach (string tempPath in archiveEntries.Values)
     DeleteArchiveEntry(tempPath);
 foreach (string tempPath in heroRasters.Values)
     DeleteHeroRaster(tempPath);
+appProcess?.Dispose();
 
 void Cancel(string requestId)
 {
