@@ -213,6 +213,9 @@ internal sealed class RasterHostSupervisor
             case PreviewReady ready:
                 _pending.TryComplete(ready.RequestId, ready);
                 break;
+            case PreviewAnimationFramesReady animation:
+                _pending.TryComplete(animation.RequestId, animation);
+                break;
             case PreviewError error:
                 RemoveCloudRequestState(error.RequestId);
                 _pending.TryComplete(error.RequestId, error);
@@ -330,6 +333,91 @@ internal sealed class RasterHostSupervisor
         {
             DiagLog.Write("App", $"host send page close request={requestId}; page={pageIndex}");
             await _channel.SendAsync(new PreviewPageClose(requestId, pageIndex, pageGeneration));
+        }
+    }
+
+    public async Task<NativeAnimationFrames?> ExtractAnimationFramesAsync(
+        string previewRequestId,
+        uint targetWidth,
+        uint targetHeight,
+        CancellationToken cancellationToken)
+    {
+        if (_channel is null)
+            throw new InvalidOperationException("RasterHost not connected");
+
+        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        try
+        {
+            await _channel.SendAsync(new PreviewAnimationFramesOpen(
+                requestId, previewRequestId, targetWidth, targetHeight));
+            ControlMessage terminal = await completion.WaitAsync(cancellationToken);
+            if (terminal is PreviewError)
+                return null;
+            if (terminal is not PreviewAnimationFramesReady ready
+                || !string.Equals(ready.PreviewRequestId, previewRequestId, StringComparison.Ordinal))
+                return null;
+            return ReadAnimationFrames(ready);
+        }
+        catch (TimeoutException)
+        {
+            RecycleHost(previewRequestId, "animation frame decode timed out");
+            throw;
+        }
+        finally
+        {
+            _pending.Cancel(requestId);
+            try
+            {
+                if (_channel is not null)
+                    await _channel.SendAsync(new PreviewAnimationFramesClose(requestId));
+            }
+            catch { }
+        }
+    }
+
+    private static NativeAnimationFrames? ReadAnimationFrames(PreviewAnimationFramesReady ready)
+    {
+        const long maxPacketBytes = 64L * 1024 * 1024 + 12;
+        if (!TempHandoffPaths.IsRasterAnimationPath(ready.TempPath, ready.RequestId)
+            || ready.PacketLength <= 12 || ready.PacketLength > maxPacketBytes
+            || ready.FrameCount is <= 0 or > 120
+            || ready.Width is <= 0 or > 1024
+            || ready.Height is <= 0 or > 1024)
+            return null;
+
+        try
+        {
+            using var stream = new FileStream(ready.TempPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length != ready.PacketLength)
+                return null;
+            Span<byte> header = stackalloc byte[12];
+            stream.ReadExactly(header);
+            int count = checked((int)BitConverter.ToUInt32(header[..4]));
+            int width = checked((int)BitConverter.ToUInt32(header[4..8]));
+            int height = checked((int)BitConverter.ToUInt32(header[8..12]));
+            int frameBytes = checked(width * height * 4);
+            long expectedLength = checked(12L + count * (4L + frameBytes));
+            if (count != ready.FrameCount || width != ready.Width || height != ready.Height
+                || expectedLength != stream.Length)
+                return null;
+
+            var frames = new List<NativeAnimationFrame>(count);
+            Span<byte> delayBytes = stackalloc byte[4];
+            for (int i = 0; i < count; i++)
+            {
+                stream.ReadExactly(delayBytes);
+                int delay = checked((int)BitConverter.ToUInt32(delayBytes));
+                if (delay is < 20 or > 1000)
+                    return null;
+                var bgra = new byte[frameBytes];
+                stream.ReadExactly(bgra);
+                frames.Add(new NativeAnimationFrame(delay, bgra));
+            }
+            return stream.Position == stream.Length ? new NativeAnimationFrames(width, height, frames) : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
+        {
+            return null;
         }
     }
 

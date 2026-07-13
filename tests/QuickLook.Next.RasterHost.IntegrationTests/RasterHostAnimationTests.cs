@@ -1,0 +1,94 @@
+using System.Diagnostics;
+using System.IO.Pipes;
+using System.Security.Cryptography;
+using QuickLook.Next.Contracts;
+using QuickLook.Next.Core;
+using Xunit;
+
+namespace QuickLook.Next.RasterHost.IntegrationTests;
+
+public sealed class RasterHostAnimationTests
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
+
+    [Fact]
+    public async Task Gif_frames_are_handed_off_and_removed_on_close()
+    {
+        string pipeName = $"quicklook_next_raster_animation_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif");
+            string previewRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+            var probe = new FileProbe(path, ".gif", File.ReadAllBytes(path)[..6])
+            {
+                Kind = "image",
+                Size = new FileInfo(path).Length,
+            };
+            await channel.SendAsync(new PreviewOpen(previewRequestId, path, probe)
+            {
+                TargetWidth = 256,
+                TargetHeight = 256,
+            }, timeout.Token);
+
+            PreviewReady? previewReady = null;
+            while (previewReady is null)
+            {
+                ControlMessage? received = await channel.ReceiveAsync(timeout.Token);
+                Assert.NotNull(received);
+                ControlMessage message = received;
+                if (message is PreviewError error)
+                    throw new Xunit.Sdk.XunitException(error.Message);
+                previewReady = message as PreviewReady;
+            }
+
+            string animationRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+            await channel.SendAsync(new PreviewAnimationFramesOpen(
+                animationRequestId, previewRequestId, 2048, 2048), timeout.Token);
+            ControlMessage? receivedTerminal = await channel.ReceiveAsync(timeout.Token);
+            Assert.NotNull(receivedTerminal);
+            ControlMessage terminal = receivedTerminal;
+            var frames = Assert.IsType<PreviewAnimationFramesReady>(terminal);
+            Assert.Equal(previewRequestId, frames.PreviewRequestId);
+            Assert.InRange(frames.FrameCount, 2, 120);
+            Assert.InRange(frames.Width, 1, 1024);
+            Assert.InRange(frames.Height, 1, 1024);
+            Assert.True(TempHandoffPaths.IsRasterAnimationPath(frames.TempPath, animationRequestId));
+            Assert.Equal(frames.PacketLength, new FileInfo(frames.TempPath).Length);
+
+            string directory = Path.GetDirectoryName(frames.TempPath)!;
+            await channel.SendAsync(new PreviewAnimationFramesClose(animationRequestId), timeout.Token);
+            await WaitForMissingAsync(frames.TempPath, timeout.Token);
+            Assert.False(Directory.Exists(directory));
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+        }
+    }
+
+    private static async Task WaitForMissingAsync(string path, CancellationToken cancellationToken)
+    {
+        while (File.Exists(path))
+            await Task.Delay(25, cancellationToken);
+    }
+}

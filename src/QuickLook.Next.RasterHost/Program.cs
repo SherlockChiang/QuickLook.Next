@@ -38,12 +38,18 @@ var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 var surfacePublishGate = new SemaphoreSlim(1, 1);
+var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
+var animationPackets = new ConcurrentDictionary<string, string>();
+var animationParents = new ConcurrentDictionary<string, string>();
+var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
 string? activeRequestId = null;
+PreviewOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
 const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
+CleanupStaleAnimationPackets();
 
 while (true)
 {
@@ -102,6 +108,19 @@ while (true)
                 }
                 break;
 
+            case PreviewAnimationFramesOpen animation when IsValidRequestId(animation.RequestId)
+                                                              && IsValidRequestId(animation.PreviewRequestId)
+                                                              && IsValidAnimationTargetSize(animation.TargetWidth, animation.TargetHeight)
+                                                              && activeOpen is { } parent
+                                                              && string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal)
+                                                              && string.Equals(parent.RequestId, animation.PreviewRequestId, StringComparison.Ordinal):
+                StartAnimationDecode(animation, parent.Path);
+                break;
+
+            case PreviewAnimationFramesClose animationClose when IsValidRequestId(animationClose.RequestId):
+                await CloseAnimationAsync(animationClose.RequestId);
+                break;
+
         case PreviewResize resize:
             if (!string.Equals(resize.RequestId, activeRequestId, StringComparison.Ordinal)
                 || resize.Width == 0 || resize.Height == 0
@@ -149,6 +168,8 @@ while (true)
                 if (isActiveRequest)
                 {
                     activeRequestId = null;
+                    activeOpen = null;
+                    CancelAnimationsForParent(close.RequestId);
                     producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                 }
                 break;
@@ -171,10 +192,18 @@ foreach (var cts in remainingOpenCts)
 {
     try { cts.Cancel(); } catch { }
 }
+foreach (string requestId in animationCts.Keys)
+    await CloseAnimationAsync(requestId);
+foreach (string tempPath in animationPackets.Values)
+    DeleteAnimationPacket(tempPath);
 
 void StartOpen(PreviewOpen open)
 {
+    string? previousRequestId = activeRequestId;
+    if (previousRequestId is not null && !string.Equals(previousRequestId, open.RequestId, StringComparison.Ordinal))
+        CancelAnimationsForParent(previousRequestId);
     activeRequestId = open.RequestId;
+    activeOpen = open;
     string[] existing;
     lock (openCtsLock)
         existing = openCts.Keys.ToArray();
@@ -209,6 +238,109 @@ void StartOpen(PreviewOpen open)
             cts.Dispose();
         }
     });
+}
+
+void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
+{
+    if (animationPackets.ContainsKey(animation.RequestId))
+    {
+        _ = channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame packet has not been released."));
+        return;
+    }
+
+    var cts = new CancellationTokenSource();
+    var gate = new SemaphoreSlim(1, 1);
+    if (!animationCts.TryAdd(animation.RequestId, cts)
+        || !animationHandoffGates.TryAdd(animation.RequestId, gate))
+    {
+        animationCts.TryRemove(animation.RequestId, out _);
+        cts.Dispose();
+        gate.Dispose();
+        _ = channel.SendAsync(new PreviewError(animation.RequestId, "Duplicate animation request ID."));
+        return;
+    }
+    animationParents[animation.RequestId] = animation.PreviewRequestId;
+
+    _ = Task.Run(async () =>
+    {
+        string? tempPath = null;
+        try
+        {
+            byte[]? packet = await NativeAnimationPacketDecoder.TryDecodeAsync(
+                path, animation.TargetWidth, animation.TargetHeight, cts.Token);
+            cts.Token.ThrowIfCancellationRequested();
+            if (packet is null)
+            {
+                await channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame decode failed."));
+                return;
+            }
+
+            tempPath = WriteAnimationPacket(animation.RequestId, packet);
+            if (tempPath is null)
+            {
+                await channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame handoff failed."));
+                return;
+            }
+
+            int count = checked((int)BitConverter.ToUInt32(packet, 0));
+            int width = checked((int)BitConverter.ToUInt32(packet, 4));
+            int height = checked((int)BitConverter.ToUInt32(packet, 8));
+            await gate.WaitAsync();
+            try
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (!string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal))
+                    return;
+                animationPackets[animation.RequestId] = tempPath;
+                await channel.SendAsync(new PreviewAnimationFramesReady(
+                    animation.RequestId, animation.PreviewRequestId, tempPath, count, width, height, packet.LongLength));
+                tempPath = null;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            DiagLog.Write("RasterHost", $"animation decode failed request={animation.RequestId}: {ex}");
+            try { await channel.SendAsync(new PreviewError(animation.RequestId, ex.Message)); } catch { }
+        }
+        finally
+        {
+            if (tempPath is not null) DeleteAnimationPacket(tempPath);
+            if (animationCts.TryRemove(animation.RequestId, out var current)) current.Dispose();
+            if (!animationPackets.ContainsKey(animation.RequestId))
+                animationParents.TryRemove(animation.RequestId, out _);
+            animationHandoffGates.TryRemove(animation.RequestId, out _);
+        }
+    });
+}
+
+async Task CloseAnimationAsync(string requestId)
+{
+    animationCts.TryGetValue(requestId, out var cts);
+    try { cts?.Cancel(); } catch (ObjectDisposedException) { }
+    if (animationHandoffGates.TryGetValue(requestId, out var gate))
+        await gate.WaitAsync();
+    try
+    {
+        if (animationPackets.TryRemove(requestId, out string? path))
+            DeleteAnimationPacket(path);
+        animationParents.TryRemove(requestId, out _);
+    }
+    finally
+    {
+        gate?.Release();
+    }
+}
+
+void CancelAnimationsForParent(string previewRequestId)
+{
+    foreach (var pair in animationParents)
+        if (string.Equals(pair.Value, previewRequestId, StringComparison.Ordinal))
+            _ = CloseAnimationAsync(pair.Key);
 }
 
 void CancelOpen(string requestId)
@@ -538,6 +670,63 @@ static bool IsValidTargetSize(uint width, uint height)
     => width <= MaxSurfaceDimension
        && height <= MaxSurfaceDimension
        && (width == 0 || height == 0 || (ulong)width * height <= MaxSurfacePixels);
+
+static bool IsValidAnimationTargetSize(uint width, uint height)
+    => IsValidTargetSize(width, height);
+
+static string? WriteAnimationPacket(string requestId, byte[] packet)
+{
+    try
+    {
+        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-animation");
+        Directory.CreateDirectory(root);
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return null;
+        string directory = Path.Combine(root, "frames-" + requestId);
+        Directory.CreateDirectory(directory);
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            return null;
+        string path = Path.Combine(directory, "frames.bin");
+        using var stream = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.WriteThrough,
+        });
+        stream.Write(packet);
+        return path;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+    {
+        return null;
+    }
+}
+
+static void DeleteAnimationPacket(string path)
+{
+    try
+    {
+        File.Delete(path);
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null) Directory.Delete(directory, recursive: false);
+    }
+    catch { }
+}
+
+static void CleanupStaleAnimationPackets()
+{
+    try
+    {
+        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-animation");
+        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return;
+        foreach (string directory in Directory.EnumerateDirectories(root, "frames-*"))
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
+                Directory.Delete(directory, recursive: true);
+    }
+    catch { }
+}
 
 static string MissingSystemCodecMessage(string extension)
 {

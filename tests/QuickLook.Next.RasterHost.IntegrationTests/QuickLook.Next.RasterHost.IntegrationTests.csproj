@@ -16,6 +16,11 @@
     <ProjectReference Include="..\..\src\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
     <ProjectReference Include="..\..\src\QuickLook.Next.RasterHost\QuickLook.Next.RasterHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\testdata\image-corpus\external\gif-disposal-background.gif"
+          Link="Fixtures\animated.gif"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
   <Target Name="StageRasterHost" AfterTargets="Build">
     <ItemGroup>
       <RasterHostFiles Include="$(RasterHostOutput)**\*" />

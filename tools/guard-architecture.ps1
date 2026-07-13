@@ -196,6 +196,9 @@ if (Test-Path $appNativeBridge) {
     if ($appNativeBridgeText -match 'ql_extract_(package_icon|office_image)') {
         Add-Failure "App NativeBridge must not P/Invoke package/Office hero raster extraction"
     }
+    if ($appNativeBridgeText -match 'ql_decode_(gif|webp)_frames') {
+        Add-Failure "App NativeBridge must not decode animated images in process"
+    }
 }
 
 # Rule 7: every supported locale must define the same resource keys.

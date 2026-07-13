@@ -30,6 +30,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(HeroRasterExtract), "hero.raster.extract")]
 [JsonDerivedType(typeof(HeroRasterExtracted), "hero.raster.extracted")]
 [JsonDerivedType(typeof(HeroRasterExtractClose), "hero.raster.extract.close")]
+[JsonDerivedType(typeof(PreviewAnimationFramesOpen), "preview.animation.open")]
+[JsonDerivedType(typeof(PreviewAnimationFramesReady), "preview.animation.ready")]
+[JsonDerivedType(typeof(PreviewAnimationFramesClose), "preview.animation.close")]
 public abstract record ControlMessage;
 
 /// <summary>App → Host on connect: authenticates the launch and lets the host duplicate surface handles into the App.</summary>
@@ -110,3 +113,14 @@ public sealed record HeroRasterExtracted(string RequestId, string TempPath, int 
 
 /// <summary>App → ParserHost: release a hero-raster temp handoff after the App has consumed it.</summary>
 public sealed record HeroRasterExtractClose(string RequestId) : ControlMessage;
+
+/// <summary>App → RasterHost: decode animation frames for the currently open parent preview.</summary>
+public sealed record PreviewAnimationFramesOpen(
+    string RequestId, string PreviewRequestId, uint TargetWidth, uint TargetHeight) : ControlMessage;
+
+/// <summary>RasterHost → App: a bounded animation frame packet is ready in host-owned temporary storage.</summary>
+public sealed record PreviewAnimationFramesReady(
+    string RequestId, string PreviewRequestId, string TempPath, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
+
+/// <summary>App → RasterHost: release an animation frame packet after consumption.</summary>
+public sealed record PreviewAnimationFramesClose(string RequestId) : ControlMessage;

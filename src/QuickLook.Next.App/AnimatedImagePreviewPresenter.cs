@@ -15,8 +15,6 @@ internal sealed class AnimatedImagePreviewPresenter
     private const double MaxZoom = 12.0;
     private const double InfoRailWidth = 246;
     private const double ToolbarHeight = 162;
-    private const long MaxWinUiDecodeBytes = 16L * 1024 * 1024;
-    private const long MaxWinUiDecodePixels = 12_000_000;
 
     private readonly Border _previewRoot;
     private readonly Image _image;
@@ -440,19 +438,10 @@ internal sealed class AnimatedImagePreviewPresenter
         if (TryReadAnimatedSize(path) is not { } size)
             return null;
 
-        string ext = System.IO.Path.GetExtension(path);
-        long pixels = Math.Max(0, size.Width) * (long)Math.Max(0, size.Height);
-        bool useNativePlayback = ext.Equals(".webp", StringComparison.OrdinalIgnoreCase) || pixels > MaxWinUiDecodePixels;
-        if (!useNativePlayback)
-        {
-            try { useNativePlayback = new System.IO.FileInfo(path).Length > MaxWinUiDecodeBytes; }
-            catch { }
-        }
-
         return new AnimatedImageRenderPlan(
             size.Width,
             size.Height,
-            useNativePlayback ? AnimatedImagePlaybackMode.NativeFramePlayback : AnimatedImagePlaybackMode.WinUiAnimatedPlayback);
+            AnimatedImagePlaybackMode.NativeFramePlayback);
     }
 
     private static (int Width, int Height)? TryReadAnimatedWebPSize(string path)

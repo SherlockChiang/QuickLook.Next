@@ -129,6 +129,17 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_animation_handoff_message()
+    {
+        var message = new PreviewAnimationFramesReady(
+            "0".PadLeft(32, '0'), "1".PadLeft(32, '1'), "C:\\temp\\frames.bin", 3, 32, 24, 9232);
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"preview.animation.ready\"", json);
+        Assert.Equal(message, Assert.IsType<PreviewAnimationFramesReady>(ProtocolJson.Deserialize(json)));
+    }
+
+    [Fact]
     public async Task Pending_request_times_out_and_rejects_late_result()
     {
         var pending = new PendingRequests();
@@ -163,6 +174,26 @@ public sealed class CoreBoundaryTests : IDisposable
 
         Assert.True(TempHandoffPaths.IsHeroRasterPath(valid, requestId, _tempRoot));
         Assert.False(TempHandoffPaths.IsHeroRasterPath(valid, "f".PadLeft(32, 'f'), _tempRoot));
+    }
+
+    [Fact]
+    public void Animation_handoff_requires_matching_request_directory()
+    {
+        const string requestId = "0123456789abcdef0123456789abcdef";
+        string directory = Path.Combine(_tempRoot, "QuickLookNext", "raster-animation", "frames-" + requestId);
+        Directory.CreateDirectory(directory);
+        string valid = Path.Combine(directory, "frames.bin");
+        File.WriteAllText(valid, "x");
+
+        Assert.True(TempHandoffPaths.IsRasterAnimationPath(valid, requestId, _tempRoot));
+        Assert.False(TempHandoffPaths.IsRasterAnimationPath(valid, "f".PadLeft(32, 'f'), _tempRoot));
+        Assert.False(TempHandoffPaths.IsRasterAnimationPath(valid, "not-hex", _tempRoot));
+
+        string nested = Path.Combine(directory, "nested");
+        Directory.CreateDirectory(nested);
+        string nestedFile = Path.Combine(nested, "frames.bin");
+        File.WriteAllText(nestedFile, "x");
+        Assert.False(TempHandoffPaths.IsRasterAnimationPath(nestedFile, requestId, _tempRoot));
     }
 
     [Fact]

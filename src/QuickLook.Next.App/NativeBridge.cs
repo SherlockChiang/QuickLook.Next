@@ -64,32 +64,11 @@ internal sealed class NativeBridge
     private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail_cancelable_with_flags(byte[] pathUtf8, nuint pathLen, int size, uint flags, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_decode_gif_frames_sized_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        uint targetWidth,
-        uint targetHeight,
-        byte[] outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_decode_webp_frames_sized_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        uint targetWidth,
-        uint targetHeight,
-        byte[] outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
-
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
-    private delegate int NativeAnimationCall(byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
     private const int MaxNativeProbeJsonBytes = 512 * 1024;
     private const int MaxNativeRasterBytes = 16 * 1024 * 1024;
-    private const int MaxNativeAnimationBytes = 80 * 1024 * 1024;
 
     private NativeCallback? _callback; // keep alive: native stores the function pointer
     private Action<NativeIntent>? _onIntent;
@@ -220,71 +199,6 @@ internal sealed class NativeBridge
         {
             return null;
         }
-    }
-
-    public NativeAnimationFrames? TryDecodeGifFrames(string path, uint targetWidth, uint targetHeight, CancellationToken cancellationToken = default)
-        => TryDecodeAnimationFrames(ql_decode_gif_frames_sized_cancelable, path, targetWidth, targetHeight, cancellationToken);
-
-    public NativeAnimationFrames? TryDecodeWebPFrames(string path, uint targetWidth, uint targetHeight, CancellationToken cancellationToken = default)
-        => TryDecodeAnimationFrames(ql_decode_webp_frames_sized_cancelable, path, targetWidth, targetHeight, cancellationToken);
-
-    private static NativeAnimationFrames? TryDecodeAnimationFrames(NativeAnimationCall call, string path, uint targetWidth, uint targetHeight, CancellationToken cancellationToken)
-    {
-        NativeCancelCallback? cancelCb = cancellationToken.CanBeCanceled
-            ? () => cancellationToken.IsCancellationRequested
-            : null;
-        try
-        {
-            byte[] pathBytes = Encoding.UTF8.GetBytes(path);
-            int cap = 8 * 1024 * 1024;
-            while (cap <= MaxNativeAnimationBytes)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
-                try
-                {
-                    int n = call(pathBytes, (nuint)pathBytes.Length, targetWidth, targetHeight, outBuf, (nuint)outBuf.Length, cancelCb);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (n < 0)
-                    {
-                        int needed = -n;
-                        if (needed <= cap || needed > MaxNativeAnimationBytes)
-                            return null;
-                        cap = needed;
-                        continue;
-                    }
-                    if (n <= 12)
-                        return null;
-
-                    int frameCount = checked((int)BitConverter.ToUInt32(outBuf, 0));
-                    int width = checked((int)BitConverter.ToUInt32(outBuf, 4));
-                    int height = checked((int)BitConverter.ToUInt32(outBuf, 8));
-                    int frameBytes = checked(width * height * 4);
-                    if (frameCount <= 0 || width <= 0 || height <= 0 || 12 + frameCount * (4 + frameBytes) != n)
-                        return null;
-
-                    var frames = new List<NativeAnimationFrame>(frameCount);
-                    int offset = 12;
-                    for (int i = 0; i < frameCount; i++)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        int delayMs = checked((int)BitConverter.ToUInt32(outBuf, offset));
-                        offset += 4;
-                        var bgra = new byte[frameBytes];
-                        Buffer.BlockCopy(outBuf, offset, bgra, 0, frameBytes);
-                        offset += frameBytes;
-                        frames.Add(new NativeAnimationFrame(delayMs, bgra));
-                    }
-                    return new NativeAnimationFrames(width, height, frames);
-                }
-                finally { ArrayPool<byte>.Shared.Return(outBuf); }
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { }
-        finally { GC.KeepAlive(cancelCb); }
-
-        return null;
     }
 
     public NativeRasterImage? TryGetThumbnail(string path, int size)

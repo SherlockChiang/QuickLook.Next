@@ -20,6 +20,16 @@ public static class TempHandoffPaths
             file => string.Equals(file, "hero.bgra", StringComparison.Ordinal));
     }
 
+    public static bool IsRasterAnimationPath(string path, string requestId, string? tempRoot = null)
+    {
+        if (requestId.Length != 32 || !requestId.All(static c => char.IsAsciiHexDigit(c)))
+            return false;
+
+        return IsValidPath(path, Path.Combine(tempRoot ?? Path.GetTempPath(), "QuickLookNext", "raster-animation"),
+            directory => string.Equals(directory, "frames-" + requestId, StringComparison.Ordinal),
+            file => string.Equals(file, "frames.bin", StringComparison.Ordinal));
+    }
+
     private static bool IsValidPath(string path, string rootPath, Func<string, bool> isDirectoryNameValid, Func<string, bool> isFileNameValid)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Length > MaxPathChars)
