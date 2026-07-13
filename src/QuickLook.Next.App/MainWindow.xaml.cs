@@ -2558,7 +2558,13 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        if (e.Key == Windows.System.VirtualKey.Space && ShouldHandleSpaceAsPreviewClose())
+        bool modifierDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
+            || (Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
+            || (Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        if (e.Key == Windows.System.VirtualKey.Space && !modifierDown && ShouldHandleSpaceAsPreviewClose())
         {
             e.Handled = true;
             ClosePreviewFromKeyboard();

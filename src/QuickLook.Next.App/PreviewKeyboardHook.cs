@@ -10,6 +10,9 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private const uint WM_SYSKEYDOWN = 0x0104;
     private const uint WM_SYSKEYUP = 0x0105;
     private const int VK_SPACE = 0x20;
+    private const int VK_SHIFT = 0x10;
+    private const int VK_CONTROL = 0x11;
+    private const int VK_MENU = 0x12;
 
     private readonly nint _hwnd;
     private readonly Func<bool> _shouldHandleSpace;
@@ -52,6 +55,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
         if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP)
             && wParam == VK_SPACE
+            && !ModifierKeyDown()
             && _shouldHandleSpace())
         {
             if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
@@ -69,6 +73,11 @@ internal sealed class PreviewKeyboardHook : IDisposable
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 
+    private static bool ModifierKeyDown()
+        => KeyDown(VK_SHIFT) || KeyDown(VK_CONTROL) || KeyDown(VK_MENU);
+
+    private static bool KeyDown(int key) => (GetKeyState(key) & 0x8000) != 0;
+
     private delegate nint SUBCLASSPROC(nint hWnd, uint uMsg, nint wParam, nint lParam, nuint uIdSubclass, nint dwRefData);
 
     [DllImport("comctl32.dll", SetLastError = true)]
@@ -81,4 +90,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     [DllImport("comctl32.dll")]
     private static extern nint DefSubclassProc(nint hWnd, uint uMsg, nint wParam, nint lParam);
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
 }

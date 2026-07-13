@@ -248,11 +248,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
-            if is_down {
+            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                 let _ = PostThreadMessageW(tid, WM_QL_ZOOM_IN, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_MINUS_U32 | VK_SUBTRACT_U32) {
-            if is_down {
+            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                 let _ = PostThreadMessageW(tid, WM_QL_ZOOM_OUT, WPARAM(0), LPARAM(0));
             }
         }
