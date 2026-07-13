@@ -244,8 +244,7 @@ internal sealed class ParserHostSupervisor
                         break;
                     case ArchiveEntryExtracted extracted: _pending.TryComplete(extracted.RequestId, extracted); break;
                     case HeroRasterExtracted extracted:
-                        if (!_pending.TryComplete(extracted.RequestId, extracted))
-                            WindowsHandleTransfer.CloseReceivedFileHandle(extracted.FileHandle);
+                        _pending.TryComplete(extracted.RequestId, extracted);
                         break;
                 }
             }
@@ -349,13 +348,16 @@ internal sealed class ParserHostSupervisor
         TryKillHost();
     }
 
-    private static NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
+    private NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
     {
         const int maxRasterBytes = 16 * 1024 * 1024;
         const int maxDimension = 4096;
         try
         {
-            using var handle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            if (_host is null)
+                return null;
+            using var handle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                _host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
             if (extracted.PacketLength is <= 8 or > maxRasterBytes)
                 return null;
             using var stream = new FileStream(handle, FileAccess.Read);

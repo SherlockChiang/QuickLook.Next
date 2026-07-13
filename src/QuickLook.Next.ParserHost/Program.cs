@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
-using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 using QuickLook.Next.ParserHost;
 
@@ -30,10 +29,9 @@ var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
 var archiveEntries = new ConcurrentDictionary<string, string>();
 var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-var heroRasters = new ConcurrentDictionary<string, string>();
+var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 bool authenticated = false;
-SafeProcessHandle? appProcess = null;
 string? activePreviewRequestId = null;
 
 while (true)
@@ -54,7 +52,7 @@ while (true)
             }
             try
             {
-                appProcess = WindowsHandleTransfer.OpenAuthenticatedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
+                WindowsHandleTransfer.VerifyNamedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
             }
             catch (Exception ex)
             {
@@ -272,14 +270,15 @@ while (true)
                     try
                     {
                         heroCts.Token.ThrowIfCancellationRequested();
-                        if (appProcess is null || appProcess.IsInvalid)
-                            throw new InvalidOperationException("App handle-transfer process is unavailable.");
-                        var transferred = WindowsHandleTransfer.DuplicateReadOnlyFile(tempPath, appProcess);
+                        var transferred = WindowsHandleTransfer.OpenReadOnlyFile(tempPath);
                         if (transferred.Length != raster.LongLength)
+                        {
+                            transferred.Handle.Dispose();
                             throw new InvalidDataException("Hero raster changed before handle transfer.");
-                        heroRasters[extract.RequestId] = tempPath;
+                        }
+                        heroRasters[extract.RequestId] = (tempPath, transferred.Handle);
                         await channel.SendAsync(new HeroRasterExtracted(
-                            extract.RequestId, transferred.Handle, transferred.Length, width, height));
+                            extract.RequestId, transferred.Handle.DangerousGetHandle().ToInt64(), transferred.Length, width, height));
                         tempPath = null; // retained until the App acknowledges consumption.
                     }
                     finally
@@ -309,8 +308,11 @@ while (true)
             try
             {
                 Cancel(close.RequestId);
-                if (heroRasters.TryRemove(close.RequestId, out string? tempPath))
-                    DeleteHeroRaster(tempPath);
+                if (heroRasters.TryRemove(close.RequestId, out var raster))
+                {
+                    raster.Handle.Dispose();
+                    DeleteHeroRaster(raster.Path);
+                }
             }
             finally
             {
@@ -328,9 +330,11 @@ foreach (string requestId in requests.Keys)
     Cancel(requestId);
 foreach (string tempPath in archiveEntries.Values)
     DeleteArchiveEntry(tempPath);
-foreach (string tempPath in heroRasters.Values)
-    DeleteHeroRaster(tempPath);
-appProcess?.Dispose();
+foreach (var raster in heroRasters.Values)
+{
+    raster.Handle.Dispose();
+    DeleteHeroRaster(raster.Path);
+}
 
 void Cancel(string requestId)
 {

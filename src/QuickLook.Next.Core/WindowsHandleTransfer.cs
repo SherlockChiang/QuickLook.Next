@@ -16,10 +16,7 @@ public static class WindowsHandleTransfer
 
     public static SafeProcessHandle OpenAuthenticatedPipeServerProcess(SafePipeHandle pipe, int expectedProcessId)
     {
-        if (expectedProcessId <= 0
-            || !GetNamedPipeServerProcessId(pipe, out uint serverProcessId)
-            || serverProcessId != (uint)expectedProcessId)
-            throw new InvalidOperationException("Named pipe server process did not match the authenticated App process.");
+        uint serverProcessId = VerifyNamedPipeServerProcess(pipe, expectedProcessId);
 
         SafeProcessHandle process = OpenProcess(ProcessDuplicateHandle, false, serverProcessId);
         if (process.IsInvalid)
@@ -30,30 +27,44 @@ public static class WindowsHandleTransfer
         return process;
     }
 
-    public static (long Handle, long Length) DuplicateReadOnlyFile(string path, SafeProcessHandle targetProcess)
+    public static uint VerifyNamedPipeServerProcess(SafePipeHandle pipe, int expectedProcessId)
     {
-        using SafeFileHandle source = CreateFile(
-            path, GenericRead, FileShareRead | FileShareDelete, 0, OpenExisting, 0, 0);
-        if (source.IsInvalid)
+        if (expectedProcessId <= 0
+            || !GetNamedPipeServerProcessId(pipe, out uint serverProcessId)
+            || serverProcessId != (uint)expectedProcessId)
+            throw new InvalidOperationException("Named pipe server process did not match the authenticated App process.");
+        return serverProcessId;
+    }
+
+    public static (SafeFileHandle Handle, long Length) OpenReadOnlyFile(string path)
+    {
+        SafeFileHandle handle = CreateFile(path, GenericRead, FileShareRead | FileShareDelete, 0, OpenExisting, 0, 0);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the handoff file.");
-        if (GetFileType(source) != FileTypeDisk || !GetFileSizeEx(source, out long length) || length < 0)
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not validate the handoff file.");
-        if (!DuplicateHandle(GetCurrentProcess(), source, targetProcess, out nint duplicate, 0, false, DuplicateSameAccess))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not duplicate the handoff file into the App.");
-        return (duplicate.ToInt64(), length);
+        }
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length < 0)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Could not validate the handoff file.");
+        }
+        return (handle, length);
     }
 
-    public static SafeFileHandle TakeReceivedFileHandle(long value)
+    public static SafeFileHandle DuplicateFileFromProcess(SafeProcessHandle sourceProcess, long sourceHandle, long expectedLength)
     {
-        nint handle = checked((nint)value);
-        if (handle == 0 || handle == -1)
-            throw new InvalidDataException("Received an invalid file handle.");
-        return new SafeFileHandle(handle, ownsHandle: true);
-    }
-
-    public static void CloseReceivedFileHandle(long value)
-    {
-        try { TakeReceivedFileHandle(value).Dispose(); } catch { }
+        nint remoteHandle = checked((nint)sourceHandle);
+        if (remoteHandle == 0 || remoteHandle == -1
+            || !DuplicateHandle(sourceProcess, remoteHandle, GetCurrentProcess(), out nint duplicate, 0, false, DuplicateSameAccess))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not duplicate the handoff file from the host.");
+        var handle = new SafeFileHandle(duplicate, ownsHandle: true);
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length != expectedLength)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Host handoff handle was not the expected disk file.");
+        }
+        return handle;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -81,6 +92,6 @@ public static class WindowsHandleTransfer
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DuplicateHandle(
-        nint sourceProcess, SafeFileHandle sourceHandle, SafeProcessHandle targetProcess,
+        SafeProcessHandle sourceProcess, nint sourceHandle, nint targetProcess,
         out nint targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
 }

@@ -204,8 +204,7 @@ internal sealed class RasterHostSupervisor
                 _pending.TryComplete(ready.RequestId, ready);
                 break;
             case PreviewAnimationFramesReady animation:
-                if (!_pending.TryComplete(animation.RequestId, animation))
-                    WindowsHandleTransfer.CloseReceivedFileHandle(animation.FileHandle);
+                _pending.TryComplete(animation.RequestId, animation);
                 break;
             case PreviewError error:
                 RemoveCloudRequestState(error.RequestId);
@@ -348,7 +347,6 @@ internal sealed class RasterHostSupervisor
                 return null;
             if (!string.Equals(ready.PreviewRequestId, previewRequestId, StringComparison.Ordinal))
             {
-                WindowsHandleTransfer.CloseReceivedFileHandle(ready.FileHandle);
                 return null;
             }
             return ReadAnimationFrames(ready);
@@ -370,12 +368,15 @@ internal sealed class RasterHostSupervisor
         }
     }
 
-    private static NativeAnimationFrames? ReadAnimationFrames(PreviewAnimationFramesReady ready)
+    private NativeAnimationFrames? ReadAnimationFrames(PreviewAnimationFramesReady ready)
     {
         const long maxPacketBytes = 64L * 1024 * 1024 + 12;
         try
         {
-            using var handle = WindowsHandleTransfer.TakeReceivedFileHandle(ready.FileHandle);
+            if (_host is null)
+                return null;
+            using var handle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                _host.SafeHandle, ready.FileHandle, ready.PacketLength);
             if (ready.PacketLength <= 12 || ready.PacketLength > maxPacketBytes
                 || ready.FrameCount is <= 0 or > 120
                 || ready.Width is <= 0 or > 1024

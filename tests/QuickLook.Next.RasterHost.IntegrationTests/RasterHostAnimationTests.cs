@@ -69,7 +69,8 @@ public sealed class RasterHostAnimationTests
             Assert.InRange(frames.FrameCount, 2, 120);
             Assert.InRange(frames.Width, 1, 1024);
             Assert.InRange(frames.Height, 1, 1024);
-            using var frameHandle = WindowsHandleTransfer.TakeReceivedFileHandle(frames.FileHandle);
+            using var frameHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                host.SafeHandle, frames.FileHandle, frames.PacketLength);
             using var frameStream = new FileStream(frameHandle, FileAccess.Read);
             Assert.Equal(frames.PacketLength, frameStream.Length);
             Span<byte> header = stackalloc byte[12];

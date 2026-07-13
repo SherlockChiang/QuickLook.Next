@@ -382,7 +382,7 @@ public sealed class ParserHostIntegrationTests
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(8, extracted.Width);
             Assert.Equal(8, extracted.Height);
-            using var heroHandle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            using var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
             using var heroStream = new FileStream(heroHandle, FileAccess.Read);
             Assert.Equal(extracted.PacketLength, heroStream.Length);
             var raster = new byte[heroStream.Length];
@@ -438,7 +438,7 @@ public sealed class ParserHostIntegrationTests
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(16, extracted.Width);
             Assert.Equal(16, extracted.Height);
-            using var heroHandle = WindowsHandleTransfer.TakeReceivedFileHandle(extracted.FileHandle);
+            using var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
             using var heroStream = new FileStream(heroHandle, FileAccess.Read);
             Assert.Equal(extracted.PacketLength, heroStream.Length);
             var raster = new byte[heroStream.Length];
@@ -499,7 +499,7 @@ public sealed class ParserHostIntegrationTests
             string rasterId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(rasterId, docxPath, "office"), timeout.Token);
             HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            rasterHandle = WindowsHandleTransfer.TakeReceivedFileHandle(raster.FileHandle);
+            rasterHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, raster.FileHandle, raster.PacketLength);
             rasterPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + rasterId, "hero.bgra");
             Assert.True(File.Exists(archivePath));
             Assert.True(File.Exists(rasterPath));

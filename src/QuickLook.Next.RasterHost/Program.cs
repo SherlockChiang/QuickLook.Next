@@ -40,7 +40,7 @@ var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 var surfacePublishGate = new SemaphoreSlim(1, 1);
 var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
-var animationPackets = new ConcurrentDictionary<string, string>();
+var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHandle Handle)>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
@@ -197,8 +197,11 @@ foreach (var cts in remainingOpenCts)
 }
 foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
-foreach (string tempPath in animationPackets.Values)
-    DeleteAnimationPacket(tempPath);
+foreach (var packet in animationPackets.Values)
+{
+    packet.Handle.Dispose();
+    DeleteAnimationPacket(packet.Path);
+}
 appProcess?.Dispose();
 
 void StartOpen(PreviewOpen open)
@@ -295,14 +298,15 @@ void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
                 cts.Token.ThrowIfCancellationRequested();
                 if (!string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal))
                     return;
-                if (appProcess is null || appProcess.IsInvalid)
-                    throw new InvalidOperationException("App handle-transfer process is unavailable.");
-                var transferred = WindowsHandleTransfer.DuplicateReadOnlyFile(tempPath, appProcess);
+                var transferred = WindowsHandleTransfer.OpenReadOnlyFile(tempPath);
                 if (transferred.Length != packet.LongLength)
+                {
+                    transferred.Handle.Dispose();
                     throw new InvalidDataException("Animation packet changed before handle transfer.");
-                animationPackets[animation.RequestId] = tempPath;
+                }
+                animationPackets[animation.RequestId] = (tempPath, transferred.Handle);
                 await channel.SendAsync(new PreviewAnimationFramesReady(
-                    animation.RequestId, animation.PreviewRequestId, transferred.Handle, count, width, height, transferred.Length));
+                    animation.RequestId, animation.PreviewRequestId, transferred.Handle.DangerousGetHandle().ToInt64(), count, width, height, transferred.Length));
                 tempPath = null;
             }
             finally
@@ -335,8 +339,11 @@ async Task CloseAnimationAsync(string requestId)
         await gate.WaitAsync();
     try
     {
-        if (animationPackets.TryRemove(requestId, out string? path))
-            DeleteAnimationPacket(path);
+        if (animationPackets.TryRemove(requestId, out var packet))
+        {
+            packet.Handle.Dispose();
+            DeleteAnimationPacket(packet.Path);
+        }
         animationParents.TryRemove(requestId, out _);
     }
     finally
