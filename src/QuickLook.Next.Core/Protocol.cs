@@ -107,7 +107,8 @@ public sealed record PreviewClose(string RequestId) : ControlMessage;
 public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, string EntryPath) : ControlMessage;
 
 /// <summary>ParserHost → App: terminal successful archive entry extraction.</summary>
-public sealed record ArchiveEntryExtracted(string RequestId, string TempPath) : ControlMessage;
+public sealed record ArchiveEntryExtracted(
+    string RequestId, long FileHandle, long FileLength, string LogicalName) : ControlMessage;
 
 /// <summary>App → ParserHost: cancel an archive entry extraction.</summary>
 public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage;

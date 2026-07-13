@@ -500,8 +500,11 @@ public sealed partial class MainWindow : Window
         var id = requestId ?? _previewSession.CurrentRequestId;
         if (id is null)
         {
-            if (archiveHandoff is not null && _parserSupervisor is not null)
-                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+            if (archiveHandoff is not null)
+            {
+                if (_parserSupervisor is not null) await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+                else archiveHandoff.Dispose();
+            }
             return;
         }
         if (requestId is null || string.Equals(_previewSession.CurrentRequestId, id, StringComparison.Ordinal))
@@ -509,8 +512,11 @@ public sealed partial class MainWindow : Window
         if (!_requestHosts.Remove(id, out PreviewHostOwner owner))
         {
             DiagLog.Write("App", $"close skip: request has no host owner; request={id}");
-            if (archiveHandoff is not null && _parserSupervisor is not null)
-                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+            if (archiveHandoff is not null)
+            {
+                if (_parserSupervisor is not null) await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+                else archiveHandoff.Dispose();
+            }
             return;
         }
 
@@ -532,8 +538,11 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            if (archiveHandoff is not null && _parserSupervisor is not null)
-                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+            if (archiveHandoff is not null)
+            {
+                if (_parserSupervisor is not null) await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+                else archiveHandoff.Dispose();
+            }
         }
     }
 
@@ -877,8 +886,11 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            if (archiveHandoff is not null && !archiveHandoffTransferred && _parserSupervisor is not null)
-                await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+            if (archiveHandoff is not null && !archiveHandoffTransferred)
+            {
+                if (_parserSupervisor is not null) await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+                else archiveHandoff.Dispose();
+            }
         }
     }
 

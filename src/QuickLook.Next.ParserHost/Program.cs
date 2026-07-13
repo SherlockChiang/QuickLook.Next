@@ -26,7 +26,7 @@ catch (Exception ex)
 
 using var channelLifetime = channel;
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
-var archiveEntries = new ConcurrentDictionary<string, string>();
+var archiveEntries = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
@@ -168,14 +168,22 @@ while (true)
                         await archiveHandoffGate.WaitAsync();
                         try
                         {
-                            archiveEntries[extract.RequestId] = path;
+                            var transferred = WindowsHandleTransfer.OpenReadOnlyFile(path);
+                            archiveEntries[extract.RequestId] = (path, transferred.Handle);
                             if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
                             {
-                                if (archiveEntries.TryRemove(extract.RequestId, out string? closedPath))
-                                    DeleteArchiveEntry(closedPath);
+                                if (archiveEntries.TryRemove(extract.RequestId, out var closedEntry))
+                                {
+                                    closedEntry.Handle.Dispose();
+                                    DeleteArchiveEntry(closedEntry.Path);
+                                }
                                 return;
                             }
-                            await channel.SendAsync(new ArchiveEntryExtracted(extract.RequestId, path));
+                            await channel.SendAsync(new ArchiveEntryExtracted(
+                                extract.RequestId,
+                                transferred.Handle.DangerousGetHandle().ToInt64(),
+                                transferred.Length,
+                                extract.EntryPath));
                         }
                         finally
                         {
@@ -207,8 +215,11 @@ while (true)
                 if (requests.ContainsKey(close.RequestId))
                     closedArchiveEntries[close.RequestId] = 0;
                 Cancel(close.RequestId);
-                if (archiveEntries.TryRemove(close.RequestId, out string? archiveEntryPath) && archiveEntryPath is not null)
-                    DeleteArchiveEntry(archiveEntryPath);
+                if (archiveEntries.TryRemove(close.RequestId, out var archiveEntry))
+                {
+                    archiveEntry.Handle.Dispose();
+                    DeleteArchiveEntry(archiveEntry.Path);
+                }
             }
             finally
             {
@@ -328,8 +339,11 @@ while (true)
 
 foreach (string requestId in requests.Keys)
     Cancel(requestId);
-foreach (string tempPath in archiveEntries.Values)
-    DeleteArchiveEntry(tempPath);
+foreach (var entry in archiveEntries.Values)
+{
+    entry.Handle.Dispose();
+    DeleteArchiveEntry(entry.Path);
+}
 foreach (var raster in heroRasters.Values)
 {
     raster.Handle.Dispose();

@@ -211,7 +211,6 @@ public sealed class ParserHostIntegrationTests
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
-        string? handoffPath = null;
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -223,19 +222,20 @@ public sealed class ParserHostIntegrationTests
             string requestId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new ArchiveEntryExtract(requestId, zipPath, entryName), timeout.Token);
             ArchiveEntryExtracted extracted = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = extracted.TempPath;
-            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
-            Assert.True(TempHandoffPaths.IsArchiveExtractPath(handoffPath));
-            Assert.Equal(contents, await File.ReadAllTextAsync(handoffPath, timeout.Token));
+            Assert.Equal(entryName, extracted.LogicalName);
+            using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                host.SafeHandle, extracted.FileHandle, extracted.FileLength);
+            using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+            using var reader = new StreamReader(entryStream);
+            Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
 
             await channel.SendAsync(new ArchiveEntryExtractClose(requestId), timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
+            Assert.True(entryStream.CanRead);
         }
         finally
         {
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
-            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }
     }
@@ -482,8 +482,8 @@ public sealed class ParserHostIntegrationTests
         var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
-        string? archivePath = null;
         string? rasterPath = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? archiveHandle = null;
         Microsoft.Win32.SafeHandles.SafeFileHandle? rasterHandle = null;
         try
         {
@@ -495,26 +495,28 @@ public sealed class ParserHostIntegrationTests
 
             string archiveId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new ArchiveEntryExtract(archiveId, zipPath, entryName), timeout.Token);
-            archivePath = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token)).TempPath;
+            ArchiveEntryExtracted archive = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            archiveHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, archive.FileHandle, archive.FileLength);
             string rasterId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(rasterId, docxPath, "office"), timeout.Token);
             HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
             rasterHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, raster.FileHandle, raster.PacketLength);
             rasterPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + rasterId, "hero.bgra");
-            Assert.True(File.Exists(archivePath));
+            Assert.False(archiveHandle.IsInvalid);
             Assert.True(File.Exists(rasterPath));
 
             channel.Dispose();
             pipe.Dispose();
             await host.WaitForExitAsync(timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(archivePath) && !File.Exists(rasterPath), timeout.Token);
+            await WaitUntilAsync(() => !File.Exists(rasterPath), timeout.Token);
+            Assert.True(RandomAccess.GetLength(archiveHandle) > 0);
         }
         finally
         {
+            archiveHandle?.Dispose();
             rasterHandle?.Dispose();
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
-            if (archivePath is not null) try { Directory.Delete(Path.GetDirectoryName(archivePath)!, recursive: true); } catch { }
             if (rasterPath is not null) try { Directory.Delete(Path.GetDirectoryName(rasterPath)!, recursive: true); } catch { }
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }

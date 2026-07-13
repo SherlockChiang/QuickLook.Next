@@ -210,6 +210,22 @@ if (Test-Path $parserHostProgram) {
     }
 }
 
+$protocolPath = Join-Path $Root "src/QuickLook.Next.Core/Protocol.cs"
+if (Test-Path $protocolPath) {
+    $protocolText = Get-Content -LiteralPath $protocolPath -Raw
+    if ($protocolText -match 'ArchiveEntryExtracted\([^\)]*TempPath') {
+        Add-Failure "Archive entry handoffs must not expose a temporary path"
+    }
+}
+
+$parserSupervisor = Join-Path $Root "src/QuickLook.Next.App/ParserHostSupervisor.cs"
+if (Test-Path $parserSupervisor) {
+    $parserSupervisorText = Get-Content -LiteralPath $parserSupervisor -Raw
+    if ($parserSupervisorText -notmatch 'new FileStream\(path, FileMode\.CreateNew, FileAccess\.ReadWrite, FileShare\.Read\)') {
+        Add-Failure "Archive App handoff must retain a read-shared anchor that blocks writes and deletion"
+    }
+}
+
 $rasterHostRoot = Join-Path $Root "src/QuickLook.Next.RasterHost"
 if (Test-Path $rasterHostRoot) {
     $rasterHostText = (Get-ChildItem -LiteralPath $rasterHostRoot -File -Filter "*.cs" |

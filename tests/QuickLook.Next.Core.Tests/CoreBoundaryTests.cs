@@ -141,6 +141,17 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_archive_handle_message()
+    {
+        var message = new ArchiveEntryExtracted("2".PadLeft(32, '2'), 1234, 4096, "folder/report.pdf");
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"archive.entry.extracted\"", json);
+        Assert.DoesNotContain("tempPath", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(message, Assert.IsType<ArchiveEntryExtracted>(ProtocolJson.Deserialize(json)));
+    }
+
+    [Fact]
     public async Task Pending_request_times_out_and_rejects_late_result()
     {
         var pending = new PendingRequests();
@@ -238,6 +249,22 @@ public sealed class CoreBoundaryTests : IDisposable
                 source.Handle.DangerousGetHandle().ToInt64(),
                 source.Length + 1));
         }
+    }
+
+    [Fact]
+    public void Read_shared_anchor_blocks_path_replacement()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "anchored.txt");
+        using var anchor = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+        anchor.Write("anchored"u8);
+        anchor.Flush();
+
+        Assert.Throws<IOException>(() => File.Delete(path));
+        Assert.Throws<IOException>(() => File.WriteAllText(path, "replaced"));
+        using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var text = new StreamReader(reader);
+        Assert.Equal("anchored", text.ReadToEnd());
     }
 
     [Fact]

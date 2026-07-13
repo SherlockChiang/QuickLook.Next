@@ -157,17 +157,23 @@ internal sealed class ParserHostSupervisor
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
+        ArchiveEntryHandoff? handoff = null;
         try
         {
             await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
-            if (response is ArchiveEntryExtracted extracted && TempHandoffPaths.IsArchiveExtractPath(extracted.TempPath))
-                return new ArchiveEntryHandoff(requestId, extracted.TempPath);
-            return null;
+            if (response is ArchiveEntryExtracted extracted)
+                handoff = CreateArchiveEntryHandoff(extracted);
+            return handoff;
         }
         finally
         {
             _pending.Cancel(requestId);
+            if (handoff is null)
+            {
+                try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(requestId)) ?? Task.CompletedTask); }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+            }
         }
     }
 
@@ -175,6 +181,7 @@ internal sealed class ParserHostSupervisor
     {
         try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(handoff.RequestId)) ?? Task.CompletedTask); }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        finally { handoff.Dispose(); }
     }
 
     public async Task<NativeRasterImage?> ExtractHeroRasterAsync(string path, string kind, CancellationToken cancellationToken)
@@ -393,9 +400,75 @@ internal sealed class ParserHostSupervisor
         }
     }
 
+    private ArchiveEntryHandoff? CreateArchiveEntryHandoff(ArchiveEntryExtracted extracted)
+    {
+        const long maxArchiveEntryBytes = 64L * 1024 * 1024;
+        if (_host is null || extracted.FileLength is < 0 or > maxArchiveEntryBytes)
+            return null;
+
+        string requestDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNext", "app-preview", extracted.RequestId);
+        string extension = Path.GetExtension(extracted.LogicalName);
+        if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
+            extension = "";
+        string path = Path.Combine(requestDirectory, "entry" + extension.ToLowerInvariant());
+        try
+        {
+            using var sourceHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                _host.SafeHandle, extracted.FileHandle, extracted.FileLength);
+            using var source = new FileStream(sourceHandle, FileAccess.Read);
+            string root = Path.GetDirectoryName(requestDirectory)!;
+            Directory.CreateDirectory(root);
+            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+                return null;
+            Directory.CreateDirectory(requestDirectory);
+            if ((File.GetAttributes(requestDirectory) & FileAttributes.ReparsePoint) != 0)
+                return null;
+            var anchor = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+            try
+            {
+                source.CopyTo(anchor);
+                anchor.Flush(flushToDisk: true);
+                if (anchor.Length != extracted.FileLength)
+                    throw new InvalidDataException("Archive entry changed during anchored copy.");
+                anchor.Position = 0;
+                return new ArchiveEntryHandoff(extracted.RequestId, path, anchor);
+            }
+            catch
+            {
+                anchor.Dispose();
+                throw;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
+        {
+            try { Directory.Delete(requestDirectory, recursive: true); } catch { }
+            return null;
+        }
+    }
+
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeClientProcessId(nint pipe, out uint clientProcessId);
 }
 
-internal sealed record ArchiveEntryHandoff(string RequestId, string Path);
+internal sealed class ArchiveEntryHandoff(
+    string requestId,
+    string path,
+    FileStream anchor) : IDisposable
+{
+    private FileStream? _anchor = anchor;
+    public string RequestId { get; } = requestId;
+    public string Path { get; } = path;
+
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref _anchor, null)?.Dispose();
+        try { File.Delete(Path); } catch { }
+        try
+        {
+            string? directory = System.IO.Path.GetDirectoryName(Path);
+            if (directory is not null) Directory.Delete(directory, recursive: false);
+        }
+        catch { }
+    }
+}

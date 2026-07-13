@@ -86,4 +86,5 @@ public static class WindowsHandleTransfer
     private static extern bool DuplicateHandle(
         SafeProcessHandle sourceProcess, nint sourceHandle, nint targetProcess,
         out nint targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
+
 }
