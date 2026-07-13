@@ -14356,9 +14356,8 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
     let mut skipped = 0u64;
     let mut partial = false;
 
-    // Directories first
-    if let Ok(dirs) = fs::read_dir(path) {
-        for entry in dirs.flatten() {
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
             if preview_cancelled(cancel_cb) {
                 return String::new();
             }
@@ -14367,9 +14366,14 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
                 break;
             }
             let entry_path = entry.path();
-            if entry_path.is_dir() {
+            let Ok(file_type) = entry.file_type() else {
+                skipped += 1;
+                continue;
+            };
+            if file_type.is_dir() || file_type.is_file() {
                 if let Ok(meta) = entry.metadata() {
-                    folder_count += 1;
+                    let is_folder = file_type.is_dir();
+                    let size = if is_folder { 0 } else { meta.len() as i64 };
                     let name = entry_path
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -14382,72 +14386,40 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
                         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                         .map(|d| d.as_secs() as i64)
                         .unwrap_or(0);
-                    let virtual_path = format!("{}/", name);
+                    if is_folder {
+                        folder_count += 1;
+                    } else {
+                        file_count += 1;
+                        total_bytes += size;
+                    }
+                    let virtual_path = if is_folder {
+                        format!("{}/", name)
+                    } else {
+                        name.clone()
+                    };
+                    let typ = if is_folder {
+                        "Folder".to_string()
+                    } else {
+                        type_for_ext(&name).to_string()
+                    };
                     items.push(PreviewListingItemDto {
                         name,
                         path: virtual_path,
                         parent_path: String::new(),
-                        is_folder: true,
-                        size: 0,
+                        is_folder,
+                        size,
                         packed_size: 0,
                         modified_unix: modified,
-                        typ: "Folder".to_string(),
+                        typ,
                         native_path: Some(native),
                     });
+                } else {
+                    skipped += 1;
                 }
             }
         }
     } else {
         skipped += 1;
-    }
-
-    // Files
-    if !partial {
-        if let Ok(files) = fs::read_dir(path) {
-            for entry in files.flatten() {
-                if preview_cancelled(cancel_cb) {
-                    return String::new();
-                }
-                if items.len() >= MAX_FOLDER_ITEMS {
-                    partial = true;
-                    break;
-                }
-                let entry_path = entry.path();
-                if entry_path.is_file() {
-                    if let Ok(meta) = entry.metadata() {
-                        file_count += 1;
-                        let size = meta.len() as i64;
-                        total_bytes += size;
-                        let name = entry_path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let native = entry_path.to_string_lossy().to_string();
-                        let modified = meta
-                            .modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0);
-                        let typ = type_for_ext(&name).to_string();
-                        items.push(PreviewListingItemDto {
-                            name: name.clone(),
-                            path: name,
-                            parent_path: String::new(),
-                            is_folder: false,
-                            size,
-                            packed_size: 0,
-                            modified_unix: modified,
-                            typ,
-                            native_path: Some(native),
-                        });
-                    }
-                }
-            }
-        } else {
-            skipped += 1;
-        }
     }
 
     // Sort: folders first, then by name (case-insensitive)
