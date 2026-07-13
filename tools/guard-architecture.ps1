@@ -201,7 +201,16 @@ if (Test-Path $appNativeBridge) {
     }
 }
 
-# Rule 7: every supported locale must define the same resource keys.
+# Rule 7: ParserHost must not receive a process handle back into the App.
+$parserHostProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
+if (Test-Path $parserHostProgram) {
+    $parserHostText = Get-Content -LiteralPath $parserHostProgram -Raw
+    if ($parserHostText -match 'OpenAuthenticatedPipeServerProcess|PROCESS_DUP_HANDLE') {
+        Add-Failure "ParserHost must not receive a handle to the App process"
+    }
+}
+
+# Rule 8: every supported locale must define the same resource keys.
 $englishResources = Join-Path $Root "src\QuickLook.Next.App\Strings\en-US\Resources.resw"
 $chineseResources = Join-Path $Root "src\QuickLook.Next.App\Strings\zh-CN\Resources.resw"
 if ((Test-Path $englishResources) -and (Test-Path $chineseResources)) {

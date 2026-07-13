@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using Xunit;
@@ -194,6 +195,49 @@ public sealed class CoreBoundaryTests : IDisposable
         string nestedFile = Path.Combine(nested, "frames.bin");
         File.WriteAllText(nestedFile, "x");
         Assert.False(TempHandoffPaths.IsRasterAnimationPath(nestedFile, requestId, _tempRoot));
+    }
+
+    [Fact]
+    public void Read_only_handoff_handle_survives_source_close_and_path_delete()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "handoff.bin");
+        byte[] expected = "immutable handoff"u8.ToArray();
+        File.WriteAllBytes(path, expected);
+
+        var source = WindowsHandleTransfer.OpenReadOnlyFile(path);
+        using var duplicate = WindowsHandleTransfer.DuplicateFileFromProcess(
+            Process.GetCurrentProcess().SafeHandle,
+            source.Handle.DangerousGetHandle().ToInt64(),
+            expected.Length);
+        using var writeDuplicate = WindowsHandleTransfer.DuplicateFileFromProcess(
+            Process.GetCurrentProcess().SafeHandle,
+            source.Handle.DangerousGetHandle().ToInt64(),
+            expected.Length);
+        source.Handle.Dispose();
+        File.Delete(path);
+
+        using var stream = new FileStream(duplicate, FileAccess.Read);
+        var actual = new byte[expected.Length];
+        stream.ReadExactly(actual);
+        Assert.Equal(expected, actual);
+        Assert.Throws<UnauthorizedAccessException>(() => RandomAccess.Write(writeDuplicate, [0], 0));
+    }
+
+    [Fact]
+    public void Handoff_handle_rejects_mismatched_length()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "handoff-length.bin");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        var source = WindowsHandleTransfer.OpenReadOnlyFile(path);
+        using (source.Handle)
+        {
+            Assert.Throws<InvalidDataException>(() => WindowsHandleTransfer.DuplicateFileFromProcess(
+                Process.GetCurrentProcess().SafeHandle,
+                source.Handle.DangerousGetHandle().ToInt64(),
+                source.Length + 1));
+        }
     }
 
     [Fact]
