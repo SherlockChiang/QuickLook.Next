@@ -67,6 +67,7 @@ thread_local! {
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
+const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
@@ -1019,7 +1020,8 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, can
     let mut reader = options.read_info(BufReader::new(file)).ok()?;
     let original_width = u32::from(reader.width());
     let original_height = u32::from(reader.height());
-    if should_skip_native_image_decode(original_width, original_height) {
+    if should_skip_native_image_decode(original_width, original_height)
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
         return None;
     }
 
@@ -1094,23 +1096,19 @@ fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, ca
     if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
     let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(file)).ok()?;
-    let mut frames = Vec::new();
-    for frame in decoder.into_frames() {
-        if cancel_requested(cancel_cb) { return None; }
-        match frame {
-            Ok(frame) => frames.push(frame),
-            Err(_) => {
-                let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
-                return Some((width, height, vec![(100, bgra)]));
-            }
+    let mut frames = decoder.into_frames();
+    let first = match frames.next() {
+        Some(Ok(frame)) => frame,
+        _ => {
+            let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
+            return Some((width, height, vec![(100, bgra)]));
         }
-        if frames.len() >= MAX_ANIMATED_FRAMES { break; }
-    }
-    if frames.is_empty() {
-        let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
-        return Some((width, height, vec![(100, bgra)]));
-    }
-    decode_animation_frames_bgra(frames, target_width, target_height, cancel_cb)
+    };
+    decode_animation_frames_bgra(
+        std::iter::once(first).chain(frames.map_while(|frame| frame.ok())),
+        target_width,
+        target_height,
+        cancel_cb)
 }
 
 fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
@@ -1138,12 +1136,14 @@ fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, 
     total as i32
 }
 
-fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::Frame>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     if cancel_requested(cancel_cb) { return None; }
-    let first = frames.first()?;
+    let mut frames = frames.into_iter();
+    let first = frames.next()?;
     let original_width = first.buffer().width();
     let original_height = first.buffer().height();
-    if should_skip_native_image_decode(original_width, original_height) {
+    if should_skip_native_image_decode(original_width, original_height)
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
         return None;
     }
 
@@ -1163,7 +1163,7 @@ fn decode_animation_frames_bgra(frames: Vec<image::Frame>, target_width: u32, ta
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
-    for frame in frames.into_iter().take(max_frames) {
+    for frame in std::iter::once(first).chain(frames).take(max_frames) {
         if cancel_requested(cancel_cb) { return None; }
         let (num, den) = frame.delay().numer_denom_ms();
         let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
