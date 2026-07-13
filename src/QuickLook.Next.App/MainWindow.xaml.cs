@@ -2301,7 +2301,12 @@ public sealed partial class MainWindow : Window
             RasterizationScale);
         DiagLog.Write("App", $"window resize content={contentWidth:0}x{contentHeight:0}; target={size.Width}x{size.Height}; visible={_previewVisible}; pending={_previewRevealPending}; topmost={setTopmost}");
         TemporarilyHideWindowForTransitionResize();
-        GetAppWindow().Resize(size);
+        AppWindow appWindow = GetAppWindow();
+        PointInt32? position = PreviewWindowSizer.GetCenteredPosition(GetWindowId(), size);
+        if (position is { } point)
+            appWindow.MoveAndResize(new RectInt32(point.X, point.Y, size.Width, size.Height));
+        else
+            appWindow.Resize(size);
         if (setTopmost && _previewVisible)
             _windowController.Raise(activate: false);
     }

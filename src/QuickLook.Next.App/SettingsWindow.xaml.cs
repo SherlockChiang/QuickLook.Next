@@ -104,9 +104,15 @@ public sealed partial class SettingsWindow : Window
                 return;
 
             RectInt32 work = display.WorkArea;
-            int width = Math.Min(720, Math.Max(420, work.Width - 32));
-            RootGrid.Measure(new Windows.Foundation.Size(width, double.PositiveInfinity));
-            int height = Math.Min((int)Math.Ceiling(RootGrid.DesiredSize.Height), Math.Max(360, work.Height - 32));
+            double scale = RootGrid.XamlRoot?.RasterizationScale ?? 1.0;
+            if (!double.IsFinite(scale) || scale <= 0)
+                scale = 1.0;
+            double availableWidthDips = Math.Max(420, (work.Width - 32) / scale);
+            double widthDips = Math.Min(720, availableWidthDips);
+            ContentPanel.Measure(new Windows.Foundation.Size(widthDips, double.PositiveInfinity));
+            double desiredHeightDips = 48 + ContentPanel.DesiredSize.Height;
+            int width = Math.Min(work.Width - 32, (int)Math.Ceiling(widthDips * scale));
+            int height = Math.Min(work.Height - 32, Math.Max((int)Math.Ceiling(360 * scale), (int)Math.Ceiling(desiredHeightDips * scale)));
             var bounds = new RectInt32(
                 work.X + (work.Width - width) / 2,
                 work.Y + (work.Height - height) / 2,
