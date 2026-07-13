@@ -121,7 +121,7 @@ internal sealed class ImageSidecarController
                 }
 
                 thumbnailAttempts++;
-                if (_thumbnailCache.TryGet(sibling, out ImageSource? cachedSource) && cachedSource is not null)
+                if (_thumbnailCache.TryGet(sibling, 96, out ImageSource? cachedSource) && cachedSource is not null)
                 {
                     thumbnailBatch.Add((sibling, cachedSource));
                     FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
@@ -142,7 +142,7 @@ internal sealed class ImageSidecarController
                 ImageSource? source = _createBitmapSource(raster);
                 if (source is null)
                     continue;
-                _thumbnailCache.Add(sibling, source);
+                _thumbnailCache.Add(sibling, 96, source);
 
                 thumbnailBatch.Add((sibling, source));
                 FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
@@ -251,7 +251,7 @@ internal sealed class ImageSidecarController
         try
         {
             string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
-                .Where(path => !_thumbnailCache.Contains(path))
+                .Where(path => !_thumbnailCache.Contains(path, 128))
                 .Where(path => !CloudFileStatus.MayRequireHydration(path))
                 .ToArray();
             if (targets.Length == 0)
@@ -284,7 +284,7 @@ internal sealed class ImageSidecarController
                     ImageSource? source = _createBitmapSource(raster);
                     if (source is null)
                         return;
-                    _thumbnailCache.Add(target, source);
+                    _thumbnailCache.Add(target, 128, source);
                     ImageFilmstripItem? item = Items.FirstOrDefault(i =>
                         string.Equals(i.Path, target, StringComparison.OrdinalIgnoreCase));
                     if (item is not null && item.Thumbnail is null)

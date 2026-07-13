@@ -4,16 +4,17 @@ namespace QuickLook.Next.App;
 
 internal sealed class ImageThumbnailCache(int capacity)
 {
-    private readonly Dictionary<string, ImageSource> _cache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly LinkedList<string> _lru = new();
+    private readonly Dictionary<CacheKey, ImageSource> _cache = new();
+    private readonly LinkedList<CacheKey> _lru = new();
 
-    public bool Contains(string path) => _cache.ContainsKey(path);
+    public bool Contains(string path, int size) => _cache.ContainsKey(CreateKey(path, size));
 
-    public bool TryGet(string path, out ImageSource? source)
+    public bool TryGet(string path, int size, out ImageSource? source)
     {
-        if (_cache.TryGetValue(path, out source))
+        CacheKey key = CreateKey(path, size);
+        if (_cache.TryGetValue(key, out source))
         {
-            Touch(path);
+            Touch(key);
             return true;
         }
 
@@ -21,12 +22,14 @@ internal sealed class ImageThumbnailCache(int capacity)
         return false;
     }
 
-    public void Add(string path, ImageSource source)
+    public void Add(string path, int size, ImageSource source)
     {
-        if (_cache.ContainsKey(path))
+        CacheKey key = CreateKey(path, size);
+        RemoveStaleVersions(key);
+        if (_cache.ContainsKey(key))
         {
-            _cache[path] = source;
-            Touch(path);
+            _cache[key] = source;
+            Touch(key);
             return;
         }
 
@@ -36,31 +39,61 @@ internal sealed class ImageThumbnailCache(int capacity)
             _lru.RemoveFirst();
         }
 
-        _cache[path] = source;
-        _lru.AddLast(path);
+        _cache[key] = source;
+        _lru.AddLast(key);
     }
 
     public void Remove(string path)
     {
-        _cache.Remove(path);
-        RemoveLruEntry(path);
-    }
-
-    private void Touch(string path)
-    {
-        RemoveLruEntry(path);
-        _lru.AddLast(path);
-    }
-
-    private void RemoveLruEntry(string path)
-    {
-        for (LinkedListNode<string>? node = _lru.First; node is not null; node = node.Next)
+        foreach (CacheKey key in _cache.Keys.Where(key => key.Path.Equals(path, StringComparison.OrdinalIgnoreCase)).ToArray())
         {
-            if (!string.Equals(node.Value, path, StringComparison.OrdinalIgnoreCase))
+            _cache.Remove(key);
+            RemoveLruEntry(key);
+        }
+    }
+
+    private void RemoveStaleVersions(CacheKey current)
+    {
+        foreach (CacheKey key in _cache.Keys.Where(key =>
+                     key.Path.Equals(current.Path, StringComparison.OrdinalIgnoreCase)
+                     && key.Size == current.Size
+                     && key != current).ToArray())
+        {
+            _cache.Remove(key);
+            RemoveLruEntry(key);
+        }
+    }
+
+    private void Touch(CacheKey key)
+    {
+        RemoveLruEntry(key);
+        _lru.AddLast(key);
+    }
+
+    private void RemoveLruEntry(CacheKey key)
+    {
+        for (LinkedListNode<CacheKey>? node = _lru.First; node is not null; node = node.Next)
+        {
+            if (node.Value != key)
                 continue;
 
             _lru.Remove(node);
             return;
         }
     }
+
+    private static CacheKey CreateKey(string path, int size)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return new CacheKey(path.ToUpperInvariant(), info.LastWriteTimeUtc.Ticks, info.Length, size);
+        }
+        catch
+        {
+            return new CacheKey(path.ToUpperInvariant(), 0, 0, size);
+        }
+    }
+
+    private readonly record struct CacheKey(string Path, long ModifiedTicks, long Length, int Size);
 }
