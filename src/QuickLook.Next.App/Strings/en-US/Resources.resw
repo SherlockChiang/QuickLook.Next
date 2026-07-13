@@ -169,6 +169,15 @@
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>The project has not yet published a formal software license. See the repository for the current terms and source history.</value></data>
   <data name="SettingsSaveFailed" xml:space="preserve"><value>Setting not saved</value></data>
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next could not save this setting.</value></data>
+  <data name="ListingReading" xml:space="preserve"><value>Reading folder...</value></data>
+  <data name="ListingError" xml:space="preserve"><value>Could not read this folder</value></data>
+  <data name="StartupErrorPrefix" xml:space="preserve"><value>startup error: </value></data>
+  <data name="MovedToRecycleBin" xml:space="preserve"><value>Moved to Recycle Bin</value></data>
+  <data name="TextPreviewTruncated" xml:space="preserve"><value>[Preview truncated]</value></data>
+  <data name="CopyAction" xml:space="preserve"><value>Copy</value></data>
+  <data name="CopiedAction" xml:space="preserve"><value>Copied!</value></data>
+  <data name="DialogOk" xml:space="preserve"><value>OK</value></data>
+  <data name="ErrorKind" xml:space="preserve"><value>ERROR</value></data>
   <data name="FolderTypeDisplay" xml:space="preserve">
     <value>Folder</value>
   </data>

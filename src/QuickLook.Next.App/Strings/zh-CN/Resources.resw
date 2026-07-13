@@ -5,6 +5,31 @@
   <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <data name="AppName" xml:space="preserve"><value>QuickLook Next</value></data>
+  <data name="Ready" xml:space="preserve"><value>就绪</value></data>
+  <data name="ReadyKind" xml:space="preserve"><value>就绪</value></data>
+  <data name="EmptyValue" xml:space="preserve"><value>-</value></data>
+  <data name="FitZoom" xml:space="preserve"><value>适应窗口</value></data>
+  <data name="PlayAnimation" xml:space="preserve"><value>播放动画</value></data>
+  <data name="PauseAnimation" xml:space="preserve"><value>暂停动画</value></data>
+  <data name="ShowPreviewDetails" xml:space="preserve"><value>显示预览详情</value></data>
+  <data name="HidePreviewDetails" xml:space="preserve"><value>隐藏预览详情</value></data>
+  <data name="PreviewUnavailableTitle" xml:space="preserve"><value>无法预览</value></data>
+  <data name="PreviewUnavailableMessage" xml:space="preserve"><value>无法预览此文件。</value></data>
+  <data name="PreviewTimedOut" xml:space="preserve"><value>预览超时</value></data>
+  <data name="PdfPageFailed" xml:space="preserve"><value>PDF 页面加载失败</value></data>
+  <data name="SurfaceFailed" xml:space="preserve"><value>预览画面加载失败</value></data>
+  <data name="PreviewTimedOutTitle" xml:space="preserve"><value>预览超时</value></data>
+  <data name="PreviewTimedOutMessage" xml:space="preserve"><value>预览耗时过长，请重试。</value></data>
+  <data name="PreviewServiceUnavailableTitle" xml:space="preserve"><value>预览服务不可用</value></data>
+  <data name="PreviewServiceUnavailableMessage" xml:space="preserve"><value>预览服务已断开或重启，请重试。</value></data>
+  <data name="PreviewDisplayFailedTitle" xml:space="preserve"><value>无法显示预览</value></data>
+  <data name="PreviewDisplayFailedMessage" xml:space="preserve"><value>此设备无法显示该预览。</value></data>
+  <data name="PreviewContentFailedTitle" xml:space="preserve"><value>无法预览</value></data>
+  <data name="PreviewContentFailedMessage" xml:space="preserve"><value>无法预览此文件。</value></data>
+  <data name="RetryPreview" xml:space="preserve"><value>重试</value></data>
+  <data name="PathCopied" xml:space="preserve"><value>路径已复制</value></data>
+  <data name="FileCopied" xml:space="preserve"><value>文件已复制</value></data>
+  <data name="NoExifData" xml:space="preserve"><value>没有 EXIF 数据</value></data>
   <data name="TrayShowPreview" xml:space="preserve"><value>显示预览</value></data>
   <data name="TraySettings" xml:space="preserve"><value>设置</value></data>
   <data name="TrayAutoStart" xml:space="preserve"><value>开机自启</value></data>
@@ -30,4 +55,32 @@
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>项目尚未发布正式软件许可证，请前往代码仓库查看当前条款和源码历史。</value></data>
   <data name="SettingsSaveFailed" xml:space="preserve"><value>设置未保存</value></data>
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next 无法保存此设置。</value></data>
+  <data name="ListingReading" xml:space="preserve"><value>正在读取文件夹...</value></data>
+  <data name="ListingError" xml:space="preserve"><value>无法读取此文件夹</value></data>
+  <data name="StartupErrorPrefix" xml:space="preserve"><value>启动错误：</value></data>
+  <data name="MovedToRecycleBin" xml:space="preserve"><value>已移至回收站</value></data>
+  <data name="DeleteFileTitle" xml:space="preserve"><value>将文件移至回收站？</value></data>
+  <data name="DeleteFileMessage" xml:space="preserve"><value>{0} 将被移至回收站。</value></data>
+  <data name="MoveToRecycleBin" xml:space="preserve"><value>移至回收站</value></data>
+  <data name="Cancel" xml:space="preserve"><value>取消</value></data>
+  <data name="TextPreviewTruncated" xml:space="preserve"><value>[预览已截断]</value></data>
+  <data name="CopyAction" xml:space="preserve"><value>复制</value></data>
+  <data name="CopiedAction" xml:space="preserve"><value>已复制</value></data>
+  <data name="DialogOk" xml:space="preserve"><value>确定</value></data>
+  <data name="ErrorKind" xml:space="preserve"><value>错误</value></data>
+  <data name="FolderTypeDisplay" xml:space="preserve"><value>文件夹</value></data>
+  <data name="ListingSortName" xml:space="preserve"><value>名称</value></data>
+  <data name="ListingSortModified" xml:space="preserve"><value>修改时间</value></data>
+  <data name="ListingSortType" xml:space="preserve"><value>类型</value></data>
+  <data name="ListingSortSize" xml:space="preserve"><value>大小</value></data>
+  <data name="ListingPartialSuffix" xml:space="preserve"><value> - 内容不完整</value></data>
+  <data name="ListingSummaryFormat" xml:space="preserve"><value>{0:N0} 个文件，{1:N0} 个文件夹 - {2}</value></data>
+  <data name="ListingOpenBreadcrumbFormat" xml:space="preserve"><value>在列表中打开 {0}</value></data>
+  <data name="PdfPageIndicatorFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
+  <data name="PdfPageIndicatorPagedFormat" xml:space="preserve"><value>{0:N0} / {1:N0}（分页）</value></data>
+  <data name="PdfPageIndicatorEmpty" xml:space="preserve"><value>0 / 0</value></data>
+  <data name="CertificateHeroSubtitle" xml:space="preserve"><value>证书</value></data>
+  <data name="PackageHeroSubtitle" xml:space="preserve"><value>应用包图标</value></data>
+  <data name="ExecutableHeroSubtitle" xml:space="preserve"><value>应用程序图标</value></data>
+  <data name="OfficeEmbeddedImagePreview" xml:space="preserve"><value>嵌入图片预览</value></data>
 </root>
