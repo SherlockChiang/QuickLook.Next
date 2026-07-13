@@ -1,0 +1,50 @@
+param(
+    [string]$Root = (Split-Path $PSScriptRoot -Parent)
+)
+
+$ErrorActionPreference = "Stop"
+$failures = New-Object System.Collections.Generic.List[string]
+
+function Require-Pattern([string]$path, [string]$pattern, [string]$message) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $script:failures.Add("Missing file: $path")
+        return
+    }
+    $text = Get-Content -LiteralPath $path -Raw
+    if ($text -notmatch $pattern) {
+        $script:failures.Add($message)
+    }
+}
+
+Write-Host "== performance bounds guard ==" -ForegroundColor Cyan
+
+$pipeChannel = Join-Path $Root "src/QuickLook.Next.Core/PipeChannel.cs"
+Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
+    "Control-channel messages must remain capped at 4 MiB."
+
+$nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_DIMENSION:\s*u32\s*=\s*1024' `
+    "Animated frame dimensions must remain capped at 1024 pixels."
+Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAMES:\s*usize\s*=\s*120' `
+    "Animated image decoding must remain capped at 120 frames."
+Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_BYTES:\s*usize\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+    "Animated frame packets must remain capped at 64 MiB."
+
+$officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
+Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `
+    "Office preview must retain its bounded 16-page model."
+Require-Pattern $officePresenter 'if\s*\(index\s*<\s*2\)\s*\r?\n\s*Materialize\(slot\)' `
+    "Office preview must not eagerly materialize more than the first two pages."
+Require-Pattern $officePresenter 'slot\.Host\.Child\s*=\s*null' `
+    "Office preview must release pages outside the viewport keep-alive window."
+
+if ($failures.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Performance bounds guard failed:" -ForegroundColor Red
+    foreach ($failure in $failures) {
+        Write-Host " - $failure" -ForegroundColor Red
+    }
+    exit 1
+}
+
+Write-Host "performance bounds guard passed" -ForegroundColor Green

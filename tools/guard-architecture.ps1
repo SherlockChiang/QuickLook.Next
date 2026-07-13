@@ -238,6 +238,11 @@ if (Test-Path $thumbnailPriorityGuard) {
     & $thumbnailPriorityGuard -Root $Root
 }
 
+$performanceBoundsGuard = Join-Path $PSScriptRoot "guard-performance-bounds.ps1"
+if (Test-Path $performanceBoundsGuard) {
+    & $performanceBoundsGuard -Root $Root
+}
+
 $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
 if (Test-Path $imageCorpusGuard) {
     & $imageCorpusGuard -Root $Root -SkipSystemImageSmoke:$SkipSystemImageSmoke
