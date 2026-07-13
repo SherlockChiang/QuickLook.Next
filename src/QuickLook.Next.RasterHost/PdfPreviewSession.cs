@@ -14,7 +14,7 @@ internal sealed class PdfPreviewSession : IDisposable
 {
     private const double MaxRenderDimension = 2200.0;
     // Keep preview.ready comfortably below the bounded control-pipe message size.
-    private const uint MaxPageGeometryCount = 8192;
+    private const uint MaxPageGeometryCount = 256;
     private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
     private const long MaxDiskCacheBytes = 256L * 1024 * 1024;
     private static readonly WinColor White = new() { A = 255, R = 255, G = 255, B = 255 };
@@ -41,6 +41,7 @@ internal sealed class PdfPreviewSession : IDisposable
 
     private readonly PdfDocument _document;
     private readonly CancellationTokenSource _disposeCts = new();
+    private readonly SemaphoreSlim _documentRenderLock = new(1, 1);
     private readonly long _mtimeTicks;
     private bool _disposed;
 
@@ -193,7 +194,7 @@ internal sealed class PdfPreviewSession : IDisposable
             }
         }
         if (writeDisk)
-            StoreDiskCached(key, bgra, w, h);
+            _ = Task.Run(() => StoreDiskCached(key, bgra, w, h));
     }
 
     private static void StoreDiskCached(string key, byte[] bgra, int width, int height)
@@ -202,11 +203,12 @@ internal sealed class PdfPreviewSession : IDisposable
         {
             Directory.CreateDirectory(DiskCacheDirectory);
             string path = DiskCachePath(key);
-            byte[] bytes = new byte[8 + bgra.Length];
-            BitConverter.GetBytes(width).CopyTo(bytes, 0);
-            BitConverter.GetBytes(height).CopyTo(bytes, 4);
-            System.Buffer.BlockCopy(bgra, 0, bytes, 8, bgra.Length);
-            File.WriteAllBytes(path, bytes);
+            using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            Span<byte> header = stackalloc byte[8];
+            BitConverter.TryWriteBytes(header[..4], width);
+            BitConverter.TryWriteBytes(header[4..], height);
+            stream.Write(header);
+            stream.Write(bgra);
             TrimDiskCache();
         }
         catch (Exception ex)
@@ -311,50 +313,54 @@ internal sealed class PdfPreviewSession : IDisposable
         }
 
         var waitWatch = Stopwatch.StartNew();
-        var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(Path, pageIndex, targetW, targetH))
+        var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(pageIndex, targetW, targetH, token))
             .WaitAsync(PageRenderTimeout, token);
         waitWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
         return rendered;
     }
 
-    private static async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
-        string path,
+    private async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
         int pageIndex,
         uint targetW,
-        uint targetH)
+        uint targetH,
+        CancellationToken cancellationToken)
     {
-        StorageFile file = await StorageFile.GetFileFromPathAsync(path);
-        PdfDocument document = await PdfDocument.LoadFromFileAsync(file);
-        if (pageIndex < 0 || pageIndex >= document.PageCount)
-            throw new ArgumentOutOfRangeException(nameof(pageIndex));
-
-        using PdfPage page = document.GetPage((uint)pageIndex);
-        using var stream = new InMemoryRandomAccessStream();
-        var renderWatch = Stopwatch.StartNew();
-        await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
+        await _documentRenderLock.WaitAsync(cancellationToken);
+        try
         {
-            DestinationWidth = targetW,
-            DestinationHeight = targetH,
-            BackgroundColor = White,
-        });
-        renderWatch.Stop();
-        DiagLog.Write("RasterHost", $"pdf page render {renderWatch.ElapsedMilliseconds}ms; page={pageIndex}; target={targetW}x{targetH}; path={path}");
+            cancellationToken.ThrowIfCancellationRequested();
+            using PdfPage page = _document.GetPage((uint)pageIndex);
+            using var stream = new InMemoryRandomAccessStream();
+            var renderWatch = Stopwatch.StartNew();
+            await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
+            {
+                DestinationWidth = targetW,
+                DestinationHeight = targetH,
+                BackgroundColor = White,
+            });
+            renderWatch.Stop();
+            DiagLog.Write("RasterHost", $"pdf page render {renderWatch.ElapsedMilliseconds}ms; page={pageIndex}; target={targetW}x{targetH}; path={Path}");
 
-        stream.Seek(0);
-        var decodeWatch = Stopwatch.StartNew();
-        BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
-        PixelDataProvider pixels = await decoder.GetPixelDataAsync(
-            BitmapPixelFormat.Bgra8,
-            BitmapAlphaMode.Premultiplied,
-            new BitmapTransform(),
-            ExifOrientationMode.IgnoreExifOrientation,
-            ColorManagementMode.DoNotColorManage);
+            stream.Seek(0);
+            var decodeWatch = Stopwatch.StartNew();
+            BitmapDecoder decoder = await BitmapDecoder.CreateAsync(stream);
+            PixelDataProvider pixels = await decoder.GetPixelDataAsync(
+                BitmapPixelFormat.Bgra8,
+                BitmapAlphaMode.Premultiplied,
+                new BitmapTransform(),
+                ExifOrientationMode.IgnoreExifOrientation,
+                ColorManagementMode.DoNotColorManage);
 
-        byte[] bgra = pixels.DetachPixelData();
-        decodeWatch.Stop();
-        DiagLog.Write("RasterHost", $"pdf page bitmap decode {decodeWatch.ElapsedMilliseconds}ms; page={pageIndex}; bytes={bgra.Length}; path={path}");
-        return (bgra, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+            byte[] bgra = pixels.DetachPixelData();
+            decodeWatch.Stop();
+            DiagLog.Write("RasterHost", $"pdf page bitmap decode {decodeWatch.ElapsedMilliseconds}ms; page={pageIndex}; bytes={bgra.Length}; path={Path}");
+            return (bgra, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+        }
+        finally
+        {
+            _documentRenderLock.Release();
+        }
     }
 
     public void Dispose()
