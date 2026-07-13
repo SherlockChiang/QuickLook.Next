@@ -427,13 +427,19 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
 {
     try
     {
-        return await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight).WaitAsync(timeout, cancellationToken);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(timeout);
+        try
+        {
+            return await SystemImageDecoder.TryDecodeAsync(path, timeoutCts.Token, targetWidth, targetHeight);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            DiagLog.Write("RasterHost", $"system image decode timed out path={path}; timeout={timeout.TotalMilliseconds:0}ms");
+            return null;
+        }
     }
-    catch (TimeoutException)
-    {
-        DiagLog.Write("RasterHost", $"system image decode timed out path={path}; timeout={timeout.TotalMilliseconds:0}ms");
-        return null;
-    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
 }
 
 static bool PreferSystemImageDecoder(string path)
