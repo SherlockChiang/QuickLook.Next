@@ -34,6 +34,9 @@ public sealed class PipeChannel : IDisposable
     private readonly StreamReader _reader;
     private readonly StreamWriter _writer;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly char[] _readBuffer = new char[8192];
+    private int _readOffset;
+    private int _readCount;
 
     public PipeChannel(Stream stream)
     {
@@ -61,24 +64,30 @@ public sealed class PipeChannel : IDisposable
     private async Task<string?> ReadBoundedLineAsync(CancellationToken ct)
     {
         var line = new StringBuilder();
-        var one = new char[1];
         while (true)
         {
-            int read = await _reader.ReadAsync(one.AsMemory(0, 1), ct).ConfigureAwait(false);
-            if (read == 0)
-                return line.Length == 0 ? null : line.ToString();
+            if (_readOffset == _readCount)
+            {
+                _readCount = await _reader.ReadAsync(_readBuffer.AsMemory(), ct).ConfigureAwait(false);
+                _readOffset = 0;
+                if (_readCount == 0)
+                    return line.Length == 0 ? null : line.ToString();
+            }
 
-            char c = one[0];
-            if (c == '\n')
+            int newline = Array.IndexOf(_readBuffer, '\n', _readOffset, _readCount - _readOffset);
+            int end = newline >= 0 ? newline : _readCount;
+            int length = end - _readOffset;
+            if (line.Length > MaxControlLineChars - length)
+                throw new InvalidDataException($"control message is too large (>{MaxControlLineChars:N0} chars)");
+            line.Append(_readBuffer, _readOffset, length);
+            _readOffset = newline >= 0 ? newline + 1 : end;
+
+            if (newline >= 0)
             {
                 if (line.Length > 0 && line[^1] == '\r')
                     line.Length--;
                 return line.ToString();
             }
-
-            if (line.Length >= MaxControlLineChars)
-                throw new InvalidDataException($"control message is too large (>{MaxControlLineChars:N0} chars)");
-            line.Append(c);
         }
     }
 
