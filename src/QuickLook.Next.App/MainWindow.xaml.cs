@@ -217,7 +217,13 @@ public sealed partial class MainWindow : Window
             OfficePagesPanel);
         _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
         _textPresenter = new TextPreviewPresenter(TextPreviewBlock, TextScrollViewer, TextListView, TextPreviewContainer, MarkdownOutlinePanel, MarkdownOutlineList, () => RootGrid.ActualTheme);
-        _tablePresenter = new TablePreviewPresenter(TableScrollViewer, TableTitleText, TableSummaryText, TableGrid, () => RootGrid.ActualTheme);
+        _tablePresenter = new TablePreviewPresenter(
+            TableScrollViewer,
+            TableTitleText,
+            TableSummaryText,
+            TableGrid,
+            () => RootGrid.ActualTheme,
+            () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _officePresenter = new OfficePreviewPresenter(OfficeScrollViewer, OfficePagesPanel);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
@@ -2838,6 +2844,7 @@ public sealed partial class MainWindow : Window
     {
         TrySetBackdrop();
         UpdateTitleBarColors();
+        _tablePresenter?.RefreshPalette();
     }
 
     private void UpdateTitleBarColors()

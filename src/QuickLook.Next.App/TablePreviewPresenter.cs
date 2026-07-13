@@ -21,6 +21,7 @@ internal sealed class TablePreviewPresenter
     private readonly TextBlock _summaryText;
     private readonly Canvas _canvas;
     private readonly Func<ElementTheme> _getTheme;
+    private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private PreviewTable? _table;
     private double[] _widths = [];
     private TablePalette? _palette;
@@ -35,13 +36,15 @@ internal sealed class TablePreviewPresenter
         TextBlock titleText,
         TextBlock summaryText,
         Canvas canvas,
-        Func<ElementTheme> getTheme)
+        Func<ElementTheme> getTheme,
+        Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast)
     {
         _scrollViewer = scrollViewer;
         _titleText = titleText;
         _summaryText = summaryText;
         _canvas = canvas;
         _getTheme = getTheme;
+        _getHighContrast = getHighContrast;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
         _scrollViewer.SizeChanged += OnScrollViewerSizeChanged;
     }
@@ -56,7 +59,7 @@ internal sealed class TablePreviewPresenter
         int columnCount = Math.Clamp(table.Headers.Length, 1, 64);
         _table = table;
         _widths = EstimateColumnWidths(table, columnCount);
-        _palette = new TablePalette(_getTheme() != ElementTheme.Light);
+        _palette = CreatePalette();
 
         double tableWidth = RowHeaderWidth + _widths.Sum();
         double tableHeight = HeaderHeight + table.Rows.Length * RowHeight;
@@ -80,6 +83,21 @@ internal sealed class TablePreviewPresenter
         _canvas.Height = 0;
         _titleText.Text = "";
         _summaryText.Text = "";
+    }
+
+    public void RefreshPalette()
+    {
+        if (_table is null)
+            return;
+        _palette = CreatePalette();
+        ResetRenderedRange();
+        RenderViewport();
+    }
+
+    private TablePalette CreatePalette()
+    {
+        var highContrast = _getHighContrast();
+        return new TablePalette(_getTheme() != ElementTheme.Light, highContrast);
     }
 
     private static string BuildSummary(PreviewTable table)
@@ -224,9 +242,12 @@ internal sealed class TablePreviewPresenter
         private readonly bool _dark;
         private readonly Dictionary<TableCellKind, SolidColorBrush> _brushes;
 
-        public TablePalette(bool dark)
+        private readonly (bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground) _highContrast;
+
+        public TablePalette(bool dark, (bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground) highContrast)
         {
             _dark = dark;
+            _highContrast = highContrast;
             _brushes = [];
             GridLine = For(TableCellKind.GridLine);
         }
@@ -235,7 +256,11 @@ internal sealed class TablePreviewPresenter
 
         public SolidColorBrush For(TableCellKind kind) => _brushes.TryGetValue(kind, out var brush)
             ? brush
-            : _brushes[kind] = new SolidColorBrush(kind switch
+            : _brushes[kind] = new SolidColorBrush(_highContrast.Enabled
+                ? kind is TableCellKind.HeaderText or TableCellKind.Text
+                    ? _highContrast.Foreground
+                    : _highContrast.Background
+                : kind switch
             {
                 TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner => _dark ? ColorHelper.FromArgb(255, 45, 45, 48) : ColorHelper.FromArgb(255, 246, 247, 249),
                 TableCellKind.AlternateCell => _dark ? ColorHelper.FromArgb(22, 255, 255, 255) : ColorHelper.FromArgb(255, 250, 251, 252),
