@@ -50,6 +50,16 @@ jobs:
             throw "Tag ${{ steps.version.outputs.tag }} already exists. Increment VERSION before publishing."
           }
 
+      - name: Check NuGet vulnerabilities
+        shell: pwsh
+        run: dotnet list QuickLook.Next.slnx package --vulnerable --include-transitive
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --version 0.21.2 --locked
+          cargo audit --file native/quicklook_next_native/Cargo.lock
+
       - name: Restore release signing certificate
         shell: pwsh
         env:

@@ -10,7 +10,6 @@ and commit so changes remain independently reviewable and revertible.
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
 - [ ] Bound ZIP decompression work by compressed bytes, ratio, and elapsed time.
-- [ ] Enforce NuGet and Cargo vulnerability audits in stable release validation.
 - [ ] Redact full file paths from default diagnostics.
 - [ ] Add first-run onboarding and a persistent shortcut/help entry.
 - [ ] Add correlated preview phase timings for startup and first usable content.
@@ -65,4 +64,7 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Bound bencode nesting and node counts.
   - Verification: `cargo test --locked bencode_parser`
+  - Commit: this change
+- [x] Enforce NuGet and Cargo vulnerability audits before stable release signing.
+  - Verification: workflow review against the existing beta release audit steps
   - Commit: this change
