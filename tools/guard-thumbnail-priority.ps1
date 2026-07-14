@@ -56,7 +56,7 @@ if (Test-Path $sidecarPath) {
 
 if (Test-Path $schedulerPath) {
     $schedulerText = Get-Content -LiteralPath $schedulerPath -Raw
-    if ($schedulerText -notmatch 'LinkedList<Request> _foreground' -or $schedulerText -notmatch 'LinkedList<Request> _background') {
+    if ($schedulerText -notmatch 'LinkedList<Work> _foreground' -or $schedulerText -notmatch 'LinkedList<Work> _background') {
         Add-Failure "NativeThumbnailScheduler must keep separate foreground/background queues"
     }
     if ($schedulerText -notmatch 'MaxQueuedRequests' -or $schedulerText -notmatch '_foreground\.Count \+ _background\.Count >= MaxQueuedRequests') {
@@ -68,8 +68,17 @@ if (Test-Path $schedulerPath) {
     if ($schedulerText -notmatch '_foregroundBurst = 0') {
         Add-Failure "NativeThumbnailScheduler must reset foreground fairness after background work"
     }
-    if ($schedulerText -notmatch 'bool cacheOnly' -or $schedulerText -notmatch 'request\.CacheOnly') {
+    if (($schedulerText -notmatch 'WorkKey\(string Path, int Size, bool CacheOnly\)') -or
+        ($schedulerText -notmatch 'work\.Key\.CacheOnly')) {
         Add-Failure "NativeThumbnailScheduler must preserve the cache-only policy on each request"
+    }
+    if (($schedulerText -notmatch 'Dictionary<WorkKey, Work> _pending') -or
+        ($schedulerText -notmatch '_pending\.TryGetValue\(key')) {
+        Add-Failure "NativeThumbnailScheduler must deduplicate pending thumbnail work by key"
+    }
+    if (($schedulerText -notmatch 'class Subscriber') -or
+        ($schedulerText -notmatch 'work\.RemoveSubscriber\(subscriber\)')) {
+        Add-Failure "NativeThumbnailScheduler must preserve independent caller cancellation"
     }
 }
 

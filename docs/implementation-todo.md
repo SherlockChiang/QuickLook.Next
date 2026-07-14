@@ -13,7 +13,6 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
-- [ ] Deduplicate thumbnail work while preserving independent caller cancellation.
 - [ ] Maintain PDF disk-cache size incrementally instead of enumerating it.
 - [ ] Release PDF document resources asynchronously after active renders stop.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
@@ -59,6 +58,10 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `cargo test --locked package_icon_candidates`
   - Integration verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore --filter Package_hero_raster_close_removes_bgra_handoff`
   - Commit: `88be923` plus the following integration-test commit
+- [x] Deduplicate thumbnail work by path, size, and cache policy while preserving
+  independent caller cancellation and foreground promotion.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive
   preview control.

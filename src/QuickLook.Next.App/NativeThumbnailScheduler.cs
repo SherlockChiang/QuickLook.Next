@@ -6,8 +6,9 @@ internal sealed class NativeThumbnailScheduler
     private const int ForegroundBurstLimit = 8;
     private readonly NativeBridge _native;
     private readonly object _gate = new();
-    private readonly LinkedList<Request> _foreground = new();
-    private readonly LinkedList<Request> _background = new();
+    private readonly LinkedList<Work> _foreground = new();
+    private readonly LinkedList<Work> _background = new();
+    private readonly Dictionary<WorkKey, Work> _pending = new();
     private bool _running;
     private int _foregroundBurst;
 
@@ -24,104 +25,120 @@ internal sealed class NativeThumbnailScheduler
         CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var request = new Request(this, path, size, cacheOnly, token);
+        var key = new WorkKey(path, size, cacheOnly);
 
         lock (_gate)
         {
-            if (request.Task.IsCompleted)
-                return request.Task;
+            if (_pending.TryGetValue(key, out Work? existing))
+            {
+                Subscriber subscriber = existing.AddSubscriber(this, token);
+                if (priority == NativeThumbnailPriority.Foreground)
+                    Promote(existing);
+                return subscriber.Task;
+            }
 
             if (_foreground.Count + _background.Count >= MaxQueuedRequests)
             {
                 if (priority == NativeThumbnailPriority.Background || !DropOldestBackground())
-                {
-                    request.TrySetResult(null);
-                    return request.Task;
-                }
+                    return Task.FromResult<NativeRasterImage?>(null);
             }
 
-            if (priority == NativeThumbnailPriority.Foreground)
-                request.Node = _foreground.AddLast(request);
-            else
-                request.Node = _background.AddLast(request);
+            var work = new Work(key);
+            Subscriber result = work.AddSubscriber(this, token);
+            if (result.Task.IsCompleted)
+                return result.Task;
+            _pending.Add(key, work);
+            work.Node = priority == NativeThumbnailPriority.Foreground
+                ? _foreground.AddLast(work)
+                : _background.AddLast(work);
 
             if (!_running)
             {
                 _running = true;
                 _ = Task.Run(ProcessAsync);
             }
-        }
 
-        return request.Task;
+            return result.Task;
+        }
     }
 
     private Task ProcessAsync()
     {
         while (true)
         {
-            Request? request = DequeueNext();
-            if (request is null)
+            Work? work = DequeueNext();
+            if (work is null)
                 return Task.CompletedTask;
 
-            if (request.Token.IsCancellationRequested)
-            {
-                request.TrySetCanceled();
-                continue;
-            }
-
+            NativeRasterImage? result = null;
+            bool canceled = false;
             try
             {
-                request.TrySetResult(_native.TryGetThumbnail(request.Path, request.Size, request.CacheOnly, request.Token));
+                result = _native.TryGetThumbnail(
+                    work.Key.Path,
+                    work.Key.Size,
+                    work.Key.CacheOnly,
+                    work.Cancellation.Token);
             }
             catch (OperationCanceledException)
             {
-                request.TrySetCanceled();
+                canceled = true;
             }
             catch
             {
-                request.TrySetResult(null);
             }
+
+            Complete(work, result, canceled);
         }
     }
 
-    private Request? DequeueNext()
+    private Work? DequeueNext()
     {
         lock (_gate)
         {
-            Request? request;
+            Work? work;
             if (_foreground.Count > 0
                 && (_background.Count == 0 || _foregroundBurst < ForegroundBurstLimit))
             {
-                request = RemoveFirst(_foreground);
+                work = RemoveFirst(_foreground);
                 _foregroundBurst++;
-                return request;
             }
-
-            if (_background.Count > 0)
+            else if (_background.Count > 0)
             {
-                request = RemoveFirst(_background);
+                work = RemoveFirst(_background);
                 _foregroundBurst = 0;
-                return request;
             }
-
-            if (_foreground.Count > 0)
+            else if (_foreground.Count > 0)
             {
-                request = RemoveFirst(_foreground);
+                work = RemoveFirst(_foreground);
                 _foregroundBurst++;
-                return request;
+            }
+            else
+            {
+                _running = false;
+                return null;
             }
 
-            _running = false;
-            return null;
+            work.Started = true;
+            return work;
         }
     }
 
-    private static Request RemoveFirst(LinkedList<Request> queue)
+    private static Work RemoveFirst(LinkedList<Work> queue)
     {
-        LinkedListNode<Request> node = queue.First!;
+        LinkedListNode<Work> node = queue.First!;
         queue.RemoveFirst();
         node.Value.Node = null;
         return node.Value;
+    }
+
+    private void Promote(Work work)
+    {
+        if (work.Started || work.Node?.List != _background)
+            return;
+
+        _background.Remove(work.Node);
+        work.Node = _foreground.AddLast(work);
     }
 
     private bool DropOldestBackground()
@@ -130,56 +147,125 @@ internal sealed class NativeThumbnailScheduler
             return false;
 
         _background.RemoveFirst();
-        node.Value.Node = null;
-        node.Value.TrySetResult(null);
+        Work work = node.Value;
+        work.Node = null;
+        RemovePending(work);
+        work.CompleteSubscribers(null, canceled: false);
+        work.Dispose();
         return true;
     }
 
-    private void Cancel(Request request)
+    private void Cancel(Work work, Subscriber subscriber)
     {
         lock (_gate)
         {
-            if (request.Node is { List: not null } node)
+            if (!work.RemoveSubscriber(subscriber))
+                return;
+
+            subscriber.TrySetCanceled();
+            if (work.HasSubscribers)
+                return;
+
+            RemovePending(work);
+            if (work.Node is { List: not null } node)
             {
                 node.List.Remove(node);
-                request.Node = null;
+                work.Node = null;
             }
+            work.Cancellation.Cancel();
+            if (!work.Started)
+                work.Dispose();
         }
-        request.TrySetCanceled();
     }
 
-    private sealed class Request
+    private void Complete(Work work, NativeRasterImage? result, bool canceled)
     {
-        private readonly TaskCompletionSource<NativeRasterImage?> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly CancellationTokenRegistration _registration;
-
-        public Request(
-            NativeThumbnailScheduler owner,
-            string path,
-            int size,
-            bool cacheOnly,
-            CancellationToken token)
+        lock (_gate)
         {
-            Path = path;
-            Size = size;
-            CacheOnly = cacheOnly;
-            Token = token;
-            if (token.CanBeCanceled)
-                _registration = token.Register(
-                    static state =>
-                    {
-                        var (scheduler, request) = ((NativeThumbnailScheduler, Request))state!;
-                        scheduler.Cancel(request);
-                    },
-                    (owner, this));
+            RemovePending(work);
+            work.CompleteSubscribers(result, canceled);
+            work.Dispose();
+        }
+    }
+
+    private void RemovePending(Work work)
+    {
+        if (_pending.TryGetValue(work.Key, out Work? pending) && ReferenceEquals(pending, work))
+            _pending.Remove(work.Key);
+    }
+
+    private readonly record struct WorkKey(string Path, int Size, bool CacheOnly)
+    {
+        public bool Equals(WorkKey other)
+            => Size == other.Size
+                && CacheOnly == other.CacheOnly
+                && StringComparer.OrdinalIgnoreCase.Equals(Path, other.Path);
+
+        public override int GetHashCode()
+            => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(Path), Size, CacheOnly);
+    }
+
+    private sealed class Work : IDisposable
+    {
+        private readonly List<Subscriber> _subscribers = [];
+
+        public Work(WorkKey key) => Key = key;
+
+        public WorkKey Key { get; }
+        public CancellationTokenSource Cancellation { get; } = new();
+        public LinkedListNode<Work>? Node { get; set; }
+        public bool Started { get; set; }
+        public bool HasSubscribers => _subscribers.Count > 0;
+
+        public Subscriber AddSubscriber(NativeThumbnailScheduler owner, CancellationToken token)
+        {
+            var subscriber = new Subscriber(token);
+            _subscribers.Add(subscriber);
+            subscriber.Register(owner, this);
+            return subscriber;
         }
 
-        public string Path { get; }
-        public int Size { get; }
-        public bool CacheOnly { get; }
-        public CancellationToken Token { get; }
-        public LinkedListNode<Request>? Node { get; set; }
+        public bool RemoveSubscriber(Subscriber subscriber) => _subscribers.Remove(subscriber);
+
+        public void CompleteSubscribers(NativeRasterImage? result, bool canceled)
+        {
+            Subscriber[] subscribers = _subscribers.ToArray();
+            _subscribers.Clear();
+            foreach (Subscriber subscriber in subscribers)
+            {
+                if (canceled)
+                    subscriber.TrySetCanceled();
+                else
+                    subscriber.TrySetResult(result);
+            }
+        }
+
+        public void Dispose() => Cancellation.Dispose();
+    }
+
+    private sealed class Subscriber
+    {
+        private readonly TaskCompletionSource<NativeRasterImage?> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly CancellationToken _token;
+        private CancellationTokenRegistration _registration;
+
+        public Subscriber(CancellationToken token) => _token = token;
+
         public Task<NativeRasterImage?> Task => _completion.Task;
+
+        public void Register(NativeThumbnailScheduler owner, Work work)
+        {
+            if (_token.CanBeCanceled)
+                _registration = _token.Register(
+                    static state =>
+                    {
+                        var (scheduler, pending, subscriber) =
+                            ((NativeThumbnailScheduler, Work, Subscriber))state!;
+                        scheduler.Cancel(pending, subscriber);
+                    },
+                    (owner, work, this));
+        }
 
         public void TrySetResult(NativeRasterImage? image)
         {
@@ -189,7 +275,7 @@ internal sealed class NativeThumbnailScheduler
 
         public void TrySetCanceled()
         {
-            _completion.TrySetCanceled(Token);
+            _completion.TrySetCanceled(_token);
             _registration.Unregister();
         }
     }
