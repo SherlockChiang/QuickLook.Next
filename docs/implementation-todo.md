@@ -20,7 +20,7 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Add semantic table and Office accessibility metadata.
 - [ ] Verify live-region loading, success, and failure announcements with
   Narrator; add explicit AutomationPeer events where hidden status is silent.
-- [ ] Add responsive settings and toolbar overflow states for narrow widths.
+- [ ] Add responsive preview-toolbar overflow states for narrow widths.
 
 ## P2: Product capabilities
 
@@ -56,6 +56,10 @@ Completed entries move here with the verification commands and commit hash.
 
 - [x] Add a persisted animated-preview preference that follows Windows, always
   plays, or forces a static first frame, with localized settings UI.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Reflow settings cards and project links below 560 DIP, reduce compact
+  padding, and stretch controls without changing the wide-window layout.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 

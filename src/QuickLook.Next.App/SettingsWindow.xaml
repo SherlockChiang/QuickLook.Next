@@ -28,7 +28,8 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
-                        <Grid ColumnSpacing="20">
+                        <Grid x:Name="LanguageSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -48,7 +49,8 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
-                        <Grid ColumnSpacing="20">
+                        <Grid x:Name="AnimationSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="220" />
@@ -115,7 +117,7 @@
                             <Button x:Name="HelpButton" Click="OnHelpClick" HorizontalAlignment="Left">
                                 <TextBlock x:Name="HelpButtonText" />
                             </Button>
-                            <StackPanel Orientation="Horizontal" Spacing="10">
+                            <StackPanel x:Name="ProjectLinksPanel" Orientation="Horizontal" Spacing="10">
                                 <Button x:Name="GitHubButton" Click="OnGitHubClick">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8A7;" FontSize="14" />

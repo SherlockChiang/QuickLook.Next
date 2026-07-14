@@ -98,7 +98,33 @@ public sealed partial class SettingsWindow : Window
         QueueResizeToContent();
     }
 
-    private void OnContentSizeChanged(object sender, SizeChangedEventArgs e) => QueueResizeToContent();
+    private void OnContentSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        ApplyResponsiveLayout(e.NewSize.Width);
+        QueueResizeToContent();
+    }
+
+    private void ApplyResponsiveLayout(double width)
+    {
+        bool compact = width > 0 && width < 560;
+        ContentPanel.Padding = compact ? new Thickness(20, 20, 20, 32) : new Thickness(36, 20, 36, 32);
+        SetSettingLayout(LanguageSettingGrid, LanguageCombo, compact);
+        SetSettingLayout(AnimationSettingGrid, AnimationCombo, compact);
+        ProjectLinksPanel.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
+        GitHubButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
+        ReleasesButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
+    }
+
+    private static void SetSettingLayout(Grid grid, FrameworkElement control, bool compact)
+    {
+        grid.ColumnDefinitions[1].Width = compact ? new GridLength(0) : new GridLength(220);
+        Grid.SetColumn(control, compact ? 0 : 1);
+        Grid.SetRow(control, compact ? 1 : 0);
+        if (compact)
+            Grid.SetColumnSpan(control, 2);
+        else
+            Grid.SetColumnSpan(control, 1);
+    }
 
     private void QueueResizeToContent()
     {
