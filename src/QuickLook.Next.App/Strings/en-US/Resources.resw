@@ -203,6 +203,7 @@
   <data name="WelcomeHelpHint" xml:space="preserve"><value>You can reopen this guide from Settings under Help and shortcuts.</value></data>
   <data name="WelcomeStart" xml:space="preserve"><value>Start previewing</value></data>
   <data name="SettingsHelpShortcuts" xml:space="preserve"><value>Help and shortcuts</value></data>
+  <data name="PdfPageAccessibleNameFormat" xml:space="preserve"><value>Page {0:N0} of {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
   </data>

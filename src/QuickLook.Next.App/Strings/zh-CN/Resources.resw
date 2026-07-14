@@ -93,6 +93,7 @@
   <data name="WelcomeHelpHint" xml:space="preserve"><value>以后可以从设置中的“帮助和快捷键”重新打开本指南。</value></data>
   <data name="WelcomeStart" xml:space="preserve"><value>开始预览</value></data>
   <data name="SettingsHelpShortcuts" xml:space="preserve"><value>帮助和快捷键</value></data>
+  <data name="PdfPageAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 页，共 {1:N0} 页</value></data>
   <data name="AppBrandText.Text" xml:space="preserve"><value>QuickLook Next</value></data>
   <data name="InfoTabText.Text" xml:space="preserve"><value>信息</value></data>
   <data name="ExifTabText.Text" xml:space="preserve"><value>EXIF</value></data>

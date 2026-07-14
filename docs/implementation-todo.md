@@ -18,7 +18,7 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
 - [ ] Complete localization of visual, status, and automation strings.
-- [ ] Add semantic PDF page, image, table, and Office accessibility metadata.
+- [ ] Add semantic table and Office accessibility metadata.
 - [ ] Add consistent live-region loading, success, and failure notifications.
 - [ ] Add responsive settings/toolbars and 40-44 DIP interaction targets.
 
@@ -69,6 +69,10 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Track active PDF operations, drain them asynchronously, release owned
   synchronization resources, and drop the PDF projection reference on close.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
+  - Commit: this change
+- [x] Expose localized PDF page position/size semantics and file-name automation
+  names for image filmstrip items.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive

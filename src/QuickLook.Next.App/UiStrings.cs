@@ -95,6 +95,7 @@ internal static class UiStrings
     public static string PdfPageIndicatorFormat => Get(nameof(PdfPageIndicatorFormat), "{0:N0} / {1:N0}");
     public static string PdfPageIndicatorPagedFormat => Get(nameof(PdfPageIndicatorPagedFormat), "{0:N0} / {1:N0} (paged)");
     public static string PdfPageIndicatorEmpty => Get(nameof(PdfPageIndicatorEmpty), "0 / 0");
+    public static string PdfPageAccessibleNameFormat => Get(nameof(PdfPageAccessibleNameFormat), "Page {0:N0} of {1:N0}");
     public static string CertificateHeroSubtitle => Get(nameof(CertificateHeroSubtitle), "Certificate");
     public static string PackageHeroSubtitle => Get(nameof(PackageHeroSubtitle), "App package icon");
     public static string ExecutableHeroSubtitle => Get(nameof(ExecutableHeroSubtitle), "Application icon");

@@ -814,14 +814,15 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Border Width="70"
-                                        Height="54"
+                                 <Border Width="70"
+                                         Height="54"
                                         Margin="4"
                                         CornerRadius="6"
                                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
-                                        BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
-                                        BorderThickness="1"
-                                        ToolTipService.ToolTip="{Binding Name}">
+                                         BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                         BorderThickness="1"
+                                         AutomationProperties.Name="{Binding Name}"
+                                         ToolTipService.ToolTip="{Binding Name}">
                                     <Image Source="{Binding Thumbnail, Mode=OneWay}"
                                            Margin="3"
                                            Stretch="Uniform" />

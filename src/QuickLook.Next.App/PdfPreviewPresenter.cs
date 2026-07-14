@@ -2,6 +2,7 @@ using System.Numerics;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
@@ -358,13 +359,19 @@ internal sealed class PdfPreviewPresenter
             if (_pageHosts.ContainsKey(pageIndex))
                 continue;
 
-            _pageHosts[pageIndex] = new Border
+            var host = new Border
             {
                 Width = _pageDisplayWidths[pageIndex],
                 Height = _pageDisplayHeights[pageIndex],
                 Margin = new Thickness(0, 0, 0, pageIndex < _pageCount - 1 ? PageSpacing : 0),
                 Background = PageBackground,
             };
+            AutomationProperties.SetName(
+                host,
+                UiStrings.Format(UiStrings.PdfPageAccessibleNameFormat, pageIndex + 1, _pageCount));
+            AutomationProperties.SetPositionInSet(host, pageIndex + 1);
+            AutomationProperties.SetSizeOfSet(host, _pageCount);
+            _pageHosts[pageIndex] = host;
         }
 
         _pagesPanel.Children.Clear();
