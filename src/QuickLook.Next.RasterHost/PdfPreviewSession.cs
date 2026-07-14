@@ -14,8 +14,6 @@ namespace QuickLook.Next.RasterHost;
 internal sealed class PdfPreviewSession : IDisposable
 {
     private const double MaxRenderDimension = 2200.0;
-    // Keep preview.ready comfortably below the bounded control-pipe message size.
-    private const uint MaxPageGeometryCount = 256;
     private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
     private const long MaxDiskCacheBytes = 256L * 1024 * 1024;
     private static readonly WinColor White = new() { A = 255, R = 255, G = 255, B = 255 };
@@ -82,35 +80,9 @@ internal sealed class PdfPreviewSession : IDisposable
             throw new InvalidOperationException("PDF contains no pages.");
 
         using PdfPage first = document.GetPage(0);
-        PdfPageGeometry[]? pageGeometries = TryGetPageGeometries(document);
         watch.Stop();
         DiagLog.Write("RasterHost", $"pdf open {watch.ElapsedMilliseconds}ms; pages={document.PageCount}; path={path}");
-        return new PdfPreviewSession(path, document, first.Size, pageGeometries, mtime);
-    }
-
-    private static PdfPageGeometry[]? TryGetPageGeometries(PdfDocument document)
-    {
-        if (document.PageCount == 0 || document.PageCount > MaxPageGeometryCount)
-            return null;
-
-        try
-        {
-            var geometries = new PdfPageGeometry[checked((int)document.PageCount)];
-            for (uint pageIndex = 0; pageIndex < document.PageCount; pageIndex++)
-            {
-                using PdfPage page = document.GetPage(pageIndex);
-                WinSize size = page.Size;
-                if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0)
-                    return null;
-                geometries[pageIndex] = new PdfPageGeometry(size.Width, size.Height);
-            }
-            return geometries;
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("RasterHost", "pdf page geometry unavailable: " + ex.Message);
-            return null;
-        }
+        return new PdfPreviewSession(path, document, first.Size, pageGeometries: null, mtime);
     }
 
     /// <summary>Drop all cached rendered pages (called on idle to return memory to the OS).</summary>

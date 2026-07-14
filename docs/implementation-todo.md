@@ -15,7 +15,7 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Deduplicate thumbnail work while preserving independent caller cancellation.
 - [ ] Maintain PDF disk-cache size incrementally instead of enumerating it.
-- [ ] Load PDF page geometry lazily and release document resources explicitly.
+- [ ] Release PDF document resources asynchronously after active renders stop.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
 - [ ] Complete localization of visual, status, and automation strings.
@@ -84,5 +84,9 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Serialize PDF disk-cache writes through a bounded process-wide queue,
   publish files atomically, and trim periodically instead of after every page.
+  - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
+  - Commit: this change
+- [x] Remove eager all-page PDF geometry enumeration from the first-preview path;
+  use the existing first-page-size fallback until each page is rendered.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
   - Commit: this change
