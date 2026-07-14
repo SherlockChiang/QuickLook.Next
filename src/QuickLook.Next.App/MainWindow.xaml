@@ -360,6 +360,7 @@
                                 Orientation="Horizontal"
                                 Spacing="4">
                         <TextBox x:Name="TextFindBox"
+                                 x:Uid="TextFindBox"
                                  Width="220"
                                  MinHeight="40"
                                  PlaceholderText="Find"
@@ -371,17 +372,17 @@
                                    VerticalAlignment="Center"
                                    TextAlignment="Center"
                                    AutomationProperties.LiveSetting="Polite" />
-                        <Button Width="40" Height="40"
+                        <Button x:Uid="TextFindPreviousButton" Width="40" Height="40"
                                 Click="OnTextFindPreviousClick"
                                 AutomationProperties.Name="Previous match">
                             <FontIcon Glyph="&#xE70E;" FontSize="14" />
                         </Button>
-                        <Button Width="40" Height="40"
+                        <Button x:Uid="TextFindNextButton" Width="40" Height="40"
                                 Click="OnTextFindNextClick"
                                 AutomationProperties.Name="Next match">
                             <FontIcon Glyph="&#xE70D;" FontSize="14" />
                         </Button>
-                        <Button Width="40" Height="40"
+                        <Button x:Uid="TextFindCloseButton" Width="40" Height="40"
                                 Click="OnTextFindCloseClick"
                                 AutomationProperties.Name="Close search">
                             <FontIcon Glyph="&#xE711;" FontSize="14" />
@@ -1110,7 +1111,7 @@
                         Spacing="8">
                 <Button x:Name="ErrorRetryButton"
                         x:Uid="ErrorRetryButton"
-                        Height="34"
+                        Height="40"
                         Padding="14,0"
                         CornerRadius="6"
                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
@@ -1119,12 +1120,12 @@
                         Click="OnRetryPreviewClick">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE72C;" FontSize="14" />
-                        <TextBlock Text="Try again" FontSize="12" />
+                        <TextBlock x:Uid="ErrorRetryText" Text="Try again" FontSize="12" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="ErrorOpenFileButton"
                         x:Uid="ErrorOpenFileButton"
-                        Height="34"
+                        Height="40"
                         Padding="14,0"
                         CornerRadius="6"
                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
@@ -1138,7 +1139,7 @@
                 </Button>
                 <Button x:Name="ErrorRevealFileButton"
                         x:Uid="ErrorRevealFileButton"
-                        Height="34"
+                        Height="40"
                         Padding="14,0"
                         CornerRadius="6"
                         Background="Transparent"

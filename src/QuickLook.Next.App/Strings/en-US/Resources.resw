@@ -228,6 +228,22 @@
   <data name="OfficeRowHeaderAccessibleNameFormat" xml:space="preserve"><value>Row {0:N0}</value></data>
   <data name="OfficeCellAccessibleNameFormat" xml:space="preserve"><value>Cell {0}: {1}</value></data>
   <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>Embedded image</value></data>
+  <data name="PreviewContentHost.AutomationProperties.Name" xml:space="preserve"><value>Preview content</value></data>
+  <data name="PreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>Image preview surface</value></data>
+  <data name="AnimatedImagePreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>Animated image preview</value></data>
+  <data name="PdfScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>PDF preview pages</value></data>
+  <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF page navigation</value></data>
+  <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown headings</value></data>
+  <data name="TextPreviewContainer.AutomationProperties.Name" xml:space="preserve"><value>Text preview</value></data>
+  <data name="TextFindBox.AutomationProperties.Name" xml:space="preserve"><value>Find in preview</value></data>
+  <data name="TextFindPreviousButton.AutomationProperties.Name" xml:space="preserve"><value>Previous match</value></data>
+  <data name="TextFindNextButton.AutomationProperties.Name" xml:space="preserve"><value>Next match</value></data>
+  <data name="TextFindCloseButton.AutomationProperties.Name" xml:space="preserve"><value>Close search</value></data>
+  <data name="MediaPreviewElement.AutomationProperties.Name" xml:space="preserve"><value>Media preview player</value></data>
+  <data name="LoadingRing.AutomationProperties.Name" xml:space="preserve"><value>Loading preview</value></data>
+  <data name="ErrorPanel.AutomationProperties.Name" xml:space="preserve"><value>Preview error</value></data>
+  <data name="ErrorText.AutomationProperties.Name" xml:space="preserve"><value>Preview error message</value></data>
+  <data name="ErrorRetryText.Text" xml:space="preserve"><value>Try again</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>Opening {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>Downloading {0} from cloud storage...</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>Checking {0} availability safely...</value></data>

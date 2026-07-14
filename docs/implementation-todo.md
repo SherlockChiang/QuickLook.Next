@@ -52,6 +52,11 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Localize high-frequency preview, search, media, loading, and error
+  automation names; localize Retry and raise all error actions to 40 DIP.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+
 - [x] Add localized row, column, cell, merged-range, page/sheet/slide position,
   and embedded-image automation names to virtualized table and Office previews.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`

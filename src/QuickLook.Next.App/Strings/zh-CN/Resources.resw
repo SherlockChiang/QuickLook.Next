@@ -118,6 +118,22 @@
   <data name="OfficeRowHeaderAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 行</value></data>
   <data name="OfficeCellAccessibleNameFormat" xml:space="preserve"><value>单元格 {0}：{1}</value></data>
   <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>嵌入图像</value></data>
+  <data name="PreviewContentHost.AutomationProperties.Name" xml:space="preserve"><value>预览内容</value></data>
+  <data name="PreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>图像预览区域</value></data>
+  <data name="AnimatedImagePreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>动态图像预览</value></data>
+  <data name="PdfScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>PDF 预览页面</value></data>
+  <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF 页面导航</value></data>
+  <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown 标题</value></data>
+  <data name="TextPreviewContainer.AutomationProperties.Name" xml:space="preserve"><value>文本预览</value></data>
+  <data name="TextFindBox.AutomationProperties.Name" xml:space="preserve"><value>在预览中查找</value></data>
+  <data name="TextFindPreviousButton.AutomationProperties.Name" xml:space="preserve"><value>上一个匹配项</value></data>
+  <data name="TextFindNextButton.AutomationProperties.Name" xml:space="preserve"><value>下一个匹配项</value></data>
+  <data name="TextFindCloseButton.AutomationProperties.Name" xml:space="preserve"><value>关闭搜索</value></data>
+  <data name="MediaPreviewElement.AutomationProperties.Name" xml:space="preserve"><value>媒体预览播放器</value></data>
+  <data name="LoadingRing.AutomationProperties.Name" xml:space="preserve"><value>正在加载预览</value></data>
+  <data name="ErrorPanel.AutomationProperties.Name" xml:space="preserve"><value>预览错误</value></data>
+  <data name="ErrorText.AutomationProperties.Name" xml:space="preserve"><value>预览错误消息</value></data>
+  <data name="ErrorRetryText.Text" xml:space="preserve"><value>重试</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>正在打开 {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>正在从云存储下载 {0}...</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>正在安全检查 {0} 的可用性...</value></data>
