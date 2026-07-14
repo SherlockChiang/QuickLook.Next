@@ -13,7 +13,8 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
-- [ ] Release PDF document resources asynchronously after active renders stop.
+- [ ] Replace the PDF document projection with an input/ownership path that
+  exposes deterministic close semantics.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
 - [ ] Complete localization of visual, status, and automation strings.
@@ -63,6 +64,10 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Scan the PDF disk cache once per RasterHost process, then maintain its byte
   count incrementally and enumerate LRU files only when the limit is exceeded.
+  - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
+  - Commit: this change
+- [x] Track active PDF operations, drain them asynchronously, release owned
+  synchronization resources, and drop the PDF projection reference on close.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
   - Commit: this change
 

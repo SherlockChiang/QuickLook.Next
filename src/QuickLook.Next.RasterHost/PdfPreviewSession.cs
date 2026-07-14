@@ -11,7 +11,7 @@ using WinSize = Windows.Foundation.Size;
 
 namespace QuickLook.Next.RasterHost;
 
-internal sealed class PdfPreviewSession : IDisposable
+internal sealed class PdfPreviewSession : IAsyncDisposable
 {
     private const double MaxRenderDimension = 2200.0;
     private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
@@ -50,11 +50,14 @@ internal sealed class PdfPreviewSession : IDisposable
         public LinkedListNode<string> Node { get; } = node;
     }
 
-    private readonly PdfDocument _document;
+    private PdfDocument? _document;
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly SemaphoreSlim _documentRenderLock = new(1, 1);
+    private readonly object _lifetimeLock = new();
     private readonly long _mtimeTicks;
     private bool _disposed;
+    private int _activeOperations;
+    private TaskCompletionSource? _operationsDrained;
 
     private PdfPreviewSession(string path, PdfDocument document, WinSize firstPageSize, PdfPageGeometry[]? pageGeometries, long mtimeTicks)
     {
@@ -66,9 +69,11 @@ internal sealed class PdfPreviewSession : IDisposable
     }
 
     public string Path { get; }
-    public uint PageCount => _document.PageCount;
+    public uint PageCount => Document.PageCount;
     public WinSize FirstPageSize { get; }
     public PdfPageGeometry[]? PageGeometries { get; }
+
+    private PdfDocument Document => _document ?? throw new ObjectDisposedException(nameof(PdfPreviewSession));
 
     public static async Task<PdfPreviewSession> OpenAsync(string path)
     {
@@ -317,9 +322,37 @@ internal sealed class PdfPreviewSession : IDisposable
     /// format to eliminate the PNG compress/decompress round-trip — for a 2200×2800 page that's
     /// ~24MB of raw pixels vs CPU-expensive PNG codec that saves ~2-3MB we never persist.
     /// </summary>
-    public async Task<(byte[] Bgra, int Width, int Height)> RenderPageAsync(int pageIndex, double scale, CancellationToken cancellationToken)
+    public Task<(byte[] Bgra, int Width, int Height)> RenderPageAsync(
+        int pageIndex,
+        double scale,
+        CancellationToken cancellationToken)
     {
-        if (pageIndex < 0 || pageIndex >= _document.PageCount)
+        EnterOperation();
+        return RenderPageWithLifetimeAsync(pageIndex, scale, cancellationToken);
+    }
+
+    private async Task<(byte[] Bgra, int Width, int Height)> RenderPageWithLifetimeAsync(
+        int pageIndex,
+        double scale,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await RenderPageOperationAsync(pageIndex, scale, cancellationToken);
+        }
+        finally
+        {
+            ExitOperation();
+        }
+    }
+
+    private async Task<(byte[] Bgra, int Width, int Height)> RenderPageOperationAsync(
+        int pageIndex,
+        double scale,
+        CancellationToken cancellationToken)
+    {
+        PdfDocument document = Document;
+        if (pageIndex < 0 || pageIndex >= document.PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageIndex));
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
@@ -327,7 +360,7 @@ internal sealed class PdfPreviewSession : IDisposable
 
         // Single GetPage call: read size and render from the same page object (was 2× GetPage before).
         token.ThrowIfCancellationRequested();
-        using PdfPage page = _document.GetPage((uint)pageIndex);
+        using PdfPage page = document.GetPage((uint)pageIndex);
         WinSize pageSize = page.Size;
 
         double targetScale = Math.Clamp(scale, 0.1, 4.0);
@@ -362,7 +395,7 @@ internal sealed class PdfPreviewSession : IDisposable
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using PdfPage page = _document.GetPage((uint)pageIndex);
+            using PdfPage page = Document.GetPage((uint)pageIndex);
             using var stream = new InMemoryRandomAccessStream();
             var renderWatch = Stopwatch.StartNew();
             await page.RenderToStreamAsync(stream, new PdfPageRenderOptions
@@ -395,11 +428,48 @@ internal sealed class PdfPreviewSession : IDisposable
         }
     }
 
-    public void Dispose()
+    private void EnterOperation()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_lifetimeLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _activeOperations++;
+        }
+    }
+
+    private void ExitOperation()
+    {
+        TaskCompletionSource? drained = null;
+        lock (_lifetimeLock)
+        {
+            _activeOperations--;
+            if (_disposed && _activeOperations == 0)
+                drained = _operationsDrained;
+        }
+        drained?.TrySetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Task? waitForOperations = null;
+        lock (_lifetimeLock)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            if (_activeOperations > 0)
+            {
+                _operationsDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                waitForOperations = _operationsDrained.Task;
+            }
+        }
+
         try { _disposeCts.Cancel(); } catch { }
+        if (waitForOperations is not null)
+            await waitForOperations.ConfigureAwait(false);
+
+        _document = null;
+        _documentRenderLock.Dispose();
         _disposeCts.Dispose();
     }
 }

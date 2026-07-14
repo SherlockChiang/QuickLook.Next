@@ -166,7 +166,7 @@ while (true)
                 bool isActiveRequest = string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal);
                 CancelOpen(close.RequestId);
                 if (pdfSessions.TryRemove(close.RequestId, out var pdf))
-                    pdf.Dispose();
+                    await pdf.DisposeAsync();
                 foreach (var key in pdfPageRenderCts.Keys.Where(k => k.RequestId == close.RequestId).ToArray())
                 {
                     if (pdfPageRenderCts.TryRemove(key, out var cts))
@@ -203,6 +203,9 @@ foreach (var cts in remainingOpenCts)
 }
 foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
+foreach (PdfPreviewSession session in pdfSessions.Values)
+    await session.DisposeAsync();
+pdfSessions.Clear();
 foreach (var packet in animationPackets.Values)
 {
     packet.Handle.Dispose();
@@ -394,7 +397,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
         cancellationToken.ThrowIfCancellationRequested();
         if (IsPdf(open.Probe))
         {
-            if (pdfSessions.TryRemove(open.RequestId, out var old)) old.Dispose();
+            if (pdfSessions.TryRemove(open.RequestId, out var old)) await old.DisposeAsync();
             PdfPreviewSession? session = await PdfPreviewSession.OpenAsync(open.Path);
             try
             {
@@ -428,7 +431,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                     }
                     catch
                     {
-                        if (pdfSessions.TryRemove(open.RequestId, out var failed)) failed.Dispose();
+                        if (pdfSessions.TryRemove(open.RequestId, out var failed)) await failed.DisposeAsync();
                         throw;
                     }
                 }
@@ -439,7 +442,8 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             }
             finally
             {
-                session?.Dispose();
+                if (session is not null)
+                    await session.DisposeAsync();
             }
             return;
         }
