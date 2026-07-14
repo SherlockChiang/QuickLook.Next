@@ -58,31 +58,31 @@ Completed entries move here with the verification commands and commit hash.
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
   - Verification: `cargo test --locked package_icon_candidates`
   - Integration verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore --filter Package_hero_raster_close_removes_bgra_handoff`
-  - Commit: `88be923` plus the following integration-test commit
+  - Commits: `88be923`, `28b7a27`
 - [x] Deduplicate thumbnail work by path, size, and cache policy while preserving
   independent caller cancellation and foreground promotion.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `39bdd24`
 - [x] Scan the PDF disk cache once per RasterHost process, then maintain its byte
   count incrementally and enumerate LRU files only when the limit is exceeded.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
-  - Commit: this change
+  - Commit: `5208700`
 - [x] Track active PDF operations, drain them asynchronously, release owned
   synchronization resources, and drop the PDF projection reference on close.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
-  - Commit: this change
+  - Commit: `bae019e`
 - [x] Expose localized PDF page position/size semantics and file-name automation
   names for image filmstrip items.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `34a46af`
 - [x] Mark loading, normal status, and PDF page changes as polite live regions;
   retain assertive semantics for blocking preview errors.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `9b43e79`
 - [x] Raise preview controls, listing rows, and breadcrumbs to at least 40 DIP;
   programmatically label settings controls.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `993768d`
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive
   preview control.
