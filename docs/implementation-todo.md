@@ -66,6 +66,10 @@ Completed entries move here with the verification commands and commit hash.
   anchors for prose, headings, quotes, lists, code, and bounded tables.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
+- [x] Extract plain and Markdown visible-text search indexing into a tested Core
+  helper covering case-insensitive non-overlap and AST list/table/link content.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Text_search|Markdown_search`
+  - Commit: this change
 
 - [x] Record process/App/background/hook startup milestones and correlate preview
   intent, availability, probe, route, loading shell, reveal, and final first-frame

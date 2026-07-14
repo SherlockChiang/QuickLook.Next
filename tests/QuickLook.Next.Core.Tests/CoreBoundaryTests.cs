@@ -9,6 +9,39 @@ public sealed class CoreBoundaryTests : IDisposable
 {
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextTests", Guid.NewGuid().ToString("n"));
 
+    [Fact]
+    public void Text_search_matches_case_insensitively_without_overlap()
+        => Assert.Equal([0, 4], TextSearchIndex.FindMatches("Testtest", "test"));
+
+    [Fact]
+    public void Markdown_search_index_uses_visible_ast_content()
+    {
+        var document = new PreviewMarkdown
+        {
+            IsPartial = true,
+            Blocks =
+            [
+                new PreviewMarkdownBlock("heading")
+                {
+                    Inlines = [new PreviewMarkdownInline("link") { Text = "Docs", Url = "https://example.test" }],
+                },
+                new PreviewMarkdownBlock("unorderedList")
+                {
+                    Children = [new PreviewMarkdownBlock("item") { Text = "First item" }],
+                },
+                new PreviewMarkdownBlock("table")
+                {
+                    TableHeaders = ["Name"],
+                    TableRows = [["QuickLook"]],
+                },
+            ],
+        };
+
+        Assert.Equal(
+            "Docs (https://example.test)\nFirst item\nName\nQuickLook\nPartial",
+            TextSearchIndex.BuildMarkdownVisibleText(document, "Partial"));
+    }
+
     [Theory]
     [InlineData(FileAttributes.Offline)]
     [InlineData((FileAttributes)0x00040000)]
