@@ -56,11 +56,17 @@ if (Test-Path $sidecarPath) {
 
 if (Test-Path $schedulerPath) {
     $schedulerText = Get-Content -LiteralPath $schedulerPath -Raw
-    if ($schedulerText -notmatch 'Queue<Request> _foreground' -or $schedulerText -notmatch 'Queue<Request> _background') {
+    if ($schedulerText -notmatch 'LinkedList<Request> _foreground' -or $schedulerText -notmatch 'LinkedList<Request> _background') {
         Add-Failure "NativeThumbnailScheduler must keep separate foreground/background queues"
     }
-    if ($schedulerText -notmatch 'if \(_foreground\.Count > 0\)\s*return _foreground\.Dequeue\(\);\s*if \(_background\.Count > 0\)') {
-        Add-Failure "NativeThumbnailScheduler must drain foreground thumbnails before background thumbnails"
+    if ($schedulerText -notmatch 'MaxQueuedRequests' -or $schedulerText -notmatch '_foreground\.Count \+ _background\.Count >= MaxQueuedRequests') {
+        Add-Failure "NativeThumbnailScheduler must bound total queued thumbnail work"
+    }
+    if ($schedulerText -notmatch 'ForegroundBurstLimit' -or $schedulerText -notmatch '_foregroundBurst < ForegroundBurstLimit') {
+        Add-Failure "NativeThumbnailScheduler must cap foreground bursts so background work cannot starve"
+    }
+    if ($schedulerText -notmatch '_foregroundBurst = 0') {
+        Add-Failure "NativeThumbnailScheduler must reset foreground fairness after background work"
     }
     if ($schedulerText -notmatch 'bool cacheOnly' -or $schedulerText -notmatch 'request\.CacheOnly') {
         Add-Failure "NativeThumbnailScheduler must preserve the cache-only policy on each request"
