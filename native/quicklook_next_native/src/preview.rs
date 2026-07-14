@@ -12138,7 +12138,9 @@ fn find_epub_opf_path(
 ) -> Option<String> {
     for i in 0..zip.len().min(512) {
         if preview_cancelled(cancel_cb) { return None; }
-        let entry = zip.by_index_raw(i).ok()?;
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
         let name = entry.name().replace('\\', "/");
         if name.to_ascii_lowercase().ends_with(".opf") {
             return Some(name);
@@ -13333,7 +13335,9 @@ pub fn extract_package_icon_bgra(
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     for (path_score, name) in candidates.into_iter().take(32) {
         if preview_cancelled(cancel_cb) { return None; }
-        let mut entry = zip.by_name(&name).ok()?;
+        let Ok(mut entry) = zip.by_name(&name) else {
+            continue;
+        };
         let Some(bytes) = read_limited_to_end(&mut entry, MAX_PACKAGE_ICON_BYTES) else {
             continue;
         };
@@ -13428,6 +13432,7 @@ fn package_icon_candidate_score(name: &str) -> i32 {
     if !is_supported_zip_image_name(&lower) {
         return 0;
     }
+    let is_android_mipmap = lower.starts_with("res/mipmap") || lower.contains("/res/mipmap");
 
     let mut score = 0;
     if lower.contains("ic_launcher") {
@@ -13451,14 +13456,14 @@ fn package_icon_candidate_score(name: &str) -> i32 {
     if lower.contains("icon") {
         score += 140;
     }
-    if score == 0 {
+    if score == 0 && !is_android_mipmap {
         return 0;
     }
 
     if lower.starts_with("assets/") || lower.contains("/assets/") {
         score += 30;
     }
-    if lower.contains("/mipmap") || lower.starts_with("res/mipmap") {
+    if is_android_mipmap {
         score += 30;
     }
     if lower.contains("/drawable") || lower.starts_with("res/drawable") {
@@ -14608,6 +14613,14 @@ mod tests {
         ));
         assert!(!archive_entry_within_extract_budget(1_000_001, 1000));
         assert!(!archive_entry_within_extract_budget(1, 0));
+    }
+
+    #[test]
+    fn package_icon_candidates_accept_arbitrary_android_mipmap_names() {
+        assert!(package_icon_candidate_score("res/mipmap-xxxhdpi/product_mark.png") > 0);
+        assert!(package_icon_candidate_score("base/res/mipmap-hdpi/brand_asset.webp") > 0);
+        assert_eq!(package_icon_candidate_score("res/drawable/random_photo.png"), 0);
+        assert_eq!(package_icon_candidate_score("res/mipmap-anydpi-v26/product_mark.xml"), 0);
     }
 
     #[test]

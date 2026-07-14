@@ -25,6 +25,7 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P2: Product capabilities
 
+- [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
 - [ ] Implement text/code search with Ctrl+F, F3, Shift+F3, and match counts.
 - [ ] Add a privacy-conscious diagnostics center and support bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
@@ -52,6 +53,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Present APK raster icons from Android mipmap resources even when the
+  launcher resource uses a custom filename; skip unreadable ZIP candidates.
+  - Verification: `cargo test --locked package_icon_candidates`
+  - Commit: this change
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive
   preview control.
