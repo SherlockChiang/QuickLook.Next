@@ -21,7 +21,7 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Add semantic table and Office accessibility metadata.
 - [ ] Verify live-region loading, success, and failure announcements with
   Narrator; add explicit AutomationPeer events where hidden status is silent.
-- [ ] Add responsive settings/toolbars and 40-44 DIP interaction targets.
+- [ ] Add responsive settings and toolbar overflow states for narrow widths.
 
 ## P2: Product capabilities
 
@@ -77,6 +77,10 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Mark loading, normal status, and PDF page changes as polite live regions;
   retain assertive semantics for blocking preview errors.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Raise preview controls, listing rows, and breadcrumbs to at least 40 DIP;
+  programmatically label settings controls.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 

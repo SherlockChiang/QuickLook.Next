@@ -37,7 +37,11 @@
                                 <TextBlock x:Name="AutoStartTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
                                 <TextBlock x:Name="AutoStartDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
-                            <ToggleSwitch x:Name="AutoStartToggle" Grid.Column="1" Toggled="OnAutoStartToggled" />
+                            <ToggleSwitch x:Name="AutoStartToggle"
+                                          Grid.Column="1"
+                                          MinHeight="40"
+                                          AutomationProperties.LabeledBy="{x:Bind AutoStartTitle}"
+                                          Toggled="OnAutoStartToggled" />
                         </Grid>
                     </Border>
 
@@ -53,7 +57,12 @@
                                 <TextBlock x:Name="LanguageTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
                                 <TextBlock x:Name="LanguageDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                             </StackPanel>
-                            <ComboBox x:Name="LanguageCombo" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="OnLanguageSelectionChanged">
+                            <ComboBox x:Name="LanguageCombo"
+                                      Grid.Column="1"
+                                      MinHeight="40"
+                                      HorizontalAlignment="Stretch"
+                                      AutomationProperties.LabeledBy="{x:Bind LanguageTitle}"
+                                      SelectionChanged="OnLanguageSelectionChanged">
                                 <ComboBoxItem x:Name="SystemLanguageItem" Tag="system" />
                                 <ComboBoxItem Content="English" Tag="en-US" />
                                 <ComboBoxItem Content="简体中文" Tag="zh-CN" />

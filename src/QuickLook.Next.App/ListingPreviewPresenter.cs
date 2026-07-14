@@ -254,7 +254,7 @@ internal sealed class ListingPreviewPresenter
             Content = text,
             Tag = path,
             Padding = new Thickness(8, 2, 8, 2),
-            MinHeight = 26,
+            MinHeight = 40,
         };
         AutomationProperties.SetName(button, UiStrings.Format(UiStrings.ListingOpenBreadcrumbFormat, text));
         button.Click += OnBreadcrumbClick;
