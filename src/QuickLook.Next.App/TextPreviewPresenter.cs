@@ -75,7 +75,7 @@ internal sealed class TextPreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         string text = TrimForDisplay(ready.TextContent ?? "");
-        _displayedText = text;
+        _displayedText = ready.Markdown is null ? text : BuildMarkdownSearchText(ready.Markdown);
         ClearSearch();
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
@@ -236,6 +236,60 @@ internal sealed class TextPreviewPresenter
             partial.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
             _textBlock.Blocks.Add(partial);
         }
+    }
+
+    private static string BuildMarkdownSearchText(PreviewMarkdown document)
+    {
+        var text = new StringBuilder();
+        foreach (PreviewMarkdownBlock block in document.Blocks)
+            AppendMarkdownSearchBlock(text, block);
+        if (document.IsPartial)
+            text.AppendLine(UiStrings.TextPreviewTruncated);
+        return text.ToString().TrimEnd();
+    }
+
+    private static void AppendMarkdownSearchBlock(StringBuilder text, PreviewMarkdownBlock block)
+    {
+        switch (block.Kind)
+        {
+            case "unorderedList":
+            case "orderedList":
+                foreach (PreviewMarkdownBlock item in block.Children)
+                    text.AppendLine(MarkdownInlineText(item.Inlines, item.Text));
+                break;
+            case "table":
+                foreach (string header in block.TableHeaders)
+                    text.AppendLine(header);
+                foreach (string[] row in block.TableRows.Take(120))
+                {
+                    foreach (string cell in row)
+                        text.AppendLine(cell);
+                }
+                break;
+            case "thematicBreak":
+                break;
+            default:
+                text.AppendLine(MarkdownInlineText(block.Inlines, block.Text));
+                break;
+        }
+    }
+
+    private static string MarkdownInlineText(
+        IReadOnlyList<PreviewMarkdownInline> inlines,
+        string fallbackText)
+    {
+        if (inlines.Count == 0)
+            return fallbackText;
+        var text = new StringBuilder();
+        foreach (PreviewMarkdownInline inline in inlines)
+        {
+            text.Append(inline.Children.Length == 0
+                ? inline.Text
+                : MarkdownInlineText(inline.Children, inline.Text));
+            if (inline.Kind == "link" && !string.IsNullOrWhiteSpace(inline.Url))
+                text.Append($" ({inline.Url})");
+        }
+        return text.ToString();
     }
 
     private void AddMarkdownBlock(PreviewMarkdownBlock block)
