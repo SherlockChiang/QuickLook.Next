@@ -56,7 +56,7 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Compact the text preview toolbar while search is open so the query,
   count, and navigation controls fit without horizontal overflow.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `aac32a6`
 
 - [x] Add a persisted animated-preview preference that follows Windows, always
   plays, or forces a static first frame, with localized settings UI.
