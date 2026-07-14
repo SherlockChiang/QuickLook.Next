@@ -94,6 +94,13 @@
   <data name="WelcomeStart" xml:space="preserve"><value>开始预览</value></data>
   <data name="SettingsHelpShortcuts" xml:space="preserve"><value>帮助和快捷键</value></data>
   <data name="PdfPageAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 页，共 {1:N0} 页</value></data>
+  <data name="OpeningFileFormat" xml:space="preserve"><value>正在打开 {0}...</value></data>
+  <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>正在从云存储下载 {0}...</value></data>
+  <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>正在安全检查 {0} 的可用性...</value></data>
+  <data name="CloudUnknownDeferred" xml:space="preserve"><value>无法在不下载内容的情况下识别此云文件类型，因此已推迟预览。</value></data>
+  <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>无法在不读取内容的情况下验证文件可用性，因此已推迟预览。</value></data>
+  <data name="CloudMediaDeferred" xml:space="preserve"><value>云服务提供商在本地提供此文件后才能播放媒体。</value></data>
+  <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>无法安全验证文件可用性，因此已推迟媒体播放。</value></data>
   <data name="AppBrandText.Text" xml:space="preserve"><value>QuickLook Next</value></data>
   <data name="InfoTabText.Text" xml:space="preserve"><value>信息</value></data>
   <data name="ExifTabText.Text" xml:space="preserve"><value>EXIF</value></data>

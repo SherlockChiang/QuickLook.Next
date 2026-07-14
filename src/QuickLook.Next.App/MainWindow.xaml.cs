@@ -653,7 +653,7 @@ public sealed partial class MainWindow : Window
         _currentPreviewWasCloudPlaceholder = false;
         Title = System.IO.Path.GetFileName(path);
         PreviewTitleText.Text = Title;
-        StatusText.Text = $"opening {System.IO.Path.GetFileName(path)}…";
+        StatusText.Text = UiStrings.Format(UiStrings.OpeningFileFormat, System.IO.Path.GetFileName(path));
         ShowPreviewLoadingShell();
         try
         {
@@ -672,13 +672,13 @@ public sealed partial class MainWindow : Window
             _currentPreviewWasCloudPlaceholder = mayRequireHydration;
             if (availability == CloudFileAvailability.RequiresHydration)
             {
-                StatusText.Text = $"downloading {System.IO.Path.GetFileName(path)} from cloud storage…";
+                StatusText.Text = UiStrings.Format(UiStrings.DownloadingCloudFileFormat, System.IO.Path.GetFileName(path));
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
             }
             else if (availability == CloudFileAvailability.Unknown)
             {
-                StatusText.Text = $"checking {System.IO.Path.GetFileName(path)} availability safely…";
+                StatusText.Text = UiStrings.Format(UiStrings.CheckingFileAvailabilityFormat, System.IO.Path.GetFileName(path));
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"file availability unknown; using isolated preview gen={generation}; path={path}");
             }
@@ -700,8 +700,8 @@ public sealed partial class MainWindow : Window
                     path,
                     probe,
                     availability == CloudFileAvailability.RequiresHydration
-                        ? "Preview is deferred because this cloud file type cannot be identified without downloading its contents."
-                        : "Preview is deferred because file availability could not be verified without reading its contents.");
+                        ? UiStrings.CloudUnknownDeferred
+                        : UiStrings.CloudAvailabilityUnknownDeferred);
                 _previewSession.CommitPath(path);
                 _previewSession.SetRequestId(null);
                 StatusText.Text = ShowTextPreview(unknownCloudReady);
@@ -719,8 +719,8 @@ public sealed partial class MainWindow : Window
                     path,
                     probe,
                     availability == CloudFileAvailability.RequiresHydration
-                        ? "Media playback is deferred until the cloud provider makes this file available locally."
-                        : "Media playback is deferred because file availability could not be verified safely.");
+                        ? UiStrings.CloudMediaDeferred
+                        : UiStrings.CloudMediaAvailabilityUnknownDeferred);
                     _previewSession.CommitPath(path);
                     _previewSession.SetRequestId(null);
                     StatusText.Text = ShowTextPreview(cloudMediaReady);

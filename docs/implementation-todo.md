@@ -67,6 +67,10 @@ Completed entries move here with the verification commands and commit hash.
   syntax tokens before creating WinUI Run elements.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
+- [x] Localize opening, cloud download, availability-check, and deferred-preview
+  status text in English and Simplified Chinese.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.

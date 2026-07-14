@@ -33,6 +33,13 @@ internal static class UiStrings
     public static string PathCopied => Get(nameof(PathCopied), "Path copied");
     public static string FileCopied => Get(nameof(FileCopied), "File copied");
     public static string NoExifData => Get(nameof(NoExifData), "No EXIF data");
+    public static string OpeningFileFormat => Get(nameof(OpeningFileFormat), "Opening {0}...");
+    public static string DownloadingCloudFileFormat => Get(nameof(DownloadingCloudFileFormat), "Downloading {0} from cloud storage...");
+    public static string CheckingFileAvailabilityFormat => Get(nameof(CheckingFileAvailabilityFormat), "Checking {0} availability safely...");
+    public static string CloudUnknownDeferred => Get(nameof(CloudUnknownDeferred), "Preview is deferred because this cloud file type cannot be identified without downloading its contents.");
+    public static string CloudAvailabilityUnknownDeferred => Get(nameof(CloudAvailabilityUnknownDeferred), "Preview is deferred because file availability could not be verified without reading its contents.");
+    public static string CloudMediaDeferred => Get(nameof(CloudMediaDeferred), "Media playback is deferred until the cloud provider makes this file available locally.");
+    public static string CloudMediaAvailabilityUnknownDeferred => Get(nameof(CloudMediaAvailabilityUnknownDeferred), "Media playback is deferred because file availability could not be verified safely.");
 
     public static string TrayShowPreview => Get(nameof(TrayShowPreview), "Show preview");
     public static string TraySettings => Get(nameof(TraySettings), "Settings");
