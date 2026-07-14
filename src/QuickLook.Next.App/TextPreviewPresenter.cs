@@ -43,7 +43,9 @@ internal sealed class TextPreviewPresenter
     private string _displayedText = "";
     private string _searchQuery = "";
     private readonly List<int> _searchMatches = [];
+    private readonly List<(int Start, FrameworkElement Anchor)> _markdownSearchAnchors = [];
     private int _currentSearchMatch = -1;
+    private int _markdownSearchOffset;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -76,6 +78,8 @@ internal sealed class TextPreviewPresenter
         _lastMaxContent = maxContent;
         string text = TrimForDisplay(ready.TextContent ?? "");
         _displayedText = ready.Markdown is null ? text : BuildMarkdownSearchText(ready.Markdown);
+        _markdownSearchAnchors.Clear();
+        _markdownSearchOffset = 0;
         ClearSearch();
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
@@ -122,6 +126,8 @@ internal sealed class TextPreviewPresenter
     {
         _lastReady = null;
         _displayedText = "";
+        _markdownSearchAnchors.Clear();
+        _markdownSearchOffset = 0;
         ClearSearch();
         _renderVersion++;
         _textBlock.Blocks.Clear();
@@ -213,6 +219,21 @@ internal sealed class TextPreviewPresenter
     {
         if (_currentSearchMatch < 0 || _displayedText.Length == 0 || _scrollViewer.ScrollableHeight <= 0)
             return;
+        if (_markdownSearchAnchors.Count > 0)
+        {
+            int match = _searchMatches[_currentSearchMatch];
+            FrameworkElement anchor = _markdownSearchAnchors
+                .LastOrDefault(candidate => candidate.Start <= match)
+                .Anchor ?? _markdownSearchAnchors[0].Anchor;
+            _scrollViewer.UpdateLayout();
+            double target = Math.Max(
+                0,
+                _scrollViewer.VerticalOffset
+                    + anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y
+                    - 8);
+            _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
+            return;
+        }
         double progress = (double)_searchMatches[_currentSearchMatch] / _displayedText.Length;
         _scrollViewer.ChangeView(null, _scrollViewer.ScrollableHeight * progress, null, disableAnimation: true);
     }
@@ -335,6 +356,7 @@ internal sealed class TextPreviewPresenter
         var p = CreateParagraph(size, "Segoe UI", block.Level <= 2 ? 16 : 10, 8);
         FrameworkElement anchor = CreateHeadingAnchor();
         p.Inlines.Add(new InlineUIContainer { Child = anchor });
+        RegisterMarkdownSearchAnchor(anchor, MarkdownInlineText(block.Inlines, block.Text));
         var bold = new Bold();
         AddMarkdownInlines(bold.Inlines, block.Inlines, block.Text);
         p.Inlines.Add(bold);
@@ -345,6 +367,9 @@ internal sealed class TextPreviewPresenter
     private void AddMarkdownParagraph(PreviewMarkdownBlock block)
     {
         var p = CreateParagraph(14, "Segoe UI", 0, 9);
+        FrameworkElement anchor = CreateHeadingAnchor();
+        p.Inlines.Add(new InlineUIContainer { Child = anchor });
+        RegisterMarkdownSearchAnchor(anchor, MarkdownInlineText(block.Inlines, block.Text));
         AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
         _textBlock.Blocks.Add(p);
     }
@@ -353,6 +378,9 @@ internal sealed class TextPreviewPresenter
     {
         var p = CreateParagraph(14, "Segoe UI", 4, 10);
         p.Foreground = UiGrayBrush;
+        FrameworkElement anchor = CreateHeadingAnchor();
+        p.Inlines.Add(new InlineUIContainer { Child = anchor });
+        RegisterMarkdownSearchAnchor(anchor, MarkdownInlineText(block.Inlines, block.Text));
         p.Inlines.Add(new Run { Text = "| " });
         AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
         _textBlock.Blocks.Add(p);
@@ -365,6 +393,9 @@ internal sealed class TextPreviewPresenter
         {
             var p = CreateParagraph(14, "Segoe UI", 0, 5);
             p.Margin = new Thickness(18, 0, 0, 5);
+            FrameworkElement anchor = CreateHeadingAnchor();
+            p.Inlines.Add(new InlineUIContainer { Child = anchor });
+            RegisterMarkdownSearchAnchor(anchor, MarkdownInlineText(item.Inlines, item.Text));
             p.Inlines.Add(new Run { Text = ordered ? $"{index}. " : "- " });
             AddMarkdownInlines(p.Inlines, item.Inlines, item.Text);
             _textBlock.Blocks.Add(p);
@@ -463,10 +494,30 @@ internal sealed class TextPreviewPresenter
         };
         scroller.Content = grid;
         container.Child = scroller;
+        RegisterMarkdownSearchAnchor(container, MarkdownTableSearchText(block));
 
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });
         _textBlock.Blocks.Add(p);
+    }
+
+    private void RegisterMarkdownSearchAnchor(FrameworkElement anchor, string text)
+    {
+        _markdownSearchAnchors.Add((_markdownSearchOffset, anchor));
+        _markdownSearchOffset += text.Length + 1;
+    }
+
+    private static string MarkdownTableSearchText(PreviewMarkdownBlock block)
+    {
+        var text = new StringBuilder();
+        foreach (string header in block.TableHeaders)
+            text.AppendLine(header);
+        foreach (string[] row in block.TableRows.Take(120))
+        {
+            foreach (string cell in row)
+                text.AppendLine(cell);
+        }
+        return text.ToString().TrimEnd();
     }
 
     private void AddOutlineItem(PreviewMarkdownBlock block, FrameworkElement anchor)
@@ -955,6 +1006,9 @@ internal sealed class TextPreviewPresenter
         grid.Children.Add(bodyScroller);
         
         container.Child = grid;
+
+        if (_lastReady?.Markdown is not null)
+            RegisterMarkdownSearchAnchor(container, code);
 
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });

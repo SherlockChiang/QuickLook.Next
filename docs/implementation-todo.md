@@ -25,8 +25,8 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Add exact per-block Markdown search highlighting and navigation anchors;
-  AST-only documents now use a visible-text search index.
+- [ ] Add exact per-block Markdown search highlighting; AST-only documents now
+  use a visible-text index and block-precise navigation anchors.
 - [ ] Add a privacy-conscious diagnostics center and support bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add high-value behavior preferences to the versioned settings schema.
@@ -60,6 +60,10 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Build structured Markdown search indexes from displayed AST blocks,
   including lists, code, rendered table rows, links, and partial notices.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Navigate structured Markdown search matches to exact rendered block
+  anchors for prose, headings, quotes, lists, code, and bounded tables.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 
