@@ -922,12 +922,16 @@ fn decode_image_bgra(
         return None;
     }
 
-    let (original_width, original_height) = ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()?;
+    let jpeg_metadata = jpeg_metadata(path).ok()?;
+    let (original_width, original_height) = match jpeg_metadata.dimensions {
+        Some(dimensions) => dimensions,
+        None => ImageReader::open(path)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?,
+    };
     if should_skip_native_image_decode(original_width, original_height) {
         return None;
     }
@@ -947,8 +951,7 @@ fn decode_image_bgra(
         return None;
     }
 
-    let orientation = jpeg_exif_orientation(path);
-    if let Some(orientation) = orientation {
+    if let Some(orientation) = jpeg_metadata.orientation {
         image = apply_exif_orientation(image, orientation);
     }
 
@@ -985,8 +988,8 @@ fn decode_image_bgra(
 
     let convert_start = Instant::now();
     let mut rgba = raster.to_rgba8();
-    if let Some(profile) = jpeg_icc_profile(path).ok()? {
-        if !apply_icc_to_srgb_rgba(rgba.as_mut(), &profile) {
+    if let Some(profile) = jpeg_metadata.icc_profile.as_deref() {
+        if !apply_icc_to_srgb_rgba(rgba.as_mut(), profile) {
             return None;
         }
     }
@@ -1192,34 +1195,42 @@ fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::Frame>, 
     Some((width, height, decoded))
 }
 
-fn jpeg_icc_profile(path: &str) -> std::result::Result<Option<Vec<u8>>, ()> {
+#[derive(Default)]
+struct JpegMetadata {
+    dimensions: Option<(u32, u32)>,
+    orientation: Option<u16>,
+    icc_profile: Option<Vec<u8>>,
+}
+
+fn jpeg_metadata(path: &str) -> std::result::Result<JpegMetadata, ()> {
     let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
-        return Ok(None);
+        return Ok(JpegMetadata::default());
     }
     let file = std::fs::File::open(path).map_err(|_| ())?;
-    jpeg_icc_profile_from_reader(BufReader::new(file))
+    jpeg_metadata_from_reader(BufReader::new(file))
 }
 
 fn jpeg_icc_profile_from_bytes(bytes: &[u8]) -> std::result::Result<Option<Vec<u8>>, ()> {
-    jpeg_icc_profile_from_reader(std::io::Cursor::new(bytes))
+    Ok(jpeg_metadata_from_reader(std::io::Cursor::new(bytes))?.icc_profile)
 }
 
-fn jpeg_icc_profile_from_reader(mut reader: impl Read) -> std::result::Result<Option<Vec<u8>>, ()> {
+fn jpeg_metadata_from_reader(mut reader: impl Read) -> std::result::Result<JpegMetadata, ()> {
     const MAX_JPEG_HEADER_BYTES: usize = 8 * 1024 * 1024;
     let mut signature = [0u8; 2];
     if reader.read_exact(&mut signature).is_err() || signature != [0xFF, 0xD8] {
-        return Ok(None);
+        return Ok(JpegMetadata::default());
     }
     let mut scanned = 2usize;
     let mut chunks: Vec<(u8, Vec<u8>)> = Vec::new();
     let mut expected_count = 0u8;
+    let mut metadata = JpegMetadata::default();
     loop {
         let mut marker_byte = [0u8; 1];
         reader.read_exact(&mut marker_byte).map_err(|_| ())?;
         scanned += 1;
         if marker_byte[0] != 0xFF {
-            return Ok(None);
+            return Ok(metadata);
         }
         while marker_byte[0] == 0xFF {
             reader.read_exact(&mut marker_byte).map_err(|_| ())?;
@@ -1245,7 +1256,15 @@ fn jpeg_icc_profile_from_reader(mut reader: impl Read) -> std::result::Result<Op
         }
         let mut segment = vec![0u8; payload_len];
         reader.read_exact(&mut segment).map_err(|_| ())?;
-        if marker == 0xE2 && segment.len() > 14 && segment.starts_with(b"ICC_PROFILE\0") {
+        if is_jpeg_sof_marker(marker) && segment.len() >= 5 {
+            let height = u16::from_be_bytes([segment[1], segment[2]]) as u32;
+            let width = u16::from_be_bytes([segment[3], segment[4]]) as u32;
+            if width > 0 && height > 0 {
+                metadata.dimensions = Some((width, height));
+            }
+        } else if marker == 0xE1 && segment.starts_with(b"Exif\0\0") {
+            metadata.orientation = tiff_orientation(&segment[6..]);
+        } else if marker == 0xE2 && segment.len() > 14 && segment.starts_with(b"ICC_PROFILE\0") {
             let sequence = segment[12];
             let count = segment[13];
             if sequence == 0 || count == 0 || sequence > count || count > 16 {
@@ -1256,7 +1275,7 @@ fn jpeg_icc_profile_from_reader(mut reader: impl Read) -> std::result::Result<Op
         }
     }
     if expected_count == 0 || chunks.len() != expected_count as usize {
-        return Ok(None);
+        return Ok(metadata);
     }
     chunks.sort_by_key(|(sequence, _)| *sequence);
     for (index, (sequence, _)) in chunks.iter().enumerate() {
@@ -1272,7 +1291,12 @@ fn jpeg_icc_profile_from_reader(mut reader: impl Read) -> std::result::Result<Op
     for (_, chunk) in chunks {
         profile.extend_from_slice(&chunk);
     }
-    Ok(Some(profile))
+    metadata.icc_profile = Some(profile);
+    Ok(metadata)
+}
+
+fn is_jpeg_sof_marker(marker: u8) -> bool {
+    matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF)
 }
 
 fn apply_icc_to_srgb_rgba(rgba: &mut [u8], profile: &[u8]) -> bool {
@@ -1356,40 +1380,6 @@ fn apply_exif_orientation(image: image::DynamicImage, orientation: u16) -> image
         8 => image.rotate270(),
         _ => image,
     }
-}
-
-fn jpeg_exif_orientation(path: &str) -> Option<u16> {
-    let ext = std::path::Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
-    if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
-        return None;
-    }
-
-    let bytes = std::fs::read(path).ok()?;
-    let mut pos = 2usize;
-    if bytes.get(0..2)? != [0xFF, 0xD8] {
-        return None;
-    }
-    while pos + 4 <= bytes.len() {
-        if bytes[pos] != 0xFF {
-            return None;
-        }
-        let marker = bytes[pos + 1];
-        pos += 2;
-        if marker == 0xDA || marker == 0xD9 {
-            break;
-        }
-        let len = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
-        if len < 2 || pos + len > bytes.len() {
-            return None;
-        }
-        let payload = pos + 2;
-        let payload_end = pos + len;
-        if marker == 0xE1 && bytes.get(payload..payload + 6) == Some(b"Exif\0\0") {
-            return tiff_orientation(bytes.get(payload + 6..payload_end)?);
-        }
-        pos = payload_end;
-    }
-    None
 }
 
 fn tiff_orientation(tiff: &[u8]) -> Option<u16> {
@@ -1697,12 +1687,20 @@ mod tests {
         jpeg.extend(std::iter::repeat_n(0x7f, 16 * 1024 * 1024));
         let mut reader = std::io::Cursor::new(&jpeg);
 
-        let profile = jpeg_icc_profile_from_reader(&mut reader)
-            .expect("parse jpeg")
-            .expect("icc profile");
+        let metadata = jpeg_metadata_from_reader(&mut reader).expect("parse jpeg");
+        let profile = metadata.icc_profile.expect("icc profile");
 
         assert_eq!(profile, b"quicklook-next-test-icc");
         assert!(reader.position() < 1024 * 1024);
+    }
+
+    #[test]
+    fn jpeg_metadata_stream_reads_dimensions_and_orientation() {
+        let jpeg = jpeg_with_orientation_segment(6);
+        let metadata = jpeg_metadata_from_reader(std::io::Cursor::new(jpeg)).expect("parse jpeg");
+
+        assert_eq!(metadata.dimensions, Some((1, 2)));
+        assert_eq!(metadata.orientation, Some(6));
     }
 
     #[test]

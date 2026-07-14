@@ -14,7 +14,6 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Replace the PDF document projection with an input/ownership path that
   exposes deterministic close semantics.
-- [ ] Parse JPEG dimensions and orientation in the bounded ICC header stream.
 - [ ] Virtualize large code, Markdown, and table presentation work beyond the
   existing character/run bounds.
 - [ ] Complete localization of visual, status, and automation strings.
@@ -53,6 +52,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Parse JPEG SOF dimensions, EXIF orientation, and split ICC data in one
+  bounded marker stream before decode, then reuse the result during conversion.
+  - Verification: `cargo test --locked jpeg_`
+  - Commit: this change
 
 - [x] Record process/App/background/hook startup milestones and correlate preview
   intent, availability, probe, route, loading shell, reveal, and final first-frame
