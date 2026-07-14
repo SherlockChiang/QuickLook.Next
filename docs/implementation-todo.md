@@ -56,37 +56,37 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Preserve standard Space-key behavior when focus is inside an interactive
   preview control.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `1e5e683`
 - [x] Bound bencode nesting and node counts.
   - Verification: `cargo test --locked bencode_parser`
-  - Commit: this change
+  - Commit: `a6ef746`
 - [x] Enforce NuGet and Cargo vulnerability audits before stable release signing.
   - Verification: workflow review against the existing beta release audit steps
-  - Commit: this change
+  - Commit: `7f75828`
 - [x] Bound ZIP entry extraction by compressed bytes, compression ratio, output
   bytes, and elapsed time.
   - Verification: `cargo test --locked archive_extract_budget`
-  - Commit: this change
+  - Commit: `2a44365`
 - [x] Redact Windows drive and UNC directory paths from default diagnostics.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
-  - Commit: this change
+  - Commit: `3c4716c`
 - [x] Add first-run onboarding and a persistent Help and shortcuts entry in
   Settings.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `3461b4f`
 - [x] Bound thumbnail queues, remove canceled requests immediately, and reserve
   one background slot after each eight foreground requests.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `565d740`
 - [x] Populate the image filmstrip with one collection reset, index items by
   path, and restrict initial thumbnails to the current item's 20-neighbor radius.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `81c8847`
 - [x] Serialize PDF disk-cache writes through a bounded process-wide queue,
   publish files atomically, and trim periodically instead of after every page.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
-  - Commit: this change
+  - Commit: `9b2f882`
 - [x] Remove eager all-page PDF geometry enumeration from the first-preview path;
   use the existing first-page-size fallback until each page is rendered.
   - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
-  - Commit: this change
+  - Commit: `ee55705`
