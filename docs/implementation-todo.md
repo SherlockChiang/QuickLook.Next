@@ -74,12 +74,12 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Version settings schema v1, validate loaded values, preserve invalid files,
   atomically replace settings, and update in-memory state only after persistence.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `571d56d`
 - [x] Implement displayed-text search with Ctrl+F, Enter/F3 navigation,
   Shift+Enter/Shift+F3 reverse navigation, Escape close, match counts, and
   plain/code highlighting.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `80c8f9e`
 
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
