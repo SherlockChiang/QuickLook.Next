@@ -12616,6 +12616,9 @@ const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
 const MAX_TAR_SCAN_BYTES: u64 = 512 * 1024 * 1024;
 const TAR_SCAN_DEADLINE: Duration = Duration::from_secs(4);
 const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_EXTRACT_RATIO: u64 = 1000;
+const ARCHIVE_EXTRACT_DEADLINE: Duration = Duration::from_secs(4);
 const MAX_ARCHIVE_EXTRACT_ROOTS: usize = 32;
 const ARCHIVE_EXTRACT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -12699,14 +12702,17 @@ pub fn extract_archive_entry_to_temp(
     }
     let mut zip = ZipArchive::new(file).ok()?;
     let mut entry = zip.by_name(&normalized).ok()?;
-    if entry.is_dir() || entry.size() > MAX_ARCHIVE_EXTRACT_BYTES {
+    if entry.is_dir()
+        || !archive_entry_within_extract_budget(entry.size(), entry.compressed_size())
+    {
         return None;
     }
 
+    let started = Instant::now();
     let mut bytes = Vec::with_capacity((entry.size() as usize).min(1024 * 1024));
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        if preview_cancelled(cancel_cb) {
+        if preview_cancelled(cancel_cb) || started.elapsed() > ARCHIVE_EXTRACT_DEADLINE {
             return None;
         }
         let read = entry.read(&mut buffer).ok()?;
@@ -12750,6 +12756,14 @@ pub fn extract_archive_entry_to_temp(
         return None;
     }
     target.to_str().map(|s| s.to_string())
+}
+
+fn archive_entry_within_extract_budget(size: u64, compressed_size: u64) -> bool {
+    size <= MAX_ARCHIVE_EXTRACT_BYTES
+        && compressed_size <= MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES
+        && (size == 0
+            || (compressed_size > 0
+                && size <= compressed_size.saturating_mul(MAX_ARCHIVE_EXTRACT_RATIO)))
 }
 
 fn read_office_zip_text<R: Read + Seek>(
@@ -14578,6 +14592,22 @@ mod tests {
         bytes.push(b'e');
 
         assert!(parse_bencode(&bytes, None).is_none());
+    }
+
+    #[test]
+    fn archive_extract_budget_rejects_oversized_or_extreme_entries() {
+        assert!(archive_entry_within_extract_budget(1024, 128));
+        assert!(archive_entry_within_extract_budget(0, 0));
+        assert!(!archive_entry_within_extract_budget(
+            MAX_ARCHIVE_EXTRACT_BYTES + 1,
+            1024
+        ));
+        assert!(!archive_entry_within_extract_budget(
+            1024,
+            MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES + 1
+        ));
+        assert!(!archive_entry_within_extract_budget(1_000_001, 1000));
+        assert!(!archive_entry_within_extract_budget(1, 0));
     }
 
     #[test]
