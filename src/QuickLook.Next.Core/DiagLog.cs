@@ -43,7 +43,7 @@ public static class DiagLog
     public static void Write(string tag, string message)
     {
         if (_path.Length == 0) return;
-        string line = $"{DateTime.Now:HH:mm:ss.fff} [{tag}] {message}";
+        string line = $"{DateTime.Now:HH:mm:ss.fff} [{tag}] {DiagnosticsRedactor.RedactPaths(message)}";
         Lines.Writer.TryWrite(line);
     }
 
