@@ -57,11 +57,11 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Add a persisted animated-preview preference that follows Windows, always
   plays, or forces a static first frame, with localized settings UI.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `7b223dd`
 - [x] Reflow settings cards and project links below 560 DIP, reduce compact
   padding, and stretch controls without changing the wide-window layout.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `d74622d`
 
 - [x] Parse JPEG SOF dimensions, EXIF orientation, and split ICC data in one
   bounded marker stream before decode, then reuse the result during conversion.
