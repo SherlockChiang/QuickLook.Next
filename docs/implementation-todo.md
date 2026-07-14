@@ -19,7 +19,8 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Virtualize large code, Markdown, and table presentation work.
 - [ ] Complete localization of visual, status, and automation strings.
 - [ ] Add semantic table and Office accessibility metadata.
-- [ ] Add consistent live-region loading, success, and failure notifications.
+- [ ] Verify live-region loading, success, and failure announcements with
+  Narrator; add explicit AutomationPeer events where hidden status is silent.
 - [ ] Add responsive settings/toolbars and 40-44 DIP interaction targets.
 
 ## P2: Product capabilities
@@ -72,6 +73,10 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Expose localized PDF page position/size semantics and file-name automation
   names for image filmstrip items.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Mark loading, normal status, and PDF page changes as polite live regions;
+  retain assertive semantics for blocking preview errors.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 

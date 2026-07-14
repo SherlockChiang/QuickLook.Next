@@ -207,7 +207,8 @@
                                FontWeight="SemiBold"
                                Text="1 / 1"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               AutomationProperties.Name="Current PDF page" />
+                               AutomationProperties.Name="Current PDF page"
+                               AutomationProperties.LiveSetting="Polite" />
                     <Button x:Name="NextPdfPageButton"
                             x:Uid="NextPdfPageButton"
                             Click="OnNextPdfPageClick"
@@ -1026,7 +1027,9 @@
                     Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
                     CornerRadius="0,0,8,8" Padding="12,3">
                 <TextBlock x:Name="StatusText" Text=""
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           FontSize="12"
+                           AutomationProperties.LiveSetting="Polite" />
             </Border>
         </Grid>
 
@@ -1037,9 +1040,10 @@
                       IsActive="False"
                       Width="32"
                       Height="32"
-                      HorizontalAlignment="Center"
-                      VerticalAlignment="Center"
-                      AutomationProperties.Name="Loading preview" />
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       AutomationProperties.Name="Loading preview"
+                       AutomationProperties.LiveSetting="Polite" />
 
         <StackPanel x:Name="ErrorPanel"
                     x:Uid="ErrorPanel"
