@@ -59,7 +59,7 @@ internal sealed class OfficePreviewPresenter
         double maxPageWidth = Math.Max(360, maxContent.Width - 72);
         _maxPageWidth = maxPageWidth;
         int renderedPageCount = Math.Min(layout.Pages.Length, 16);
-        foreach ((OfficePage page, int index) in layout.Pages.Take(renderedPageCount).Select((page, index) => (page, index)))
+        foreach ((OfficePage page, int index) in layout.Pages.Take(16).Select((page, index) => (page, index)))
         {
             Border host = CreatePageHost(layout, page, maxPageWidth, index, renderedPageCount);
             var slot = new PageSlot(page, host);
