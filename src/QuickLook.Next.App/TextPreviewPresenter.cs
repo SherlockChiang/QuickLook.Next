@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -510,7 +511,7 @@ internal sealed class TextPreviewPresenter
     {
         string[] lines = NormalizeLines(text);
         bool inCode = false;
-        string code = "";
+        var code = new StringBuilder();
         string codeLanguage = "text";
         var paragraphBuffer = new List<string>();
 
@@ -530,8 +531,8 @@ internal sealed class TextPreviewPresenter
             {
                 if (inCode)
                 {
-                    AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
-                    code = "";
+                    AddMarkdownCodeBlock(code.ToString().TrimEnd('\n'), codeLanguage);
+                    code.Clear();
                     codeLanguage = "text";
                     inCode = false;
                 }
@@ -548,7 +549,7 @@ internal sealed class TextPreviewPresenter
 
             if (inCode)
             {
-                code += raw + "\n";
+                code.AppendLine(raw);
                 continue;
             }
 
@@ -604,7 +605,7 @@ internal sealed class TextPreviewPresenter
             // To preserve order properly we should await it, but RenderMarkdown is synchronous right now.
             // A quick fix is to fire-and-forget or keep markdown code highlighting synchronous if it's small,
             // but for full files, we use RenderCodeOrPlainTextAsync.
-            AddMarkdownCodeBlock(code.TrimEnd('\n'), codeLanguage);
+            AddMarkdownCodeBlock(code.ToString().TrimEnd('\n'), codeLanguage);
         }
     }
 
@@ -639,7 +640,7 @@ internal sealed class TextPreviewPresenter
         }
         else
         {
-            var spans = await Task.Run(() => SyntaxHighlighter.Highlight(code, language).ToList());
+            var spans = await Task.Run(() => MergeAdjacentSpans(SyntaxHighlighter.Highlight(code, language)));
             if (renderVersion != _renderVersion)
                 return;
 
@@ -781,7 +782,7 @@ internal sealed class TextPreviewPresenter
         }
         else
         {
-            var spans = SyntaxHighlighter.Highlight(code, language).ToList();
+            var spans = MergeAdjacentSpans(SyntaxHighlighter.Highlight(code, language));
             int runs = 0;
             foreach (var (txt, kind) in spans)
             {
@@ -807,6 +808,31 @@ internal sealed class TextPreviewPresenter
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });
         _textBlock.Blocks.Add(p);
+    }
+
+    private static List<(string Text, TokenKind Kind)> MergeAdjacentSpans(
+        IEnumerable<(string Text, TokenKind Kind)> spans)
+    {
+        var merged = new List<(string Text, TokenKind Kind)>();
+        var text = new StringBuilder();
+        TokenKind currentKind = TokenKind.Default;
+        bool hasCurrent = false;
+        foreach ((string value, TokenKind kind) in spans)
+        {
+            if (value.Length == 0)
+                continue;
+            if (hasCurrent && kind != currentKind)
+            {
+                merged.Add((text.ToString(), currentKind));
+                text.Clear();
+            }
+            currentKind = kind;
+            hasCurrent = true;
+            text.Append(value);
+        }
+        if (hasCurrent)
+            merged.Add((text.ToString(), currentKind));
+        return merged;
     }
 
     private void OnTextListViewKeyDown(object sender, KeyRoutedEventArgs e)

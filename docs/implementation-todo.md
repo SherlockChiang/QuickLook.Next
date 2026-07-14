@@ -15,7 +15,8 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Replace the PDF document projection with an input/ownership path that
   exposes deterministic close semantics.
 - [ ] Parse JPEG dimensions and orientation in the bounded ICC header stream.
-- [ ] Virtualize large code, Markdown, and table presentation work.
+- [ ] Virtualize large code, Markdown, and table presentation work beyond the
+  existing character/run bounds.
 - [ ] Complete localization of visual, status, and automation strings.
 - [ ] Add semantic table and Office accessibility metadata.
 - [ ] Verify live-region loading, success, and failure announcements with
@@ -61,6 +62,10 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Stream JPEG ICC marker segments with an 8 MiB header budget and stop at
   scan data instead of reading the full compressed image.
   - Verification: `cargo test --locked jpeg_icc`
+  - Commit: this change
+- [x] Eliminate quadratic Markdown fenced-code accumulation and merge adjacent
+  syntax tokens before creating WinUI Run elements.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 
 - [x] Present APK raster icons from Android mipmap resources even when the
