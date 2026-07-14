@@ -163,6 +163,12 @@ internal sealed class AnimatedImagePreviewPresenter
         }
     }
 
+    public void PausePlayback()
+    {
+        if (CanTogglePlayback && !IsPlaybackPaused)
+            TogglePlayback();
+    }
+
     public void UpdateLayout()
     {
         if (_image.Source is null || _sourceWidth <= 0 || _sourceHeight <= 0)

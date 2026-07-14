@@ -37,6 +37,12 @@ public sealed partial class SettingsWindow : Window
             "zh-CN" => 2,
             _ => 0,
         };
+        AnimationCombo.SelectedIndex = AppSettings.Current.Animation switch
+        {
+            "always" => 1,
+            "still" => 2,
+            _ => 0,
+        };
         _initializing = false;
     }
 
@@ -51,6 +57,11 @@ public sealed partial class SettingsWindow : Window
         LanguageTitle.Text = UiStrings.SettingsLanguage;
         LanguageDescription.Text = UiStrings.SettingsLanguageDescription;
         SystemLanguageItem.Content = UiStrings.SettingsSystemLanguage;
+        AnimationTitle.Text = UiStrings.SettingsAnimation;
+        AnimationDescription.Text = UiStrings.SettingsAnimationDescription;
+        SystemAnimationItem.Content = UiStrings.SettingsAnimationSystem;
+        AlwaysAnimateItem.Content = UiStrings.SettingsAnimationAlways;
+        StillAnimationItem.Content = UiStrings.SettingsAnimationStill;
         RestartInfo.Title = UiStrings.SettingsRestartTitle;
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         AboutHeading.Text = UiStrings.SettingsAbout;
@@ -157,6 +168,21 @@ public sealed partial class SettingsWindow : Window
         RestartInfo.Title = UiStrings.SettingsRestartTitle;
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         RestartInfo.IsOpen = true;
+    }
+
+    private void OnAnimationSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing || AnimationCombo.SelectedItem is not ComboBoxItem { Tag: string animation })
+            return;
+        if (!AppSettings.SaveAnimation(animation))
+        {
+            RestartInfo.Severity = InfoBarSeverity.Error;
+            RestartInfo.Title = UiStrings.SettingsSaveFailed;
+            RestartInfo.Message = UiStrings.SettingsSaveFailedMessage;
+            RestartInfo.IsOpen = true;
+            return;
+        }
+        _settingsChanged();
     }
 
     private static string GetVersion()

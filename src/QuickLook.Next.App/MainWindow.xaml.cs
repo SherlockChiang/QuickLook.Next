@@ -2948,7 +2948,12 @@ public sealed partial class MainWindow : Window
 
     private bool IsHighContrast => _accessibilitySettings.HighContrast;
     private bool PrefersReducedTransparency => IsHighContrast || !_uiSettings.AdvancedEffectsEnabled;
-    private bool PrefersReducedMotion => !_uiSettings.AnimationsEnabled;
+    private bool PrefersReducedMotion => IsHighContrast || AppSettings.Current.Animation switch
+    {
+        "always" => false,
+        "still" => true,
+        _ => !_uiSettings.AnimationsEnabled,
+    };
 
     private void ApplyAccessibilityVisuals()
     {
@@ -3092,10 +3097,18 @@ public sealed partial class MainWindow : Window
     {
         if (_settingsWindow is null)
         {
-            _settingsWindow = new SettingsWindow(ResolveAppIconPath, RefreshTrayIcon);
+            _settingsWindow = new SettingsWindow(ResolveAppIconPath, OnSettingsChanged);
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         }
         _settingsWindow.Activate();
+    }
+
+    private void OnSettingsChanged()
+    {
+        RefreshTrayIcon();
+        if (PrefersReducedMotion)
+            _animatedImagePresenter?.PausePlayback();
+        UpdateImageAnimationPlaybackButton();
     }
 
     private void RemoveTrayIcon()

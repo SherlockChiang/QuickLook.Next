@@ -29,7 +29,7 @@ and commit so changes remain independently reviewable and revertible.
   use a visible-text index and block-precise navigation anchors.
 - [ ] Add a privacy-conscious diagnostics center and support bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
-- [ ] Add high-value behavior preferences to the versioned settings schema.
+- [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
   size policy.
 - [ ] Add bounded PDF text search and copy.
@@ -53,6 +53,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add a persisted animated-preview preference that follows Windows, always
+  plays, or forces a static first frame, with localized settings UI.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Parse JPEG SOF dimensions, EXIF orientation, and split ICC data in one
   bounded marker stream before decode, then reuse the result during conversion.

@@ -4,7 +4,7 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
-internal sealed record AppSettings(int SchemaVersion = 1, string Language = "system")
+internal sealed record AppSettings(int SchemaVersion = 1, string Language = "system", string Animation = "system")
 {
     public const int CurrentSchemaVersion = 1;
     private static readonly string SettingsDirectory = Path.Combine(
@@ -36,20 +36,26 @@ internal sealed record AppSettings(int SchemaVersion = 1, string Language = "sys
         if (language is not ("system" or "en-US" or "zh-CN"))
             return false;
 
+        return Save(Current with { Language = language });
+    }
+
+    public static bool SaveAnimation(string animation)
+    {
+        if (animation is not ("system" or "always" or "still"))
+            return false;
+        return Save(Current with { Animation = animation });
+    }
+
+    private static bool Save(AppSettings updated)
+    {
         try
         {
             Directory.CreateDirectory(SettingsDirectory);
-            AppSettings updated = Current with
-            {
-                SchemaVersion = CurrentSchemaVersion,
-                Language = language,
-            };
+            updated = updated with { SchemaVersion = CurrentSchemaVersion };
             string temporaryPath = SettingsPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
             try
             {
-                File.WriteAllText(
-                    temporaryPath,
-                    JsonSerializer.Serialize(updated, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(temporaryPath, JsonSerializer.Serialize(updated, new JsonSerializerOptions { WriteIndented = true }));
                 File.Move(temporaryPath, SettingsPath, overwrite: true);
             }
             finally
@@ -75,7 +81,8 @@ internal sealed record AppSettings(int SchemaVersion = 1, string Language = "sys
             AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
             if (settings is null
                 || settings.SchemaVersion is < 1 or > CurrentSchemaVersion
-                || settings.Language is not ("system" or "en-US" or "zh-CN"))
+                || settings.Language is not ("system" or "en-US" or "zh-CN")
+                || settings.Animation is not ("system" or "always" or "still"))
             {
                 PreserveInvalidSettings();
                 return new AppSettings();

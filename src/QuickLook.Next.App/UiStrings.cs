@@ -64,6 +64,11 @@ internal static class UiStrings
     public static string SettingsLanguage => Get(nameof(SettingsLanguage), "Language");
     public static string SettingsLanguageDescription => Get(nameof(SettingsLanguageDescription), "Choose the language used by the app and tray menu.");
     public static string SettingsSystemLanguage => Get(nameof(SettingsSystemLanguage), "Use system language");
+    public static string SettingsAnimation => Get(nameof(SettingsAnimation), "Animated previews");
+    public static string SettingsAnimationDescription => Get(nameof(SettingsAnimationDescription), "Choose whether animated images follow Windows, always play, or show a still frame.");
+    public static string SettingsAnimationSystem => Get(nameof(SettingsAnimationSystem), "Follow Windows settings");
+    public static string SettingsAnimationAlways => Get(nameof(SettingsAnimationAlways), "Always play");
+    public static string SettingsAnimationStill => Get(nameof(SettingsAnimationStill), "Show still frame");
     public static string SettingsRestartTitle => Get(nameof(SettingsRestartTitle), "Restart required");
     public static string SettingsRestartMessage => Get(nameof(SettingsRestartMessage), "Exit QuickLook Next from the tray and start it again to apply the language.");
     public static string SettingsAbout => Get(nameof(SettingsAbout), "About");

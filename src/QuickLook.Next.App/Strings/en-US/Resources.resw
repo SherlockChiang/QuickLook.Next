@@ -158,6 +158,11 @@
   <data name="SettingsLanguage" xml:space="preserve"><value>Language</value></data>
   <data name="SettingsLanguageDescription" xml:space="preserve"><value>Choose the language used by the app and tray menu.</value></data>
   <data name="SettingsSystemLanguage" xml:space="preserve"><value>Use system language</value></data>
+  <data name="SettingsAnimation" xml:space="preserve"><value>Animated previews</value></data>
+  <data name="SettingsAnimationDescription" xml:space="preserve"><value>Choose whether animated images follow Windows, always play, or show a still frame.</value></data>
+  <data name="SettingsAnimationSystem" xml:space="preserve"><value>Follow Windows settings</value></data>
+  <data name="SettingsAnimationAlways" xml:space="preserve"><value>Always play</value></data>
+  <data name="SettingsAnimationStill" xml:space="preserve"><value>Show still frame</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>

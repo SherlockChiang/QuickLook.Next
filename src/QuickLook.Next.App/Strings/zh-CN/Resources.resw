@@ -44,6 +44,11 @@
   <data name="SettingsLanguage" xml:space="preserve"><value>语言</value></data>
   <data name="SettingsLanguageDescription" xml:space="preserve"><value>选择应用和托盘菜单使用的语言。</value></data>
   <data name="SettingsSystemLanguage" xml:space="preserve"><value>跟随系统语言</value></data>
+  <data name="SettingsAnimation" xml:space="preserve"><value>动画预览</value></data>
+  <data name="SettingsAnimationDescription" xml:space="preserve"><value>选择动画图像跟随 Windows、始终播放或显示静态帧。</value></data>
+  <data name="SettingsAnimationSystem" xml:space="preserve"><value>跟随 Windows 设置</value></data>
+  <data name="SettingsAnimationAlways" xml:space="preserve"><value>始终播放</value></data>
+  <data name="SettingsAnimationStill" xml:space="preserve"><value>显示静态帧</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>需要重启</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>请从托盘退出 QuickLook Next 并重新启动，以应用新的语言。</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>关于</value></data>

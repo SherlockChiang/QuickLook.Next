@@ -70,6 +70,28 @@
                         </Grid>
                     </Border>
 
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid ColumnSpacing="20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="AnimationTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="AnimationDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox x:Name="AnimationCombo" Grid.Column="1" MinHeight="40" HorizontalAlignment="Stretch"
+                                      AutomationProperties.LabeledBy="{x:Bind AnimationTitle}"
+                                      SelectionChanged="OnAnimationSelectionChanged">
+                                <ComboBoxItem x:Name="SystemAnimationItem" Tag="system" />
+                                <ComboBoxItem x:Name="AlwaysAnimateItem" Tag="always" />
+                                <ComboBoxItem x:Name="StillAnimationItem" Tag="still" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
                     <InfoBar x:Name="RestartInfo" Severity="Informational" IsOpen="False" IsClosable="True" />
 
                     <StackPanel Spacing="4" Margin="0,6,0,0">
