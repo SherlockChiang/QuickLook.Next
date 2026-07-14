@@ -13,7 +13,7 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
-- [ ] Bound, deduplicate, and fairly schedule thumbnail work.
+- [ ] Deduplicate thumbnail work while preserving independent caller cancellation.
 - [ ] Bulk-populate the image filmstrip and restrict initial work to visible
   neighbors.
 - [ ] Serialize PDF disk-cache writes and maintain cache size incrementally.
@@ -74,5 +74,9 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Add first-run onboarding and a persistent Help and shortcuts entry in
   Settings.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Bound thumbnail queues, remove canceled requests immediately, and reserve
+  one background slot after each eight foreground requests.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
