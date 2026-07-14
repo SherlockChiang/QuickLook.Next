@@ -60,7 +60,7 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Add localized row, column, cell, merged-range, page/sheet/slide position,
   and embedded-image automation names to virtualized table and Office previews.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: `829123d`
+  - Commits: `829123d`, `adf3ae6`
 
 - [x] Compact the text preview toolbar while search is open so the query,
   count, and navigation controls fit without horizontal overflow.
