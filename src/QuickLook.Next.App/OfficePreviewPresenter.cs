@@ -2,6 +2,7 @@ using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
@@ -57,9 +58,10 @@ internal sealed class OfficePreviewPresenter
 
         double maxPageWidth = Math.Max(360, maxContent.Width - 72);
         _maxPageWidth = maxPageWidth;
-        foreach ((OfficePage page, int index) in layout.Pages.Take(16).Select((page, index) => (page, index)))
+        int renderedPageCount = Math.Min(layout.Pages.Length, 16);
+        foreach ((OfficePage page, int index) in layout.Pages.Take(renderedPageCount).Select((page, index) => (page, index)))
         {
-            Border host = CreatePageHost(layout, page, maxPageWidth);
+            Border host = CreatePageHost(layout, page, maxPageWidth, index, renderedPageCount);
             var slot = new PageSlot(page, host);
             _pageSlots.Add(slot);
             _pagesPanel.Children.Add(host);
@@ -86,7 +88,7 @@ internal sealed class OfficePreviewPresenter
             Render(_lastReady, _lastMaxContent);
     }
 
-    private static Border CreatePageHost(OfficeLayout layout, OfficePage page, double maxPageWidth)
+    private static Border CreatePageHost(OfficeLayout layout, OfficePage page, double maxPageWidth, int index, int count)
     {
         double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
         double pageHeight = Math.Max(180, page.Height > 0 ? page.Height : layout.Height);
@@ -94,12 +96,22 @@ internal sealed class OfficePreviewPresenter
         bool isWorkbook = layout.LayoutKind.Equals("workbook", StringComparison.OrdinalIgnoreCase);
         double viewWidth = pageWidth * scale + (isWorkbook ? 42 : 0);
         double viewHeight = pageHeight * scale + (isWorkbook ? 24 : 0);
-        return new Border
+        var host = new Border
         {
             Width = viewWidth,
             Height = viewHeight + 24,
             HorizontalAlignment = HorizontalAlignment.Center,
         };
+        string format = layout.LayoutKind.ToLowerInvariant() switch
+        {
+            "presentation" => UiStrings.OfficeSlideAccessibleNameFormat,
+            "workbook" => UiStrings.OfficeSheetAccessibleNameFormat,
+            _ => UiStrings.OfficePageAccessibleNameFormat,
+        };
+        AutomationProperties.SetName(host, UiStrings.Format(format, index + 1, count, page.Title));
+        AutomationProperties.SetPositionInSet(host, index + 1);
+        AutomationProperties.SetSizeOfSet(host, count);
+        return host;
     }
 
     private void UpdateVirtualPages()
@@ -221,7 +233,8 @@ internal sealed class OfficePreviewPresenter
             .Take(32);
         foreach (OfficeCell cell in columnHeaders)
         {
-            var header = CreateHeaderCell(ColumnName(cell.Column), cell.Width * scale, columnHeaderHeight);
+            string column = ColumnName(cell.Column);
+            var header = CreateHeaderCell(column, UiStrings.Format(UiStrings.OfficeColumnHeaderAccessibleNameFormat, column), cell.Width * scale, columnHeaderHeight);
             Canvas.SetLeft(header, rowHeaderWidth + cell.X * scale);
             Canvas.SetTop(header, 0);
             canvas.Children.Add(header);
@@ -234,7 +247,7 @@ internal sealed class OfficePreviewPresenter
             .Take(128);
         foreach (OfficeCell cell in rowHeaders)
         {
-            var header = CreateHeaderCell((cell.Row + 1).ToString(), rowHeaderWidth, cell.Height * scale);
+            var header = CreateHeaderCell((cell.Row + 1).ToString(), UiStrings.Format(UiStrings.OfficeRowHeaderAccessibleNameFormat, cell.Row + 1), rowHeaderWidth, cell.Height * scale);
             Canvas.SetLeft(header, 0);
             Canvas.SetTop(header, columnHeaderHeight + cell.Y * scale);
             canvas.Children.Add(header);
@@ -261,8 +274,18 @@ internal sealed class OfficePreviewPresenter
         canvas.Children.Add(rightLine);
     }
 
-    private Border CreateHeaderCell(string text, double width, double height)
+    private Border CreateHeaderCell(string text, string accessibleName, double width, double height)
     {
+        var textBlock = new TextBlock
+        {
+            Text = text,
+            FontSize = 11,
+            Foreground = ForegroundBrush(OfficeHeaderTextBrush),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+        };
+        AutomationProperties.SetName(textBlock, accessibleName);
         return new Border
         {
             Width = Math.Max(12, width),
@@ -270,15 +293,7 @@ internal sealed class OfficePreviewPresenter
             Background = BackgroundBrush(OfficeHeaderBrush),
             BorderBrush = ForegroundBrush(OfficeCellBorderBrush),
             BorderThickness = new Thickness(0, 0, 1, 1),
-            Child = new TextBlock
-            {
-                Text = text,
-                FontSize = 11,
-                Foreground = ForegroundBrush(OfficeHeaderTextBrush),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextAlignment = TextAlignment.Center,
-            },
+            Child = textBlock,
         };
     }
 
@@ -300,6 +315,26 @@ internal sealed class OfficePreviewPresenter
         double width = Math.Max(12, cell.Width * scale);
         double height = Math.Max(12, cell.Height * scale);
         bool merged = cell.RowSpan > 1 || cell.ColumnSpan > 1;
+        var textBlock = new TextBlock
+        {
+            Text = cell.Text,
+            FontSize = FontSizeFor(cell.FontSize),
+            FontWeight = new Windows.UI.Text.FontWeight { Weight = cell.Bold ? (ushort)600 : (ushort)400 },
+            FontStyle = cell.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
+            MaxWidth = Math.Max(4, width - 10),
+            MaxHeight = Math.Max(4, height - 4),
+            TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.WordEllipsis,
+            Foreground = DocumentBrush(cell.TextColor) ?? ForegroundBrush(OfficeBlackBrush),
+            TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
+            HorizontalAlignment = HorizontalAlignmentFor(cell.HorizontalAlignment),
+            VerticalAlignment = VerticalAlignmentFor(cell.VerticalAlignment),
+        };
+        string start = ColumnName(cell.Column) + (cell.Row + 1);
+        string address = merged
+            ? start + ":" + ColumnName(cell.Column + cell.ColumnSpan - 1) + (cell.Row + cell.RowSpan)
+            : start;
+        AutomationProperties.SetName(textBlock, UiStrings.Format(UiStrings.OfficeCellAccessibleNameFormat, address, cell.Text.Length == 0 ? UiStrings.TableBlankCell : cell.Text));
         var border = new Border
         {
             Width = width,
@@ -309,21 +344,7 @@ internal sealed class OfficePreviewPresenter
             Padding = new Thickness(5, 2, 5, 2),
             Background = DocumentBrush(cell.FillColor)
                 ?? (merged ? new SolidColorBrush(ColorHelper.FromArgb(255, 252, 253, 255)) : null),
-            Child = new TextBlock
-            {
-                Text = cell.Text,
-                FontSize = FontSizeFor(cell.FontSize),
-                FontWeight = new Windows.UI.Text.FontWeight { Weight = cell.Bold ? (ushort)600 : (ushort)400 },
-                FontStyle = cell.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
-                MaxWidth = Math.Max(4, width - 10),
-                MaxHeight = Math.Max(4, height - 4),
-                TextWrapping = cell.WrapText ? TextWrapping.Wrap : TextWrapping.NoWrap,
-                TextTrimming = TextTrimming.WordEllipsis,
-                Foreground = DocumentBrush(cell.TextColor) ?? ForegroundBrush(OfficeBlackBrush),
-                TextAlignment = TextAlignmentFor(cell.HorizontalAlignment),
-                HorizontalAlignment = HorizontalAlignmentFor(cell.HorizontalAlignment),
-                VerticalAlignment = VerticalAlignmentFor(cell.VerticalAlignment),
-            },
+            Child = textBlock,
         };
         Canvas.SetLeft(border, offsetX + cell.X * scale);
         Canvas.SetTop(border, offsetY + cell.Y * scale);
@@ -412,6 +433,7 @@ internal sealed class OfficePreviewPresenter
                 Height = height,
                 Stretch = Stretch.Uniform,
             };
+            AutomationProperties.SetName(image, string.IsNullOrWhiteSpace(item.ImageName) ? UiStrings.OfficeEmbeddedImageAccessibleName : item.ImageName);
             Canvas.SetLeft(image, x);
             Canvas.SetTop(image, y);
             canvas.Children.Add(image);

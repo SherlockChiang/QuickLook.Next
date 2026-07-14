@@ -209,6 +209,25 @@
   <data name="WelcomeStart" xml:space="preserve"><value>Start previewing</value></data>
   <data name="SettingsHelpShortcuts" xml:space="preserve"><value>Help and shortcuts</value></data>
   <data name="PdfPageAccessibleNameFormat" xml:space="preserve"><value>Page {0:N0} of {1:N0}</value></data>
+  <data name="TableScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>Delimited table preview</value></data>
+  <data name="TableGrid.AutomationProperties.Name" xml:space="preserve"><value>Delimited table cells</value></data>
+  <data name="OfficeScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>Office document preview</value></data>
+  <data name="TableDimensionsFormat" xml:space="preserve"><value>{0:N0} rows x {1:N0} columns</value></data>
+  <data name="TableShowingRowsFormat" xml:space="preserve"><value> - showing {0:N0} rows</value></data>
+  <data name="TableSummaryFormat" xml:space="preserve"><value>{0} table - {1}</value></data>
+  <data name="TableFallbackColumnFormat" xml:space="preserve"><value>Column {0:N0}</value></data>
+  <data name="TableCornerAccessibleName" xml:space="preserve"><value>Table corner</value></data>
+  <data name="TableColumnHeaderAccessibleNameFormat" xml:space="preserve"><value>Column {0:N0} header, {1}</value></data>
+  <data name="TableRowHeaderAccessibleNameFormat" xml:space="preserve"><value>Row {0:N0}</value></data>
+  <data name="TableCellAccessibleNameFormat" xml:space="preserve"><value>Row {0:N0}, {1}: {2}</value></data>
+  <data name="TableBlankCell" xml:space="preserve"><value>blank</value></data>
+  <data name="OfficeSlideAccessibleNameFormat" xml:space="preserve"><value>Slide {0:N0} of {1:N0}: {2}</value></data>
+  <data name="OfficeSheetAccessibleNameFormat" xml:space="preserve"><value>Sheet {0:N0} of {1:N0}: {2}</value></data>
+  <data name="OfficePageAccessibleNameFormat" xml:space="preserve"><value>Page {0:N0} of {1:N0}: {2}</value></data>
+  <data name="OfficeColumnHeaderAccessibleNameFormat" xml:space="preserve"><value>Column {0}</value></data>
+  <data name="OfficeRowHeaderAccessibleNameFormat" xml:space="preserve"><value>Row {0:N0}</value></data>
+  <data name="OfficeCellAccessibleNameFormat" xml:space="preserve"><value>Cell {0}: {1}</value></data>
+  <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>Embedded image</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>Opening {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>Downloading {0} from cloud storage...</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>Checking {0} availability safely...</value></data>

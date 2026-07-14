@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Automation;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -102,10 +103,10 @@ internal sealed class TablePreviewPresenter
 
     private static string BuildSummary(PreviewTable table)
     {
-        string summary = $"{table.TotalRows:N0} rows x {table.TotalColumns:N0} columns";
+        string summary = UiStrings.Format(UiStrings.TableDimensionsFormat, table.TotalRows, table.TotalColumns);
         if (table.IsPartial)
-            summary += $" - showing {table.Rows.Length:N0} rows";
-        return $"{table.Format.ToUpperInvariant()} table - {summary}";
+            summary += UiStrings.Format(UiStrings.TableShowingRowsFormat, table.Rows.Length);
+        return UiStrings.Format(UiStrings.TableSummaryFormat, table.Format.ToUpperInvariant(), summary);
     }
 
     private static double[] EstimateColumnWidths(PreviewTable table, int columnCount)
@@ -173,11 +174,12 @@ internal sealed class TablePreviewPresenter
 
         if (showHeader)
         {
-            AddCell("", 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, _palette);
+            AddCell("", UiStrings.TableCornerAccessibleName, 0, 0, RowHeaderWidth, HeaderHeight, TableCellKind.Corner, _palette);
             double x = columnLeft;
             for (int c = firstColumn; c < lastColumn; c++)
             {
-                AddCell(_table.Headers.ElementAtOrDefault(c) ?? $"Column {c + 1}", x, 0, _widths[c], HeaderHeight, TableCellKind.Header, _palette);
+                string header = _table.Headers.ElementAtOrDefault(c) ?? UiStrings.Format(UiStrings.TableFallbackColumnFormat, c + 1);
+                AddCell(header, UiStrings.Format(UiStrings.TableColumnHeaderAccessibleNameFormat, c + 1, header), x, 0, _widths[c], HeaderHeight, TableCellKind.Header, _palette);
                 x += _widths[c];
             }
         }
@@ -185,12 +187,15 @@ internal sealed class TablePreviewPresenter
         for (int r = firstRow; r < lastRow; r++)
         {
             double y = HeaderHeight + r * RowHeight;
-            AddCell((r + 1).ToString(), 0, y, RowHeaderWidth, RowHeight, TableCellKind.RowHeader, _palette);
+            AddCell((r + 1).ToString(), UiStrings.Format(UiStrings.TableRowHeaderAccessibleNameFormat, r + 1), 0, y, RowHeaderWidth, RowHeight, TableCellKind.RowHeader, _palette);
             string[] cells = _table.Rows[r].Cells;
             double x = columnLeft;
             for (int c = firstColumn; c < lastColumn; c++)
             {
-                AddCell(c < cells.Length ? cells[c] : "", x, y, _widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell, _palette);
+                string value = c < cells.Length ? cells[c] : "";
+                string header = _table.Headers.ElementAtOrDefault(c) ?? UiStrings.Format(UiStrings.TableFallbackColumnFormat, c + 1);
+                string accessibleValue = value.Length == 0 ? UiStrings.TableBlankCell : value;
+                AddCell(value, UiStrings.Format(UiStrings.TableCellAccessibleNameFormat, r + 1, header, accessibleValue), x, y, _widths[c], RowHeight, r % 2 == 0 ? TableCellKind.Cell : TableCellKind.AlternateCell, _palette);
                 x += _widths[c];
             }
         }
@@ -205,8 +210,23 @@ internal sealed class TablePreviewPresenter
         _headerRendered = false;
     }
 
-    private void AddCell(string text, double x, double y, double width, double height, TableCellKind kind, TablePalette palette)
+    private void AddCell(string text, string accessibleName, double x, double y, double width, double height, TableCellKind kind, TablePalette palette)
     {
+        var textBlock = new TextBlock
+        {
+            Text = text,
+            FontSize = kind is TableCellKind.Header or TableCellKind.RowHeader ? 12 : 13,
+            FontWeight = new Windows.UI.Text.FontWeight { Weight = kind is TableCellKind.Header ? (ushort)600 : (ushort)400 },
+            FontFamily = TableFontFamily,
+            Foreground = palette.For(kind is TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
+                ? TableCellKind.HeaderText
+                : TableCellKind.Text),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.NoWrap,
+            MaxWidth = Math.Max(8, width - 18),
+        };
+        AutomationProperties.SetName(textBlock, accessibleName);
         var border = new Border
         {
             Width = width,
@@ -217,20 +237,7 @@ internal sealed class TablePreviewPresenter
             Background = palette.For(kind),
             BorderBrush = palette.GridLine,
             BorderThickness = new Thickness(0, 0, 1, 1),
-            Child = new TextBlock
-            {
-                Text = text,
-                FontSize = kind is TableCellKind.Header or TableCellKind.RowHeader ? 12 : 13,
-                FontWeight = new Windows.UI.Text.FontWeight { Weight = kind is TableCellKind.Header ? (ushort)600 : (ushort)400 },
-                FontFamily = TableFontFamily,
-                Foreground = palette.For(kind is TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner
-                    ? TableCellKind.HeaderText
-                    : TableCellKind.Text),
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                TextWrapping = TextWrapping.NoWrap,
-                MaxWidth = Math.Max(8, width - 18),
-            },
+            Child = textBlock,
         };
         Canvas.SetLeft(border, x);
         Canvas.SetTop(border, y);

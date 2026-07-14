@@ -99,6 +99,25 @@
   <data name="WelcomeStart" xml:space="preserve"><value>开始预览</value></data>
   <data name="SettingsHelpShortcuts" xml:space="preserve"><value>帮助和快捷键</value></data>
   <data name="PdfPageAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 页，共 {1:N0} 页</value></data>
+  <data name="TableScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>分隔符表格预览</value></data>
+  <data name="TableGrid.AutomationProperties.Name" xml:space="preserve"><value>分隔符表格单元格</value></data>
+  <data name="OfficeScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>Office 文档预览</value></data>
+  <data name="TableDimensionsFormat" xml:space="preserve"><value>{0:N0} 行 x {1:N0} 列</value></data>
+  <data name="TableShowingRowsFormat" xml:space="preserve"><value> - 显示 {0:N0} 行</value></data>
+  <data name="TableSummaryFormat" xml:space="preserve"><value>{0} 表格 - {1}</value></data>
+  <data name="TableFallbackColumnFormat" xml:space="preserve"><value>第 {0:N0} 列</value></data>
+  <data name="TableCornerAccessibleName" xml:space="preserve"><value>表格角单元格</value></data>
+  <data name="TableColumnHeaderAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 列标题，{1}</value></data>
+  <data name="TableRowHeaderAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 行</value></data>
+  <data name="TableCellAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 行，{1}：{2}</value></data>
+  <data name="TableBlankCell" xml:space="preserve"><value>空白</value></data>
+  <data name="OfficeSlideAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 张幻灯片，共 {1:N0} 张：{2}</value></data>
+  <data name="OfficeSheetAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 个工作表，共 {1:N0} 个：{2}</value></data>
+  <data name="OfficePageAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 页，共 {1:N0} 页：{2}</value></data>
+  <data name="OfficeColumnHeaderAccessibleNameFormat" xml:space="preserve"><value>第 {0} 列</value></data>
+  <data name="OfficeRowHeaderAccessibleNameFormat" xml:space="preserve"><value>第 {0:N0} 行</value></data>
+  <data name="OfficeCellAccessibleNameFormat" xml:space="preserve"><value>单元格 {0}：{1}</value></data>
+  <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>嵌入图像</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>正在打开 {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>正在从云存储下载 {0}...</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>正在安全检查 {0} 的可用性...</value></data>

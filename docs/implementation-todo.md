@@ -17,7 +17,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Virtualize large code, Markdown, and table presentation work beyond the
   existing character/run bounds.
 - [ ] Complete localization of visual, status, and automation strings.
-- [ ] Add semantic table and Office accessibility metadata.
 - [ ] Verify live-region loading, success, and failure announcements with
   Narrator; add explicit AutomationPeer events where hidden status is silent.
 
@@ -52,6 +51,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add localized row, column, cell, merged-range, page/sheet/slide position,
+  and embedded-image automation names to virtualized table and Office previews.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Compact the text preview toolbar while search is open so the query,
   count, and navigation controls fit without horizontal overflow.

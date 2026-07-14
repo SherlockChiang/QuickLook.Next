@@ -114,6 +114,22 @@ internal static class UiStrings
     public static string PackageHeroSubtitle => Get(nameof(PackageHeroSubtitle), "App package icon");
     public static string ExecutableHeroSubtitle => Get(nameof(ExecutableHeroSubtitle), "Application icon");
     public static string OfficeEmbeddedImagePreview => Get(nameof(OfficeEmbeddedImagePreview), "Embedded image preview");
+    public static string TableDimensionsFormat => Get(nameof(TableDimensionsFormat), "{0:N0} rows x {1:N0} columns");
+    public static string TableShowingRowsFormat => Get(nameof(TableShowingRowsFormat), " - showing {0:N0} rows");
+    public static string TableSummaryFormat => Get(nameof(TableSummaryFormat), "{0} table - {1}");
+    public static string TableFallbackColumnFormat => Get(nameof(TableFallbackColumnFormat), "Column {0:N0}");
+    public static string TableCornerAccessibleName => Get(nameof(TableCornerAccessibleName), "Table corner");
+    public static string TableColumnHeaderAccessibleNameFormat => Get(nameof(TableColumnHeaderAccessibleNameFormat), "Column {0:N0} header, {1}");
+    public static string TableRowHeaderAccessibleNameFormat => Get(nameof(TableRowHeaderAccessibleNameFormat), "Row {0:N0}");
+    public static string TableCellAccessibleNameFormat => Get(nameof(TableCellAccessibleNameFormat), "Row {0:N0}, {1}: {2}");
+    public static string TableBlankCell => Get(nameof(TableBlankCell), "blank");
+    public static string OfficeSlideAccessibleNameFormat => Get(nameof(OfficeSlideAccessibleNameFormat), "Slide {0:N0} of {1:N0}: {2}");
+    public static string OfficeSheetAccessibleNameFormat => Get(nameof(OfficeSheetAccessibleNameFormat), "Sheet {0:N0} of {1:N0}: {2}");
+    public static string OfficePageAccessibleNameFormat => Get(nameof(OfficePageAccessibleNameFormat), "Page {0:N0} of {1:N0}: {2}");
+    public static string OfficeColumnHeaderAccessibleNameFormat => Get(nameof(OfficeColumnHeaderAccessibleNameFormat), "Column {0}");
+    public static string OfficeRowHeaderAccessibleNameFormat => Get(nameof(OfficeRowHeaderAccessibleNameFormat), "Row {0:N0}");
+    public static string OfficeCellAccessibleNameFormat => Get(nameof(OfficeCellAccessibleNameFormat), "Cell {0}: {1}");
+    public static string OfficeEmbeddedImageAccessibleName => Get(nameof(OfficeEmbeddedImageAccessibleName), "Embedded image");
 
     public static string Format(string format, params object[] arguments)
         => string.Format(CultureInfo.CurrentCulture, format, arguments);
