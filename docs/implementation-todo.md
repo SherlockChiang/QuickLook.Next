@@ -57,19 +57,19 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Parse JPEG SOF dimensions, EXIF orientation, and split ICC data in one
   bounded marker stream before decode, then reuse the result during conversion.
   - Verification: `cargo test --locked jpeg_`
-  - Commit: this change
+  - Commit: `bddc4ad`
 - [x] Build structured Markdown search indexes from displayed AST blocks,
   including lists, code, rendered table rows, links, and partial notices.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `9694bd8`
 - [x] Navigate structured Markdown search matches to exact rendered block
   anchors for prose, headings, quotes, lists, code, and bounded tables.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `c6d9ace`
 - [x] Extract plain and Markdown visible-text search indexing into a tested Core
   helper covering case-insensitive non-overlap and AST list/table/link content.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Text_search|Markdown_search`
-  - Commit: this change
+  - Commit: `8e6cbaa`
 
 - [x] Record process/App/background/hook startup milestones and correlate preview
   intent, availability, probe, route, loading shell, reveal, and final first-frame
