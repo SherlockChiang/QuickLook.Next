@@ -13,6 +13,7 @@ public static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        AppStartupTiming.Start();
         if (args is ["--restricted-host-probe-child"])
         {
             if (!HostProcessLauncher.IsCurrentProcessInJob()

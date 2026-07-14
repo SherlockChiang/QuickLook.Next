@@ -15,6 +15,7 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, e) => DiagLog.Write("App", "domain unhandled: " + e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) => DiagLog.Write("App", "task unobserved: " + e.Exception);
         InitializeComponent();
+        AppStartupTiming.Mark("app-constructed");
     }
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
@@ -23,6 +24,7 @@ public partial class App : Application
         {
             _window = new MainWindow();
             await _window.StartBackgroundAsync();
+            AppStartupTiming.Mark("background-ready");
             if (FirstRunExperience.ShouldShow)
                 WelcomeWindow.Show(
                     () => System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico"),

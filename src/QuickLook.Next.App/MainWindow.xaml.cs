@@ -84,6 +84,7 @@ public sealed partial class MainWindow : Window
     private bool _isModalDialogOpen;
     private long _lastPreviewRevealTick;
     private long _loadingShellShowStarted;
+    private PreviewLifecycleTiming? _previewTiming;
     private string? _lastPreviewRevealPath;
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
@@ -365,6 +366,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _native.Start(OnNativeIntent);
+            AppStartupTiming.Mark("native-hook-ready");
             StatusText.Text = UiStrings.Ready.ToLowerInvariant();
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
             _ = PrewarmPreviewHostsAsync(_lifetimeCts.Token);
@@ -409,22 +411,22 @@ public sealed partial class MainWindow : Window
 
     private void OnNativeIntent(NativeIntent intent)
     {
-        long enqueuedAt = Stopwatch.GetTimestamp();
+        long receivedAt = Stopwatch.GetTimestamp();
         DispatcherQueue.TryEnqueue(() =>
         {
-            double queueDelayMs = Stopwatch.GetElapsedTime(enqueuedAt).TotalMilliseconds;
+            double queueDelayMs = Stopwatch.GetElapsedTime(receivedAt).TotalMilliseconds;
             DiagLog.Write("App", $"native intent={intent.Intent}; path={intent.PrimaryPath ?? "<none>"}; visible={_previewVisible}; uiQueue={queueDelayMs:0.0}ms");
             if (intent.Intent == PreviewIntent.Switch)
-                DebounceSwitchIntent(intent);
+                DebounceSwitchIntent(intent, receivedAt);
             else
             {
                 CancelSwitchDebounce();
-                _ = HandleNativeIntentSafelyAsync(intent);
+                _ = HandleNativeIntentSafelyAsync(intent, receivedAt);
             }
         });
     }
 
-    private void DebounceSwitchIntent(NativeIntent intent)
+    private void DebounceSwitchIntent(NativeIntent intent, long receivedAt)
     {
         if (!_previewVisible)
             return;
@@ -446,7 +448,7 @@ public sealed partial class MainWindow : Window
                     if (_switchDebounceCts != cts || cts.IsCancellationRequested)
                         return;
                     _switchDebounceCts = null;
-                    _ = HandleNativeIntentSafelyAsync(intent);
+                    _ = HandleNativeIntentSafelyAsync(intent, receivedAt);
                 }
                 finally
                 {
@@ -470,11 +472,11 @@ public sealed partial class MainWindow : Window
         _switchDebounceCts = null;
     }
 
-    private async Task HandleNativeIntentSafelyAsync(NativeIntent intent)
+    private async Task HandleNativeIntentSafelyAsync(NativeIntent intent, long receivedAt = 0)
     {
         try
         {
-            await HandleNativeIntentAsync(intent);
+            await HandleNativeIntentAsync(intent, receivedAt);
         }
         catch (OperationCanceledException)
         {
@@ -548,6 +550,8 @@ public sealed partial class MainWindow : Window
 
     private async Task ClosePreviewImmediatelyAsync()
     {
+        _previewTiming?.Complete("closed");
+        CancelPreviewFrameCallbacks();
         string? requestId = _previewSession.CurrentRequestId;
         _previewSession.BeginClose();
         ResetPreview();
@@ -581,7 +585,7 @@ public sealed partial class MainWindow : Window
         await _parserSupervisor.EnsureStartedAsync(cancellationToken);
     }
 
-    private async Task HandleNativeIntentAsync(NativeIntent intent)
+    private async Task HandleNativeIntentAsync(NativeIntent intent, long receivedAt)
     {
         // +/- zoom the image preview (only when one is showing; the global key isn't swallowed elsewhere).
         if (intent.Intent is PreviewIntent.ZoomIn or PreviewIntent.ZoomOut)
@@ -623,7 +627,7 @@ public sealed partial class MainWindow : Window
             PreviewNavigationSource source = intent.Intent == PreviewIntent.Open
                 ? PreviewNavigationSource.ExplorerOpen
                 : PreviewNavigationSource.ExplorerSwitch;
-            await PreviewPathAsync(path, source);
+            await PreviewPathAsync(path, source, receivedAt: receivedAt);
         }
     }
 
@@ -633,11 +637,14 @@ public sealed partial class MainWindow : Window
     private async Task PreviewPathAsync(
         string path,
         PreviewNavigationSource source,
-        ArchiveEntryHandoff? archiveHandoff = null)
+        ArchiveEntryHandoff? archiveHandoff = null,
+        long receivedAt = 0)
     {
         PreviewSessionSnapshot session = _previewSession.Begin(path, source);
         int generation = session.Generation;
         CancellationToken previewToken = session.Token;
+        _previewTiming?.Complete("superseded");
+        _previewTiming = new PreviewLifecycleTiming(generation, source, path, receivedAt);
         using var previewTrace = DiagLog.TraceScope("App", $"preview path source={source} gen={generation} path={path}", 250);
         BeginPreviewTransition();
         ResetPreview();
@@ -655,6 +662,7 @@ public sealed partial class MainWindow : Window
                 () => CloudFileStatus.GetAvailability(path),
                 previewToken);
             await Task.WhenAll(closeTask, availabilityTask);
+            MarkPreviewPhase(generation, "availability-complete", $"availability={availabilityTask.Result}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentArchiveEntryHandoff = archiveHandoff;
             archiveHandoffTransferred = archiveHandoff is not null;
@@ -665,13 +673,13 @@ public sealed partial class MainWindow : Window
             if (availability == CloudFileAvailability.RequiresHydration)
             {
                 StatusText.Text = $"downloading {System.IO.Path.GetFileName(path)} from cloud storage…";
-                RevealPreviewWindow(activate: false);
+                RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
             }
             else if (availability == CloudFileAvailability.Unknown)
             {
                 StatusText.Text = $"checking {System.IO.Path.GetFileName(path)} availability safely…";
-                RevealPreviewWindow(activate: false);
+                RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"file availability unknown; using isolated preview gen={generation}; path={path}");
             }
             DiagLog.Write("App", $"preview probe begin gen={generation}");
@@ -681,6 +689,7 @@ public sealed partial class MainWindow : Window
                     : _native.ProbeFile(path) ?? BuildProbe(path),
                 previewToken);
             DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
+            MarkPreviewPhase(generation, "probe-complete", $"kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentProbe = probe;
 
@@ -702,6 +711,7 @@ public sealed partial class MainWindow : Window
 
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
+                MarkPreviewPhase(generation, "route-selected", "route=media");
                 if (mayRequireHydration)
                 {
                     var cloudMediaReady = CreateCloudMetadataPreview(
@@ -746,6 +756,7 @@ public sealed partial class MainWindow : Window
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             if (animatedPlan is { } plan)
             {
+                MarkPreviewPhase(generation, "route-selected", $"route=animation; mode={plan.PlaybackMode}");
                 DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={plan.PlaybackMode}; {plan.Width}x{plan.Height}");
                 if (plan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
                 {
@@ -773,6 +784,7 @@ public sealed partial class MainWindow : Window
             if (!forceAnimatedFirstFrameRaster
                 && (IsParserHostPreview(probe) || (mayRequireHydration && IsCloudParserHostPreview(probe))))
             {
+                MarkPreviewPhase(generation, "route-selected", "route=parser-host");
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 (string parserRequestId, Task<ControlMessage> parserCompletion) = mayRequireHydration
@@ -797,6 +809,7 @@ public sealed partial class MainWindow : Window
             }
             else if (!forceAnimatedFirstFrameRaster)
             {
+                MarkPreviewPhase(generation, "route-selected", "route=native");
                 nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
                 if (nativeReady is null && probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase))
                     nativeReady = await Task.Run(
@@ -825,6 +838,7 @@ public sealed partial class MainWindow : Window
             }
 
             await EnsureRasterHostStartedAsync(previewToken);
+            MarkPreviewPhase(generation, "route-selected", "route=raster-host");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
             var (requestId, completion) = mayRequireHydration
@@ -874,6 +888,7 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", "preview timed out: " + ex.Message);
             StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.TimedOut, true));
             RevealPreviewWindow(activate: false);
+            CompletePreviewTiming(generation, "timed-out");
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
@@ -882,11 +897,13 @@ public sealed partial class MainWindow : Window
             {
                 StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Service, true));
                 RevealPreviewWindow(activate: false);
+                CompletePreviewTiming(generation, "failed");
             }
         }
         catch (OperationCanceledException)
         {
             DiagLog.Write("App", $"preview canceled: path={path}");
+            CompletePreviewTiming(generation, "canceled");
         }
         finally
         {
@@ -947,6 +964,7 @@ public sealed partial class MainWindow : Window
 
     private void BeginPreviewTransition()
     {
+        CancelPreviewFrameCallbacks();
         DiagLog.Write("App", $"preview transition begin; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         _native.SetPreviewVisible(true);
         _previewRevealPending = true;
@@ -960,13 +978,17 @@ public sealed partial class MainWindow : Window
     private void ShowPreviewLoadingShell()
     {
         if (_previewVisible && !_previewTemporarilyHidden)
+        {
+            MarkPreviewPhase(_previewSession.Generation, "loading-indicator-visible");
             return;
+        }
 
         using var trace = DiagLog.TraceScope("App", "preview loading shell show", 50);
         _loadingShellShowStarted = Stopwatch.GetTimestamp();
         CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
         CompositionTarget.Rendering += OnLoadingShellFirstFrame;
         ShowPreviewWindow(activate: false, resizeToDefault: true);
+        MarkPreviewPhase(_previewSession.Generation, "loading-shell-show-requested");
         _previewTemporarilyHidden = false;
     }
 
@@ -977,9 +999,10 @@ public sealed partial class MainWindow : Window
         _loadingShellShowStarted = 0;
         if (started != 0)
             DiagLog.Write("App", $"loading shell first frame {Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.0}ms");
+        MarkPreviewPhase(_previewSession.Generation, "loading-shell-first-frame");
     }
 
-    private void RevealPreviewWindow(bool activate)
+    private void RevealPreviewWindow(bool activate, bool finalContent = true)
     {
         DiagLog.Write("App", $"preview reveal; activate={activate}; visible={_previewVisible}; tempHidden={_previewTemporarilyHidden}");
         _previewRevealPending = false;
@@ -1006,8 +1029,43 @@ public sealed partial class MainWindow : Window
             EnsureCompositor();
         }
         FadeInPreviewContent();
+        MarkPreviewPhase(_previewSession.Generation, finalContent ? "reveal-called" : "placeholder-reveal");
+        if (finalContent)
+        {
+            CompositionTarget.Rendering -= OnPreviewFinalFirstFrame;
+            CompositionTarget.Rendering += OnPreviewFinalFirstFrame;
+        }
         _lastPreviewRevealTick = Environment.TickCount64;
         _lastPreviewRevealPath = _previewSession.CurrentPath;
+    }
+
+    private void OnPreviewFinalFirstFrame(object? sender, object e)
+    {
+        CompositionTarget.Rendering -= OnPreviewFinalFirstFrame;
+        PreviewLifecycleTiming? timing = _previewTiming;
+        if (timing is null || timing.Generation != _previewSession.Generation || timing.IsTerminal)
+            return;
+        timing.Mark("final-first-frame");
+        timing.Complete("revealed");
+    }
+
+    private void MarkPreviewPhase(int generation, string phase, string? detail = null)
+    {
+        if (_previewTiming is { } timing && timing.Generation == generation)
+            timing.Mark(phase, detail);
+    }
+
+    private void CompletePreviewTiming(int generation, string outcome)
+    {
+        if (_previewTiming is { } timing && timing.Generation == generation)
+            timing.Complete(outcome);
+    }
+
+    private void CancelPreviewFrameCallbacks()
+    {
+        CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
+        CompositionTarget.Rendering -= OnPreviewFinalFirstFrame;
+        _loadingShellShowStarted = 0;
     }
 
     private bool ShouldIgnoreDuplicateOpenClose(string path)

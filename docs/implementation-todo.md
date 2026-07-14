@@ -9,7 +9,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
-- [ ] Add correlated preview phase timings for startup and first usable content.
 
 ## P1: Performance and accessibility
 
@@ -53,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Record process/App/background/hook startup milestones and correlate preview
+  intent, availability, probe, route, loading shell, reveal, and final first-frame
+  timings with one generation-scoped ID.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
