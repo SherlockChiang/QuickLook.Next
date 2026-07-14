@@ -13,7 +13,6 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
-- [ ] Maintain PDF disk-cache size incrementally instead of enumerating it.
 - [ ] Release PDF document resources asynchronously after active renders stop.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
@@ -61,6 +60,10 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Deduplicate thumbnail work by path, size, and cache policy while preserving
   independent caller cancellation and foreground promotion.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Scan the PDF disk cache once per RasterHost process, then maintain its byte
+  count incrementally and enumerate LRU files only when the limit is exceeded.
+  - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
   - Commit: this change
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive

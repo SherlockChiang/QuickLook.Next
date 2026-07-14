@@ -37,7 +37,8 @@ internal sealed class PdfPreviewSession : IDisposable
             FullMode = BoundedChannelFullMode.DropWrite,
         });
     private static readonly Task DiskCacheWriter = Task.Run(ProcessDiskCacheWritesAsync);
-    private static int _diskWritesUntilTrim;
+    private static bool _diskCacheInitialized;
+    private static long _diskCacheBytes;
 
     private sealed record DiskCacheWrite(string Key, byte[] Bgra, int Width, int Height);
 
@@ -179,8 +180,30 @@ internal sealed class PdfPreviewSession : IDisposable
 
     private static async Task ProcessDiskCacheWritesAsync()
     {
+        InitializeDiskCache();
         await foreach (DiskCacheWrite write in DiskCacheWrites.Reader.ReadAllAsync())
             StoreDiskCached(write);
+    }
+
+    private static void InitializeDiskCache()
+    {
+        if (_diskCacheInitialized)
+            return;
+
+        _diskCacheInitialized = true;
+        try
+        {
+            var directory = new DirectoryInfo(DiskCacheDirectory);
+            _diskCacheBytes = directory.Exists
+                ? directory.GetFiles("*.bgra").Sum(file => file.Length)
+                : 0;
+            if (_diskCacheBytes > MaxDiskCacheBytes)
+                TrimDiskCache();
+        }
+        catch
+        {
+            _diskCacheBytes = 0;
+        }
     }
 
     private static void StoreDiskCached(DiskCacheWrite write)
@@ -190,6 +213,8 @@ internal sealed class PdfPreviewSession : IDisposable
         {
             Directory.CreateDirectory(DiskCacheDirectory);
             string path = DiskCachePath(write.Key);
+            long previousLength = 0;
+            try { previousLength = new FileInfo(path).Length; } catch { }
             temporaryPath = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
             using var stream = new FileStream(
                 temporaryPath,
@@ -207,11 +232,9 @@ internal sealed class PdfPreviewSession : IDisposable
             stream.Close();
             File.Move(temporaryPath, path, overwrite: true);
             temporaryPath = null;
-            if (++_diskWritesUntilTrim >= 16)
-            {
-                _diskWritesUntilTrim = 0;
+            _diskCacheBytes = Math.Max(0, _diskCacheBytes - previousLength + 8L + write.Bgra.LongLength);
+            if (_diskCacheBytes > MaxDiskCacheBytes)
                 TrimDiskCache();
-            }
         }
         catch (Exception ex)
         {
@@ -241,15 +264,15 @@ internal sealed class PdfPreviewSession : IDisposable
     {
         var directory = new DirectoryInfo(DiskCacheDirectory);
         FileInfo[] files = directory.Exists ? directory.GetFiles("*.bgra") : [];
-        long total = files.Sum(file => file.Length);
         foreach (FileInfo file in files.OrderBy(file => file.LastAccessTimeUtc))
         {
-            if (total <= MaxDiskCacheBytes)
+            if (_diskCacheBytes <= MaxDiskCacheBytes)
                 break;
             try
             {
-                total -= file.Length;
+                long length = file.Length;
                 file.Delete();
+                _diskCacheBytes = Math.Max(0, _diskCacheBytes - length);
             }
             catch { }
         }
