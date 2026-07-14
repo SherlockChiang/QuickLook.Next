@@ -20,7 +20,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Add semantic table and Office accessibility metadata.
 - [ ] Verify live-region loading, success, and failure announcements with
   Narrator; add explicit AutomationPeer events where hidden status is silent.
-- [ ] Add responsive preview-toolbar overflow states for narrow widths.
 
 ## P2: Product capabilities
 
@@ -53,6 +52,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Compact the text preview toolbar while search is open so the query,
+  count, and navigation controls fit without horizontal overflow.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Add a persisted animated-preview preference that follows Windows, always
   plays, or forces a static first frame, with localized settings UI.

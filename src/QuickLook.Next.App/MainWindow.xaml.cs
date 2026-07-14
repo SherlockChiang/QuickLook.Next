@@ -3314,6 +3314,8 @@ public sealed partial class MainWindow : Window
         if (TextPreviewContainer.Visibility != Visibility.Visible || _textPresenter is not { } textPresenter)
             return;
         TextFindPanel.Visibility = Visibility.Visible;
+        TextWordWrapButton.Visibility = Visibility.Collapsed;
+        TextSearchButton.Visibility = Visibility.Collapsed;
         TextFindBox.Focus(FocusState.Programmatic);
         TextFindBox.SelectAll();
         ApplyTextSearchState(textPresenter.SetSearchQuery(TextFindBox.Text));
@@ -3360,6 +3362,8 @@ public sealed partial class MainWindow : Window
     private void CloseTextSearch()
     {
         TextFindPanel.Visibility = Visibility.Collapsed;
+        TextWordWrapButton.Visibility = Visibility.Visible;
+        TextSearchButton.Visibility = Visibility.Visible;
         TextFindBox.Text = "";
         if (_textPresenter is { } textPresenter)
             ApplyTextSearchState(textPresenter.ClearSearch());
