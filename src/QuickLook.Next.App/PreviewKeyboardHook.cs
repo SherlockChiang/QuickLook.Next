@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
@@ -56,7 +58,8 @@ internal sealed class PreviewKeyboardHook : IDisposable
         if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP)
             && wParam == VK_SPACE
             && !ModifierKeyDown()
-            && _shouldHandleSpace())
+            && _shouldHandleSpace()
+            && !FocusedControlUsesSpace())
         {
             if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
             {
@@ -75,6 +78,9 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     private static bool ModifierKeyDown()
         => KeyDown(VK_SHIFT) || KeyDown(VK_CONTROL) || KeyDown(VK_MENU);
+
+    private static bool FocusedControlUsesSpace()
+        => FocusManager.GetFocusedElement() is Control;
 
     private static bool KeyDown(int key) => (GetKeyState(key) & 0x8000) != 0;
 

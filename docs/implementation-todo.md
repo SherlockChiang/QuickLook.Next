@@ -9,8 +9,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
-- [ ] Preserve standard Space-key behavior when focus is inside an interactive
-  preview control.
 - [ ] Bound bencode nesting and node counts.
 - [ ] Bound ZIP decompression work by compressed bytes, ratio, and elapsed time.
 - [ ] Enforce NuGet and Cargo vulnerability audits in stable release validation.
@@ -61,3 +59,8 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Preserve standard Space-key behavior when focus is inside an interactive
+  preview control.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
