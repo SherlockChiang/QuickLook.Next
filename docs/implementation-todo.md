@@ -57,7 +57,8 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
   - Verification: `cargo test --locked package_icon_candidates`
-  - Commit: this change
+  - Integration verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore --filter Package_hero_raster_close_removes_bgra_handoff`
+  - Commit: `88be923` plus the following integration-test commit
 
 - [x] Preserve standard Space-key behavior when focus is inside an interactive
   preview control.

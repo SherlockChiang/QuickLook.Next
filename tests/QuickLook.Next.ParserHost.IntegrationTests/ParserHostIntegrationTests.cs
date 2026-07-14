@@ -477,7 +477,7 @@ public sealed class ParserHostIntegrationTests
         using (var archive = ZipFile.Open(apkPath, ZipArchiveMode.Create))
         {
             byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mP4z8DwnxLMMGrAqAGjBgwXAwAwxP4QisZM5QAAAABJRU5ErkJggg==");
-            using Stream stream = archive.CreateEntry("res/mipmap-hdpi/ic_launcher.png").Open();
+            using Stream stream = archive.CreateEntry("res/mipmap-hdpi/product_mark.png").Open();
             stream.Write(png);
         }
 
