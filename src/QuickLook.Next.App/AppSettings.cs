@@ -4,8 +4,9 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
-internal sealed record AppSettings(string Language = "system")
+internal sealed record AppSettings(int SchemaVersion = 1, string Language = "system")
 {
+    public const int CurrentSchemaVersion = 1;
     private static readonly string SettingsDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickLook.Next");
@@ -38,8 +39,24 @@ internal sealed record AppSettings(string Language = "system")
         try
         {
             Directory.CreateDirectory(SettingsDirectory);
-            Current = Current with { Language = language };
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true }));
+            AppSettings updated = Current with
+            {
+                SchemaVersion = CurrentSchemaVersion,
+                Language = language,
+            };
+            string temporaryPath = SettingsPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(
+                    temporaryPath,
+                    JsonSerializer.Serialize(updated, new JsonSerializerOptions { WriteIndented = true }));
+                File.Move(temporaryPath, SettingsPath, overwrite: true);
+            }
+            finally
+            {
+                try { File.Delete(temporaryPath); } catch { }
+            }
+            Current = updated;
             return true;
         }
         catch (Exception ex)
@@ -55,12 +72,33 @@ internal sealed record AppSettings(string Language = "system")
         {
             if (!File.Exists(SettingsPath))
                 return new AppSettings();
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+            AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+            if (settings is null
+                || settings.SchemaVersion is < 1 or > CurrentSchemaVersion
+                || settings.Language is not ("system" or "en-US" or "zh-CN"))
+            {
+                PreserveInvalidSettings();
+                return new AppSettings();
+            }
+            return settings;
         }
         catch (Exception ex)
         {
             DiagLog.Write("App", "settings load failed: " + ex.Message);
+            PreserveInvalidSettings();
             return new AppSettings();
+        }
+    }
+
+    private static void PreserveInvalidSettings()
+    {
+        try
+        {
+            if (File.Exists(SettingsPath))
+                File.Move(SettingsPath, SettingsPath + ".invalid", overwrite: true);
+        }
+        catch
+        {
         }
     }
 }

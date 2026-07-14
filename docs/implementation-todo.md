@@ -29,7 +29,7 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Implement text/code search with Ctrl+F, F3, Shift+F3, and match counts.
 - [ ] Add a privacy-conscious diagnostics center and support bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
-- [ ] Version the settings schema and add high-value behavior preferences.
+- [ ] Add high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
   size policy.
 - [ ] Add bounded PDF text search and copy.
@@ -71,6 +71,10 @@ Completed entries move here with the verification commands and commit hash.
   status text in English and Simplified Chinese.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: `d16f1c2`
+- [x] Version settings schema v1, validate loaded values, preserve invalid files,
+  atomically replace settings, and update in-memory state only after persistence.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
