@@ -1197,37 +1197,54 @@ fn jpeg_icc_profile(path: &str) -> std::result::Result<Option<Vec<u8>>, ()> {
     if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
         return Ok(None);
     }
-    let mut file = std::fs::File::open(path).map_err(|_| ())?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|_| ())?;
-    jpeg_icc_profile_from_bytes(&bytes)
+    let file = std::fs::File::open(path).map_err(|_| ())?;
+    jpeg_icc_profile_from_reader(BufReader::new(file))
 }
 
 fn jpeg_icc_profile_from_bytes(bytes: &[u8]) -> std::result::Result<Option<Vec<u8>>, ()> {
-    if bytes.len() < 4 || bytes.get(0..2) != Some(&[0xFF, 0xD8]) {
+    jpeg_icc_profile_from_reader(std::io::Cursor::new(bytes))
+}
+
+fn jpeg_icc_profile_from_reader(mut reader: impl Read) -> std::result::Result<Option<Vec<u8>>, ()> {
+    const MAX_JPEG_HEADER_BYTES: usize = 8 * 1024 * 1024;
+    let mut signature = [0u8; 2];
+    if reader.read_exact(&mut signature).is_err() || signature != [0xFF, 0xD8] {
         return Ok(None);
     }
-    let mut pos = 2usize;
+    let mut scanned = 2usize;
     let mut chunks: Vec<(u8, Vec<u8>)> = Vec::new();
     let mut expected_count = 0u8;
-    while pos + 4 <= bytes.len() {
-        if bytes[pos] != 0xFF {
+    loop {
+        let mut marker_byte = [0u8; 1];
+        reader.read_exact(&mut marker_byte).map_err(|_| ())?;
+        scanned += 1;
+        if marker_byte[0] != 0xFF {
             return Ok(None);
         }
-        while pos < bytes.len() && bytes[pos] == 0xFF {
-            pos += 1;
+        while marker_byte[0] == 0xFF {
+            reader.read_exact(&mut marker_byte).map_err(|_| ())?;
+            scanned += 1;
         }
-        let marker = *bytes.get(pos).ok_or(())?;
-        pos += 1;
+        let marker = marker_byte[0];
         if marker == 0xDA || marker == 0xD9 {
             break;
         }
-        let len = u16::from_be_bytes(bytes.get(pos..pos + 2).ok_or(())?.try_into().map_err(|_| ())?) as usize;
-        pos += 2;
-        if len < 2 || pos + len - 2 > bytes.len() {
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+        let mut length_bytes = [0u8; 2];
+        reader.read_exact(&mut length_bytes).map_err(|_| ())?;
+        let len = u16::from_be_bytes(length_bytes) as usize;
+        if len < 2 {
             return Err(());
         }
-        let segment = &bytes[pos..pos + len - 2];
+        let payload_len = len - 2;
+        scanned = scanned.checked_add(2 + payload_len).ok_or(())?;
+        if scanned > MAX_JPEG_HEADER_BYTES {
+            return Err(());
+        }
+        let mut segment = vec![0u8; payload_len];
+        reader.read_exact(&mut segment).map_err(|_| ())?;
         if marker == 0xE2 && segment.len() > 14 && segment.starts_with(b"ICC_PROFILE\0") {
             let sequence = segment[12];
             let count = segment[13];
@@ -1237,7 +1254,6 @@ fn jpeg_icc_profile_from_bytes(bytes: &[u8]) -> std::result::Result<Option<Vec<u
             expected_count = expected_count.max(count);
             chunks.push((sequence, segment[14..].to_vec()));
         }
-        pos += len - 2;
     }
     if expected_count == 0 || chunks.len() != expected_count as usize {
         return Ok(None);
@@ -1673,6 +1689,20 @@ mod tests {
         let profile = jpeg_icc_profile_from_bytes(&jpeg).expect("parse jpeg").expect("icc profile");
 
         assert_eq!(profile, b"quicklook-next-test-icc");
+    }
+
+    #[test]
+    fn jpeg_icc_stream_stops_before_scan_data() {
+        let mut jpeg = jpeg_with_split_icc_segments();
+        jpeg.extend(std::iter::repeat_n(0x7f, 16 * 1024 * 1024));
+        let mut reader = std::io::Cursor::new(&jpeg);
+
+        let profile = jpeg_icc_profile_from_reader(&mut reader)
+            .expect("parse jpeg")
+            .expect("icc profile");
+
+        assert_eq!(profile, b"quicklook-next-test-icc");
+        assert!(reader.position() < 1024 * 1024);
     }
 
     #[test]

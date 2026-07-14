@@ -14,7 +14,7 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Replace the PDF document projection with an input/ownership path that
   exposes deterministic close semantics.
-- [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
+- [ ] Parse JPEG dimensions and orientation in the bounded ICC header stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
 - [ ] Complete localization of visual, status, and automation strings.
 - [ ] Add semantic table and Office accessibility metadata.
@@ -57,6 +57,10 @@ Completed entries move here with the verification commands and commit hash.
   intent, availability, probe, route, loading shell, reveal, and final first-frame
   timings with one generation-scoped ID.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Stream JPEG ICC marker segments with an 8 MiB header budget and stop at
+  scan data instead of reading the full compressed image.
+  - Verification: `cargo test --locked jpeg_icc`
   - Commit: this change
 
 - [x] Present APK raster icons from Android mipmap resources even when the
