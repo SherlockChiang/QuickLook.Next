@@ -63,6 +63,11 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Guard: `tools/guard-performance-bounds.ps1`
   - Commit: this change
+- [x] Bound structured Markdown rendering to 2000 block/list paragraphs and
+  inline traversal to depth 16 in both UI rendering and search indexing.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`; `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_inline_search_index_obeys_depth_budget`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
 
 - [x] Localize high-frequency preview, search, media, loading, and error
   automation names; localize Retry and raise all error actions to 40 DIP.

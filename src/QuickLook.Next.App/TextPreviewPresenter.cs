@@ -19,6 +19,7 @@ internal sealed class TextPreviewPresenter
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
     private const int MaxSearchHighlightRanges = 5000;
+    private const int MaxMarkdownBlocks = 2000;
     private const double OutlineWidth = 188;
     private const double OutlineGap = 10;
 
@@ -47,6 +48,8 @@ internal sealed class TextPreviewPresenter
     private readonly List<(int Start, FrameworkElement Anchor)> _markdownSearchAnchors = [];
     private int _currentSearchMatch = -1;
     private int _markdownSearchOffset;
+    private int _markdownBlocksRendered;
+    private bool _markdownRenderTruncated;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -83,6 +86,8 @@ internal sealed class TextPreviewPresenter
             : TextSearchIndex.BuildMarkdownVisibleText(ready.Markdown, UiStrings.TextPreviewTruncated);
         _markdownSearchAnchors.Clear();
         _markdownSearchOffset = 0;
+        _markdownBlocksRendered = 0;
+        _markdownRenderTruncated = false;
         ClearSearch();
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
@@ -240,9 +245,16 @@ internal sealed class TextPreviewPresenter
     private void RenderMarkdownDocument(PreviewMarkdown document)
     {
         foreach (PreviewMarkdownBlock block in document.Blocks)
-            AddMarkdownBlock(block);
+        {
+            if (block.Kind is "unorderedList" or "orderedList")
+                AddMarkdownBlock(block);
+            else if (TryReserveMarkdownBlock())
+                AddMarkdownBlock(block);
+            else
+                break;
+        }
 
-        if (document.IsPartial)
+        if (document.IsPartial || _markdownRenderTruncated)
         {
             var partial = CreateParagraph(12, "Segoe UI", 12, 0);
             partial.Foreground = UiGrayBrush;
@@ -330,6 +342,8 @@ internal sealed class TextPreviewPresenter
         int index = 1;
         foreach (PreviewMarkdownBlock item in block.Children)
         {
+            if (!TryReserveMarkdownBlock())
+                break;
             var p = CreateParagraph(14, "Segoe UI", 0, 5);
             p.Margin = new Thickness(18, 0, 0, 5);
             FrameworkElement anchor = CreateHeadingAnchor();
@@ -340,6 +354,17 @@ internal sealed class TextPreviewPresenter
             _textBlock.Blocks.Add(p);
             index++;
         }
+    }
+
+    private bool TryReserveMarkdownBlock()
+    {
+        if (_markdownBlocksRendered < MaxMarkdownBlocks)
+        {
+            _markdownBlocksRendered++;
+            return true;
+        }
+        _markdownRenderTruncated = true;
+        return false;
     }
 
     private void AddMarkdownRule()
@@ -552,19 +577,19 @@ internal sealed class TextPreviewPresenter
         }
     }
 
-    private void AddMarkdownInlines(InlineCollection target, IReadOnlyList<PreviewMarkdownInline> inlines, string fallbackText)
+    private void AddMarkdownInlines(InlineCollection target, IReadOnlyList<PreviewMarkdownInline> inlines, string fallbackText, int depth = 0)
     {
-        if (inlines.Count == 0)
+        if (inlines.Count == 0 || depth >= TextSearchIndex.MaxMarkdownInlineDepth)
         {
             target.Add(new Run { Text = fallbackText });
             return;
         }
 
         foreach (PreviewMarkdownInline inline in inlines)
-            AddMarkdownInline(target, inline);
+            AddMarkdownInline(target, inline, depth);
     }
 
-    private void AddMarkdownInline(InlineCollection target, PreviewMarkdownInline inline)
+    private void AddMarkdownInline(InlineCollection target, PreviewMarkdownInline inline, int depth)
     {
         switch (inline.Kind)
         {
@@ -578,17 +603,17 @@ internal sealed class TextPreviewPresenter
                 break;
             case "strong":
                 var bold = new Bold();
-                AddMarkdownInlines(bold.Inlines, inline.Children, inline.Text);
+                AddMarkdownInlines(bold.Inlines, inline.Children, inline.Text, depth + 1);
                 target.Add(bold);
                 break;
             case "emphasis":
                 var italic = new Italic();
-                AddMarkdownInlines(italic.Inlines, inline.Children, inline.Text);
+                AddMarkdownInlines(italic.Inlines, inline.Children, inline.Text, depth + 1);
                 target.Add(italic);
                 break;
             case "link":
                 var link = new Span { Foreground = BrushFor(TokenKind.Keyword) };
-                AddMarkdownInlines(link.Inlines, inline.Children, inline.Text);
+                AddMarkdownInlines(link.Inlines, inline.Children, inline.Text, depth + 1);
                 if (!string.IsNullOrWhiteSpace(inline.Url))
                     link.Inlines.Add(new Run { Text = $" ({inline.Url})" });
                 target.Add(link);

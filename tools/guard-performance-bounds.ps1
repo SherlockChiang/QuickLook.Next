@@ -50,10 +50,14 @@ Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
     "Markdown table rendering must remain capped at 64 columns."
 Require-Pattern $textSearchIndex 'MaxMarkdownTableCells\s*=\s*4096' `
     "Markdown table rendering must retain its 4096-cell budget."
+Require-Pattern $textSearchIndex 'MaxMarkdownInlineDepth\s*=\s*16' `
+    "Markdown inline traversal must retain its depth limit of 16."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
     "Text search must retain its 5000-range visual highlight budget."
+Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*2000' `
+    "Structured Markdown rendering must retain its 2000-block UI budget."
 
 if ($failures.Count -gt 0) {
     Write-Host ""

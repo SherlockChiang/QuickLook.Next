@@ -7,6 +7,7 @@ public static class TextSearchIndex
 {
     public const int MaxMarkdownTableColumns = 64;
     public const int MaxMarkdownTableCells = 4096;
+    public const int MaxMarkdownInlineDepth = 16;
 
     public static List<int> FindMatches(string text, string query)
     {
@@ -36,15 +37,21 @@ public static class TextSearchIndex
     public static string MarkdownInlineText(
         IReadOnlyList<PreviewMarkdownInline> inlines,
         string fallbackText)
+        => MarkdownInlineText(inlines, fallbackText, 0);
+
+    private static string MarkdownInlineText(
+        IReadOnlyList<PreviewMarkdownInline> inlines,
+        string fallbackText,
+        int depth)
     {
-        if (inlines.Count == 0)
+        if (inlines.Count == 0 || depth >= MaxMarkdownInlineDepth)
             return fallbackText;
         var text = new StringBuilder();
         foreach (PreviewMarkdownInline inline in inlines)
         {
             text.Append(inline.Children.Length == 0
                 ? inline.Text
-                : MarkdownInlineText(inline.Children, inline.Text));
+                : MarkdownInlineText(inline.Children, inline.Text, depth + 1));
             if (inline.Kind == "link" && !string.IsNullOrWhiteSpace(inline.Url))
                 text.Append($" ({inline.Url})");
         }

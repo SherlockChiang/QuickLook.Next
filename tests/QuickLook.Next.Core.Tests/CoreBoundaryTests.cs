@@ -60,6 +60,19 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.DoesNotContain("H64", cells);
     }
 
+    [Fact]
+    public void Markdown_inline_search_index_obeys_depth_budget()
+    {
+        PreviewMarkdownInline inline = new("text") { Text = "leaf" };
+        for (int depth = 0; depth < 1000; depth++)
+            inline = new PreviewMarkdownInline("strong") { Text = $"depth-{depth}", Children = [inline] };
+
+        string text = TextSearchIndex.MarkdownInlineText([inline], "root");
+
+        Assert.StartsWith("depth-", text);
+        Assert.DoesNotContain("leaf", text);
+    }
+
     [Theory]
     [InlineData(FileAttributes.Offline)]
     [InlineData((FileAttributes)0x00040000)]
