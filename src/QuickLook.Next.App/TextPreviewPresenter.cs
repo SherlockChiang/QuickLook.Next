@@ -12,6 +12,8 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
+internal readonly record struct TextSearchState(int Current, int Count);
+
 internal sealed class TextPreviewPresenter
 {
     private const int MaxHighlightedChars = 256 * 1024;
@@ -38,6 +40,10 @@ internal sealed class TextPreviewPresenter
     private int _renderVersion;
     private PreviewReady? _lastReady;
     private (double Width, double Height) _lastMaxContent;
+    private string _displayedText = "";
+    private string _searchQuery = "";
+    private readonly List<int> _searchMatches = [];
+    private int _currentSearchMatch = -1;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -69,6 +75,8 @@ internal sealed class TextPreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         string text = TrimForDisplay(ready.TextContent ?? "");
+        _displayedText = text;
+        ClearSearch();
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
 
@@ -113,11 +121,100 @@ internal sealed class TextPreviewPresenter
     public void Clear()
     {
         _lastReady = null;
+        _displayedText = "";
+        ClearSearch();
         _renderVersion++;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
         ClearOutline();
         ApplyOutlineVisibility();
+    }
+
+    public TextSearchState SetSearchQuery(string query)
+    {
+        _searchQuery = query.Trim();
+        _searchMatches.Clear();
+        _currentSearchMatch = -1;
+        if (_searchQuery.Length > 0)
+        {
+            int index = 0;
+            while ((index = _displayedText.IndexOf(
+                _searchQuery,
+                index,
+                StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                _searchMatches.Add(index);
+                index += _searchQuery.Length;
+            }
+            if (_searchMatches.Count > 0)
+                _currentSearchMatch = 0;
+        }
+        ApplySearchHighlights();
+        ScrollToCurrentSearchMatch();
+        return SearchState;
+    }
+
+    public TextSearchState MoveSearch(int delta)
+    {
+        if (_searchMatches.Count == 0)
+            return SearchState;
+        _currentSearchMatch = (_currentSearchMatch + delta + _searchMatches.Count) % _searchMatches.Count;
+        ApplySearchHighlights();
+        ScrollToCurrentSearchMatch();
+        return SearchState;
+    }
+
+    public TextSearchState ClearSearch()
+    {
+        _searchQuery = "";
+        _searchMatches.Clear();
+        _currentSearchMatch = -1;
+        _textBlock.TextHighlighters.Clear();
+        return SearchState;
+    }
+
+    private TextSearchState SearchState
+        => new(_currentSearchMatch >= 0 ? _currentSearchMatch + 1 : 0, _searchMatches.Count);
+
+    private void ApplySearchHighlights()
+    {
+        _textBlock.TextHighlighters.Clear();
+        if (_searchMatches.Count == 0
+            || _lastReady?.Markdown is not null
+            || _lastReady?.TextFormat == "markdown")
+        {
+            return;
+        }
+
+        var allMatches = new TextHighlighter
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(110, 255, 210, 64)),
+        };
+        foreach (int start in _searchMatches)
+            allMatches.Ranges.Add(new TextRange { StartIndex = start, Length = _searchQuery.Length });
+        _textBlock.TextHighlighters.Add(allMatches);
+
+        if (_currentSearchMatch >= 0)
+        {
+            var current = new TextHighlighter
+            {
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 255, 145, 48)),
+            };
+            current.Ranges.Add(new TextRange
+            {
+                StartIndex = _searchMatches[_currentSearchMatch],
+                Length = _searchQuery.Length,
+            });
+            _textBlock.TextHighlighters.Add(current);
+        }
+    }
+
+    private void ScrollToCurrentSearchMatch()
+    {
+        if (_currentSearchMatch < 0 || _displayedText.Length == 0 || _scrollViewer.ScrollableHeight <= 0)
+            return;
+        double progress = (double)_searchMatches[_currentSearchMatch] / _displayedText.Length;
+        _scrollViewer.ChangeView(null, _scrollViewer.ScrollableHeight * progress, null, disableAnimation: true);
     }
 
     public void RefreshPalette()

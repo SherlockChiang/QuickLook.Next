@@ -71,6 +71,8 @@ internal static class UiStrings
     public static string SettingsVersionFormat => Get(nameof(SettingsVersionFormat), "Version {0}");
     public static string SettingsProjectSource => Get(nameof(SettingsProjectSource), "QuickLook Next is an open-source project developed on GitHub. Builds published by this project originate from the repository below.");
     public static string SettingsHelpShortcuts => Get(nameof(SettingsHelpShortcuts), "Help and shortcuts");
+    public static string TextFindPlaceholder => Get(nameof(TextFindPlaceholder), "Find");
+    public static string TextFindCountFormat => Get(nameof(TextFindCountFormat), "{0:N0} / {1:N0}");
     public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
     public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
     public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "The project has not yet published a formal software license. See the repository for the current terms and source history.");

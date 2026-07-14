@@ -101,6 +101,8 @@
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>无法在不读取内容的情况下验证文件可用性，因此已推迟预览。</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>云服务提供商在本地提供此文件后才能播放媒体。</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>无法安全验证文件可用性，因此已推迟媒体播放。</value></data>
+  <data name="TextFindPlaceholder" xml:space="preserve"><value>查找</value></data>
+  <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve"><value>QuickLook Next</value></data>
   <data name="InfoTabText.Text" xml:space="preserve"><value>信息</value></data>
   <data name="ExifTabText.Text" xml:space="preserve"><value>EXIF</value></data>

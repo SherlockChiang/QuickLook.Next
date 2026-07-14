@@ -211,6 +211,8 @@
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>Preview is deferred because file availability could not be verified without reading its contents.</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>Media playback is deferred until the cloud provider makes this file available locally.</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>Media playback is deferred because file availability could not be verified safely.</value></data>
+  <data name="TextFindPlaceholder" xml:space="preserve"><value>Find</value></data>
+  <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
   </data>

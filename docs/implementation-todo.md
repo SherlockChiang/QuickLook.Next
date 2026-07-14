@@ -26,7 +26,7 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Implement text/code search with Ctrl+F, F3, Shift+F3, and match counts.
+- [ ] Add exact per-block Markdown search highlighting and navigation anchors.
 - [ ] Add a privacy-conscious diagnostics center and support bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add high-value behavior preferences to the versioned settings schema.
@@ -73,6 +73,11 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: `d16f1c2`
 - [x] Version settings schema v1, validate loaded values, preserve invalid files,
   atomically replace settings, and update in-memory state only after persistence.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Implement displayed-text search with Ctrl+F, Enter/F3 navigation,
+  Shift+Enter/Shift+F3 reverse navigation, Escape close, match counts, and
+  plain/code highlighting.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change
 

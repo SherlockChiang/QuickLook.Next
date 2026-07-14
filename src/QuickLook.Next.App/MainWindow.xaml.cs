@@ -200,6 +200,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        TextFindBox.PlaceholderText = UiStrings.TextFindPlaceholder;
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
         _panelController = new PreviewPanelController(
             PreviewRoot,
@@ -2641,16 +2642,40 @@ public sealed partial class MainWindow : Window
 
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
+        bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        bool shiftDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
         bool modifierDown = (Microsoft.UI.Input.InputKeyboardSource
             .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
             || (Microsoft.UI.Input.InputKeyboardSource
                 .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
             || (Microsoft.UI.Input.InputKeyboardSource
                 .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
-        if (e.Key == Windows.System.VirtualKey.Space && !modifierDown && ShouldHandleSpaceAsPreviewClose())
+        bool focusedControlUsesSpace = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement() is Control;
+        if (e.Key == Windows.System.VirtualKey.Space
+            && !modifierDown
+            && !focusedControlUsesSpace
+            && ShouldHandleSpaceAsPreviewClose())
         {
             e.Handled = true;
             ClosePreviewFromKeyboard();
+            return;
+        }
+
+        bool textPreviewVisible = TextPreviewContainer.Visibility == Visibility.Visible;
+        if (textPreviewVisible && controlDown && e.Key == Windows.System.VirtualKey.F)
+        {
+            OpenTextSearch();
+            e.Handled = true;
+            return;
+        }
+        if (textPreviewVisible && e.Key == Windows.System.VirtualKey.F3 && _textPresenter is { } textPresenter)
+        {
+            ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
+            e.Handled = true;
             return;
         }
 
@@ -2659,10 +2684,6 @@ public sealed partial class MainWindow : Window
             || (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible);
         if (!imagePreviewVisible)
             return;
-
-        bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
-            & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
 
         if (e.Key == Windows.System.VirtualKey.Home
             || (controlDown && e.Key is Windows.System.VirtualKey.Number0 or Windows.System.VirtualKey.NumberPad0))
@@ -3273,16 +3294,65 @@ public sealed partial class MainWindow : Window
     }
 
     private void TextSearchButton_Click(object sender, RoutedEventArgs e)
+        => OpenTextSearch();
+
+    private void OpenTextSearch()
     {
-        // Placeholder for search logic
-        // In a real app, this would open a find bar, but for now we can just show a flyout or focus.
-        var dialog = new ContentDialog
-        {
-            Title = "Search (Coming Soon)",
-            Content = "Search functionality is currently being refined.",
-            CloseButtonText = UiStrings.DialogOk,
-            XamlRoot = this.Content.XamlRoot
-        };
-        _ = dialog.ShowAsync();
+        if (TextPreviewContainer.Visibility != Visibility.Visible || _textPresenter is not { } textPresenter)
+            return;
+        TextFindPanel.Visibility = Visibility.Visible;
+        TextFindBox.Focus(FocusState.Programmatic);
+        TextFindBox.SelectAll();
+        ApplyTextSearchState(textPresenter.SetSearchQuery(TextFindBox.Text));
     }
+
+    private void OnTextFindTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_textPresenter is { } textPresenter)
+            ApplyTextSearchState(textPresenter.SetSearchQuery(TextFindBox.Text));
+    }
+
+    private void OnTextFindPreviousClick(object sender, RoutedEventArgs e)
+    {
+        if (_textPresenter is { } textPresenter)
+            ApplyTextSearchState(textPresenter.MoveSearch(-1));
+    }
+
+    private void OnTextFindNextClick(object sender, RoutedEventArgs e)
+    {
+        if (_textPresenter is { } textPresenter)
+            ApplyTextSearchState(textPresenter.MoveSearch(1));
+    }
+
+    private void OnTextFindCloseClick(object sender, RoutedEventArgs e) => CloseTextSearch();
+
+    private void OnTextFindKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        bool shiftDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            if (_textPresenter is { } textPresenter)
+                ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CloseTextSearch();
+            e.Handled = true;
+        }
+    }
+
+    private void CloseTextSearch()
+    {
+        TextFindPanel.Visibility = Visibility.Collapsed;
+        TextFindBox.Text = "";
+        if (_textPresenter is { } textPresenter)
+            ApplyTextSearchState(textPresenter.ClearSearch());
+        TextPreviewBlock.Focus(FocusState.Programmatic);
+    }
+
+    private void ApplyTextSearchState(TextSearchState state)
+        => TextFindCountText.Text = UiStrings.Format(UiStrings.TextFindCountFormat, state.Current, state.Count);
 }

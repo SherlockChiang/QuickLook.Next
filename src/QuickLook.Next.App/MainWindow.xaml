@@ -344,9 +344,10 @@
                         </ListView.ItemTemplate>
                     </ListView>
 
-            <Border Margin="0,12,24,0" 
-                    Visibility="Collapsed"
-                    IsHitTestVisible="False"
+            <Border x:Name="TextToolbar"
+                    Grid.Row="1"
+                    Margin="0,12,24,0"
+                    Canvas.ZIndex="10"
                     HorizontalAlignment="Right" VerticalAlignment="Top"
                     Background="{ThemeResource LayerFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
@@ -354,13 +355,48 @@
                     CornerRadius="8"
                     Padding="4">
                 <StackPanel Orientation="Horizontal" Spacing="4">
+                    <StackPanel x:Name="TextFindPanel"
+                                Visibility="Collapsed"
+                                Orientation="Horizontal"
+                                Spacing="4">
+                        <TextBox x:Name="TextFindBox"
+                                 Width="220"
+                                 MinHeight="40"
+                                 PlaceholderText="Find"
+                                 TextChanged="OnTextFindTextChanged"
+                                 KeyDown="OnTextFindKeyDown"
+                                 AutomationProperties.Name="Find in preview" />
+                        <TextBlock x:Name="TextFindCountText"
+                                   MinWidth="54"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center"
+                                   AutomationProperties.LiveSetting="Polite" />
+                        <Button Width="40" Height="40"
+                                Click="OnTextFindPreviousClick"
+                                AutomationProperties.Name="Previous match">
+                            <FontIcon Glyph="&#xE70E;" FontSize="14" />
+                        </Button>
+                        <Button Width="40" Height="40"
+                                Click="OnTextFindNextClick"
+                                AutomationProperties.Name="Next match">
+                            <FontIcon Glyph="&#xE70D;" FontSize="14" />
+                        </Button>
+                        <Button Width="40" Height="40"
+                                Click="OnTextFindCloseClick"
+                                AutomationProperties.Name="Close search">
+                            <FontIcon Glyph="&#xE711;" FontSize="14" />
+                        </Button>
+                    </StackPanel>
                     <ToggleButton x:Name="TextWordWrapButton" 
-                                  ToolTipService.ToolTip="Toggle Word Wrap"
-                                  Padding="6" Background="Transparent" BorderThickness="0"
-                                  Click="TextWordWrapButton_Click">
+                                   Width="40" Height="40"
+                                   ToolTipService.ToolTip="Toggle Word Wrap"
+                                   Padding="6" Background="Transparent" BorderThickness="0"
+                                   AutomationProperties.Name="Toggle word wrap"
+                                   Click="TextWordWrapButton_Click">
                         <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
                     </ToggleButton>
                     <ToggleButton x:Name="TextLineNumbersButton"
+                                  Visibility="Collapsed"
                                   IsChecked="True"
                                   ToolTipService.ToolTip="Toggle Line Numbers"
                                   Padding="6" Background="Transparent" BorderThickness="0"
@@ -368,8 +404,10 @@
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
                     <Button x:Name="TextSearchButton"
+                            Width="40" Height="40"
                             ToolTipService.ToolTip="Search (Ctrl+F)"
                             Padding="6" Background="Transparent" BorderThickness="0"
+                            AutomationProperties.Name="Search text"
                             Click="TextSearchButton_Click">
                         <FontIcon Glyph="&#xE721;" FontSize="14"/>
                     </Button>
