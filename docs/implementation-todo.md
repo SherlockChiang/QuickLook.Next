@@ -14,8 +14,6 @@ and commit so changes remain independently reviewable and revertible.
 ## P1: Performance and accessibility
 
 - [ ] Deduplicate thumbnail work while preserving independent caller cancellation.
-- [ ] Bulk-populate the image filmstrip and restrict initial work to visible
-  neighbors.
 - [ ] Serialize PDF disk-cache writes and maintain cache size incrementally.
 - [ ] Load PDF page geometry lazily and release document resources explicitly.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
@@ -78,5 +76,9 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Bound thumbnail queues, remove canceled requests immediately, and reserve
   one background slot after each eight foreground requests.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Populate the image filmstrip with one collection reset, index items by
+  path, and restrict initial thumbnails to the current item's 20-neighbor radius.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change

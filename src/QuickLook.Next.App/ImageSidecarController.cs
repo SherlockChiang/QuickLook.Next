@@ -12,10 +12,8 @@ internal sealed class ImageSidecarController
 {
     private const int MaxImageThumbnailCacheItems = 256;
     private const int MaxImageFilmstripItems = 600;
-    private const int MaxInitialFilmstripThumbnailLoads = 160;
     private const int ImmediateFilmstripThumbnailRadius = 20;
     private const int FilmstripThumbnailBatchSize = 12;
-    private const int DelayedFilmstripThumbnailStartMs = 350;
     private const int AdjacentImagePrefetchRadius = 2;
 
     private readonly ListView _filmstripList;
@@ -27,6 +25,7 @@ internal sealed class ImageSidecarController
     private readonly Func<string, int, CancellationToken, Task<NativeRasterImage?>> _loadThumbnail;
     private readonly Func<NativeRasterImage, ImageSource?> _createBitmapSource;
     private readonly ImageThumbnailCache _thumbnailCache = new(MaxImageThumbnailCacheItems);
+    private Dictionary<string, ImageFilmstripItem> _itemsByPath = new(StringComparer.OrdinalIgnoreCase);
     private string[] _siblingPaths = [];
 
     public ImageSidecarController(
@@ -50,11 +49,12 @@ internal sealed class ImageSidecarController
         _filmstripList.ItemsSource = Items;
     }
 
-    public ObservableCollection<ImageFilmstripItem> Items { get; } = [];
+    public ObservableCollection<ImageFilmstripItem> Items { get; private set; } = [];
 
     public void Clear()
     {
         _siblingPaths = [];
+        _itemsByPath.Clear();
         Items.Clear();
         _filmstripList.SelectedItem = null;
         _filmstrip.Visibility = Visibility.Collapsed;
@@ -78,6 +78,13 @@ internal sealed class ImageSidecarController
             }, token);
             token.ThrowIfCancellationRequested();
             DiagLog.Write("App", $"image filmstrip listing gen={generation}; siblings={siblings.Length}");
+            ImageFilmstripItem[] siblingItems = siblings
+                .Select(sibling => new ImageFilmstripItem
+                {
+                    Path = sibling,
+                    Name = Path.GetFileName(sibling),
+                })
+                .ToArray();
 
             if (!_isPathCurrent(path, generation, token))
                 return;
@@ -88,15 +95,9 @@ internal sealed class ImageSidecarController
                     return;
 
                 _siblingPaths = siblings;
-                Items.Clear();
-                foreach (string sibling in siblings)
-                {
-                    Items.Add(new ImageFilmstripItem
-                    {
-                        Path = sibling,
-                        Name = Path.GetFileName(sibling),
-                    });
-                }
+                Items = new ObservableCollection<ImageFilmstripItem>(siblingItems);
+                _itemsByPath = siblingItems.ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
+                _filmstripList.ItemsSource = Items;
                 SelectCurrent(path);
                 _filmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
             });
@@ -104,21 +105,13 @@ internal sealed class ImageSidecarController
 
             var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
             int thumbnailAttempts = 0;
-            bool delayedFarThumbnails = false;
-            foreach ((string sibling, int distance) in ImageFilmstripPlanner.PrioritizeWithDistance(siblings, path).Take(MaxInitialFilmstripThumbnailLoads))
+            foreach ((string sibling, _) in ImageFilmstripPlanner
+                .PrioritizeWithDistance(siblings, path)
+                .TakeWhile(item => item.Distance <= ImmediateFilmstripThumbnailRadius))
             {
                 token.ThrowIfCancellationRequested();
                 if (!_isPathCurrent(path, generation, token))
                     return;
-
-                if (distance > ImmediateFilmstripThumbnailRadius && !delayedFarThumbnails)
-                {
-                    FlushThumbnailBatch(path, generation, token, thumbnailBatch);
-                    delayedFarThumbnails = true;
-                    await Task.Delay(DelayedFilmstripThumbnailStartMs, token);
-                    if (!_isPathCurrent(path, generation, token))
-                        return;
-                }
 
                 thumbnailAttempts++;
                 if (_thumbnailCache.TryGet(sibling, 96, out ImageSource? cachedSource) && cachedSource is not null)
@@ -203,9 +196,7 @@ internal sealed class ImageSidecarController
             .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        ImageFilmstripItem? item = Items.FirstOrDefault(i =>
-            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-        if (item is not null)
+        if (_itemsByPath.Remove(path, out ImageFilmstripItem? item))
             Items.Remove(item);
 
         _filmstrip.Visibility = _siblingPaths.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -238,9 +229,7 @@ internal sealed class ImageSidecarController
                 return;
             foreach ((string path, ImageSource source) in updates)
             {
-                ImageFilmstripItem? item = Items.FirstOrDefault(i =>
-                    string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-                if (item is not null)
+                if (_itemsByPath.TryGetValue(path, out ImageFilmstripItem? item))
                     item.Thumbnail = source;
             }
         });
@@ -285,9 +274,8 @@ internal sealed class ImageSidecarController
                     if (source is null)
                         return;
                     _thumbnailCache.Add(target, 128, source);
-                    ImageFilmstripItem? item = Items.FirstOrDefault(i =>
-                        string.Equals(i.Path, target, StringComparison.OrdinalIgnoreCase));
-                    if (item is not null && item.Thumbnail is null)
+                    if (_itemsByPath.TryGetValue(target, out ImageFilmstripItem? item)
+                        && item.Thumbnail is null)
                         item.Thumbnail = source;
                 });
             }
@@ -303,9 +291,7 @@ internal sealed class ImageSidecarController
 
     public void SelectCurrent(string path)
     {
-        ImageFilmstripItem? current = Items.FirstOrDefault(i =>
-            string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
-        if (current is null)
+        if (!_itemsByPath.TryGetValue(path, out ImageFilmstripItem? current))
             return;
         _filmstripList.SelectedItem = current;
         _filmstripList.ScrollIntoView(current);
