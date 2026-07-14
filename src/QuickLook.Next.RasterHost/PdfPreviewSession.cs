@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Threading.Channels;
 using Windows.Data.Pdf;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -30,6 +31,17 @@ internal sealed class PdfPreviewSession : IDisposable
     private static readonly object _inflightLock = new();
     private static readonly Dictionary<string, Task<(byte[] Bgra, int Width, int Height)>> _inflightRenders = new();
     private static readonly SemaphoreSlim RenderWorkerPool = new(2, 2);
+    private static readonly Channel<DiskCacheWrite> DiskCacheWrites = Channel.CreateBounded<DiskCacheWrite>(
+        new BoundedChannelOptions(16)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
+    private static readonly Task DiskCacheWriter = Task.Run(ProcessDiskCacheWritesAsync);
+    private static int _diskWritesUntilTrim;
+
+    private sealed record DiskCacheWrite(string Key, byte[] Bgra, int Width, int Height);
 
     private sealed class CachedPage(byte[] bgra, int w, int h, LinkedListNode<string> node)
     {
@@ -190,26 +202,55 @@ internal sealed class PdfPreviewSession : IDisposable
             }
         }
         if (writeDisk)
-            _ = Task.Run(() => StoreDiskCached(key, bgra, w, h));
+            DiskCacheWrites.Writer.TryWrite(new DiskCacheWrite(key, bgra, w, h));
     }
 
-    private static void StoreDiskCached(string key, byte[] bgra, int width, int height)
+    private static async Task ProcessDiskCacheWritesAsync()
     {
+        await foreach (DiskCacheWrite write in DiskCacheWrites.Reader.ReadAllAsync())
+            StoreDiskCached(write);
+    }
+
+    private static void StoreDiskCached(DiskCacheWrite write)
+    {
+        string? temporaryPath = null;
         try
         {
             Directory.CreateDirectory(DiskCacheDirectory);
-            string path = DiskCachePath(key);
-            using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            string path = DiskCachePath(write.Key);
+            temporaryPath = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            using var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                64 * 1024,
+                FileOptions.SequentialScan);
             Span<byte> header = stackalloc byte[8];
-            BitConverter.TryWriteBytes(header[..4], width);
-            BitConverter.TryWriteBytes(header[4..], height);
+            BitConverter.TryWriteBytes(header[..4], write.Width);
+            BitConverter.TryWriteBytes(header[4..], write.Height);
             stream.Write(header);
-            stream.Write(bgra);
-            TrimDiskCache();
+            stream.Write(write.Bgra);
+            stream.Flush(flushToDisk: false);
+            stream.Close();
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryPath = null;
+            if (++_diskWritesUntilTrim >= 16)
+            {
+                _diskWritesUntilTrim = 0;
+                TrimDiskCache();
+            }
         }
         catch (Exception ex)
         {
             DiagLog.Write("RasterHost", "pdf disk cache write failed: " + ex.Message);
+        }
+        finally
+        {
+            if (temporaryPath is not null)
+            {
+                try { File.Delete(temporaryPath); } catch { }
+            }
         }
     }
 

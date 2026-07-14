@@ -14,7 +14,7 @@ and commit so changes remain independently reviewable and revertible.
 ## P1: Performance and accessibility
 
 - [ ] Deduplicate thumbnail work while preserving independent caller cancellation.
-- [ ] Serialize PDF disk-cache writes and maintain cache size incrementally.
+- [ ] Maintain PDF disk-cache size incrementally instead of enumerating it.
 - [ ] Load PDF page geometry lazily and release document resources explicitly.
 - [ ] Parse JPEG dimensions, orientation, and ICC metadata in one bounded stream.
 - [ ] Virtualize large code, Markdown, and table presentation work.
@@ -81,4 +81,8 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Populate the image filmstrip with one collection reset, index items by
   path, and restrict initial thumbnails to the current item's 20-neighbor radius.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
+- [x] Serialize PDF disk-cache writes through a bounded process-wide queue,
+  publish files atomically, and trim periodically instead of after every page.
+  - Verification: `dotnet build src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj --no-restore`
   - Commit: this change
