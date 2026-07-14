@@ -38,6 +38,15 @@ internal static class UiStrings
     public static string TraySettings => Get(nameof(TraySettings), "Settings");
     public static string TrayAutoStart => Get(nameof(TrayAutoStart), "Start with Windows");
     public static string TrayExit => Get(nameof(TrayExit), "Exit QuickLook Next");
+    public static string WelcomeTitle => Get(nameof(WelcomeTitle), "Welcome to QuickLook Next");
+    public static string WelcomeHeading => Get(nameof(WelcomeHeading), "Preview files without breaking your flow");
+    public static string WelcomeIntroduction => Get(nameof(WelcomeIntroduction), "QuickLook Next is running in the notification area and is ready to preview files from File Explorer.");
+    public static string WelcomeOpenShortcut => Get(nameof(WelcomeOpenShortcut), "1. Select a file in File Explorer, then press Space.");
+    public static string WelcomeCloseShortcut => Get(nameof(WelcomeCloseShortcut), "2. Press Space again to close the preview.");
+    public static string WelcomeNavigationShortcut => Get(nameof(WelcomeNavigationShortcut), "Use the arrow keys in File Explorer to move between files while the preview stays open.");
+    public static string WelcomeTrayBehavior => Get(nameof(WelcomeTrayBehavior), "Closing the preview keeps QuickLook Next running in the notification area.");
+    public static string WelcomeHelpHint => Get(nameof(WelcomeHelpHint), "You can reopen this guide from Settings under Help and shortcuts.");
+    public static string WelcomeStart => Get(nameof(WelcomeStart), "Start previewing");
     public static string AutoStartEnableFailed => Get(nameof(AutoStartEnableFailed), "Could not enable start with Windows");
     public static string AutoStartDisableFailed => Get(nameof(AutoStartDisableFailed), "Could not disable start with Windows");
     public static string SettingsTitle => Get(nameof(SettingsTitle), "Settings");
@@ -54,6 +63,7 @@ internal static class UiStrings
     public static string SettingsAboutDescription => Get(nameof(SettingsAboutDescription), "Version, project source, and release information.");
     public static string SettingsVersionFormat => Get(nameof(SettingsVersionFormat), "Version {0}");
     public static string SettingsProjectSource => Get(nameof(SettingsProjectSource), "QuickLook Next is an open-source project developed on GitHub. Builds published by this project originate from the repository below.");
+    public static string SettingsHelpShortcuts => Get(nameof(SettingsHelpShortcuts), "Help and shortcuts");
     public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
     public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
     public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "The project has not yet published a formal software license. See the repository for the current terms and source history.");

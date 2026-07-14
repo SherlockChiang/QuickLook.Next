@@ -57,6 +57,7 @@ public sealed partial class SettingsWindow : Window
         AboutDescription.Text = UiStrings.SettingsAboutDescription;
         VersionText.Text = UiStrings.Format(UiStrings.SettingsVersionFormat, GetVersion());
         ProjectSourceText.Text = UiStrings.SettingsProjectSource;
+        HelpButtonText.Text = UiStrings.SettingsHelpShortcuts;
         GitHubButtonText.Text = UiStrings.SettingsOpenGitHub;
         ReleasesButtonText.Text = UiStrings.SettingsViewReleases;
         LicenseText.Text = UiStrings.SettingsLicenseNotice;
@@ -167,6 +168,7 @@ public sealed partial class SettingsWindow : Window
 
     private void OnGitHubClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl);
     private void OnReleasesClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl + "/releases");
+    private void OnHelpClick(object sender, RoutedEventArgs e) => WelcomeWindow.Show(_resolveIconPath);
 
     private static void OpenUrl(string url)
     {

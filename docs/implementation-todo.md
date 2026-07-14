@@ -9,7 +9,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
-- [ ] Add first-run onboarding and a persistent shortcut/help entry.
 - [ ] Add correlated preview phase timings for startup and first usable content.
 
 ## P1: Performance and accessibility
@@ -72,4 +71,8 @@ Completed entries move here with the verification commands and commit hash.
   - Commit: this change
 - [x] Redact Windows drive and UNC directory paths from default diagnostics.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Commit: this change
+- [x] Add first-run onboarding and a persistent Help and shortcuts entry in
+  Settings.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Commit: this change

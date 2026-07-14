@@ -81,6 +81,9 @@
                             </StackPanel>
                             <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                             <TextBlock x:Name="ProjectSourceText" TextWrapping="Wrap" />
+                            <Button x:Name="HelpButton" Click="OnHelpClick" HorizontalAlignment="Left">
+                                <TextBlock x:Name="HelpButtonText" />
+                            </Button>
                             <StackPanel Orientation="Horizontal" Spacing="10">
                                 <Button x:Name="GitHubButton" Click="OnGitHubClick">
                                     <StackPanel Orientation="Horizontal" Spacing="8">

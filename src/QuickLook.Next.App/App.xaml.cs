@@ -23,6 +23,10 @@ public partial class App : Application
         {
             _window = new MainWindow();
             await _window.StartBackgroundAsync();
+            if (FirstRunExperience.ShouldShow)
+                WelcomeWindow.Show(
+                    () => System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico"),
+                    markFirstRun: true);
         }
         catch (Exception ex)
         {

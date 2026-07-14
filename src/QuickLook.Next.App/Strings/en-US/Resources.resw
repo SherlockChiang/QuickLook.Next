@@ -193,6 +193,16 @@
   <data name="OfficeEmbeddedImagePreview" xml:space="preserve">
     <value>Embedded image preview</value>
   </data>
+  <data name="WelcomeTitle" xml:space="preserve"><value>Welcome to QuickLook Next</value></data>
+  <data name="WelcomeHeading" xml:space="preserve"><value>Preview files without breaking your flow</value></data>
+  <data name="WelcomeIntroduction" xml:space="preserve"><value>QuickLook Next is running in the notification area and is ready to preview files from File Explorer.</value></data>
+  <data name="WelcomeOpenShortcut" xml:space="preserve"><value>1. Select a file in File Explorer, then press Space.</value></data>
+  <data name="WelcomeCloseShortcut" xml:space="preserve"><value>2. Press Space again to close the preview.</value></data>
+  <data name="WelcomeNavigationShortcut" xml:space="preserve"><value>Use the arrow keys in File Explorer to move between files while the preview stays open.</value></data>
+  <data name="WelcomeTrayBehavior" xml:space="preserve"><value>Closing the preview keeps QuickLook Next running in the notification area.</value></data>
+  <data name="WelcomeHelpHint" xml:space="preserve"><value>You can reopen this guide from Settings under Help and shortcuts.</value></data>
+  <data name="WelcomeStart" xml:space="preserve"><value>Start previewing</value></data>
+  <data name="SettingsHelpShortcuts" xml:space="preserve"><value>Help and shortcuts</value></data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
   </data>

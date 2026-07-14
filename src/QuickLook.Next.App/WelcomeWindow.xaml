@@ -1,0 +1,48 @@
+<Window
+    x:Class="QuickLook.Next.App.WelcomeWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="TitleBar" Padding="16,0,140,0">
+            <TextBlock x:Name="TitleBarText" VerticalAlignment="Center"
+                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="620" Padding="40,28,40,36" Spacing="22">
+                <StackPanel Spacing="8">
+                    <TextBlock x:Name="HeadingText" FontSize="32" FontWeight="SemiBold"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="IntroductionText" FontSize="16"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="10" Padding="22">
+                    <StackPanel Spacing="14">
+                        <TextBlock x:Name="OpenShortcutText" FontSize="18" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="CloseShortcutText" TextWrapping="Wrap" />
+                        <TextBlock x:Name="NavigationShortcutText" TextWrapping="Wrap" />
+                        <TextBlock x:Name="TrayBehaviorText" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock x:Name="HelpHintText"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+
+                <Button x:Name="StartButton" HorizontalAlignment="Left"
+                        Click="OnStartClick" Style="{StaticResource AccentButtonStyle}" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>
