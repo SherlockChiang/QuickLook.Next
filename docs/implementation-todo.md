@@ -58,19 +58,19 @@ Completed entries move here with the verification commands and commit hash.
   intent, availability, probe, route, loading shell, reveal, and final first-frame
   timings with one generation-scoped ID.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `26bf822`
 - [x] Stream JPEG ICC marker segments with an 8 MiB header budget and stop at
   scan data instead of reading the full compressed image.
   - Verification: `cargo test --locked jpeg_icc`
-  - Commit: this change
+  - Commit: `2bc28cc`
 - [x] Eliminate quadratic Markdown fenced-code accumulation and merge adjacent
   syntax tokens before creating WinUI Run elements.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `09c906f`
 - [x] Localize opening, cloud download, availability-check, and deferred-preview
   status text in English and Simplified Chinese.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `d16f1c2`
 
 - [x] Present APK raster icons from Android mipmap resources even when the
   launcher resource uses a custom filename; skip unreadable ZIP candidates.
