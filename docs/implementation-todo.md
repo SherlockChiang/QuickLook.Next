@@ -57,6 +57,12 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_table_search_index_obeys_cell_budget`
   - Guard: `tools/guard-performance-bounds.ps1`
   - Commit: this change
+- [x] Bound each materialized Office page to 2048 cells and 2048 layout items,
+  reuse the bounded cell set for headers/freeze panes, and release Office state
+  during preview reset.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
 
 - [x] Localize high-frequency preview, search, media, loading, and error
   automation names; localize Retry and raise all error actions to 40 DIP.

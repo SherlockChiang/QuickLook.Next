@@ -15,6 +15,8 @@ namespace QuickLook.Next.App;
 // PPT/XLSX model from Rust into WinUI controls; it is not expected to match the Office rendering engine.
 internal sealed class OfficePreviewPresenter
 {
+    private const int MaxCellsPerPage = 2048;
+    private const int MaxLayoutItemsPerPage = 2048;
     private static readonly SolidColorBrush OfficeWhiteBrush = new(Colors.White);
     private static readonly SolidColorBrush OfficeBlackBrush = new(Colors.Black);
     private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
@@ -86,6 +88,16 @@ internal sealed class OfficePreviewPresenter
     {
         if (_lastReady is not null)
             Render(_lastReady, _lastMaxContent);
+    }
+
+    public void Clear()
+    {
+        _layout = null;
+        _lastReady = null;
+        _lastMaxContent = default;
+        _maxPageWidth = 0;
+        _pageSlots.Clear();
+        _pagesPanel.Children.Clear();
     }
 
     private static Border CreatePageHost(OfficeLayout layout, OfficePage page, double maxPageWidth, int index, int count)
@@ -179,13 +191,14 @@ internal sealed class OfficePreviewPresenter
 
         if (isWorkbook)
         {
-            AddWorkbookHeaders(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
-            foreach (OfficeCell cell in page.Cells)
+            OfficeCell[] visibleCells = page.Cells.Take(MaxCellsPerPage).ToArray();
+            AddWorkbookHeaders(canvas, page, visibleCells, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
+            foreach (OfficeCell cell in visibleCells)
                 AddCell(canvas, cell, scale, rowHeaderWidth, columnHeaderHeight);
-            AddFreezePaneIndicators(canvas, page, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
+            AddFreezePaneIndicators(canvas, page, visibleCells, scale, rowHeaderWidth, columnHeaderHeight, contentWidth, contentHeight);
         }
 
-        foreach (OfficeLayoutItem item in page.Items.OrderBy(item => item.ZIndex))
+        foreach (OfficeLayoutItem item in page.Items.OrderBy(item => item.ZIndex).Take(MaxLayoutItemsPerPage))
             AddLayoutItem(canvas, item, scale, layout.LayoutKind, rowHeaderWidth, columnHeaderHeight);
 
         stack.Children.Add(new Border
@@ -211,6 +224,7 @@ internal sealed class OfficePreviewPresenter
     private void AddWorkbookHeaders(
         Canvas canvas,
         OfficePage page,
+        IReadOnlyList<OfficeCell> cells,
         double scale,
         double rowHeaderWidth,
         double columnHeaderHeight,
@@ -226,7 +240,7 @@ internal sealed class OfficePreviewPresenter
             BorderThickness = new Thickness(0, 0, 1, 1),
         });
 
-        var columnHeaders = page.Cells
+        var columnHeaders = cells
             .OrderBy(cell => cell.Column)
             .GroupBy(cell => cell.Column)
             .Select(group => group.First())
@@ -240,7 +254,7 @@ internal sealed class OfficePreviewPresenter
             canvas.Children.Add(header);
         }
 
-        var rowHeaders = page.Cells
+        var rowHeaders = cells
             .OrderBy(cell => cell.Row)
             .GroupBy(cell => cell.Row)
             .Select(group => group.First())
@@ -382,6 +396,7 @@ internal sealed class OfficePreviewPresenter
     private void AddFreezePaneIndicators(
         Canvas canvas,
         OfficePage page,
+        IReadOnlyList<OfficeCell> cells,
         double scale,
         double offsetX,
         double offsetY,
@@ -390,10 +405,10 @@ internal sealed class OfficePreviewPresenter
     {
         if (page.FreezeColumns > 0)
         {
-            double boundary = page.Cells
+            double boundary = cells
                 .Where(cell => cell.Column >= page.FreezeColumns)
                 .Select(cell => cell.X)
-                .DefaultIfEmpty(page.Cells.Where(cell => cell.Column < page.FreezeColumns).Select(cell => cell.X + cell.Width).DefaultIfEmpty(0).Max())
+                .DefaultIfEmpty(cells.Where(cell => cell.Column < page.FreezeColumns).Select(cell => cell.X + cell.Width).DefaultIfEmpty(0).Max())
                 .Min();
             var line = new Border { Width = 2, Height = contentHeight, Background = OfficeFreezeBrush, Opacity = 0.72 };
             Canvas.SetLeft(line, offsetX + boundary * scale);
@@ -403,10 +418,10 @@ internal sealed class OfficePreviewPresenter
 
         if (page.FreezeRows > 0)
         {
-            double boundary = page.Cells
+            double boundary = cells
                 .Where(cell => cell.Row >= page.FreezeRows)
                 .Select(cell => cell.Y)
-                .DefaultIfEmpty(page.Cells.Where(cell => cell.Row < page.FreezeRows).Select(cell => cell.Y + cell.Height).DefaultIfEmpty(0).Max())
+                .DefaultIfEmpty(cells.Where(cell => cell.Row < page.FreezeRows).Select(cell => cell.Y + cell.Height).DefaultIfEmpty(0).Max())
                 .Min();
             var line = new Border { Width = contentWidth, Height = 2, Background = OfficeFreezeBrush, Opacity = 0.72 };
             Canvas.SetLeft(line, offsetX);

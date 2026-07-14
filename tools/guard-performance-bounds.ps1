@@ -37,6 +37,13 @@ Require-Pattern $officePresenter 'if\s*\(index\s*<\s*2\)\s*\r?\n\s*Materialize\(
     "Office preview must not eagerly materialize more than the first two pages."
 Require-Pattern $officePresenter 'slot\.Host\.Child\s*=\s*null' `
     "Office preview must release pages outside the viewport keep-alive window."
+Require-Pattern $officePresenter 'MaxCellsPerPage\s*=\s*2048' `
+    "Office pages must retain their 2048-cell render budget."
+Require-Pattern $officePresenter 'MaxLayoutItemsPerPage\s*=\s*2048' `
+    "Office pages must retain their 2048-item render budget."
+$mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
+Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
+    "Preview reset must release retained Office layout state."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

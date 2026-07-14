@@ -1645,6 +1645,7 @@ public sealed partial class MainWindow : Window
         _pdfPresenter?.Clear();
         _textPresenter?.Clear();
         _tablePresenter?.Clear();
+        _officePresenter?.Clear();
         _listingPresenter?.Reset();
         _panelController.ResetPreviewState();
 
