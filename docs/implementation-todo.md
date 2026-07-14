@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Bound Markdown tables to 64 columns and 4096 rendered cells, and cap
+  ordinary text-search highlight ranges at 5000 while retaining full results.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_table_search_index_obeys_cell_budget`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
+
 - [x] Localize high-frequency preview, search, media, loading, and error
   automation names; localize Retry and raise all error actions to 40 DIP.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`

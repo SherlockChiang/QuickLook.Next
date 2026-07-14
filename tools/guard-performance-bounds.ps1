@@ -38,6 +38,16 @@ Require-Pattern $officePresenter 'if\s*\(index\s*<\s*2\)\s*\r?\n\s*Materialize\(
 Require-Pattern $officePresenter 'slot\.Host\.Child\s*=\s*null' `
     "Office preview must release pages outside the viewport keep-alive window."
 
+$textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
+Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
+    "Markdown table rendering must remain capped at 64 columns."
+Require-Pattern $textSearchIndex 'MaxMarkdownTableCells\s*=\s*4096' `
+    "Markdown table rendering must retain its 4096-cell budget."
+
+$textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
+Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
+    "Text search must retain its 5000-range visual highlight budget."
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Performance bounds guard failed:" -ForegroundColor Red

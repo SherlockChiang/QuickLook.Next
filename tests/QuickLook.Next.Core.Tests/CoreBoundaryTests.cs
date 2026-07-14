@@ -42,6 +42,24 @@ public sealed class CoreBoundaryTests : IDisposable
             TextSearchIndex.BuildMarkdownVisibleText(document, "Partial"));
     }
 
+    [Fact]
+    public void Markdown_table_search_index_obeys_cell_budget()
+    {
+        var table = new PreviewMarkdownBlock("table")
+        {
+            TableHeaders = Enumerable.Range(0, 100).Select(index => $"H{index}").ToArray(),
+            TableRows = Enumerable.Range(0, 200)
+                .Select(row => Enumerable.Range(0, 100).Select(column => $"{row}:{column}").ToArray())
+                .ToArray(),
+        };
+
+        string[] cells = TextSearchIndex.MarkdownTableText(table).Split('\n');
+
+        Assert.Equal(TextSearchIndex.MaxMarkdownTableCells, cells.Length);
+        Assert.Contains("H63", cells);
+        Assert.DoesNotContain("H64", cells);
+    }
+
     [Theory]
     [InlineData(FileAttributes.Offline)]
     [InlineData((FileAttributes)0x00040000)]

@@ -18,6 +18,7 @@ internal sealed class TextPreviewPresenter
 {
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
+    private const int MaxSearchHighlightRanges = 5000;
     private const double OutlineWidth = 188;
     private const double OutlineGap = 10;
 
@@ -187,7 +188,7 @@ internal sealed class TextPreviewPresenter
         {
             Background = new SolidColorBrush(Windows.UI.Color.FromArgb(110, 255, 210, 64)),
         };
-        foreach (int start in _searchMatches)
+        foreach (int start in _searchMatches.Take(MaxSearchHighlightRanges))
             allMatches.Ranges.Add(new TextRange { StartIndex = start, Length = _searchQuery.Length });
         _textBlock.TextHighlighters.Add(allMatches);
 
@@ -354,6 +355,7 @@ internal sealed class TextPreviewPresenter
         int columns = Math.Max(
             block.TableHeaders.Length,
             block.TableRows.Select(row => row.Length).DefaultIfEmpty(0).Max());
+        columns = Math.Min(columns, TextSearchIndex.MaxMarkdownTableColumns);
         if (columns <= 0) return;
 
         var container = new Border
@@ -371,7 +373,9 @@ internal sealed class TextPreviewPresenter
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         int currentRow = 0;
-        int maxRows = Math.Min(block.TableRows.Count(), 120);
+        int maxRows = Math.Min(
+            block.TableRows.Count(),
+            Math.Min(120, Math.Max(0, TextSearchIndex.MaxMarkdownTableCells / columns - 1)));
 
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         for (int c = 0; c < columns; c++)
@@ -398,7 +402,7 @@ internal sealed class TextPreviewPresenter
         }
         currentRow++;
 
-        foreach (var row in block.TableRows.Take(120))
+        foreach (var row in block.TableRows.Take(maxRows))
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             for (int c = 0; c < columns; c++)

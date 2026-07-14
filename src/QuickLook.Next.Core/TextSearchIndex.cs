@@ -5,6 +5,9 @@ namespace QuickLook.Next.Core;
 
 public static class TextSearchIndex
 {
+    public const int MaxMarkdownTableColumns = 64;
+    public const int MaxMarkdownTableCells = 4096;
+
     public static List<int> FindMatches(string text, string query)
     {
         var matches = new List<int>();
@@ -51,11 +54,17 @@ public static class TextSearchIndex
     public static string MarkdownTableText(PreviewMarkdownBlock block)
     {
         var text = new StringBuilder();
-        foreach (string header in block.TableHeaders)
+        int columns = Math.Min(
+            MaxMarkdownTableColumns,
+            Math.Max(block.TableHeaders.Length, block.TableRows.Select(row => row.Length).DefaultIfEmpty(0).Max()));
+        if (columns == 0)
+            return "";
+        foreach (string header in block.TableHeaders.Take(columns))
             AppendLine(text, header);
-        foreach (string[] row in block.TableRows.Take(120))
+        int rows = Math.Min(120, Math.Max(0, MaxMarkdownTableCells / columns - 1));
+        foreach (string[] row in block.TableRows.Take(rows))
         {
-            foreach (string cell in row)
+            foreach (string cell in row.Take(columns))
                 AppendLine(text, cell);
         }
         return text.ToString().TrimEnd();
