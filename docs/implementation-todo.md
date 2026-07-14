@@ -56,18 +56,18 @@ Completed entries move here with the verification commands and commit hash.
   ordinary text-search highlight ranges at 5000 while retaining full results.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_table_search_index_obeys_cell_budget`
   - Guard: `tools/guard-performance-bounds.ps1`
-  - Commit: this change
+  - Commit: `c0f8a6a`
 - [x] Bound each materialized Office page to 2048 cells and 2048 layout items,
   reuse the bounded cell set for headers/freeze panes, and release Office state
   during preview reset.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Guard: `tools/guard-performance-bounds.ps1`
-  - Commit: this change
+  - Commit: `7364008`
 - [x] Bound structured Markdown rendering to 2000 block/list paragraphs and
   inline traversal to depth 16 in both UI rendering and search indexing.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`; `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_inline_search_index_obeys_depth_budget`
   - Guard: `tools/guard-performance-bounds.ps1`
-  - Commit: this change
+  - Commit: `cfcca7a`
 
 - [x] Localize high-frequency preview, search, media, loading, and error
   automation names; localize Retry and raise all error actions to 40 DIP.
