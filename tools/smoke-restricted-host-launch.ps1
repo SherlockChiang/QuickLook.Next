@@ -10,8 +10,8 @@ if (-not (Test-Path -LiteralPath $app -PathType Leaf)) {
 }
 
 Write-Host "== restricted host launch smoke ==" -ForegroundColor Cyan
-& $app --smoke-restricted-host-launch
-if ($LASTEXITCODE -ne 0) {
-    throw "Restricted host launch smoke failed with exit code $LASTEXITCODE."
+$process = Start-Process -FilePath $app -ArgumentList "--smoke-restricted-host-launch" -Wait -PassThru
+if ($process.ExitCode -ne 0) {
+    throw "Restricted host launch smoke failed with exit code $($process.ExitCode)."
 }
 Write-Host "restricted host launch smoke passed" -ForegroundColor Green
