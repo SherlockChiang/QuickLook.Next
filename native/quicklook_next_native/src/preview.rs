@@ -241,6 +241,8 @@ const MAX_MARKDOWN_TABLE_ROWS: usize = 120;
 const MAX_MARKDOWN_INLINE_CHARS: usize = 4096;
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BENCODE_DEPTH: usize = 64;
+const MAX_BENCODE_NODES: usize = 100_000;
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
@@ -13681,15 +13683,21 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
 
 fn parse_bencode(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) -> Option<(BValue, usize)> {
     if preview_cancelled(cancel_cb) { return None; }
-    parse_bencode_at(bytes, 0, cancel_cb)
+    let mut remaining_nodes = MAX_BENCODE_NODES;
+    parse_bencode_at(bytes, 0, 0, &mut remaining_nodes, cancel_cb)
 }
 
 fn parse_bencode_at(
     bytes: &[u8],
     mut i: usize,
+    depth: usize,
+    remaining_nodes: &mut usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<(BValue, usize)> {
-    if preview_cancelled(cancel_cb) { return None; }
+    if preview_cancelled(cancel_cb) || depth > MAX_BENCODE_DEPTH || *remaining_nodes == 0 {
+        return None;
+    }
+    *remaining_nodes -= 1;
     match *bytes.get(i)? {
         b'i' => {
             i += 1;
@@ -13705,7 +13713,7 @@ fn parse_bencode_at(
             let mut values = Vec::new();
             while *bytes.get(i)? != b'e' {
                 if preview_cancelled(cancel_cb) { return None; }
-                let (value, next) = parse_bencode_at(bytes, i, cancel_cb)?;
+                let (value, next) = parse_bencode_at(bytes, i, depth + 1, remaining_nodes, cancel_cb)?;
                 values.push(value);
                 i = next;
             }
@@ -13717,7 +13725,7 @@ fn parse_bencode_at(
             while *bytes.get(i)? != b'e' {
                 if preview_cancelled(cancel_cb) { return None; }
                 let (key, next) = parse_bytes_at(bytes, i)?;
-                let (value, next) = parse_bencode_at(bytes, next, cancel_cb)?;
+                let (value, next) = parse_bencode_at(bytes, next, depth + 1, remaining_nodes, cancel_cb)?;
                 values.insert(key, value);
                 i = next;
             }
@@ -14552,6 +14560,24 @@ mod tests {
 
     fn test_office_context() -> OfficeContext {
         OfficeContext::new(None)
+    }
+
+    #[test]
+    fn bencode_parser_rejects_excessive_nesting() {
+        let mut bytes = vec![b'l'; MAX_BENCODE_DEPTH + 2];
+        bytes.extend(std::iter::repeat_n(b'e', MAX_BENCODE_DEPTH + 2));
+
+        assert!(parse_bencode(&bytes, None).is_none());
+    }
+
+    #[test]
+    fn bencode_parser_rejects_excessive_node_counts() {
+        let mut bytes = Vec::with_capacity(MAX_BENCODE_NODES * 2 + 2);
+        bytes.push(b'l');
+        bytes.extend(std::iter::repeat_n([b'0', b':'], MAX_BENCODE_NODES).flatten());
+        bytes.push(b'e');
+
+        assert!(parse_bencode(&bytes, None).is_none());
     }
 
     #[test]
