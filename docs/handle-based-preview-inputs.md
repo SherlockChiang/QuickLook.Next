@@ -12,11 +12,15 @@ request that is already in progress.
 - Animation frame packets and ParserHost hero rasters are returned as host-owned, read-only file
   handles. The App pulls each handle from the already authenticated host process and validates the
   object type and exact length before reading it.
+- Local ParserHost and RasterHost previews enter through `PreviewOpenHandle`. RasterHost copies the
+  exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
+  WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path after
+  handoff cannot change the rendered bytes.
 - Archive entry extraction still returns a path. Adding a handle only to `ArchiveEntryExtracted` would
   not fix the boundary because the App probe and the eventual ParserHost or RasterHost request would
   reopen that path.
-- Ordinary preview inputs are also path-based. AppContainer or a read-restricted token is not viable
-  until these inputs become handle-based.
+- Cloud fail-closed compatibility inputs remain path-based and recycle the host when canceled while
+  opening. Archive entry handoff remains the next path-reopen boundary.
 
 ## Required protocol
 
@@ -38,7 +42,7 @@ The App must:
 2. Probe metadata from that same file object, not by reopening the path.
 3. Duplicate the read-only handle into the authenticated destination host.
 4. Send only the host-local handle value and a logical filename used for extension routing and UI.
-5. Keep its source handle alive until the host sends the terminal response or the request is canceled.
+5. Dispose its source handle after duplication; the receiving host owns the duplicated object.
 
 The host must:
 
@@ -50,10 +54,10 @@ The host must:
 
 ## Native ABI migration
 
-Rust entry points currently accept UTF-8 paths and call `File::open`. Introduce Windows-only handle
-entry points that duplicate the supplied handle into a Rust-owned `std::fs::File`. Existing parsers
-should accept `Read + Seek` where practical so path and handle entry points share the same bounded
-implementation.
+Rust entry points currently accept UTF-8 paths and call `File::open`. ParserHost and RasterHost bridge
+this safely by creating bounded host-owned anchors from the duplicated object. Direct Windows handle
+entry points remain a future optimization to remove that bounded copy; existing parsers should accept
+`Read + Seek` where practical so path and handle entry points share the same implementation.
 
 Required first consumers:
 
@@ -80,8 +84,7 @@ same-user check/open race completely.
 
 1. Complete handle-based input for ParserHost.
 2. Enable a write-restricted ParserHost with dedicated output ACLs.
-3. Complete RasterHost image/PDF input and reverse D3D surface duplication so RasterHost cannot open
-   the App process.
+3. Reverse D3D surface duplication so RasterHost cannot open the App process.
 4. Move Shell thumbnails to a broker.
 5. Test low integrity, then AppContainer without network capabilities.
 

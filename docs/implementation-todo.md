@@ -31,7 +31,6 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Move animated decode/playback into RasterHost shared surfaces with a
   decoded-byte budget.
-- [ ] Complete handle-based RasterHost inputs.
 - [ ] Add AppContainer or restricting-SID isolation, network denial, and process
   mitigation policies to hostile-format hosts.
 - [ ] Split the native preview implementation by format family.
@@ -44,6 +43,19 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Send local RasterHost previews as duplicated read-only handles and anchor
+  the exact file object inside RasterHost before native image, animation, PDF,
+  system codec, or shell-thumbnail providers receive a path. Bound inputs to
+  256 MiB, validate disk type and exact length, preserve only the logical name
+  for UI/routing, and clean anchors on close, replacement, cancellation, and exit.
+  Cloud fail-closed compatibility requests remain explicitly path-based.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `80a17bc`
 
 - [x] Add a checked-in role-scoped format registry, native ABI version export,
   startup compatibility checks in App/ParserHost/RasterHost, and a semantic
