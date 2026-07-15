@@ -47,7 +47,7 @@ public sealed class RasterHostPdfTests
             await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
 
             string anchorPath = Path.Combine(
-                Path.GetTempPath(), "QuickLookNext", "raster-inputs", "input-" + requestId, "source.pdf");
+                Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId, "source.pdf");
             var ready = Assert.IsType<PreviewReady>(await ReceiveUntilAsync<PreviewReady>(channel, timeout.Token));
             Assert.Equal("pdf", ready.Kind);
             Assert.Equal(1, ready.PageCount);

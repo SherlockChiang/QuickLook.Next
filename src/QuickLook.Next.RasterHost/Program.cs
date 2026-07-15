@@ -45,7 +45,8 @@ var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHandle Handle)>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-string inputRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
+string inputBaseRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
+string inputRoot = Path.Combine(inputBaseRoot, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 var previewInputs = new ConcurrentDictionary<string, (string Path, SafeFileHandle Anchor)>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
@@ -55,7 +56,7 @@ RasterOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
 const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
 CleanupStaleAnimationPackets();
-CleanupStalePreviewInputs(inputRoot);
+CleanupPreviewInputs(inputRoot);
 
 while (true)
 {
@@ -252,6 +253,7 @@ foreach (PdfPreviewSession session in pdfSessions.Values)
 pdfSessions.Clear();
 foreach (string requestId in previewInputs.Keys)
     DeletePreviewInput(requestId);
+CleanupPreviewInputs(inputRoot);
 foreach (var packet in animationPackets.Values)
 {
     packet.Handle.Dispose();
@@ -866,7 +868,7 @@ static void DeletePreviewInputPath(string path)
     catch { }
 }
 
-static void CleanupStalePreviewInputs(string root)
+static void CleanupPreviewInputs(string root)
 {
     try
     {
@@ -875,6 +877,7 @@ static void CleanupStalePreviewInputs(string root)
         foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
             if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
                 Directory.Delete(directory, recursive: true);
+        Directory.Delete(root, recursive: false);
     }
     catch { }
 }

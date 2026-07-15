@@ -85,7 +85,7 @@ public sealed class RasterHostSvgTests
             }
 
             string anchoredPath = Path.Combine(
-                Path.GetTempPath(), "QuickLookNext", "raster-inputs", "input-" + requestId, "source.svg");
+                Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId, "source.svg");
             await using (var anchored = new FileStream(
                 anchoredPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true))
             using (var reader = new StreamReader(anchored))
