@@ -16,11 +16,11 @@ request that is already in progress.
   exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
   WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path after
   handoff cannot change the rendered bytes.
-- Archive entry extraction still returns a path. Adding a handle only to `ArchiveEntryExtracted` would
-  not fix the boundary because the App probe and the eventual ParserHost or RasterHost request would
-  reopen that path.
+- Archive entry extraction returns a ParserHost-owned read-only handle. The App copies that exact
+  object into a locked App anchor, then the normal pinned ParserHost/RasterHost handoff preserves the
+  bytes through probing and rendering.
 - Cloud fail-closed compatibility inputs remain path-based and recycle the host when canceled while
-  opening. Archive entry handoff remains the next path-reopen boundary.
+  opening.
 
 ## Required protocol
 

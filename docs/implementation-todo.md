@@ -34,8 +34,8 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Add AppContainer or restricting-SID isolation, network denial, and process
   mitigation policies to hostile-format hosts.
 - [ ] Split the native preview implementation by format family.
-- [ ] Add App policy tests, RasterHost PDF integration tests, fuzzing, ETW/WPA
-  baselines, and long-cycle resource regression tests.
+- [ ] Add App policy tests, fuzzing, ETW/WPA baselines, and long-cycle resource
+  regression tests.
 - [ ] Publish LICENSE, SECURITY.md, and CONTRIBUTING.md before ecosystem work.
 - [ ] Design any future extension SDK as signed, bounded, out-of-process, and
   denied network access by default.
@@ -43,6 +43,17 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add handle-backed RasterHost PDF integration coverage for open metadata,
+  invalid-page errors, bounded page surfaces, surface release, original-path
+  replacement, and anchor cleanup. Convert completed RasterHost anchors from
+  writable streams to read-only handles with same-object `ReOpenFile` transitions
+  so WinRT PDF can reopen them without restoring path-resolution races.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore`
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `2e653d2`
 
 - [x] Send local RasterHost previews as duplicated read-only handles and anchor
   the exact file object inside RasterHost before native image, animation, PDF,
