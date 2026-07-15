@@ -15,6 +15,7 @@ internal sealed class TablePreviewPresenter
     private const double MaxColumnWidth = 240;
     private const double HeaderHeight = 34;
     private const double RowHeight = 32;
+    private const int MaxViewportCells = 1024;
     private static readonly FontFamily TableFontFamily = new("Segoe UI");
 
     private readonly ScrollViewer _scrollViewer;
@@ -161,6 +162,9 @@ internal sealed class TablePreviewPresenter
 
         int firstRow = Math.Max(0, (int)Math.Floor((top - HeaderHeight) / RowHeight));
         int lastRow = Math.Min(_table.Rows.Length, (int)Math.Ceiling((bottom - HeaderHeight) / RowHeight));
+        int visibleColumns = Math.Max(1, lastColumn - firstColumn);
+        int maxVisibleRows = Math.Max(1, MaxViewportCells / visibleColumns);
+        lastRow = Math.Min(lastRow, firstRow + maxVisibleRows);
         bool showHeader = top < HeaderHeight;
         if (firstRow == _firstRenderedRow
             && lastRow == _lastRenderedRow

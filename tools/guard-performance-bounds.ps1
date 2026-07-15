@@ -70,6 +70,8 @@ Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]
 $tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"
 Require-Pattern $tablePresenter 'if\s*\(!e\.IsIntermediate\)\s*\r?\n\s*RenderViewport\(\)' `
     "Delimited tables must not rebuild cells during intermediate scroll events."
+Require-Pattern $tablePresenter 'MaxViewportCells\s*=\s*1024' `
+    "Delimited table viewport rendering must retain its 1024-cell budget."
 
 if ($failures.Count -gt 0) {
     Write-Host ""

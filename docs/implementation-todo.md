@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Cap each delimited-table viewport reconstruction at 1024 data cells while
+  preserving the normal application viewport range.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
+
 - [x] Bound syntax-highlighted Markdown to 10000 Run elements per document and
   downgrade over-budget code blocks before creating colored runs.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
