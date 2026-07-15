@@ -35,7 +35,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Add AppContainer or restricting-SID isolation, network denial, and process
   mitigation policies to hostile-format hosts.
 - [ ] Split the native preview implementation by format family.
-- [ ] Generate or validate the cross-language format registry and ABI version.
 - [ ] Add App policy tests, RasterHost PDF integration tests, fuzzing, ETW/WPA
   baselines, and long-cycle resource regression tests.
 - [ ] Publish LICENSE, SECURITY.md, and CONTRIBUTING.md before ecosystem work.
@@ -45,6 +44,18 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add a checked-in role-scoped format registry, native ABI version export,
+  startup compatibility checks in App/ParserHost/RasterHost, and a semantic
+  registry guard. Align DOCM parsing, JPEG `.jpe` system policy, ParserHost kinds,
+  and metadata-only fallback kinds while preserving intentional capability subsets.
+  - Verification: `cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `dcc871d`
 
 - [x] Add bounded current-folder archive filtering, encrypted ZIP item metadata
   and summaries, explicit encrypted-entry extraction rejection, and localized
