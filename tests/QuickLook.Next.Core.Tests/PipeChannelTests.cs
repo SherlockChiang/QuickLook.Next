@@ -41,6 +41,24 @@ public sealed class PipeChannelTests
     }
 
     [Fact]
+    public async Task Preview_error_round_trips_stable_codec_fields()
+    {
+        await using var pipes = await ConnectedPipePair.CreateAsync();
+        using var sender = new PipeChannel(pipes.Server);
+        using var receiver = new PipeChannel(pipes.Client);
+        var expected = new PreviewError("request", "A Windows image codec is required.")
+        {
+            Code = PreviewErrorCodes.ImageCodecRequired,
+            Format = "avif",
+        };
+
+        Task<ControlMessage?> receive = receiver.ReceiveAsync();
+        await sender.SendAsync(expected).WaitAsync(Timeout);
+
+        Assert.Equal(expected, Assert.IsType<PreviewError>(await receive.WaitAsync(Timeout)));
+    }
+
+    [Fact]
     public async Task Receive_accepts_crlf_and_unterminated_final_line()
     {
         var first = new PreviewError("first", "one");

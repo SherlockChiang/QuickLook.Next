@@ -13,6 +13,23 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Text_search_matches_case_insensitively_without_overlap()
         => Assert.Equal([0, 4], TextSearchIndex.FindMatches("Testtest", "test"));
 
+    [Theory]
+    [InlineData(".AVIF", "avif", true)]
+    [InlineData(".heif", "heic", true)]
+    [InlineData(".JXL", "jxl", true)]
+    [InlineData(".jpeg", "jpeg", false)]
+    [InlineData(".webp", "webp", false)]
+    [InlineData("C:\\private\\image.avif", null, false)]
+    [InlineData(".unknown", null, false)]
+    public void Image_codec_policy_normalizes_only_allowlisted_extensions(
+        string extension,
+        string? expectedFormat,
+        bool requiresSystemCodec)
+    {
+        Assert.Equal(expectedFormat, ImageCodecPolicy.NormalizeFormat(extension));
+        Assert.Equal(requiresSystemCodec, ImageCodecPolicy.RequiresSystemCodec(extension));
+    }
+
     [Fact]
     public void Markdown_search_index_uses_visible_ast_content()
     {

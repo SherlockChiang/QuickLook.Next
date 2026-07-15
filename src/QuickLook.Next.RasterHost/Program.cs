@@ -241,7 +241,13 @@ void StartOpen(PreviewOpen open)
         catch (Exception ex)
         {
             DiagLog.Write("RasterHost", "open task ERROR: " + ex);
-            try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+            try
+            {
+                await channel.SendAsync(IsImage(open.Probe)
+                    ? CreateImagePreviewError(open.RequestId, open.Probe.Extension)
+                    : new PreviewError(open.RequestId, ex.Message));
+            }
+            catch { }
         }
         finally
         {
@@ -520,15 +526,13 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
             return;
         }
 
-        if (IsSystemRequiredImage(open.Probe))
+        if (IsImage(open.Probe))
         {
-            await channel.SendAsync(new PreviewError(
-                open.RequestId,
-                MissingSystemCodecMessage(open.Probe.Extension)));
+            await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
             return;
         }
 
-        await channel.SendAsync(new PreviewError(open.RequestId, "no raster provider handled the file"));
+        await channel.SendAsync(new PreviewError(open.RequestId, "No raster provider handled the file."));
     }
     catch (OperationCanceledException)
     {
@@ -537,7 +541,9 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
     catch (Exception ex)
     {
         DiagLog.Write("RasterHost", "open ERROR: " + ex);
-        await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+        await channel.SendAsync(IsImage(open.Probe)
+            ? CreateImagePreviewError(open.RequestId, open.Probe.Extension)
+            : new PreviewError(open.RequestId, ex.Message));
     }
 }
 
@@ -685,9 +691,18 @@ static bool IsPdf(QuickLook.Next.Contracts.FileProbe probe)
 static bool IsImage(QuickLook.Next.Contracts.FileProbe probe)
     => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase);
 
-static bool IsSystemRequiredImage(QuickLook.Next.Contracts.FileProbe probe)
-    => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
-       && probe.Extension.ToLowerInvariant() is ".avif" or ".heic" or ".heif" or ".jxl";
+static PreviewError CreateImagePreviewError(string requestId, string extension)
+    => ImageCodecPolicy.RequiresSystemCodec(extension)
+        ? new PreviewError(requestId, "A Windows image codec is required.")
+        {
+            Code = PreviewErrorCodes.ImageCodecRequired,
+            Format = ImageCodecPolicy.NormalizeFormat(extension),
+        }
+        : new PreviewError(requestId, "Image preview failed.")
+        {
+            Code = PreviewErrorCodes.ImageDecodeFailed,
+            Format = ImageCodecPolicy.NormalizeFormat(extension),
+        };
 
 static bool IsValidRequestId(string? requestId)
     => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
@@ -760,19 +775,6 @@ static void CleanupStaleAnimationPackets()
                 Directory.Delete(directory, recursive: true);
     }
     catch { }
-}
-
-static string MissingSystemCodecMessage(string extension)
-{
-    string ext = extension.ToLowerInvariant();
-    string format = ext switch
-    {
-        ".avif" => "AVIF",
-        ".heic" or ".heif" => "HEIC/HEIF",
-        ".jxl" => "JPEG XL",
-        _ => extension.TrimStart('.').ToUpperInvariant(),
-    };
-    return $"{format} image recognized, but no Windows image codec could decode it. Install the {format} platform codec or convert the image to PNG/JPEG/WebP.";
 }
 
 static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)

@@ -26,6 +26,10 @@
   <data name="PreviewDisplayFailedMessage" xml:space="preserve"><value>此设备无法显示该预览。</value></data>
   <data name="PreviewContentFailedTitle" xml:space="preserve"><value>无法预览</value></data>
   <data name="PreviewContentFailedMessage" xml:space="preserve"><value>无法预览此文件。</value></data>
+  <data name="ImageCodecRequiredTitle" xml:space="preserve"><value>需要其他图像编解码器</value></data>
+  <data name="ImageCodecRequiredMessageFormat" xml:space="preserve"><value>Windows 需要 {0} 图像编解码器才能预览此文件。请安装适用于当前 Windows 版本的编解码器，或将图像转换为 PNG、JPEG 或 WebP。</value></data>
+  <data name="ImageDecodeFailedTitle" xml:space="preserve"><value>无法解码图像</value></data>
+  <data name="ImageDecodeFailedMessage" xml:space="preserve"><value>此图像可能已损坏、使用不支持的变体或超出预览限制。请尝试用其他应用打开，或转换为 PNG、JPEG 或 WebP。</value></data>
   <data name="RetryPreview" xml:space="preserve"><value>重试</value></data>
   <data name="PathCopied" xml:space="preserve"><value>路径已复制</value></data>
   <data name="FileCopied" xml:space="preserve"><value>文件已复制</value></data>

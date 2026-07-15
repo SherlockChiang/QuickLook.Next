@@ -29,6 +29,10 @@ internal static class UiStrings
     public static string PreviewDisplayFailedMessage => Get(nameof(PreviewDisplayFailedMessage), "The preview could not be displayed on this device.");
     public static string PreviewContentFailedTitle => Get(nameof(PreviewContentFailedTitle), "Preview unavailable");
     public static string PreviewContentFailedMessage => Get(nameof(PreviewContentFailedMessage), "This file could not be previewed.");
+    public static string ImageCodecRequiredTitle => Get(nameof(ImageCodecRequiredTitle), "Additional image codec required");
+    public static string ImageCodecRequiredMessageFormat => Get(nameof(ImageCodecRequiredMessageFormat), "Windows needs an {0} image codec to preview this file. Install the codec available for your version of Windows, or convert the image to PNG, JPEG, or WebP.");
+    public static string ImageDecodeFailedTitle => Get(nameof(ImageDecodeFailedTitle), "Unable to decode image");
+    public static string ImageDecodeFailedMessage => Get(nameof(ImageDecodeFailedMessage), "This image may be damaged, use an unsupported variant, or exceed preview limits. Try opening it in another app or convert it to PNG, JPEG, or WebP.");
     public static string RetryPreview => Get(nameof(RetryPreview), "Try again");
     public static string PathCopied => Get(nameof(PathCopied), "Path copied");
     public static string FileCopied => Get(nameof(FileCopied), "File copied");

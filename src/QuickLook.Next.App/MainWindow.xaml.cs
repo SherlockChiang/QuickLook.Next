@@ -1271,13 +1271,34 @@ public sealed partial class MainWindow : Window
 
     private string ShowHostError(PreviewError error)
     {
-        DiagLog.Write("App", "host preview error: " + error.Message);
+        string? normalizedFormat = ImageCodecPolicy.NormalizeFormat('.' + error.Format);
+        string knownCode = error.Code is PreviewErrorCodes.ImageCodecRequired or PreviewErrorCodes.ImageDecodeFailed
+            ? error.Code
+            : "unknown";
+        DiagLog.Write("App", $"host preview error: code={knownCode}; format={normalizedFormat ?? "unknown"}");
+        if (error.Code == PreviewErrorCodes.ImageCodecRequired
+            && normalizedFormat is string format)
+        {
+            return ShowErrorPreview(
+                UiStrings.ImageCodecRequiredTitle,
+                UiStrings.Format(UiStrings.ImageCodecRequiredMessageFormat, ImageFormatDisplayName(format)));
+        }
+        if (error.Code == PreviewErrorCodes.ImageDecodeFailed)
+            return ShowErrorPreview(UiStrings.ImageDecodeFailedTitle, UiStrings.ImageDecodeFailedMessage);
         return ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
     }
 
+    private static string ImageFormatDisplayName(string format)
+        => format switch
+        {
+            "avif" => "AVIF",
+            "heic" => "HEIC/HEIF",
+            "jxl" => "JPEG XL",
+            _ => format.ToUpperInvariant(),
+        };
+
     private string ShowErrorPreview(PreviewFailure failure)
     {
-        _panelController.ShowError();
         (string title, string message) = failure.Kind switch
         {
             PreviewFailureKind.TimedOut => (UiStrings.PreviewTimedOutTitle, UiStrings.PreviewTimedOutMessage),
@@ -1285,13 +1306,19 @@ public sealed partial class MainWindow : Window
             PreviewFailureKind.Surface => (UiStrings.PreviewDisplayFailedTitle, UiStrings.PreviewDisplayFailedMessage),
             _ => (UiStrings.PreviewContentFailedTitle, UiStrings.PreviewContentFailedMessage),
         };
+        return ShowErrorPreview(title, message, failure.CanRetry);
+    }
+
+    private string ShowErrorPreview(string title, string message, bool canRetry = false)
+    {
+        _panelController.ShowError();
         ErrorText.Text = message;
         PreviewTitleText.Text = title;
         PreviewMetaText.Text = ErrorText.Text;
         PreviewKindPillText.Text = UiStrings.ErrorKind;
         bool hasPath = !string.IsNullOrWhiteSpace(_previewSession.CurrentPath);
         ErrorActionsPanel.Visibility = hasPath ? Visibility.Visible : Visibility.Collapsed;
-        ErrorRetryButton.Visibility = hasPath && failure.CanRetry ? Visibility.Visible : Visibility.Collapsed;
+        ErrorRetryButton.Visibility = hasPath && canRetry ? Visibility.Visible : Visibility.Collapsed;
         ResizeWindowForContent(520, 300, MaxTextWindowWidth, MaxTextWindowHeight);
         DispatcherQueue.TryEnqueue(() =>
         {

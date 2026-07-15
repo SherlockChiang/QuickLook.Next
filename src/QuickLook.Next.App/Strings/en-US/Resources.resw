@@ -72,6 +72,10 @@
   <data name="PreviewContentFailedMessage" xml:space="preserve">
     <value>This file could not be previewed.</value>
   </data>
+  <data name="ImageCodecRequiredTitle" xml:space="preserve"><value>Additional image codec required</value></data>
+  <data name="ImageCodecRequiredMessageFormat" xml:space="preserve"><value>Windows needs an {0} image codec to preview this file. Install the codec available for your version of Windows, or convert the image to PNG, JPEG, or WebP.</value></data>
+  <data name="ImageDecodeFailedTitle" xml:space="preserve"><value>Unable to decode image</value></data>
+  <data name="ImageDecodeFailedMessage" xml:space="preserve"><value>This image may be damaged, use an unsupported variant, or exceed preview limits. Try opening it in another app or convert it to PNG, JPEG, or WebP.</value></data>
   <data name="RetryPreview" xml:space="preserve">
     <value>Try again</value>
   </data>

@@ -90,7 +90,11 @@ public sealed record PreviewReady(
 public readonly record struct PdfPageGeometry(double Width, double Height);
 
 /// <summary>Host → App: terminal failure for a RequestId.</summary>
-public sealed record PreviewError(string RequestId, string Message) : ControlMessage;
+public sealed record PreviewError(string RequestId, string Message) : ControlMessage
+{
+    public string? Code { get; init; }
+    public string? Format { get; init; }
+}
 
 /// <summary>App → Host: the preview region resized; host reallocates and emits a fresh PreviewSurface.</summary>
 public sealed record PreviewResize(string RequestId, uint Width, uint Height, double Dpi) : ControlMessage;
