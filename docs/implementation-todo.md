@@ -16,7 +16,6 @@ and commit so changes remain independently reviewable and revertible.
   exposes deterministic close semantics.
 - [ ] Virtualize large code, Markdown, and table presentation work beyond the
   existing character/run bounds.
-- [ ] Complete localization of visual, status, and automation strings.
 - [ ] Verify live-region loading, success, and failure announcements with
   Narrator; add explicit AutomationPeer events where hidden status is silent.
 
@@ -43,6 +42,19 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Complete en-US and zh-CN coverage for preview status, metadata, page counts,
+  syntax/truncation notices, visual labels, tooltips, and MainWindow automation
+  names. Keep product names, language autonyms, file content, format identifiers,
+  and internal diagnostics intentionally invariant. Guard locale key parity,
+  format-placeholder parity, `UiStrings` resource presence, and localized XAML
+  automation/tooltip properties.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `ceb721b`
 
 - [x] Add handle-backed RasterHost PDF integration coverage for open metadata,
   invalid-page errors, bounded page surfaces, surface release, original-path
