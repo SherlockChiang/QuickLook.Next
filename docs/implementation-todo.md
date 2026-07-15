@@ -23,8 +23,6 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Add exact per-block Markdown search highlighting; AST-only documents now
-  use a visible-text index and block-precise navigation anchors.
 - [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
@@ -50,6 +48,15 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add exact structured Markdown search highlighting for prose, code, and
+  table cells using a bounded visible-text segment index aligned with rendered
+  content and truncation notices.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml markdown_`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `170f995`
 
 - [x] Add an explicit-consent Settings workflow that writes a metadata-only
   diagnostics ZIP directly to a user-selected stream without staging or upload.
