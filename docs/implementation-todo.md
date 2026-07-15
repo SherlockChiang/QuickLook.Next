@@ -43,6 +43,19 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Virtualize code and plain-text presentation with recycled `ListView` rows.
+  Present the complete native bounded payload instead of truncating again at
+  256 KiB, retain cross-line syntax state through full-text tokenization, cap
+  each realized row at 512 syntax runs, and keep row models free of WinUI objects.
+  Add exact mixed-newline line indexing, exact search `ScrollIntoView`, recycled
+  search highlights, live wrap/line-number state, and ordered selected-line copy.
+  Structured Markdown virtualization and table model/header enhancements remain
+  under the broader P1 virtualization item.
+  - Verification: `dotnet "C:/Program Files/dotnet/sdk/10.0.302/MSBuild.dll" src/QuickLook.Next.App/QuickLook.Next.App.csproj -t:Build -p:Restore=false -verbosity:minimal` (0 warnings; installed SDK fallback because pinned 10.0.301 was unavailable)
+  - Verification: Core tests 106/106 via the same MSBuild `VSTest` target
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: `fc17770`
+
 - [x] Raise explicit, localized WinUI automation notifications for preview
   loading, placeholder progress, success, terminal failure, and PDF page errors.
   Use one stable activity channel, coalesce routine progress, prioritize failures,
