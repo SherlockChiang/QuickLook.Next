@@ -43,6 +43,19 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Extend the viewport-virtualized CSV/TSV presenter with continuously sticky
+  column and row headers while preserving the 1024-data-cell viewport budget and
+  avoiding body reconstruction during intermediate scrolling. Expand the native
+  represented prefix from 160 to at most 4000 rows under independent 65,536-cell
+  and 512 KiB retained-character budgets, and defensively reapply the same policy
+  to untrusted host models in Core. Structured Markdown remains the final part of
+  the broader P1 virtualization item.
+  - Verification: `cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml` (115 passed, 1 ignored)
+  - Verification: Core tests 107/107 and ParserHost integration 15/15 via the installed 10.0.302 MSBuild `VSTest` target
+  - Verification: App build 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: `5670daa`
+
 - [x] Virtualize code and plain-text presentation with recycled `ListView` rows.
   Present the complete native bounded payload instead of truncating again at
   256 KiB, retain cross-line syntax state through full-text tokenization, cap
