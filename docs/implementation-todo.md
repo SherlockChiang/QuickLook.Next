@@ -56,7 +56,7 @@ Completed entries move here with the verification commands and commit hash.
   downgrade over-budget code blocks before creating colored runs.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Guard: `tools/guard-performance-bounds.ps1`
-  - Commit: this change
+  - Commit: `583eeb6`
 
 - [x] Skip delimited-table cell reconstruction during intermediate scroll
   events and render the new viewport once scrolling settles.
