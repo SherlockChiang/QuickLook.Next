@@ -23,7 +23,6 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
   size policy.
@@ -48,6 +47,15 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add stable, path-free image codec error codes and localized guidance for
+  system-required codecs and bounded decode failures; avoid caching arbitrary
+  system decoder failures as permanently unsupported capabilities.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `db1fadc`
 
 - [x] Add exact structured Markdown search highlighting for prose, code, and
   table cells using a bounded visible-text segment index aligned with rendered
