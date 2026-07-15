@@ -35,46 +35,10 @@ public static class TextSearchIndex
         PreviewMarkdown document,
         string partialNotice)
     {
-        var text = new StringBuilder();
-        var segments = new List<MarkdownVisibleSegment>();
-        int blocks = 0;
-        bool truncated = false;
-        foreach (PreviewMarkdownBlock block in document.Blocks)
-        {
-            if (block.Kind is "unorderedList" or "orderedList")
-            {
-                foreach (PreviewMarkdownBlock item in block.Children)
-                {
-                    if (blocks++ >= MaxMarkdownBlocks)
-                    {
-                        truncated = true;
-                        break;
-                    }
-                    AppendSegment(text, segments, MarkdownInlineText(item.Inlines, item.Text));
-                }
-                if (truncated)
-                    break;
-                continue;
-            }
-
-            if (blocks++ >= MaxMarkdownBlocks)
-            {
-                truncated = true;
-                break;
-            }
-            if (block.Kind == "table")
-            {
-                foreach (string cell in MarkdownTableCells(block))
-                    AppendSegment(text, segments, cell);
-            }
-            else if (block.Kind != "thematicBreak")
-            {
-                AppendSegment(text, segments, MarkdownInlineText(block.Inlines, block.Text));
-            }
-        }
-        if (document.IsPartial || truncated)
-            AppendSegment(text, segments, partialNotice);
-        return new MarkdownVisibleTextIndex(text.ToString(), segments);
+        MarkdownPresentation presentation = MarkdownPresentationPolicy.Flatten(document, partialNotice);
+        return new MarkdownVisibleTextIndex(
+            presentation.Text,
+            presentation.Items.SelectMany(item => item.Segments).ToArray());
     }
 
     public static string MarkdownInlineText(

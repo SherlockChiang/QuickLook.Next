@@ -209,6 +209,7 @@
   <data name="AnimatedImagePreviewImage.AutomationProperties.Name" xml:space="preserve"><value>动态图像内容</value></data>
   <data name="PdfPageIndicatorText.AutomationProperties.Name" xml:space="preserve"><value>当前 PDF 页面</value></data>
   <data name="MarkdownOutlineList.AutomationProperties.Name" xml:space="preserve"><value>Markdown 标题导航</value></data>
+  <data name="MarkdownListView.AutomationProperties.Name" xml:space="preserve"><value>Markdown 文档内容</value></data>
   <data name="TextPreviewBlock.AutomationProperties.Name" xml:space="preserve"><value>文本预览内容</value></data>
   <data name="PreviewInfoRail.AutomationProperties.Name" xml:space="preserve"><value>预览详细信息</value></data>
   <data name="ExifScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>EXIF 元数据</value></data>

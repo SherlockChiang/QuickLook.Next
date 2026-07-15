@@ -282,6 +282,37 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1, index.Segments[1].Start);
     }
 
+    [Fact]
+    public void Markdown_presentation_flattens_lists_tables_and_outline_indices()
+    {
+        var document = new PreviewMarkdown
+        {
+            Blocks =
+            [
+                new PreviewMarkdownBlock("heading") { Level = 2, Text = "Title" },
+                new PreviewMarkdownBlock("unorderedList")
+                {
+                    Children = [new PreviewMarkdownBlock("listItem") { Text = "One" }, new PreviewMarkdownBlock("listItem") { Text = "Two" }],
+                },
+                new PreviewMarkdownBlock("table")
+                {
+                    TableHeaders = ["A", "B"],
+                    TableRows = [["1", "2"], ["3", "4"]],
+                },
+            ],
+        };
+
+        MarkdownPresentation presentation = MarkdownPresentationPolicy.Flatten(document, "Partial");
+
+        Assert.Equal(6, presentation.Items.Count);
+        Assert.Equal(Enumerable.Range(0, 6), presentation.Items.Select(item => item.Index));
+        Assert.Equal(["heading", "listItem", "listItem", "tableHeader", "tableRow", "tableRow"],
+            presentation.Items.Select(item => item.Block.Kind));
+        Assert.Equal(["", "- ", "- ", "", "", ""], presentation.Items.Select(item => item.Prefix));
+        Assert.Equal("Title\nOne\nTwo\nA\nB\n1\n2\n3\n4", presentation.Text);
+        Assert.Equal(presentation.Text, TextSearchIndex.BuildMarkdownVisibleText(document, "Partial"));
+    }
+
     [Theory]
     [InlineData(FileAttributes.Offline)]
     [InlineData((FileAttributes)0x00040000)]

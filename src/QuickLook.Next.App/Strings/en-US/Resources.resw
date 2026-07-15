@@ -367,6 +367,7 @@
   <data name="AnimatedImagePreviewImage.AutomationProperties.Name" xml:space="preserve"><value>Animated image content</value></data>
   <data name="PdfPageIndicatorText.AutomationProperties.Name" xml:space="preserve"><value>Current PDF page</value></data>
   <data name="MarkdownOutlineList.AutomationProperties.Name" xml:space="preserve"><value>Markdown heading navigation</value></data>
+  <data name="MarkdownListView.AutomationProperties.Name" xml:space="preserve"><value>Markdown document content</value></data>
   <data name="TextPreviewBlock.AutomationProperties.Name" xml:space="preserve"><value>Text preview content</value></data>
   <data name="PreviewInfoRail.AutomationProperties.Name" xml:space="preserve"><value>Preview details</value></data>
   <data name="ExifScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>EXIF metadata</value></data>

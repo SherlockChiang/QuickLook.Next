@@ -85,6 +85,14 @@ Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]
     "Raw Markdown fallback rendering must share the structured block budget."
 Require-Pattern $textPresenter 'ApplyMarkdownSearchHighlights\(\)' `
     "Structured Markdown search must retain local visual highlighting."
+Require-Pattern $textPresenter '_markdownListView\.ItemsSource\s*=\s*_markdownItems' `
+    "Structured Markdown must use virtualized ListView items."
+Require-Pattern $textPresenter '_markdownListView\.ContainerContentChanging\s*\+=' `
+    "Structured Markdown must materialize only realized containers."
+Require-Pattern $textPresenter 'ScrollIntoView\(_markdownItems\[item\.ItemIndex\]' `
+    "Markdown outline navigation must use stable render-item indices."
+Require-Pattern $textPresenter 'public sealed record MarkdownListItem\(MarkdownRenderItem Item\)' `
+    "Virtual Markdown item models must remain data-only."
 Require-Pattern $textPresenter '_textListView\.ItemsSource\s*=\s*result\.Lines' `
     "Code and plain text must use virtualized ListView rows."
 Require-Pattern $textPresenter 'ContainerContentChanging\s*\+=' `

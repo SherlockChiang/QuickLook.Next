@@ -355,6 +355,25 @@
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+                    <ListView x:Name="MarkdownListView"
+                              x:Uid="MarkdownListView"
+                              Grid.Row="1"
+                              Visibility="Collapsed"
+                              Padding="24"
+                              SelectionMode="None"
+                              IsItemClickEnabled="False"
+                              ShowsScrollingPlaceholders="False"
+                              HorizontalContentAlignment="Stretch"
+                              ScrollViewer.HorizontalScrollMode="Enabled"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                              AutomationProperties.Name="Markdown document content">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:MarkdownListItem">
+                                <ContentControl x:Name="MarkdownContentHost"
+                                                HorizontalContentAlignment="Stretch" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
 
             <Border x:Name="TextToolbar"
                     Grid.Row="1"

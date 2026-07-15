@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
@@ -33,12 +34,14 @@ internal sealed class TextPreviewPresenter
     private readonly Border _outlinePanel;
     private readonly ListView _outlineList;
     private readonly ListView _textListView;
+    private readonly ListView _markdownListView;
     private readonly FrameworkElement _textPreviewContainer;
     private readonly Func<ElementTheme> _getTheme;
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
     private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = [];
     private readonly Dictionary<ListViewItem, RealizedTextLine> _realizedTextLines = [];
+    private readonly Dictionary<ListViewItem, RealizedMarkdownItem> _realizedMarkdownItems = [];
     private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
@@ -60,11 +63,14 @@ internal sealed class TextPreviewPresenter
     private bool _showLineNumbers = true;
     private TextLineIndex? _textLineIndex;
     private IReadOnlyList<TextLineItem>? _textLines;
+    private MarkdownPresentation? _markdownPresentation;
+    private IReadOnlyList<MarkdownListItem>? _markdownItems;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
         ScrollViewer scrollViewer,
         ListView textListView,
+        ListView markdownListView,
         FrameworkElement textPreviewContainer,
         Border outlinePanel,
         ListView outlineList,
@@ -74,6 +80,7 @@ internal sealed class TextPreviewPresenter
         _textBlock = textBlock;
         _scrollViewer = scrollViewer;
         _textListView = textListView;
+        _markdownListView = markdownListView;
         _textPreviewContainer = textPreviewContainer;
         _outlinePanel = outlinePanel;
         _outlineList = outlineList;
@@ -85,6 +92,8 @@ internal sealed class TextPreviewPresenter
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
         _textListView.KeyDown += OnTextListViewKeyDown;
         _textListView.ContainerContentChanging += OnTextLineContainerChanging;
+        _markdownListView.ContainerContentChanging += OnMarkdownContainerChanging;
+        _markdownListView.LayoutUpdated += OnMarkdownListViewLayoutUpdated;
     }
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent, bool wrap)
@@ -93,9 +102,14 @@ internal sealed class TextPreviewPresenter
         _lastMaxContent = maxContent;
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
         string text = isMarkdown ? TrimForDisplay(ready.TextContent ?? "") : ready.TextContent ?? "";
-        _markdownSearchIndex = ready.Markdown is null
+        _markdownPresentation = ready.Markdown is null
             ? null
-            : TextSearchIndex.BuildMarkdownVisibleTextIndex(ready.Markdown, UiStrings.TextPreviewTruncated);
+            : MarkdownPresentationPolicy.Flatten(ready.Markdown, UiStrings.TextPreviewTruncated);
+        _markdownSearchIndex = _markdownPresentation is null
+            ? null
+            : new MarkdownVisibleTextIndex(
+                _markdownPresentation.Text,
+                _markdownPresentation.Items.SelectMany(item => item.Segments).ToArray());
         _displayedText = _markdownSearchIndex?.Text ?? text;
         _markdownSearchAnchors.Clear();
         _markdownSearchTargets.Clear();
@@ -110,14 +124,19 @@ internal sealed class TextPreviewPresenter
         _textBlock.Blocks.Clear();
         _textBlock.IsTextSelectionEnabled = true;
         _textListView.ItemsSource = null;
+        _markdownListView.ItemsSource = null;
         _textLines = null;
         _textLineIndex = null;
         _realizedTextLines.Clear();
+        _markdownItems = null;
+        _realizedMarkdownItems.Clear();
         ClearOutline();
 
         _wrap = wrap;
-        _scrollViewer.Visibility = isMarkdown ? Visibility.Visible : Visibility.Collapsed;
+        bool isStructuredMarkdown = ready.Markdown is not null;
+        _scrollViewer.Visibility = isMarkdown && !isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
         _textListView.Visibility = isMarkdown ? Visibility.Collapsed : Visibility.Visible;
+        _markdownListView.Visibility = isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
         
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
@@ -126,7 +145,7 @@ internal sealed class TextPreviewPresenter
         try
         {
             if (ready.Markdown is not null)
-                RenderMarkdownDocument(ready.Markdown);
+                RenderVirtualMarkdown(_markdownPresentation!);
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
@@ -139,6 +158,7 @@ internal sealed class TextPreviewPresenter
             {
                 _scrollViewer.Visibility = Visibility.Visible;
                 _textListView.Visibility = Visibility.Collapsed;
+                _markdownListView.Visibility = Visibility.Collapsed;
                 _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
             }
             else
@@ -148,7 +168,9 @@ internal sealed class TextPreviewPresenter
         }
 
         ApplyOutlineVisibility();
-        FrameworkElement focusTarget = isMarkdown ? _textBlock : _textListView;
+        FrameworkElement focusTarget = isStructuredMarkdown
+            ? _markdownListView
+            : isMarkdown ? _textBlock : _textListView;
         focusTarget.Focus(FocusState.Programmatic);
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         if (_outlineItems.Count > 0)
@@ -168,9 +190,13 @@ internal sealed class TextPreviewPresenter
         _renderVersion++;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
+        _markdownListView.ItemsSource = null;
         _textLines = null;
         _textLineIndex = null;
         _realizedTextLines.Clear();
+        _markdownPresentation = null;
+        _markdownItems = null;
+        _realizedMarkdownItems.Clear();
         ClearOutline();
         ApplyOutlineVisibility();
     }
@@ -205,6 +231,7 @@ internal sealed class TextPreviewPresenter
         _currentSearchMatch = -1;
         _textBlock.TextHighlighters.Clear();
         RefreshRealizedTextLines();
+        RefreshRealizedMarkdownItems();
         foreach (MarkdownSearchTarget target in _markdownSearchTargets)
             target.TextBlock.TextHighlighters.Clear();
         return SearchState;
@@ -260,6 +287,11 @@ internal sealed class TextPreviewPresenter
 
     private void ApplyMarkdownSearchHighlights()
     {
+        if (_markdownItems is not null)
+        {
+            RefreshRealizedMarkdownItems();
+            return;
+        }
         var allByTarget = new Dictionary<TextBlock, TextHighlighter>();
         int ranges = 0;
         int targetIndex = 0;
@@ -331,6 +363,15 @@ internal sealed class TextPreviewPresenter
         {
             int lineIndex = _textLineIndex.FindLineIndex(_searchMatches[_currentSearchMatch]);
             _textListView.ScrollIntoView(_textLines[lineIndex], ScrollIntoViewAlignment.Leading);
+            return;
+        }
+        if (_markdownItems is not null && _markdownPresentation is not null)
+        {
+            int match = _searchMatches[_currentSearchMatch];
+            MarkdownListItem item = _markdownItems.LastOrDefault(candidate =>
+                candidate.Item.Segments.Count > 0 && candidate.Item.Segments[0].Start <= match)
+                ?? _markdownItems[0];
+            _markdownListView.ScrollIntoView(item, ScrollIntoViewAlignment.Leading);
             return;
         }
         if (_scrollViewer.ScrollableHeight <= 0)
@@ -485,7 +526,11 @@ internal sealed class TextPreviewPresenter
             || container.ContentTemplateRoot is not Grid root
             || root.FindName("LineNumberText") is not TextBlock lineNumber
             || root.FindName("LineContentText") is not TextBlock textBlock)
+        {
+            if (args.Phase == 0)
+                args.RegisterUpdateCallback(OnTextLineContainerChanging);
             return;
+        }
         var realized = new RealizedTextLine(item, root, lineNumber, textBlock);
         _realizedTextLines[container] = realized;
         ApplyTextLineVisual(realized);
@@ -565,6 +610,264 @@ internal sealed class TextPreviewPresenter
                 Length = endCurrent - startCurrent,
             });
             textBlock.TextHighlighters.Add(current);
+        }
+    }
+
+    private void RenderVirtualMarkdown(MarkdownPresentation presentation)
+    {
+        _markdownItems = presentation.Items.Select(item => new MarkdownListItem(item)).ToArray();
+        _markdownListView.ItemsSource = _markdownItems;
+        foreach (MarkdownListItem item in _markdownItems)
+        {
+            if (item.Item.Block.Kind != "heading")
+                continue;
+            string title = TextSearchIndex.MarkdownInlineText(item.Item.Block.Inlines, item.Item.Block.Text).Trim();
+            if (title.Length > 0)
+                _outlineItems.Add(new MarkdownOutlineItem(title, Math.Clamp(item.Item.Block.Level, 1, 6), item.Item.Index));
+        }
+    }
+
+    private void OnMarkdownContainerChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer is not ListViewItem container)
+            return;
+        if (args.InRecycleQueue)
+        {
+            if (_realizedMarkdownItems.Remove(container, out RealizedMarkdownItem recycled))
+            {
+                foreach (VirtualMarkdownSearchTarget target in recycled.Targets)
+                    target.TextBlock.TextHighlighters.Clear();
+                recycled.Host.Content = null;
+            }
+            return;
+        }
+        if (args.Item is not MarkdownListItem item
+            || container.ContentTemplateRoot is not FrameworkElement root
+            || root.FindName("MarkdownContentHost") is not ContentControl host)
+        {
+            if (args.Phase == 0)
+                args.RegisterUpdateCallback(OnMarkdownContainerChanging);
+            return;
+        }
+        var targets = new List<VirtualMarkdownSearchTarget>();
+        host.Content = CreateVirtualMarkdownElement(item.Item, targets);
+        var realized = new RealizedMarkdownItem(item, container, host, targets);
+        _realizedMarkdownItems[container] = realized;
+        ApplyVirtualMarkdownSearchHighlights(realized);
+    }
+
+    private FrameworkElement CreateVirtualMarkdownElement(
+        MarkdownRenderItem item, List<VirtualMarkdownSearchTarget> targets)
+    {
+        PreviewMarkdownBlock block = item.Block;
+        if (block.Kind is "tableHeader" or "tableRow")
+            return CreateVirtualMarkdownTableRow(item, targets);
+        if (block.Kind == "thematicBreak")
+            return new Border
+            {
+                Height = 1,
+                Margin = new Thickness(0, 10, 0, 12),
+                Background = new SolidColorBrush(ThemeSurfaceBorderColor()),
+            };
+
+        double fontSize = block.Kind == "heading" ? block.Level switch
+        {
+            <= 1 => 28,
+            2 => 23,
+            3 => 19,
+            _ => 16,
+        } : block.Kind == "partial" ? 12 : 14;
+        var textBlock = new TextBlock
+        {
+            FontSize = fontSize,
+            FontFamily = FontFamilyFor(block.Kind == "code" ? "Cascadia Mono, Consolas" : "Segoe UI"),
+            FontWeight = block.Kind == "heading" ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
+            TextWrapping = block.Kind == "code" ? TextWrapping.NoWrap : TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            Foreground = block.Kind is "blockquote" or "partial" ? UiGrayBrush : null,
+            Margin = block.Kind switch
+            {
+                "heading" => new Thickness(0, block.Level <= 2 ? 16 : 10, 0, 8),
+                "partial" => new Thickness(0, 12, 0, 0),
+                _ => new Thickness(block.Kind == "listItem" ? 18 : 0, 0, 0, 9),
+            },
+        };
+        string prefix = block.Kind == "blockquote" ? "| " : item.Prefix;
+        if (prefix.Length > 0)
+            textBlock.Inlines.Add(new Run { Text = prefix });
+        if (block.Kind == "code")
+        {
+            string language = string.IsNullOrWhiteSpace(block.Language) ? "text" : block.Language;
+            List<(string Text, TokenKind Kind)> spans = language is "text" or "log"
+                ? []
+                : MergeAdjacentSpans(SyntaxHighlighter.Highlight(block.Text, language));
+            if (spans.Count is 0 or > MaxVirtualLineRuns)
+                textBlock.Text = prefix + block.Text;
+            else
+                foreach ((string text, TokenKind kind) in spans)
+                    textBlock.Inlines.Add(new Run { Text = text, Foreground = BrushFor(kind) });
+        }
+        else
+        {
+            AddMarkdownInlines(textBlock.Inlines, block.Inlines, block.Text);
+        }
+        if (item.Segments.Count > 0)
+            targets.Add(new VirtualMarkdownSearchTarget(
+                item.Segments[0].Start, item.Segments[0].Text.Length, textBlock, prefix.Length));
+        if (block.Kind != "code")
+            return textBlock;
+        var scroller = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = textBlock,
+        };
+        var copyButton = new Button
+        {
+            Content = UiStrings.CopyAction,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(10, 3, 10, 3),
+        };
+        AutomationProperties.SetName(copyButton, UiStrings.CopyAction);
+        copyButton.Click += (_, _) =>
+        {
+            var package = new DataPackage();
+            package.SetText(block.Text);
+            Clipboard.SetContent(package);
+            copyButton.Content = UiStrings.CopiedAction;
+        };
+        var codeGrid = new Grid();
+        codeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        codeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        codeGrid.Children.Add(copyButton);
+        Grid.SetRow(scroller, 1);
+        codeGrid.Children.Add(scroller);
+        return new Border
+        {
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 8, 0, 12),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+            Background = new SolidColorBrush(ThemeCodeBackground()),
+            Child = codeGrid,
+        };
+    }
+
+    private FrameworkElement CreateVirtualMarkdownTableRow(
+        MarkdownRenderItem item, List<VirtualMarkdownSearchTarget> targets)
+    {
+        string[] cells = item.Block.TableHeaders;
+        var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
+        for (int index = 0; index < cells.Length; index++)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(180) });
+            var text = new TextBlock
+            {
+                Text = cells[index],
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                FontWeight = item.Block.Kind == "tableHeader"
+                    ? Microsoft.UI.Text.FontWeights.SemiBold
+                    : Microsoft.UI.Text.FontWeights.Normal,
+            };
+            if (index < item.Segments.Count)
+                targets.Add(new VirtualMarkdownSearchTarget(
+                    item.Segments[index].Start, item.Segments[index].Text.Length, text, 0));
+            var border = new Border
+            {
+                Padding = new Thickness(10, 7, 10, 7),
+                BorderBrush = new SolidColorBrush(ThemeSurfaceBorderColor()),
+                BorderThickness = new Thickness(0, 0, 1, 1),
+                Background = item.Block.Kind == "tableHeader"
+                    ? new SolidColorBrush(ThemeHeaderBackground())
+                    : null,
+                Child = text,
+            };
+            Grid.SetColumn(border, index);
+            grid.Children.Add(border);
+        }
+        return grid;
+    }
+
+    private void RefreshRealizedMarkdownItems()
+    {
+        foreach (RealizedMarkdownItem item in _realizedMarkdownItems.Values.ToArray())
+            ApplyVirtualMarkdownSearchHighlights(item);
+    }
+
+    private void ApplyVirtualMarkdownSearchHighlights(RealizedMarkdownItem item)
+    {
+        foreach (VirtualMarkdownSearchTarget target in item.Targets)
+            target.TextBlock.TextHighlighters.Clear();
+        if (_searchMatches.Count == 0 || _searchQuery.Length == 0)
+            return;
+        foreach (VirtualMarkdownSearchTarget target in item.Targets)
+        {
+            var all = new TextHighlighter
+            {
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(110, 255, 210, 64)),
+            };
+            foreach (int matchStart in _searchMatches.Take(MaxSearchHighlightRanges))
+            {
+                int start = Math.Max(matchStart, target.Start);
+                int end = Math.Min(matchStart + _searchQuery.Length, target.Start + target.Length);
+                if (start < end)
+                    all.Ranges.Add(new TextRange
+                    {
+                        StartIndex = target.LocalStart + start - target.Start,
+                        Length = end - start,
+                    });
+            }
+            if (all.Ranges.Count > 0)
+                target.TextBlock.TextHighlighters.Add(all);
+            if (_currentSearchMatch < 0)
+                continue;
+            int currentStart = _searchMatches[_currentSearchMatch];
+            int localStart = Math.Max(currentStart, target.Start);
+            int currentEnd = Math.Min(currentStart + _searchQuery.Length, target.Start + target.Length);
+            if (localStart < currentEnd)
+            {
+                var current = new TextHighlighter
+                {
+                    Background = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 255, 145, 48)),
+                };
+                current.Ranges.Add(new TextRange
+                {
+                    StartIndex = target.LocalStart + localStart - target.Start,
+                    Length = currentEnd - localStart,
+                });
+                target.TextBlock.TextHighlighters.Add(current);
+            }
+        }
+    }
+
+    private void OnMarkdownListViewLayoutUpdated(object? sender, object e)
+    {
+        if (_updatingOutline || _outlineItems.Count == 0 || _markdownListView.Visibility != Visibility.Visible)
+            return;
+        int firstVisible;
+        try
+        {
+            firstVisible = _realizedMarkdownItems.Values
+                .Where(item => item.Container.TransformToVisual(_markdownListView)
+                    .TransformPoint(new Windows.Foundation.Point()).Y <= 24)
+                .Select(item => item.Item.Item.Index)
+                .DefaultIfEmpty(0)
+                .Max();
+        }
+        catch
+        {
+            return;
+        }
+        MarkdownOutlineItem? closest = _outlineItems.LastOrDefault(item => item.ItemIndex <= firstVisible)
+            ?? _outlineItems.FirstOrDefault();
+        if (closest is not null && _outlineList.SelectedItem != closest)
+        {
+            _updatingOutline = true;
+            _outlineList.SelectedItem = closest;
+            _outlineList.ScrollIntoView(closest);
+            _updatingOutline = false;
         }
     }
 
@@ -861,15 +1164,20 @@ internal sealed class TextPreviewPresenter
         if (e.ClickedItem is not MarkdownOutlineItem item)
             return;
 
-        _scrollViewer.UpdateLayout();
-        _textBlock.UpdateLayout();
-        
-        // Disable outline sync temporarily while we animate to the target
         int version = _renderVersion;
         _updatingOutline = true;
-        
-        double target = Math.Max(0, _scrollViewer.VerticalOffset + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
-        _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
+        if (item.ItemIndex >= 0 && _markdownItems is not null && item.ItemIndex < _markdownItems.Count)
+        {
+            _markdownListView.ScrollIntoView(_markdownItems[item.ItemIndex], ScrollIntoViewAlignment.Leading);
+        }
+        else if (item.Anchor is not null)
+        {
+            _scrollViewer.UpdateLayout();
+            _textBlock.UpdateLayout();
+            double target = Math.Max(0, _scrollViewer.VerticalOffset
+                + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
+            _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
+        }
 
         try
         {
@@ -884,7 +1192,7 @@ internal sealed class TextPreviewPresenter
 
     private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (_updatingOutline || _outlineItems.Count == 0 || e.IsIntermediate)
+        if (_markdownItems is not null || _updatingOutline || _outlineItems.Count == 0 || e.IsIntermediate)
             return;
 
         try
@@ -893,7 +1201,9 @@ internal sealed class TextPreviewPresenter
             double closestY = double.MinValue;
             foreach (var item in _outlineItems)
             {
-                var point = item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
+                if (item.Anchor is not FrameworkElement anchor)
+                    continue;
+                var point = anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0));
                 if (point.Y <= 24 && point.Y > closestY)
                 {
                     closest = item;
@@ -904,7 +1214,8 @@ internal sealed class TextPreviewPresenter
             if (closest == null && _outlineItems.Count > 0)
             {
                 var first = _outlineItems[0];
-                if (first.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y > 0)
+                if (first.Anchor is FrameworkElement anchor
+                    && anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y > 0)
                     closest = first;
             }
 
@@ -1601,13 +1912,23 @@ public sealed class MarkdownOutlineItem
         Title = title;
         Level = level;
         Anchor = anchor;
+        ItemIndex = -1;
+    }
+
+    public MarkdownOutlineItem(string title, int level, int itemIndex)
+    {
+        Title = title;
+        Level = level;
+        ItemIndex = itemIndex;
     }
 
     public string Title { get; }
 
     public int Level { get; }
 
-    public FrameworkElement Anchor { get; }
+    public FrameworkElement? Anchor { get; }
+
+    public int ItemIndex { get; }
 
     public Thickness Margin => new(Math.Max(0, (Level - 1) * 12), 2, 0, 2);
 
@@ -1615,5 +1936,19 @@ public sealed class MarkdownOutlineItem
 
     public Windows.UI.Text.FontWeight FontWeight => new() { Weight = Level <= 2 ? (ushort)600 : (ushort)400 };
 }
+
+public sealed record MarkdownListItem(MarkdownRenderItem Item);
+
+internal readonly record struct VirtualMarkdownSearchTarget(
+    int Start,
+    int Length,
+    TextBlock TextBlock,
+    int LocalStart);
+
+internal readonly record struct RealizedMarkdownItem(
+    MarkdownListItem Item,
+    ListViewItem Container,
+    ContentControl Host,
+    IReadOnlyList<VirtualMarkdownSearchTarget> Targets);
 
 internal readonly record struct TextPreviewResult(string Status, double Width, double Height);

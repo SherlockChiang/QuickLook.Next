@@ -226,6 +226,7 @@ public sealed partial class MainWindow : Window
             TextPreviewBlock,
             TextScrollViewer,
             TextListView,
+            MarkdownListView,
             TextPreviewContainer,
             MarkdownOutlinePanel,
             MarkdownOutlineList,
