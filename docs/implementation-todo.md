@@ -14,8 +14,6 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Replace the PDF document projection with an input/ownership path that
   exposes deterministic close semantics.
-- [ ] Virtualize large code, Markdown, and table presentation work beyond the
-  existing character/run bounds.
 - [ ] Verify loading, success, failure, and PDF page-error announcements with
   Narrator on a Windows accessibility test machine.
 
@@ -42,6 +40,20 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Complete large-content presentation virtualization across code/plain text,
+  structured Markdown, and CSV/TSV tables. Structured Markdown now uses a
+  data-only flattened Core model and recycled `ListView` containers; list items
+  and table rows are independent virtual items, outline navigation uses stable
+  item indices, and search highlights are reapplied to realized blocks/cells.
+  Preserve inline styles, bounded fenced-code syntax, code copy, table cell
+  selection, partial notices, and the shared 2000-item/4096-cell budgets. Raw
+  Markdown compatibility fallback remains separately bounded at 256 KiB.
+  - Verification: App build 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
+  - Verification: Core 108/108, ParserHost 15/15, RasterHost 7/7 via MSBuild `VSTest`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Guard: `tools/guard-architecture.ps1` passed through all static/native/image-corpus stages; final system-image smoke remained blocked by missing pinned SDK 10.0.301
+  - Related commits: `fc17770` (code/text), `5670daa` (tables), `1a21a63` (structured Markdown)
 
 - [x] Extend the viewport-virtualized CSV/TSV presenter with continuously sticky
   column and row headers while preserving the 1024-data-cell viewport budget and
