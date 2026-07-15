@@ -327,6 +327,22 @@ if ((Test-Path $englishResources) -and (Test-Path $chineseResources)) {
             }
         }
     }
+
+    $mainWindowCode = Join-Path $Root "src\QuickLook.Next.App\MainWindow.xaml.cs"
+    if (Test-Path $mainWindowCode) {
+        $mainWindowCodeText = Get-Content -LiteralPath $mainWindowCode -Raw
+        if ($mainWindowCodeText -notmatch 'void AnnouncePreviewLifecycle\(' -or
+            $mainWindowCodeText -notmatch 'RaiseNotificationEvent\(' -or
+            $mainWindowCodeText -notmatch '"preview\.lifecycle"' -or
+            $mainWindowCodeText -notmatch 'AutomationNotificationKind\.Other' -or
+            $mainWindowCodeText -notmatch 'AutomationNotificationKind\.ActionCompleted' -or
+            $mainWindowCodeText -notmatch 'AutomationNotificationKind\.ActionAborted' -or
+            $mainWindowCodeText -notmatch '_previewSession\.Generation != generation' -or
+            $mainWindowCodeText -notmatch 'isError \? ErrorText : PreviewContentHost' -or
+            $mainWindowCodeText -notmatch 'AutomationNotificationProcessing\.ImportantMostRecent') {
+            Add-Failure "Preview loading, success, and failure must raise explicit accessibility notifications"
+        }
+    }
 }
 
 if ($failures.Count -gt 0) {

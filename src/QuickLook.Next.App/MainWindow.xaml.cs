@@ -9,6 +9,7 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
@@ -985,6 +986,11 @@ public sealed partial class MainWindow : Window
         if (_previewVisible && !_previewTemporarilyHidden)
         {
             MarkPreviewPhase(_previewSession.Generation, "loading-indicator-visible");
+            AnnouncePreviewLifecycle(
+                LoadingRing,
+                StatusText.Text,
+                AutomationNotificationKind.Other,
+                AutomationNotificationProcessing.MostRecent);
             return;
         }
 
@@ -993,6 +999,11 @@ public sealed partial class MainWindow : Window
         CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
         CompositionTarget.Rendering += OnLoadingShellFirstFrame;
         ShowPreviewWindow(activate: false, resizeToDefault: true);
+        AnnouncePreviewLifecycle(
+            LoadingRing,
+            StatusText.Text,
+            AutomationNotificationKind.Other,
+            AutomationNotificationProcessing.MostRecent);
         MarkPreviewPhase(_previewSession.Generation, "loading-shell-show-requested");
         _previewTemporarilyHidden = false;
     }
@@ -1034,6 +1045,23 @@ public sealed partial class MainWindow : Window
             EnsureCompositor();
         }
         FadeInPreviewContent();
+        if (finalContent)
+        {
+            bool isError = ErrorPanel.Visibility == Visibility.Visible;
+            AnnouncePreviewLifecycle(
+                isError ? ErrorText : PreviewContentHost,
+                isError ? ErrorText.Text : UiStrings.PreviewReadyAnnouncement,
+                isError ? AutomationNotificationKind.ActionAborted : AutomationNotificationKind.ActionCompleted,
+                isError ? AutomationNotificationProcessing.ImportantMostRecent : AutomationNotificationProcessing.MostRecent);
+        }
+        else
+        {
+            AnnouncePreviewLifecycle(
+                PreviewContentHost,
+                StatusText.Text,
+                AutomationNotificationKind.Other,
+                AutomationNotificationProcessing.MostRecent);
+        }
         MarkPreviewPhase(_previewSession.Generation, finalContent ? "reveal-called" : "placeholder-reveal");
         if (finalContent)
         {
@@ -1064,6 +1092,29 @@ public sealed partial class MainWindow : Window
     {
         if (_previewTiming is { } timing && timing.Generation == generation)
             timing.Complete(outcome);
+    }
+
+    private void AnnouncePreviewLifecycle(
+        FrameworkElement element,
+        string message,
+        AutomationNotificationKind kind,
+        AutomationNotificationProcessing processing)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+        int generation = _previewSession.Generation;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_previewSession.Generation != generation)
+                return;
+            AutomationPeer? peer = FrameworkElementAutomationPeer.FromElement(element)
+                ?? FrameworkElementAutomationPeer.CreatePeerForElement(element);
+            peer?.RaiseNotificationEvent(
+                kind,
+                processing,
+                message,
+                "preview.lifecycle");
+        });
     }
 
     private void CancelPreviewFrameCallbacks()
@@ -1444,6 +1495,11 @@ public sealed partial class MainWindow : Window
         StatusText.Text = error.TimedOut
             ? UiStrings.Format(UiStrings.PdfPageTimedOutStatusFormat, error.PageIndex + 1)
             : UiStrings.Format(UiStrings.PdfPageFailedStatusFormat, error.PageIndex + 1);
+        AnnouncePreviewLifecycle(
+            PreviewContentHost,
+            StatusText.Text,
+            AutomationNotificationKind.ActionAborted,
+            AutomationNotificationProcessing.ImportantMostRecent);
     }
 
     private void ShowSurfaceFailure(string requestId, string message)

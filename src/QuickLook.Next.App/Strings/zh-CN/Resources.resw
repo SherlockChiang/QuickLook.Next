@@ -7,6 +7,7 @@
   <data name="AppName" xml:space="preserve"><value>QuickLook Next</value></data>
   <data name="Ready" xml:space="preserve"><value>就绪</value></data>
   <data name="ReadyKind" xml:space="preserve"><value>就绪</value></data>
+  <data name="PreviewReadyAnnouncement" xml:space="preserve"><value>预览已就绪</value></data>
   <data name="EmptyValue" xml:space="preserve"><value>-</value></data>
   <data name="FitZoom" xml:space="preserve"><value>适应窗口</value></data>
   <data name="PlayAnimation" xml:space="preserve"><value>播放动画</value></data>

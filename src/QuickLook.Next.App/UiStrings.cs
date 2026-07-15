@@ -9,6 +9,7 @@ internal static class UiStrings
     public static string AppName => Get(nameof(AppName), "QuickLook Next");
     public static string Ready => Get(nameof(Ready), "Ready");
     public static string ReadyKind => Get(nameof(ReadyKind), "READY");
+    public static string PreviewReadyAnnouncement => Get(nameof(PreviewReadyAnnouncement), "Preview ready");
     public static string EmptyValue => Get(nameof(EmptyValue), "-");
     public static string FitZoom => Get(nameof(FitZoom), "Fit");
     public static string PlayAnimation => Get(nameof(PlayAnimation), "Play animation");

@@ -21,6 +21,7 @@
   <data name="ReadyKind" xml:space="preserve">
     <value>READY</value>
   </data>
+  <data name="PreviewReadyAnnouncement" xml:space="preserve"><value>Preview ready</value></data>
   <data name="EmptyValue" xml:space="preserve">
     <value>-</value>
   </data>
