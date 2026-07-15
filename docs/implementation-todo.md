@@ -16,8 +16,8 @@ and commit so changes remain independently reviewable and revertible.
   exposes deterministic close semantics.
 - [ ] Virtualize large code, Markdown, and table presentation work beyond the
   existing character/run bounds.
-- [ ] Verify live-region loading, success, and failure announcements with
-  Narrator; add explicit AutomationPeer events where hidden status is silent.
+- [ ] Verify loading, success, failure, and PDF page-error announcements with
+  Narrator on a Windows accessibility test machine.
 
 ## P2: Product capabilities
 
@@ -42,6 +42,22 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Raise explicit, localized WinUI automation notifications for preview
+  loading, placeholder progress, success, terminal failure, and PDF page errors.
+  Use one stable activity channel, coalesce routine progress, prioritize failures,
+  and discard queued announcements after the preview generation changes. Keep
+  search and listing updates on their existing visible live regions.
+  - Verification: `dotnet "C:/Program Files/dotnet/sdk/10.0.302/MSBuild.dll" src/QuickLook.Next.App/QuickLook.Next.App.csproj -t:Build -p:Restore=false -verbosity:minimal` (0 warnings; installed SDK fallback because pinned 10.0.301 was unavailable)
+  - Verification: Core 105/105, ParserHost 15/15, RasterHost 7/7 via the same MSBuild `VSTest` target
+  - Guard: `tools/guard-architecture.ps1` static/native/image-corpus stages passed; final system-image smoke was blocked by missing pinned SDK 10.0.301
+  - Manual follow-up: Narrator listening verification remains open.
+  - Commit: `eabfef2`
+
+- [x] Isolate RasterHost preview anchors by host PID so concurrent hosts cannot
+  remove each other's exact-object input files during startup cleanup.
+  - Verification: ParserHost integration 15/15 and RasterHost integration 7/7 executed concurrently via MSBuild `VSTest`
+  - Commit: `ad057f6`
 
 - [x] Complete en-US and zh-CN coverage for preview status, metadata, page counts,
   syntax/truncation notices, visual labels, tooltips, and MainWindow automation
