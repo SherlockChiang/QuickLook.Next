@@ -517,6 +517,28 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Reopened_anchor_is_read_only_and_survives_the_writable_handle()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "reopened-anchor.bin");
+        byte[] expected = "reopened anchor"u8.ToArray();
+        using var writable = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite,
+            FileShare.Read | FileShare.Write | FileShare.Delete);
+        writable.Write(expected);
+        writable.Flush(flushToDisk: true);
+
+        using var transitional = WindowsHandleTransfer.ReopenTransitionalReadOnlyFile(writable.SafeFileHandle, expected.Length);
+        writable.Dispose();
+        using var anchor = WindowsHandleTransfer.ReopenReadOnlyFile(transitional, expected.Length);
+        using var stream = new FileStream(anchor, FileAccess.Read);
+        var actual = new byte[expected.Length];
+        stream.ReadExactly(actual);
+
+        Assert.Equal(expected, actual);
+        Assert.Throws<UnauthorizedAccessException>(() => RandomAccess.Write(anchor, [0], 0));
+    }
+
+    [Fact]
     public void Read_shared_anchor_blocks_path_replacement()
     {
         Directory.CreateDirectory(_tempRoot);

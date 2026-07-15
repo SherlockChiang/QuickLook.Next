@@ -8,6 +8,7 @@ public static class WindowsHandleTransfer
 {
     private const uint GenericRead = 0x80000000;
     private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
     private const uint FileShareDelete = 0x00000004;
     private const uint OpenExisting = 3;
     private const uint DuplicateSameAccess = 0x00000002;
@@ -59,6 +60,28 @@ public static class WindowsHandleTransfer
         if (!DuplicateHandle(GetCurrentProcess(), source, targetProcess, out nint duplicate, 0, false, DuplicateSameAccess))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not duplicate the preview file into the host.");
         return duplicate.ToInt64();
+    }
+
+    public static SafeFileHandle ReopenTransitionalReadOnlyFile(SafeFileHandle source, long expectedLength)
+        => ReopenReadOnlyFile(source, expectedLength, FileShareRead | FileShareWrite | FileShareDelete);
+
+    public static SafeFileHandle ReopenReadOnlyFile(SafeFileHandle source, long expectedLength)
+        => ReopenReadOnlyFile(source, expectedLength, FileShareRead | FileShareDelete);
+
+    private static SafeFileHandle ReopenReadOnlyFile(SafeFileHandle source, long expectedLength, uint shareMode)
+    {
+        SafeFileHandle handle = ReOpenFile(source, GenericRead, shareMode, 0);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the read-only preview anchor.");
+        }
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length != expectedLength)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Read-only preview anchor was not the expected disk file.");
+        }
+        return handle;
     }
 
     public static SafeFileHandle TakeLocalFileHandle(long value, long expectedLength)
@@ -129,5 +152,9 @@ public static class WindowsHandleTransfer
     private static extern bool DuplicateHandle(
         nint sourceProcess, SafeFileHandle sourceHandle, SafeProcessHandle targetProcess,
         out nint targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeFileHandle ReOpenFile(
+        SafeFileHandle originalFile, uint desiredAccess, uint shareMode, uint flagsAndAttributes);
 
 }

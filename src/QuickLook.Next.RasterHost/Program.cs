@@ -46,7 +46,7 @@ var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHa
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 string inputRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
-var previewInputs = new ConcurrentDictionary<string, (string Path, FileStream Anchor)>();
+var previewInputs = new ConcurrentDictionary<string, (string Path, SafeFileHandle Anchor)>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
@@ -791,7 +791,7 @@ static bool IsValidTargetSize(uint width, uint height)
 static bool IsValidAnimationTargetSize(uint width, uint height)
     => IsValidTargetSize(width, height);
 
-static async Task<(string Path, FileStream Anchor)?> CreatePreviewInputAsync(
+static async Task<(string Path, SafeFileHandle Anchor)?> CreatePreviewInputAsync(
     string requestId,
     string logicalPath,
     SafeFileHandle sourceHandle,
@@ -811,24 +811,27 @@ static async Task<(string Path, FileStream Anchor)?> CreatePreviewInputAsync(
         Directory.CreateDirectory(directory);
         if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return null;
         using var source = new FileStream(sourceHandle, FileAccess.Read);
-        var anchor = new FileStream(path, new FileStreamOptions
+        var writableAnchor = new FileStream(path, new FileStreamOptions
         {
             Mode = FileMode.CreateNew,
             Access = FileAccess.ReadWrite,
-            Share = FileShare.Read,
+            Share = FileShare.Read | FileShare.Delete,
             Options = FileOptions.Asynchronous | FileOptions.WriteThrough,
         });
         try
         {
-            await source.CopyToAsync(anchor, cancellationToken);
-            await anchor.FlushAsync(cancellationToken);
-            if (anchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
-            anchor.Position = 0;
-            return (path, anchor);
+            await source.CopyToAsync(writableAnchor, cancellationToken);
+            await writableAnchor.FlushAsync(cancellationToken);
+            if (writableAnchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
+            using var transitionalHandle = WindowsHandleTransfer.ReopenTransitionalReadOnlyFile(
+                writableAnchor.SafeFileHandle, sourceLength);
+            writableAnchor.Dispose();
+            writableAnchor = null!;
+            return (path, WindowsHandleTransfer.ReopenReadOnlyFile(transitionalHandle, sourceLength));
         }
         catch
         {
-            anchor.Dispose();
+            writableAnchor?.Dispose();
             throw;
         }
     }
@@ -839,6 +842,7 @@ static async Task<(string Path, FileStream Anchor)?> CreatePreviewInputAsync(
     }
     catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
     {
+        DiagLog.Write("RasterHost", $"preview input anchor failed: {ex.GetType().Name}: {ex.Message}");
         DeletePreviewInputPath(path);
         return null;
     }

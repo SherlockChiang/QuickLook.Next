@@ -263,7 +263,10 @@ if (Test-Path $rasterHostRoot) {
     if ($rasterHostText -notmatch 'case PreviewOpenHandle open' -or $rasterHostText -notmatch 'TakeLocalFileHandle\(open\.SourceHandle, open\.SourceLength\)') {
         Add-Failure "RasterHost local previews must consume the exact duplicated source handle"
     }
-    if ($rasterHostText -notmatch 'CreatePreviewInputAsync\(' -or $rasterHostText -notmatch 'source\.CopyToAsync\(anchor, cancellationToken\)') {
+    if ($rasterHostText -notmatch 'CreatePreviewInputAsync\(' -or
+        $rasterHostText -notmatch 'source\.CopyToAsync\(writableAnchor, cancellationToken\)' -or
+        $rasterHostText -notmatch 'ReopenTransitionalReadOnlyFile\(' -or
+        $rasterHostText -notmatch 'ReopenReadOnlyFile\(') {
         Add-Failure "RasterHost handle inputs must be anchored before path-only raster providers run"
     }
 }
