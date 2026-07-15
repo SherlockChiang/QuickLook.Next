@@ -34,6 +34,7 @@ internal sealed class OfficePreviewPresenter
     private double _maxPageWidth;
     private PreviewReady? _lastReady;
     private (double Width, double Height) _lastMaxContent;
+    private bool _virtualUpdateQueued;
 
     public OfficePreviewPresenter(
         ScrollViewer scrollViewer,
@@ -43,8 +44,8 @@ internal sealed class OfficePreviewPresenter
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
         _getHighContrast = getHighContrast;
-        _scrollViewer.ViewChanged += (_, _) => UpdateVirtualPages();
-        _scrollViewer.SizeChanged += (_, _) => UpdateVirtualPages();
+        _scrollViewer.ViewChanged += (_, _) => QueueVirtualPageUpdate();
+        _scrollViewer.SizeChanged += (_, _) => QueueVirtualPageUpdate();
     }
 
     public OfficePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
@@ -70,7 +71,7 @@ internal sealed class OfficePreviewPresenter
             if (index < 2)
                 Materialize(slot);
         }
-        _pagesPanel.DispatcherQueue.TryEnqueue(UpdateVirtualPages);
+        QueueVirtualPageUpdate();
 
         var first = layout.Pages.FirstOrDefault();
         double firstWidth = first?.Width > 0 ? first.Width : layout.Width;
@@ -96,6 +97,7 @@ internal sealed class OfficePreviewPresenter
         _lastReady = null;
         _lastMaxContent = default;
         _maxPageWidth = 0;
+        _virtualUpdateQueued = false;
         _pageSlots.Clear();
         _pagesPanel.Children.Clear();
     }
@@ -126,6 +128,21 @@ internal sealed class OfficePreviewPresenter
         return host;
     }
 
+    private void QueueVirtualPageUpdate()
+    {
+        if (_virtualUpdateQueued || _layout is null)
+            return;
+        _virtualUpdateQueued = true;
+        if (!_pagesPanel.DispatcherQueue.TryEnqueue(() =>
+        {
+            _virtualUpdateQueued = false;
+            UpdateVirtualPages();
+        }))
+        {
+            _virtualUpdateQueued = false;
+        }
+    }
+
     private void UpdateVirtualPages()
     {
         if (_layout is null || _pageSlots.Count == 0)
@@ -135,22 +152,35 @@ internal sealed class OfficePreviewPresenter
         if (!double.IsFinite(viewport) || viewport <= 0)
             return;
         double margin = viewport;
+        PageSlot? pageToMaterialize = null;
+        bool morePagesPending = false;
         foreach (PageSlot slot in _pageSlots)
         {
+            bool nearby;
             try
             {
                 double top = slot.Host.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point()).Y;
-                bool nearby = top < viewport + margin && top + slot.Host.Height > -margin;
-                if (nearby)
-                    Materialize(slot);
-                else
-                    slot.Host.Child = null;
+                nearby = top < viewport + margin && top + slot.Host.Height > -margin;
             }
             catch
             {
-                Materialize(slot);
+                nearby = true;
+            }
+
+            if (!nearby)
+                slot.Host.Child = null;
+            else if (slot.Host.Child is null)
+            {
+                if (pageToMaterialize is null)
+                    pageToMaterialize = slot;
+                else
+                    morePagesPending = true;
             }
         }
+        if (pageToMaterialize is not null)
+            Materialize(pageToMaterialize);
+        if (morePagesPending)
+            QueueVirtualPageUpdate();
     }
 
     private void Materialize(PageSlot slot)

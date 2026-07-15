@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Materialize at most one missing Office page per dispatcher callback while
+  releasing all off-screen pages immediately and queuing remaining nearby work.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
+
 - [x] Apply the shared 2000-block UI budget to raw Markdown fallback parsing,
   stopping line scans before creating excess paragraphs or code containers.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`

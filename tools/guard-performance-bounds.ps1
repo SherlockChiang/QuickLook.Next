@@ -41,6 +41,10 @@ Require-Pattern $officePresenter 'MaxCellsPerPage\s*=\s*2048' `
     "Office pages must retain their 2048-cell render budget."
 Require-Pattern $officePresenter 'MaxLayoutItemsPerPage\s*=\s*2048' `
     "Office pages must retain their 2048-item render budget."
+Require-Pattern $officePresenter 'PageSlot\?\s+pageToMaterialize\s*=\s*null' `
+    "Office scrolling must materialize at most one missing page per dispatcher callback."
+Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
+    "Office virtual-page updates must remain dispatcher-queued."
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
     "Preview reset must release retained Office layout state."
