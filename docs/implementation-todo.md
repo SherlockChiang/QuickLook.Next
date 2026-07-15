@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Inventory metadata for exactly four known App/RasterHost log files without
+  reading contents, enumerating directories, following reparse points, or
+  exposing a production API for arbitrary roots or file names.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter DiagnosticsLogInventoryTests`
+  - Commit: this change
+
 - [x] Add a fixed-schema, metadata-only diagnostics ZIP writer with exactly two
   entries, normalized inputs, no path/attachment API, cancellation, and strict
   JSON, README, and archive size budgets.
