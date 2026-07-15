@@ -18,6 +18,7 @@ internal sealed class TextPreviewPresenter
 {
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
+    private const int MaxVirtualLineRuns = 512;
     private const int MaxSearchHighlightRanges = 5000;
     private const int MaxMarkdownBlocks = TextSearchIndex.MaxMarkdownBlocks;
     private const int MaxMarkdownSyntaxRuns = 10000;
@@ -37,6 +38,7 @@ internal sealed class TextPreviewPresenter
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private readonly ObservableCollection<MarkdownOutlineItem> _outlineItems = [];
     private readonly Dictionary<TokenKind, SolidColorBrush> _tokenBrushes = [];
+    private readonly Dictionary<ListViewItem, RealizedTextLine> _realizedTextLines = [];
     private readonly Thickness _defaultScrollMargin;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
@@ -55,6 +57,9 @@ internal sealed class TextPreviewPresenter
     private bool _markdownRenderTruncated;
     private int _markdownSyntaxRunsRemaining;
     private bool _wrap;
+    private bool _showLineNumbers = true;
+    private TextLineIndex? _textLineIndex;
+    private IReadOnlyList<TextLineItem>? _textLines;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -79,13 +84,15 @@ internal sealed class TextPreviewPresenter
         _outlineList.ItemClick += OnOutlineItemClick;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
         _textListView.KeyDown += OnTextListViewKeyDown;
+        _textListView.ContainerContentChanging += OnTextLineContainerChanging;
     }
 
     public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent, bool wrap)
     {
         _lastReady = ready;
         _lastMaxContent = maxContent;
-        string text = TrimForDisplay(ready.TextContent ?? "");
+        bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
+        string text = isMarkdown ? TrimForDisplay(ready.TextContent ?? "") : ready.TextContent ?? "";
         _markdownSearchIndex = ready.Markdown is null
             ? null
             : TextSearchIndex.BuildMarkdownVisibleTextIndex(ready.Markdown, UiStrings.TextPreviewTruncated);
@@ -102,12 +109,15 @@ internal sealed class TextPreviewPresenter
 
         _textBlock.Blocks.Clear();
         _textBlock.IsTextSelectionEnabled = true;
+        _textListView.ItemsSource = null;
+        _textLines = null;
+        _textLineIndex = null;
+        _realizedTextLines.Clear();
         ClearOutline();
 
-        bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
         _wrap = wrap;
-        _scrollViewer.Visibility = Visibility.Visible;
-        _textListView.Visibility = Visibility.Collapsed;
+        _scrollViewer.Visibility = isMarkdown ? Visibility.Visible : Visibility.Collapsed;
+        _textListView.Visibility = isMarkdown ? Visibility.Collapsed : Visibility.Visible;
         
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
@@ -120,18 +130,26 @@ internal sealed class TextPreviewPresenter
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
-                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
+                _ = RenderVirtualTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
         }
         catch (Exception ex)
         {
             DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
-            _scrollViewer.Visibility = Visibility.Visible;
-            _textListView.Visibility = Visibility.Collapsed;
-            _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
+            if (isMarkdown)
+            {
+                _scrollViewer.Visibility = Visibility.Visible;
+                _textListView.Visibility = Visibility.Collapsed;
+                _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
+            }
+            else
+            {
+                _ = RenderVirtualTextAsync(text, "text", renderVersion);
+            }
         }
 
         ApplyOutlineVisibility();
-        _textBlock.Focus(FocusState.Programmatic);
+        FrameworkElement focusTarget = isMarkdown ? _textBlock : _textListView;
+        focusTarget.Focus(FocusState.Programmatic);
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         if (_outlineItems.Count > 0)
             size = (Math.Min(maxContent.Width, size.Width + OutlineWidth + OutlineGap), size.Height);
@@ -150,6 +168,9 @@ internal sealed class TextPreviewPresenter
         _renderVersion++;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
+        _textLines = null;
+        _textLineIndex = null;
+        _realizedTextLines.Clear();
         ClearOutline();
         ApplyOutlineVisibility();
     }
@@ -183,6 +204,7 @@ internal sealed class TextPreviewPresenter
         _searchMatches.Clear();
         _currentSearchMatch = -1;
         _textBlock.TextHighlighters.Clear();
+        RefreshRealizedTextLines();
         foreach (MarkdownSearchTarget target in _markdownSearchTargets)
             target.TextBlock.TextHighlighters.Clear();
         return SearchState;
@@ -206,6 +228,12 @@ internal sealed class TextPreviewPresenter
         }
         if (_lastReady?.TextFormat == "markdown")
             return;
+
+        if (_textLines is not null)
+        {
+            RefreshRealizedTextLines();
+            return;
+        }
 
         var allMatches = new TextHighlighter
         {
@@ -297,7 +325,15 @@ internal sealed class TextPreviewPresenter
 
     private void ScrollToCurrentSearchMatch()
     {
-        if (_currentSearchMatch < 0 || _displayedText.Length == 0 || _scrollViewer.ScrollableHeight <= 0)
+        if (_currentSearchMatch < 0 || _displayedText.Length == 0)
+            return;
+        if (_textLines is not null && _textLineIndex is not null)
+        {
+            int lineIndex = _textLineIndex.FindLineIndex(_searchMatches[_currentSearchMatch]);
+            _textListView.ScrollIntoView(_textLines[lineIndex], ScrollIntoViewAlignment.Leading);
+            return;
+        }
+        if (_scrollViewer.ScrollableHeight <= 0)
             return;
         if (_markdownSearchAnchors.Count > 0)
         {
@@ -330,15 +366,24 @@ internal sealed class TextPreviewPresenter
         _wrap = wrap;
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        if (_textListView.ItemsSource is ObservableCollection<TextLineItem> items)
-        {
-            foreach (TextLineItem item in items)
-                if (item.Content is TextBlock textBlock)
-                    textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        }
+        ScrollViewer.SetHorizontalScrollMode(_textListView, wrap ? ScrollMode.Disabled : ScrollMode.Enabled);
+        ScrollViewer.SetHorizontalScrollBarVisibility(
+            _textListView, wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+        RefreshRealizedTextLines();
+    }
+
+    public void SetLineNumbersVisible(bool visible)
+    {
+        _showLineNumbers = visible;
+        RefreshRealizedTextLines();
     }
 
     public bool SupportsWrappingToggle
+        => _lastReady is not null
+            && _lastReady.Markdown is null
+            && !string.Equals(_lastReady.TextFormat, "markdown", StringComparison.OrdinalIgnoreCase);
+
+    public bool SupportsLineNumbers
         => _lastReady is not null
             && _lastReady.Markdown is null
             && !string.Equals(_lastReady.TextFormat, "markdown", StringComparison.OrdinalIgnoreCase);
@@ -350,6 +395,177 @@ internal sealed class TextPreviewPresenter
         bool wrap = TextWrappingPolicy.ShouldWrap(mode, _lastReady.TextFormat, _lastReady.Markdown is not null);
         SetWrapping(wrap);
         return wrap;
+    }
+
+    private async Task RenderVirtualTextAsync(string text, string language, int renderVersion)
+    {
+        try
+        {
+            var result = await Task.Run(() => BuildVirtualTextLines(text, language));
+            if (renderVersion != _renderVersion)
+                return;
+            _textLineIndex = result.Index;
+            _textLines = result.Lines;
+            _textListView.ItemsSource = result.Lines;
+            ScrollViewer.SetHorizontalScrollMode(_textListView, _wrap ? ScrollMode.Disabled : ScrollMode.Enabled);
+            ScrollViewer.SetHorizontalScrollBarVisibility(
+                _textListView, _wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+            ScrollToCurrentSearchMatch();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "virtual text render failed: " + ex.Message);
+            if (renderVersion != _renderVersion)
+                return;
+            _textLineIndex = TextLineIndex.Create(text);
+            _textLines = _textLineIndex.Lines
+                .Select(line => new TextLineItem(line.Number, line.Start, text.Substring(line.Start, line.Length), []))
+                .ToArray();
+            _textListView.ItemsSource = _textLines;
+        }
+    }
+
+    private static (TextLineIndex Index, TextLineItem[] Lines) BuildVirtualTextLines(string text, string language)
+    {
+        TextLineIndex index = TextLineIndex.Create(text);
+        bool highlight = language is not ("text" or "log");
+        List<(string Text, TokenKind Kind)> tokens = highlight
+            ? MergeAdjacentSpans(SyntaxHighlighter.Highlight(text, language))
+            : [];
+        var positioned = new List<(int Start, int End, TokenKind Kind)>();
+        int position = 0;
+        foreach ((string tokenText, TokenKind kind) in tokens)
+        {
+            positioned.Add((position, position + tokenText.Length, kind));
+            position += tokenText.Length;
+        }
+        if (highlight && position != text.Length)
+            throw new InvalidDataException("Syntax highlighting did not preserve the virtualized text.");
+
+        var lines = new TextLineItem[index.Lines.Count];
+        int tokenIndex = 0;
+        for (int lineIndex = 0; lineIndex < index.Lines.Count; lineIndex++)
+        {
+            TextLineRange line = index.Lines[lineIndex];
+            int lineEnd = line.Start + line.Length;
+            while (tokenIndex < positioned.Count && positioned[tokenIndex].End <= line.Start)
+                tokenIndex++;
+            var lineTokens = new List<TextLineToken>();
+            for (int i = tokenIndex; i < positioned.Count && positioned[i].Start < lineEnd; i++)
+            {
+                int start = Math.Max(line.Start, positioned[i].Start);
+                int end = Math.Min(lineEnd, positioned[i].End);
+                if (start < end)
+                    lineTokens.Add(new TextLineToken(start - line.Start, end - start, positioned[i].Kind));
+                if (lineTokens.Count > MaxVirtualLineRuns)
+                {
+                    lineTokens.Clear();
+                    break;
+                }
+            }
+            lines[lineIndex] = new TextLineItem(
+                line.Number,
+                line.Start,
+                text.Substring(line.Start, line.Length),
+                lineTokens.ToArray());
+        }
+        return (index, lines);
+    }
+
+    private void OnTextLineContainerChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer is not ListViewItem container)
+            return;
+        if (args.InRecycleQueue)
+        {
+            _realizedTextLines.Remove(container);
+            return;
+        }
+        if (args.Item is not TextLineItem item
+            || container.ContentTemplateRoot is not Grid root
+            || root.FindName("LineNumberText") is not TextBlock lineNumber
+            || root.FindName("LineContentText") is not TextBlock textBlock)
+            return;
+        var realized = new RealizedTextLine(item, root, lineNumber, textBlock);
+        _realizedTextLines[container] = realized;
+        ApplyTextLineVisual(realized);
+    }
+
+    private void RefreshRealizedTextLines()
+    {
+        foreach (RealizedTextLine line in _realizedTextLines.Values.ToArray())
+            ApplyTextLineVisual(line);
+    }
+
+    private void ApplyTextLineVisual(RealizedTextLine realized)
+    {
+        realized.Root.ColumnDefinitions[0].Width = _showLineNumbers ? new GridLength(60) : new GridLength(0);
+        realized.LineNumber.Visibility = _showLineNumbers ? Visibility.Visible : Visibility.Collapsed;
+        TextBlock textBlock = realized.TextBlock;
+        textBlock.TextWrapping = _wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        textBlock.Inlines.Clear();
+        textBlock.TextHighlighters.Clear();
+        if (realized.Item.Tokens.Count == 0)
+        {
+            textBlock.Text = realized.Item.Text;
+        }
+        else
+        {
+            textBlock.Text = "";
+            int position = 0;
+            foreach (TextLineToken token in realized.Item.Tokens)
+            {
+                if (token.Start > position)
+                    textBlock.Inlines.Add(new Run { Text = realized.Item.Text[position..token.Start] });
+                textBlock.Inlines.Add(new Run
+                {
+                    Text = realized.Item.Text.Substring(token.Start, token.Length),
+                    Foreground = BrushFor(token.Kind),
+                });
+                position = token.Start + token.Length;
+            }
+            if (position < realized.Item.Text.Length)
+                textBlock.Inlines.Add(new Run { Text = realized.Item.Text[position..] });
+        }
+        ApplyTextLineSearchHighlights(realized.Item, textBlock);
+    }
+
+    private void ApplyTextLineSearchHighlights(TextLineItem item, TextBlock textBlock)
+    {
+        if (_searchMatches.Count == 0 || _searchQuery.Length == 0)
+            return;
+        int lineEnd = item.Start + item.Text.Length;
+        var all = new TextHighlighter
+        {
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(110, 255, 210, 64)),
+        };
+        foreach (int matchStart in _searchMatches.Take(MaxSearchHighlightRanges))
+        {
+            int start = Math.Max(matchStart, item.Start);
+            int end = Math.Min(matchStart + _searchQuery.Length, lineEnd);
+            if (start < end)
+                all.Ranges.Add(new TextRange { StartIndex = start - item.Start, Length = end - start });
+        }
+        if (all.Ranges.Count > 0)
+            textBlock.TextHighlighters.Add(all);
+        if (_currentSearchMatch < 0)
+            return;
+        int currentStart = _searchMatches[_currentSearchMatch];
+        int startCurrent = Math.Max(currentStart, item.Start);
+        int endCurrent = Math.Min(currentStart + _searchQuery.Length, lineEnd);
+        if (startCurrent < endCurrent)
+        {
+            var current = new TextHighlighter
+            {
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 255, 145, 48)),
+            };
+            current.Ranges.Add(new TextRange
+            {
+                StartIndex = startCurrent - item.Start,
+                Length = endCurrent - startCurrent,
+            });
+            textBlock.TextHighlighters.Add(current);
+        }
     }
 
     private void RenderMarkdownDocument(PreviewMarkdown document)
@@ -1368,12 +1584,15 @@ internal sealed class TextPreviewPresenter
     }
 }
 
-public sealed class TextLineItem
-{
-    public int LineNumber { get; set; }
-    public string Text { get; set; } = "";
-    public object? Content { get; set; }
-}
+public readonly record struct TextLineToken(int Start, int Length, TokenKind Kind);
+
+public sealed record TextLineItem(int LineNumber, int Start, string Text, IReadOnlyList<TextLineToken> Tokens);
+
+internal readonly record struct RealizedTextLine(
+    TextLineItem Item,
+    Grid Root,
+    TextBlock LineNumber,
+    TextBlock TextBlock);
 
 public sealed class MarkdownOutlineItem
 {

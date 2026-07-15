@@ -7,6 +7,19 @@ namespace QuickLook.Next.Core.Tests;
 
 public sealed class CoreBoundaryTests : IDisposable
 {
+    [Fact]
+    public void Text_line_index_preserves_mixed_separators_and_trailing_line()
+    {
+        const string text = "alpha\r\nbeta\rgamma\n";
+        TextLineIndex index = TextLineIndex.Create(text);
+
+        Assert.Equal(
+            [new TextLineRange(1, 0, 5), new(2, 7, 4), new(3, 12, 5), new(4, 18, 0)],
+            index.Lines);
+        Assert.Equal(0, index.FindLineIndex(0));
+        Assert.Equal(1, index.FindLineIndex(7));
+        Assert.Equal(3, index.FindLineIndex(text.Length));
+    }
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextTests", Guid.NewGuid().ToString("n"));
 
     [Fact]

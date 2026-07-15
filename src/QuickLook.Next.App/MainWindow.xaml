@@ -324,9 +324,10 @@
                               Grid.Row="1"
                               Visibility="Collapsed"
                               Padding="24"
-                              SelectionMode="Extended"
-                              IsItemClickEnabled="False"
-                              ShowsScrollingPlaceholders="False">
+                               SelectionMode="Extended"
+                               IsItemClickEnabled="False"
+                               ShowsScrollingPlaceholders="False"
+                               HorizontalContentAlignment="Stretch">
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:TextLineItem">
                                 <Grid Margin="0,0,0,2">
@@ -334,14 +335,22 @@
                                         <ColumnDefinition Width="60" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding LineNumber}"
+                                    <TextBlock x:Name="LineNumberText"
+                                               Text="{Binding LineNumber}"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                FontSize="13"
                                                FontFamily="Cascadia Mono, Consolas"
                                                HorizontalAlignment="Right"
                                                Margin="0,0,16,0"
                                                VerticalAlignment="Top" />
-                                    <ContentControl Content="{Binding Content}" Grid.Column="1" VerticalAlignment="Top" />
+                                    <TextBlock x:Name="LineContentText"
+                                               Grid.Column="1"
+                                               Text="{Binding Text}"
+                                               IsTextSelectionEnabled="True"
+                                               FontSize="13"
+                                               FontFamily="Cascadia Mono, Consolas"
+                                               TextWrapping="NoWrap"
+                                               VerticalAlignment="Top" />
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>

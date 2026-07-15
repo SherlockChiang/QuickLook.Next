@@ -79,6 +79,19 @@ Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]
     "Raw Markdown fallback rendering must share the structured block budget."
 Require-Pattern $textPresenter 'ApplyMarkdownSearchHighlights\(\)' `
     "Structured Markdown search must retain local visual highlighting."
+Require-Pattern $textPresenter '_textListView\.ItemsSource\s*=\s*result\.Lines' `
+    "Code and plain text must use virtualized ListView rows."
+Require-Pattern $textPresenter 'ContainerContentChanging\s*\+=' `
+    "Virtual text rows must materialize only through realized containers."
+Require-Pattern $textPresenter 'MaxVirtualLineRuns\s*=\s*512' `
+    "Each realized virtual text row must retain its 512-run budget."
+Require-Pattern $textPresenter 'ScrollIntoView\(_textLines\[lineIndex\]' `
+    "Virtual text search must navigate to the exact indexed line."
+Require-Pattern $textPresenter 'public sealed record TextLineItem\(int LineNumber, int Start, string Text, IReadOnlyList<TextLineToken> Tokens\)' `
+    "Virtual text line models must remain data-only."
+if ((Get-Content -LiteralPath $textPresenter -Raw) -match 'TextLineItem[\s\S]{0,200}object\?\s+Content') {
+    $failures.Add("Virtual text line models must not retain pre-created UI content.")
+}
 
 $tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"
 Require-Pattern $tablePresenter 'if\s*\(!e\.IsIntermediate\)\s*\r?\n\s*RenderViewport\(\)' `

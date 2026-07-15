@@ -1620,6 +1620,7 @@ public sealed partial class MainWindow : Window
         TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight), wrap);
         TextWordWrapButton.IsChecked = wrap;
         TextWordWrapButton.Visibility = _textPresenter.SupportsWrappingToggle ? Visibility.Visible : Visibility.Collapsed;
+        TextLineNumbersButton.Visibility = _textPresenter.SupportsLineNumbers ? Visibility.Visible : Visibility.Collapsed;
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
@@ -3384,35 +3385,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void TextLineNumbersButton_Click(object sender, RoutedEventArgs e)
-    {
-        bool showLineNumbers = TextLineNumbersButton.IsChecked == true;
-        // Since modifying DataTemplate properties runtime is tricky, we can find the TextBlocks
-        // in the visual tree, or simply ignore it for now as a toggle is visually sufficient for a demo, 
-        // or just toggle a global resource.
-        // For now, toggle a static property or resource if needed, but a quick way is to just 
-        // set the ListView ItemTemplate to a different one, or walk the visual tree.
-        WalkVisualTreeToToggleLineNumbers(TextListView, showLineNumbers);
-    }
-    
-    private void WalkVisualTreeToToggleLineNumbers(DependencyObject root, bool show)
-    {
-        int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
-        for (int i = 0; i < count; i++)
-        {
-            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
-            if (child is TextBlock tb && tb.Foreground is SolidColorBrush brush && 
-                brush.Color == ((SolidColorBrush)Application.Current.Resources["TextFillColorSecondaryBrush"]).Color &&
-                tb.Margin.Right == 16)
-            {
-                tb.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-                if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(tb) is Grid g && g.ColumnDefinitions.Count > 0)
-                {
-                    g.ColumnDefinitions[0].Width = show ? new GridLength(60) : new GridLength(0);
-                }
-            }
-            WalkVisualTreeToToggleLineNumbers(child, show);
-        }
-    }
+        => _textPresenter?.SetLineNumbersVisible(TextLineNumbersButton.IsChecked == true);
 
     private void TextSearchButton_Click(object sender, RoutedEventArgs e)
         => OpenTextSearch();
@@ -3475,7 +3448,8 @@ public sealed partial class MainWindow : Window
         TextFindBox.Text = "";
         if (_textPresenter is { } textPresenter)
             ApplyTextSearchState(textPresenter.ClearSearch());
-        TextPreviewBlock.Focus(FocusState.Programmatic);
+        FrameworkElement focusTarget = _textPresenter?.SupportsLineNumbers == true ? TextListView : TextPreviewBlock;
+        focusTarget.Focus(FocusState.Programmatic);
     }
 
     private void ApplyTextSearchState(TextSearchState state)

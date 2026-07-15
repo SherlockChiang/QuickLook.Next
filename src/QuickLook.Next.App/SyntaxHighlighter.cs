@@ -2,7 +2,7 @@ using System.Text;
 
 namespace QuickLook.Next.App;
 
-internal enum TokenKind { Default, Keyword, Str, Comment, Number, Type, Property, Punctuation }
+public enum TokenKind { Default, Keyword, Str, Comment, Number, Type, Property, Punctuation }
 
 /// <summary>
 /// Lightweight, language-aware tokenizer for preview coloring. It is deliberately conservative:
