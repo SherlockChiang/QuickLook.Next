@@ -224,6 +224,20 @@ if (Test-Path $parserSupervisor) {
     if ($parserSupervisorText -notmatch 'new FileStream\(path, FileMode\.CreateNew, FileAccess\.ReadWrite, FileShare\.Read\)') {
         Add-Failure "Archive App handoff must retain a read-shared anchor that blocks writes and deletion"
     }
+    if ($parserSupervisorText -notmatch '"--writable-root", writableRoot') {
+        Add-Failure "ParserHost must receive a per-launch writable root"
+    }
+}
+
+$parserHostProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
+if (Test-Path $parserHostProgram) {
+    $parserHostProgramText = Get-Content -LiteralPath $parserHostProgram -Raw
+    if ($parserHostProgramText -match 'Path\.GetTempPath\(') {
+        Add-Failure "ParserHost runtime writes must remain inside its per-launch writable root"
+    }
+    if ($parserHostProgramText -notmatch 'QUICKLOOK_NEXT_ARCHIVE_ROOT') {
+        Add-Failure "ParserHost archive extraction must use its per-launch writable root"
+    }
 }
 
 $mainWindowPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"

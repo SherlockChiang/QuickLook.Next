@@ -12879,6 +12879,9 @@ fn archive_extract_output_name(entry_path: &str) -> String {
 }
 
 fn archive_extract_base_path() -> PathBuf {
+    if let Some(root) = std::env::var_os("QUICKLOOK_NEXT_ARCHIVE_ROOT") {
+        return PathBuf::from(root);
+    }
     std::env::temp_dir()
         .join("QuickLookNext")
         .join("archive-preview")

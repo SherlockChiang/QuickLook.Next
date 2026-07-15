@@ -5,12 +5,22 @@ using QuickLook.Next.ParserHost;
 
 string pipeName = GetArg(args, "--pipe") ?? "quicklook_next_parser";
 string? sessionToken = GetArg(args, "--session-token");
+string writableRoot = GetArg(args, "--writable-root") ?? "";
+if (!Path.IsPathFullyQualified(writableRoot) || !Directory.Exists(writableRoot)
+    || (File.GetAttributes(writableRoot) & FileAttributes.ReparsePoint) != 0) return;
+string logRoot = Path.Combine(writableRoot, "logs");
+string inputRoot = Path.Combine(writableRoot, "parser-input");
+string archiveRoot = Path.Combine(writableRoot, "archive-preview");
+string rasterRoot = Path.Combine(writableRoot, "parser-raster");
+foreach (string child in new[] { logRoot, inputRoot, archiveRoot, rasterRoot })
+    if (!Directory.Exists(child) || (File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) return;
+Environment.SetEnvironmentVariable("QUICKLOOK_NEXT_ARCHIVE_ROOT", archiveRoot);
 
-DiagLog.Init(Path.Combine(AppContext.BaseDirectory, "parser-host.log"));
+DiagLog.InitInDirectory(logRoot, "parser-host.log");
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
-CleanupStaleHeroRasters();
-CleanupStalePreviewInputs();
+CleanupStaleHeroRasters(rasterRoot);
+CleanupStalePreviewInputs(inputRoot);
 
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
@@ -148,7 +158,7 @@ while (true)
                 try
                 {
                     using var sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength);
-                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, sourceHandle, open.SourceLength);
+                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, sourceHandle, open.SourceLength, inputRoot);
                     if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
                     {
                         input?.Anchor.Dispose();
@@ -356,7 +366,7 @@ while (true)
                         return;
                     }
 
-                    tempPath = WriteHeroRaster(extract.RequestId, raster);
+                    tempPath = WriteHeroRaster(extract.RequestId, raster, rasterRoot);
                     heroCts.Token.ThrowIfCancellationRequested();
                     if (tempPath is null)
                     {
@@ -471,12 +481,10 @@ static bool IsValidProbe(QuickLook.Next.Contracts.FileProbe? probe)
        && !string.IsNullOrWhiteSpace(probe.Kind)
        && probe.Size >= 0;
 
-static string? WriteHeroRaster(string requestId, byte[] raster)
+static string? WriteHeroRaster(string requestId, byte[] raster, string root)
 {
     try
     {
-        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster");
-        Directory.CreateDirectory(root);
         if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             return null;
 
@@ -524,11 +532,10 @@ static void DeleteArchiveEntry(string path)
     catch { }
 }
 
-static void CleanupStaleHeroRasters()
+static void CleanupStaleHeroRasters(string root)
 {
     try
     {
-        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster");
         if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             return;
 
@@ -541,11 +548,10 @@ static void CleanupStaleHeroRasters()
     catch { }
 }
 
-static void CleanupStalePreviewInputs()
+static void CleanupStalePreviewInputs(string root)
 {
     try
     {
-        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-input");
         if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             return;
         foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
@@ -559,12 +565,12 @@ static void CleanupStalePreviewInputs()
     string requestId,
     string logicalPath,
     Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
-    long sourceLength)
+    long sourceLength,
+    string root)
 {
     string extension = Path.GetExtension(logicalPath);
     if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
         extension = "";
-    string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-input");
     string directory = Path.Combine(root, "input-" + requestId);
     string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
     try

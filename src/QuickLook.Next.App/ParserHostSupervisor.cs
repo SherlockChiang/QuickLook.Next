@@ -31,6 +31,7 @@ internal sealed class ParserHostSupervisor
     private readonly CancellationTokenSource _telemetryCts = new();
     private readonly Task _telemetryTask;
     private int _timeoutCount;
+    private string? _writableRoot;
 
     public ParserHostSupervisor(string hostExePath)
     {
@@ -57,15 +58,20 @@ internal sealed class ParserHostSupervisor
         TryKillHost();
         try { _host?.Dispose(); } catch { }
         _host = null;
+        CleanupWritableRoot();
         string pipeName = $"quicklook_next_parser_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         _sessionToken = RandomNumberGenerator.GetHexString(32);
+        _writableRoot = CreateWritableRoot();
+        string writableRoot = _writableRoot;
         _server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         var job = new HostProcessJob((nint)(512L * 1024 * 1024));
         try
         {
             _host = HostProcessLauncher.StartRestricted(
-                _hostExePath, ["--pipe", pipeName, "--session-token", _sessionToken], job);
+                _hostExePath,
+                ["--pipe", pipeName, "--session-token", _sessionToken, "--writable-root", writableRoot],
+                job);
             _job = job;
         }
         catch
@@ -74,12 +80,13 @@ internal sealed class ParserHostSupervisor
             try { _host?.Dispose(); } catch { }
             _host = null;
             job.Dispose();
+            CleanupWritableRoot();
             throw;
         }
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, _backgroundEfficiencyEnabled, "App");
         LogHostResources("started", generation, _host);
         _host.EnableRaisingEvents = true;
-        _host.Exited += (_, _) => OnHostExited(generation);
+        _host.Exited += (_, _) => OnHostExited(generation, writableRoot);
         try
         {
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -88,14 +95,38 @@ internal sealed class ParserHostSupervisor
             if (!GetNamedPipeClientProcessId(_server.SafePipeHandle.DangerousGetHandle(), out uint clientPid) || clientPid != _host.Id)
                 throw new InvalidOperationException("ParserHost pipe client did not match the launched process");
         }
-        catch { TryKillHost(); throw; }
+        catch
+        {
+            TryKillHost();
+            try { _server?.Dispose(); } catch { }
+            _server = null;
+            try { _host?.Dispose(); } catch { }
+            _host = null;
+            CleanupWritableRoot(writableRoot);
+            throw;
+        }
 
-        _channel = new PipeChannel(_server);
-        await _channel.SendAsync(new Hello(Environment.ProcessId, _sessionToken));
-        _ = ReadLoopAsync(_channel, generation);
-        using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        readyCts.CancelAfter(HostConnectTimeout);
-        await _ready.Task.WaitAsync(readyCts.Token);
+        try
+        {
+            _channel = new PipeChannel(_server);
+            await _channel.SendAsync(new Hello(Environment.ProcessId, _sessionToken));
+            _ = ReadLoopAsync(_channel, generation);
+            using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readyCts.CancelAfter(HostConnectTimeout);
+            await _ready.Task.WaitAsync(readyCts.Token);
+        }
+        catch
+        {
+            TryKillHost();
+            try { _channel?.Dispose(); } catch { }
+            _channel = null;
+            try { _server?.Dispose(); } catch { }
+            _server = null;
+            try { _host?.Dispose(); } catch { }
+            _host = null;
+            CleanupWritableRoot(writableRoot);
+            throw;
+        }
     }
 
     private bool IsConnected
@@ -316,16 +347,23 @@ internal sealed class ParserHostSupervisor
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, enabled, "App");
     }
 
-    private void OnHostExited(int generation)
+    private void OnHostExited(int generation, string writableRoot)
     {
-        if (_stopping || generation != _generation)
-            return;
+        try
+        {
+            if (_stopping || generation != _generation)
+                return;
 
-        int? exitCode = null;
-        try { exitCode = _host?.ExitCode; } catch { }
-        DiagLog.Write("App", $"ParserHost exited gen={generation}; pid={_host?.Id}; exitCode={exitCode?.ToString() ?? "unknown"}; timeouts={Volatile.Read(ref _timeoutCount)}");
-        _recycleOnCancel.Clear();
-        _pending.FailAll(new InvalidOperationException("ParserHost exited"));
+            int? exitCode = null;
+            try { exitCode = _host?.ExitCode; } catch { }
+            DiagLog.Write("App", $"ParserHost exited gen={generation}; pid={_host?.Id}; exitCode={exitCode?.ToString() ?? "unknown"}; timeouts={Volatile.Read(ref _timeoutCount)}");
+            _recycleOnCancel.Clear();
+            _pending.FailAll(new InvalidOperationException("ParserHost exited"));
+        }
+        finally
+        {
+            CleanupWritableRoot(writableRoot);
+        }
     }
 
     public void Stop()
@@ -343,6 +381,7 @@ internal sealed class ParserHostSupervisor
         TryKillHost();
         try { _host?.Dispose(); } catch { }
         _host = null;
+        CleanupWritableRoot();
         try { _telemetryCts.Dispose(); } catch { }
     }
 
@@ -383,6 +422,7 @@ internal sealed class ParserHostSupervisor
         try { _job?.Dispose(); } catch { }
         _job = null;
         try { if (_host is { HasExited: false }) _host.Kill(entireProcessTree: true); } catch { }
+        try { _host?.WaitForExit(1000); } catch { }
     }
 
     private void RecycleHost(string reason)
@@ -397,6 +437,46 @@ internal sealed class ParserHostSupervisor
         try { _server?.Dispose(); } catch { }
         _server = null;
         TryKillHost();
+        CleanupWritableRoot();
+    }
+
+    private static string CreateWritableRoot()
+    {
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "QuickLookNext", "ParserHost", "work", "host-" + RandomNumberGenerator.GetHexString(16).ToLowerInvariant());
+        try
+        {
+            Directory.CreateDirectory(root);
+            foreach (string child in new[] { "logs", "parser-input", "archive-preview", "parser-raster" })
+                Directory.CreateDirectory(Path.Combine(root, child));
+            return root;
+        }
+        catch
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+            throw;
+        }
+    }
+
+    private void CleanupWritableRoot(string? expectedRoot = null)
+    {
+        string? root;
+        if (expectedRoot is null)
+        {
+            root = Interlocked.Exchange(ref _writableRoot, null);
+        }
+        else
+        {
+            Interlocked.CompareExchange(ref _writableRoot, null, expectedRoot);
+            root = expectedRoot;
+        }
+        if (root is null) return;
+        try
+        {
+            if (Directory.Exists(root) && (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0)
+                Directory.Delete(root, recursive: true);
+        }
+        catch { }
     }
 
     private NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)

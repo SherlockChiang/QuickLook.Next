@@ -40,6 +40,17 @@ public static class DiagLog
         EnsureWriterStarted();
     }
 
+    public static void InitInDirectory(string directory, string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)
+            || !string.Equals(fileName, Path.GetFileName(fileName), StringComparison.Ordinal))
+            throw new ArgumentException("Log file name must not contain a path.", nameof(fileName));
+        Directory.CreateDirectory(directory);
+        _path = Path.Combine(directory, fileName);
+        try { File.Delete(_path); } catch { }
+        EnsureWriterStarted();
+    }
+
     public static void Write(string tag, string message)
     {
         if (_path.Length == 0) return;

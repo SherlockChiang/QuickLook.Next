@@ -197,7 +197,7 @@ public sealed class ParserHostIntegrationTests
             Assert.DoesNotContain("replacement content", ready.TextContent);
 
             string anchorPath = Path.Combine(
-                Path.GetTempPath(), "QuickLookNext", "parser-input", "input-" + requestId, "source.txt");
+                GetWritableRoot(host), "parser-input", "input-" + requestId, "source.txt");
             Assert.True(File.Exists(anchorPath));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(anchorPath), timeout.Token);
@@ -442,7 +442,7 @@ public sealed class ParserHostIntegrationTests
             string requestId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(requestId, docxPath, "office"), timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + requestId, "hero.bgra");
+            handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(8, extracted.Width);
             Assert.Equal(8, extracted.Height);
@@ -498,7 +498,7 @@ public sealed class ParserHostIntegrationTests
             string requestId = Guid.NewGuid().ToString("n");
             await channel.SendAsync(new HeroRasterExtract(requestId, apkPath, "package"), timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + requestId, "hero.bgra");
+            handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(16, extracted.Width);
             Assert.Equal(16, extracted.Height);
@@ -565,7 +565,7 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new HeroRasterExtract(rasterId, docxPath, "office"), timeout.Token);
             HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
             rasterHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, raster.FileHandle, raster.PacketLength);
-            rasterPath = Path.Combine(Path.GetTempPath(), "QuickLookNext", "parser-raster", "raster-" + rasterId, "hero.bgra");
+            rasterPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + rasterId, "hero.bgra");
             Assert.False(archiveHandle.IsInvalid);
             Assert.True(File.Exists(rasterPath));
 
@@ -602,13 +602,13 @@ public sealed class ParserHostIntegrationTests
                 output.Write(block);
         }
 
-        string extractionRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "archive-preview");
-        HashSet<string> rootsBefore = EnumerateExtractionRoots(extractionRoot);
         string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
+        string extractionRoot = Path.Combine(GetWritableRoot(host), "archive-preview");
+        HashSet<string> rootsBefore = EnumerateExtractionRoots(extractionRoot);
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -644,12 +644,24 @@ public sealed class ParserHostIntegrationTests
     private static Process StartHost(string pipeName, string token)
     {
         string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
-        return Process.Start(new ProcessStartInfo(hostPath)
+        string writableRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", "host-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(writableRoot);
+        foreach (string child in new[] { "logs", "parser-input", "archive-preview", "parser-raster" })
+            Directory.CreateDirectory(Path.Combine(writableRoot, child));
+        try
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            ArgumentList = { "--pipe", pipeName, "--session-token", token },
-        }) ?? throw new InvalidOperationException("ParserHost did not start");
+            return Process.Start(new ProcessStartInfo(hostPath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                ArgumentList = { "--pipe", pipeName, "--session-token", token, "--writable-root", writableRoot },
+            }) ?? throw new InvalidOperationException("ParserHost did not start");
+        }
+        catch
+        {
+            try { Directory.Delete(writableRoot, recursive: true); } catch { }
+            throw;
+        }
     }
 
     private static async Task AssertRejectedAsync(Func<PipeChannel, string, CancellationToken, Task> send)
@@ -677,8 +689,20 @@ public sealed class ParserHostIntegrationTests
 
     private static async Task StopHostAsync(Process host)
     {
+        string writableRoot = GetWritableRoot(host);
         try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
         catch { try { host.Kill(entireProcessTree: true); } catch { } }
+        try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+        try { Directory.Delete(writableRoot, recursive: true); } catch { }
+    }
+
+    private static string GetWritableRoot(Process host)
+    {
+        IList<string> arguments = host.StartInfo.ArgumentList;
+        int index = arguments.IndexOf("--writable-root");
+        return index >= 0 && index + 1 < arguments.Count
+            ? arguments[index + 1]
+            : throw new InvalidOperationException("ParserHost writable root was not configured");
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
