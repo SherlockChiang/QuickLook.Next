@@ -1281,6 +1281,7 @@ fn jpeg_metadata(path: &str) -> std::result::Result<JpegMetadata, ()> {
     jpeg_metadata_from_reader(BufReader::new(file))
 }
 
+#[cfg(test)]
 fn jpeg_icc_profile_from_bytes(bytes: &[u8]) -> std::result::Result<Option<Vec<u8>>, ()> {
     Ok(jpeg_metadata_from_reader(std::io::Cursor::new(bytes))?.icc_profile)
 }
