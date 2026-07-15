@@ -52,6 +52,19 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Isolate every ParserHost launch under an App-owned writable root for logs,
+  pinned inputs, archive extraction, and raster handoffs; clean it on all exits.
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `a339a29`
+- [x] Render bounded SVG previews natively with external image loading disabled,
+  system-font reuse, fallback classification, and RasterHost integration coverage.
+  - Verification: `cargo test --locked`; `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore --filter RasterHostSvgTests`
+  - Commit: `ac4966d`
+- [x] Capture the restricted-host smoke child exit code from its process object.
+  - Verification: `tools/smoke-restricted-host-launch.ps1`
+  - Commit: `1636326`
+
 - [x] Bound Markdown tables to 64 columns and 4096 rendered cells, and cap
   ordinary text-search highlight ranges at 5000 while retaining full results.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter Markdown_table_search_index_obeys_cell_budget`
