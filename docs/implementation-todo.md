@@ -25,7 +25,7 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
 - [ ] Add exact per-block Markdown search highlighting; AST-only documents now
   use a visible-text index and block-precise navigation anchors.
-- [ ] Add a privacy-conscious diagnostics center and support bundle.
+- [ ] Add a Settings UI entry for the privacy-conscious diagnostics bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
@@ -51,6 +51,12 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add a fixed-schema, metadata-only diagnostics ZIP writer with exactly two
+  entries, normalized inputs, no path/attachment API, cancellation, and strict
+  JSON, README, and archive size budgets.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter DiagnosticsBundleTests`
+  - Commit: this change
 
 - [x] Cap each delimited-table viewport reconstruction at 1024 data cells while
   preserving the normal application viewport range.
