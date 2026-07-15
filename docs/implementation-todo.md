@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Apply the shared 2000-block UI budget to raw Markdown fallback parsing,
+  stopping line scans before creating excess paragraphs or code containers.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
+
 - [x] Isolate every ParserHost launch under an App-owned writable root for logs,
   pinned inputs, archive extraction, and raster handoffs; clean it on all exits.
   - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`

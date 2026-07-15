@@ -58,6 +58,8 @@ Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
     "Text search must retain its 5000-range visual highlight budget."
 Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*2000' `
     "Structured Markdown rendering must retain its 2000-block UI budget."
+Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]*TryReserveMarkdownBlock\(\)' `
+    "Raw Markdown fallback rendering must share the structured block budget."
 
 if ($failures.Count -gt 0) {
     Write-Host ""

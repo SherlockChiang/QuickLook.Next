@@ -672,13 +672,19 @@ internal sealed class TextPreviewPresenter
         string codeLanguage = "text";
         var paragraphBuffer = new List<string>();
 
-        void FlushParagraph()
+        bool FlushParagraph()
         {
-            if (paragraphBuffer.Count == 0) return;
+            if (paragraphBuffer.Count == 0) return true;
+            if (!TryReserveMarkdownBlock())
+            {
+                paragraphBuffer.Clear();
+                return false;
+            }
             var p = CreateParagraph(14, "Segoe UI", 0, 8);
             AddInlineMarkdown(p, string.Join(" ", paragraphBuffer));
             _textBlock.Blocks.Add(p);
             paragraphBuffer.Clear();
+            return true;
         }
 
         foreach (string raw in lines)
@@ -688,6 +694,8 @@ internal sealed class TextPreviewPresenter
             {
                 if (inCode)
                 {
+                    if (!TryReserveMarkdownBlock())
+                        break;
                     AddMarkdownCodeBlock(code.ToString().TrimEnd('\n'), codeLanguage);
                     code.Clear();
                     codeLanguage = "text";
@@ -695,7 +703,8 @@ internal sealed class TextPreviewPresenter
                 }
                 else
                 {
-                    FlushParagraph();
+                    if (!FlushParagraph())
+                        break;
                     inCode = true;
                     codeLanguage = SyntaxHighlighter.NormalizeLanguage(line.TrimStart()[3..].Trim());
                     if (codeLanguage.Length == 0)
@@ -713,13 +722,15 @@ internal sealed class TextPreviewPresenter
             string trimmed = line.Trim();
             if (trimmed.Length == 0)
             {
-                FlushParagraph();
+                if (!FlushParagraph())
+                    break;
                 continue;
             }
 
             if (trimmed.StartsWith("#", StringComparison.Ordinal))
             {
-                FlushParagraph();
+                if (!FlushParagraph() || !TryReserveMarkdownBlock())
+                    break;
                 int level = Math.Min(6, trimmed.TakeWhile(c => c == '#').Count());
                 string title = trimmed[level..].Trim();
                 var p = CreateParagraph(level <= 1 ? 26 : level == 2 ? 22 : 18, "Segoe UI", 14, 8);
@@ -733,7 +744,8 @@ internal sealed class TextPreviewPresenter
 
             if (trimmed.StartsWith("> ", StringComparison.Ordinal))
             {
-                FlushParagraph();
+                if (!FlushParagraph() || !TryReserveMarkdownBlock())
+                    break;
                 var p = CreateParagraph(14, "Segoe UI", 4, 8);
                 p.Foreground = UiGrayBrush;
                 p.Inlines.Add(new Run { Text = "│ " });
@@ -744,7 +756,8 @@ internal sealed class TextPreviewPresenter
 
             if (trimmed.StartsWith("- ", StringComparison.Ordinal) || trimmed.StartsWith("* ", StringComparison.Ordinal))
             {
-                FlushParagraph();
+                if (!FlushParagraph() || !TryReserveMarkdownBlock())
+                    break;
                 var p = CreateParagraph(14, "Segoe UI", 2, 4);
                 p.Inlines.Add(new Run { Text = "• " });
                 AddInlineMarkdown(p, trimmed[2..]);
@@ -755,14 +768,22 @@ internal sealed class TextPreviewPresenter
             paragraphBuffer.Add(trimmed);
         }
 
-        FlushParagraph();
-        if (inCode && code.Length > 0)
+        if (!_markdownRenderTruncated)
+            FlushParagraph();
+        if (!_markdownRenderTruncated && inCode && code.Length > 0 && TryReserveMarkdownBlock())
         {
             // For simplicity in this demo, markdown parsing is synchronous but code highlighting can be async
             // To preserve order properly we should await it, but RenderMarkdown is synchronous right now.
             // A quick fix is to fire-and-forget or keep markdown code highlighting synchronous if it's small,
             // but for full files, we use RenderCodeOrPlainTextAsync.
             AddMarkdownCodeBlock(code.ToString().TrimEnd('\n'), codeLanguage);
+        }
+        if (_markdownRenderTruncated)
+        {
+            var partial = CreateParagraph(12, "Segoe UI", 12, 0);
+            partial.Foreground = UiGrayBrush;
+            partial.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
+            _textBlock.Blocks.Add(partial);
         }
     }
 
