@@ -65,6 +65,10 @@ Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*2000' `
 Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]*TryReserveMarkdownBlock\(\)' `
     "Raw Markdown fallback rendering must share the structured block budget."
 
+$tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"
+Require-Pattern $tablePresenter 'if\s*\(!e\.IsIntermediate\)\s*\r?\n\s*RenderViewport\(\)' `
+    "Delimited tables must not rebuild cells during intermediate scroll events."
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Performance bounds guard failed:" -ForegroundColor Red

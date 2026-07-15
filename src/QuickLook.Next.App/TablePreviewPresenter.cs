@@ -125,7 +125,11 @@ internal sealed class TablePreviewPresenter
         return widths;
     }
 
-    private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e) => RenderViewport();
+    private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (!e.IsIntermediate)
+            RenderViewport();
+    }
 
     private void OnScrollViewerSizeChanged(object sender, SizeChangedEventArgs e) => RenderViewport();
 

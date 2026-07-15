@@ -52,6 +52,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Skip delimited-table cell reconstruction during intermediate scroll
+  events and render the new viewport once scrolling settles.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commit: this change
+
 - [x] Materialize at most one missing Office page per dispatcher callback while
   releasing all off-screen pages immediately and queuing remaining nearby work.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
