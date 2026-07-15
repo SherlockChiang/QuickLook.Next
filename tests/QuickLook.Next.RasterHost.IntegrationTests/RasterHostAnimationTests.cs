@@ -18,6 +18,7 @@ public sealed class RasterHostAnimationTests
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string path = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.gif");
         string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
         using Process host = Process.Start(new ProcessStartInfo(hostPath)
         {
@@ -34,21 +35,21 @@ public sealed class RasterHostAnimationTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
-            string path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif");
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif"), path);
             var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
-            using var pinnedInputHandle = pinnedInput.Handle;
             string previewRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             var probe = new FileProbe(path, ".gif", File.ReadAllBytes(path)[..6])
             {
                 Kind = "image",
                 Size = new FileInfo(path).Length,
             };
-            await channel.SendAsync(new PreviewOpen(previewRequestId, path, probe)
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedInput.Handle, host.SafeHandle);
+            pinnedInput.Handle.Dispose();
+            await channel.SendAsync(new PreviewOpenHandle(previewRequestId, hostHandle, pinnedInput.Length, path, probe)
             {
                 TargetWidth = 256,
                 TargetHeight = 256,
             }, timeout.Token);
-            Assert.Throws<IOException>(() => File.WriteAllBytes(path, [0]));
 
             PreviewReady? previewReady = null;
             while (previewReady is null)
@@ -69,6 +70,8 @@ public sealed class RasterHostAnimationTests
                 }
                 previewReady = message as PreviewReady;
             }
+
+            File.WriteAllBytes(path, [0]);
 
             string animationRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             await channel.SendAsync(new PreviewAnimationFramesOpen(
@@ -102,6 +105,7 @@ public sealed class RasterHostAnimationTests
             try { pipe.Dispose(); } catch { }
             try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
             catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            try { File.Delete(path); } catch { }
         }
     }
 

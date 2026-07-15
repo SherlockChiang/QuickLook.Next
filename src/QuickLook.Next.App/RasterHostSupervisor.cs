@@ -24,7 +24,6 @@ internal sealed class RasterHostSupervisor
     private readonly PendingRequests _pending = new();
     private readonly ConcurrentDictionary<string, byte> _cloudOriginRequests = new();
     private readonly ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), byte> _pendingCloudPages = new();
-    private readonly ConcurrentDictionary<string, Microsoft.Win32.SafeHandles.SafeFileHandle> _pinnedInputs = new();
 
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -207,7 +206,6 @@ internal sealed class RasterHostSupervisor
                 break;
             case PreviewError error:
                 RemoveCloudRequestState(error.RequestId);
-                ReleasePinnedInput(error.RequestId);
                 _pending.TryComplete(error.RequestId, error);
                 break;
             case PreviewPageError pageError:
@@ -301,13 +299,21 @@ internal sealed class RasterHostSupervisor
         uint targetWidth,
         uint targetHeight)
     {
-        if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
+        if (_channel is null || _host is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
-        if (!_pinnedInputs.TryAdd(requestId, pinnedHandle))
+        long hostHandle;
+        try
+        {
+            hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedHandle, _host.SafeHandle);
+        }
+        catch
         {
             _pending.Cancel(requestId);
+            throw;
+        }
+        finally
+        {
             pinnedHandle.Dispose();
-            throw new InvalidOperationException("Duplicate pinned RasterHost request.");
         }
         _ = StopOnTimeoutAsync(completion, requestId);
         lock (_stateLock)
@@ -315,8 +321,29 @@ internal sealed class RasterHostSupervisor
             _activeRequestId = requestId;
             _activePath = path;
         }
-        _ = SendOpenAsync(requestId, path, probe, targetWidth, targetHeight);
+        _ = SendOpenHandleAsync(requestId, hostHandle, probe.Size, path, probe, targetWidth, targetHeight);
         return (requestId, completion);
+    }
+
+    private async Task SendOpenHandleAsync(
+        string requestId, long sourceHandle, long sourceLength, string logicalPath, FileProbe probe,
+        uint targetWidth, uint targetHeight)
+    {
+        try
+        {
+            if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
+            await _channel.SendAsync(new PreviewOpenHandle(
+                requestId, sourceHandle, sourceLength, logicalPath, probe)
+            {
+                TargetWidth = targetWidth,
+                TargetHeight = targetHeight,
+            });
+        }
+        catch (Exception ex)
+        {
+            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            RecycleHost(requestId, "handle preview request could not be delivered");
+        }
     }
 
     private async Task StopOnTimeoutAsync(Task<ControlMessage> completion, string requestId)
@@ -328,7 +355,6 @@ internal sealed class RasterHostSupervisor
         catch (TimeoutException)
         {
             RemoveCloudRequestState(requestId);
-            ReleasePinnedInput(requestId);
             DiagLog.Write("App", $"RasterHost request timed out; terminating host: request={requestId}; gen={_generation}");
             TryKillHost();
         }
@@ -353,7 +379,6 @@ internal sealed class RasterHostSupervisor
         catch (Exception ex)
         {
             RemoveCloudRequestState(requestId);
-            ReleasePinnedInput(requestId);
             _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
         }
     }
@@ -519,7 +544,6 @@ internal sealed class RasterHostSupervisor
         }
         finally
         {
-            ReleasePinnedInput(requestId);
             if (recycleHost)
                 RecycleHost(requestId, "cloud preview canceled while opening");
         }
@@ -537,7 +561,6 @@ internal sealed class RasterHostSupervisor
         (string? requestId, string? path) = GetRestartContext();
         DiagLog.Write("App", $"host exited gen={gen}; request={requestId}; scheduling restart");
         ClearCloudRequestState();
-        ClearPinnedInputs();
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
         _ = RestartAsync(gen, requestId, path);
     }
@@ -602,7 +625,6 @@ internal sealed class RasterHostSupervisor
         _stopping = true;
         ++_generation;
         ClearCloudRequestState();
-        ClearPinnedInputs();
         _ready.TrySetCanceled();
         _pending.FailAll(new OperationCanceledException("RasterHost stopped"));
         try { _channel?.Dispose(); } catch { }
@@ -637,7 +659,6 @@ internal sealed class RasterHostSupervisor
         }
         ++_generation;
         ClearCloudRequestState();
-        ClearPinnedInputs();
         _pending.FailAll(new OperationCanceledException(reason));
         try { _channel?.Dispose(); } catch { }
         _channel = null;
@@ -663,18 +684,6 @@ internal sealed class RasterHostSupervisor
     {
         _cloudOriginRequests.Clear();
         _pendingCloudPages.Clear();
-    }
-
-    private void ReleasePinnedInput(string requestId)
-    {
-        if (_pinnedInputs.TryRemove(requestId, out var handle))
-            handle.Dispose();
-    }
-
-    private void ClearPinnedInputs()
-    {
-        foreach (string requestId in _pinnedInputs.Keys)
-            ReleasePinnedInput(requestId);
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

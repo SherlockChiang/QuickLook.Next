@@ -397,7 +397,11 @@ public sealed class CoreBoundaryTests : IDisposable
             Kind = "text",
             Size = 4,
         };
-        var message = new PreviewOpenHandle("3".PadLeft(32, '3'), 1234, 4, probe.Path, probe);
+        var message = new PreviewOpenHandle("3".PadLeft(32, '3'), 1234, 4, probe.Path, probe)
+        {
+            TargetWidth = 800,
+            TargetHeight = 600,
+        };
         string json = ProtocolJson.Serialize(message);
 
         Assert.Contains("\"type\":\"preview.open.handle\"", json);
@@ -406,6 +410,8 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(message.SourceHandle, roundTrip.SourceHandle);
         Assert.Equal(message.SourceLength, roundTrip.SourceLength);
         Assert.Equal(message.LogicalPath, roundTrip.LogicalPath);
+        Assert.Equal(message.TargetWidth, roundTrip.TargetWidth);
+        Assert.Equal(message.TargetHeight, roundTrip.TargetHeight);
         Assert.Equal(message.Probe.Kind, roundTrip.Probe.Kind);
         Assert.Equal(message.Probe.MagicPrefix, roundTrip.Probe.MagicPrefix);
     }

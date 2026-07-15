@@ -31,8 +31,6 @@ public sealed class RasterHostSvgTests
             await File.WriteAllTextAsync(path,
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"200\"><rect width=\"400\" height=\"200\" fill=\"#2463eb\"/></svg>",
                 timeout.Token);
-            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
-            using var pinnedInputHandle = pinnedInput.Handle;
             await pipe.WaitForConnectionAsync(timeout.Token);
             using var channel = new PipeChannel(pipe);
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
@@ -42,13 +40,29 @@ public sealed class RasterHostSvgTests
             var probe = new FileProbe(path, ".svg", "<svg"u8.ToArray())
             {
                 Kind = "image",
-                Size = pinnedInput.Length,
+                Size = new FileInfo(path).Length,
             };
-            await channel.SendAsync(new PreviewOpen(requestId, path, probe)
+            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedInput.Handle, host.SafeHandle);
+            pinnedInput.Handle.Dispose();
+            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinnedInput.Length, path, probe)
             {
                 TargetWidth = 100,
                 TargetHeight = 100,
             }, timeout.Token);
+
+            while (true)
+            {
+                try
+                {
+                    await File.WriteAllTextAsync(path, "not the requested svg", timeout.Token);
+                    break;
+                }
+                catch (IOException)
+                {
+                    await Task.Delay(10, timeout.Token);
+                }
+            }
 
             PreviewSurface? surface = null;
             PreviewReady? ready = null;
@@ -70,6 +84,12 @@ public sealed class RasterHostSvgTests
                 ready = message as PreviewReady ?? ready;
             }
 
+            string anchoredPath = Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "raster-inputs", "input-" + requestId, "source.svg");
+            await using (var anchored = new FileStream(
+                anchoredPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true))
+            using (var reader = new StreamReader(anchored))
+                Assert.StartsWith("<svg", await reader.ReadToEndAsync(timeout.Token));
             Assert.Equal((100u, 50u), (surface.Width, surface.Height));
             Assert.Equal("image", ready.Kind);
             Assert.Equal((100d, 50d), (ready.PreferredWidth, ready.PreferredHeight));

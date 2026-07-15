@@ -53,9 +53,13 @@ public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe)
     public uint TargetHeight { get; init; }
 }
 
-/// <summary>App → ParserHost: open the exact read-only file object duplicated into the host.</summary>
+/// <summary>App → preview host: open the exact read-only file object duplicated into the host.</summary>
 public sealed record PreviewOpenHandle(
-    string RequestId, long SourceHandle, long SourceLength, string LogicalPath, FileProbe Probe) : ControlMessage;
+    string RequestId, long SourceHandle, long SourceLength, string LogicalPath, FileProbe Probe) : ControlMessage
+{
+    public uint TargetWidth { get; init; }
+    public uint TargetHeight { get; init; }
+}
 
 /// <summary>RasterHost → App: a host-local composition handle that the App must copy and release.</summary>
 public sealed record PreviewSurface(

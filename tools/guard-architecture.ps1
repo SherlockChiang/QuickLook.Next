@@ -249,7 +249,7 @@ if (Test-Path $mainWindowPath) {
         Add-Failure "Local ParserHost previews must enter through a pinned source handle"
     }
     if ($mainWindowText -notmatch 'BeginPinnedRasterOpen\(path, probe, targetSize\.Width, targetSize\.Height\)') {
-        Add-Failure "Local RasterHost previews must retain a pinned source handle"
+        Add-Failure "Local RasterHost previews must enter through a pinned source handle"
     }
 }
 
@@ -259,6 +259,12 @@ if (Test-Path $rasterHostRoot) {
         ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
     if ($rasterHostText -match 'OpenAuthenticatedPipeServerProcess|PROCESS_DUP_HANDLE|OpenProcess\s*\(') {
         Add-Failure "RasterHost must not receive a handle to the App process"
+    }
+    if ($rasterHostText -notmatch 'case PreviewOpenHandle open' -or $rasterHostText -notmatch 'TakeLocalFileHandle\(open\.SourceHandle, open\.SourceLength\)') {
+        Add-Failure "RasterHost local previews must consume the exact duplicated source handle"
+    }
+    if ($rasterHostText -notmatch 'CreatePreviewInputAsync\(' -or $rasterHostText -notmatch 'source\.CopyToAsync\(anchor, cancellationToken\)') {
+        Add-Failure "RasterHost handle inputs must be anchored before path-only raster providers run"
     }
 }
 

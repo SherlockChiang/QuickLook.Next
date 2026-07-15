@@ -45,14 +45,17 @@ var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHandle Handle)>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
+string inputRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
+var previewInputs = new ConcurrentDictionary<string, (string Path, FileStream Anchor)>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
 string? activeRequestId = null;
-PreviewOpen? activeOpen = null;
+RasterOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
 const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
 CleanupStaleAnimationPackets();
+CleanupStalePreviewInputs(inputRoot);
 
 while (true)
 {
@@ -104,7 +107,45 @@ while (true)
                 await surfacePublishGate.WaitAsync();
                 try
                 {
-                    StartOpen(open);
+                    StartOpen(new RasterOpen(
+                        open.RequestId, open.Path, open.Probe, open.TargetWidth, open.TargetHeight));
+                }
+                finally
+                {
+                    surfacePublishGate.Release();
+                }
+                break;
+
+            case PreviewOpenHandle open:
+                SafeFileHandle sourceHandle;
+                try
+                {
+                    sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength);
+                }
+                catch (Exception ex)
+                {
+                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                    break;
+                }
+                if (!IsValidRequestId(open.RequestId)
+                    || open.SourceLength is not (>= 0 and <= 256L * 1024 * 1024)
+                    || string.IsNullOrWhiteSpace(open.LogicalPath)
+                    || !IsValidProbe(open.Probe)
+                    || open.SourceLength != open.Probe.Size
+                    || !IsValidTargetSize(open.TargetWidth, open.TargetHeight))
+                {
+                    sourceHandle.Dispose();
+                    if (IsValidRequestId(open.RequestId))
+                        await channel.SendAsync(new PreviewError(open.RequestId, "Invalid handle preview request."));
+                    break;
+                }
+                await surfacePublishGate.WaitAsync();
+                try
+                {
+                    StartOpen(
+                        new RasterOpen(open.RequestId, open.LogicalPath, open.Probe, open.TargetWidth, open.TargetHeight),
+                        sourceHandle,
+                        open.SourceLength);
                 }
                 finally
                 {
@@ -183,6 +224,7 @@ while (true)
                     CancelAnimationsForParent(close.RequestId);
                     producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                 }
+                DeletePreviewInput(close.RequestId);
                 break;
 
             default:
@@ -208,19 +250,21 @@ foreach (string requestId in animationCts.Keys)
 foreach (PdfPreviewSession session in pdfSessions.Values)
     await session.DisposeAsync();
 pdfSessions.Clear();
+foreach (string requestId in previewInputs.Keys)
+    DeletePreviewInput(requestId);
 foreach (var packet in animationPackets.Values)
 {
     packet.Handle.Dispose();
     DeleteAnimationPacket(packet.Path);
 }
 
-void StartOpen(PreviewOpen open)
+void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long sourceLength = 0)
 {
     string? previousRequestId = activeRequestId;
     if (previousRequestId is not null && !string.Equals(previousRequestId, open.RequestId, StringComparison.Ordinal))
         CancelAnimationsForParent(previousRequestId);
     activeRequestId = open.RequestId;
-    activeOpen = open;
+    activeOpen = sourceHandle is null ? open : null;
     string[] existing;
     lock (openCtsLock)
         existing = openCts.Keys.ToArray();
@@ -234,6 +278,26 @@ void StartOpen(PreviewOpen open)
     {
         try
         {
+            if (sourceHandle is not null)
+            {
+                using (sourceHandle)
+                {
+                    var input = await CreatePreviewInputAsync(
+                        open.RequestId, open.Path, sourceHandle, sourceLength, inputRoot, cts.Token);
+                    if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
+                    {
+                        input?.Anchor.Dispose();
+                        if (input is not null) DeletePreviewInputPath(input.Value.Path);
+                        await channel.SendAsync(new PreviewError(open.RequestId, "Could not anchor preview input."));
+                        return;
+                    }
+                    open = open with { Path = input.Value.Path };
+                }
+                cts.Token.ThrowIfCancellationRequested();
+                if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                    return;
+                activeOpen = open;
+            }
             await HandleOpenAsync(open, cts.Token);
         }
         catch (OperationCanceledException)
@@ -253,6 +317,8 @@ void StartOpen(PreviewOpen open)
         }
         finally
         {
+            if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                DeletePreviewInput(open.RequestId);
             lock (openCtsLock)
             {
                 if (openCts.TryGetValue(open.RequestId, out var current) && ReferenceEquals(current, cts))
@@ -396,7 +462,7 @@ void CancelPageRender(string requestId, int pageIndex, long pageGeneration)
     try { cts.Cancel(); } catch (ObjectDisposedException) { }
 }
 
-async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken)
+async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
 {
     DiagLog.Write("RasterHost", $"open path={open.Path} ext={open.Probe.Extension} kind={open.Probe.Kind} size={open.Probe.Size}");
     _ = Task.Delay(250, cancellationToken).ContinueWith(_ => producer.ReleaseRetired(), TaskContinuationOptions.OnlyOnRanToCompletion);
@@ -427,7 +493,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                         await channel.SendAsync(new PreviewReady(
                             open.RequestId,
                             "pdf",
-                            $"{Path.GetFileName(open.Path)} — {pageCount} pages",
+                            $"{Path.GetFileName(open.Probe.Path)} — {pageCount} pages",
                             first.Width,
                             first.Height)
                         {
@@ -488,8 +554,8 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                         TransferId = imageHandle.TransferId,
                     });
                     string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
-                        ? Path.GetFileName(open.Path)
-                        : $"{Path.GetFileName(open.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
+                        ? Path.GetFileName(open.Probe.Path)
+                        : $"{Path.GetFileName(open.Probe.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
                     await channel.SendAsync(new PreviewReady(open.RequestId, "image", title, image.Width, image.Height));
                 }
                 finally
@@ -519,7 +585,7 @@ async Task HandleOpenAsync(PreviewOpen open, CancellationToken cancellationToken
                     TransferId = fallbackHandle.TransferId,
                 });
                 await channel.SendAsync(new PreviewReady(
-                    open.RequestId, "thumbnail", Path.GetFileName(open.Path), fallbackThumb.Width, fallbackThumb.Height));
+                    open.RequestId, "thumbnail", Path.GetFileName(open.Probe.Path), fallbackThumb.Width, fallbackThumb.Height));
             }
             finally
             {
@@ -725,6 +791,90 @@ static bool IsValidTargetSize(uint width, uint height)
 static bool IsValidAnimationTargetSize(uint width, uint height)
     => IsValidTargetSize(width, height);
 
+static async Task<(string Path, FileStream Anchor)?> CreatePreviewInputAsync(
+    string requestId,
+    string logicalPath,
+    SafeFileHandle sourceHandle,
+    long sourceLength,
+    string root,
+    CancellationToken cancellationToken)
+{
+    string extension = Path.GetExtension(logicalPath);
+    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
+        extension = "";
+    string directory = Path.Combine(root, "input-" + requestId);
+    string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
+    try
+    {
+        Directory.CreateDirectory(root);
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) return null;
+        Directory.CreateDirectory(directory);
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return null;
+        using var source = new FileStream(sourceHandle, FileAccess.Read);
+        var anchor = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.ReadWrite,
+            Share = FileShare.Read,
+            Options = FileOptions.Asynchronous | FileOptions.WriteThrough,
+        });
+        try
+        {
+            await source.CopyToAsync(anchor, cancellationToken);
+            await anchor.FlushAsync(cancellationToken);
+            if (anchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
+            anchor.Position = 0;
+            return (path, anchor);
+        }
+        catch
+        {
+            anchor.Dispose();
+            throw;
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        DeletePreviewInputPath(path);
+        throw;
+    }
+    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+    {
+        DeletePreviewInputPath(path);
+        return null;
+    }
+}
+
+void DeletePreviewInput(string requestId)
+{
+    if (!previewInputs.TryRemove(requestId, out var input)) return;
+    input.Anchor.Dispose();
+    DeletePreviewInputPath(input.Path);
+}
+
+static void DeletePreviewInputPath(string path)
+{
+    try
+    {
+        File.Delete(path);
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null) Directory.Delete(directory, recursive: false);
+    }
+    catch { }
+}
+
+static void CleanupStalePreviewInputs(string root)
+{
+    try
+    {
+        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            return;
+        foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
+                Directory.Delete(directory, recursive: true);
+    }
+    catch { }
+}
+
 static string? WriteAnimationPacket(string requestId, byte[] packet)
 {
     try
@@ -828,3 +978,10 @@ static string? GetArg(string[] a, string key)
         if (a[i] == key) return a[i + 1];
     return null;
 }
+
+internal sealed record RasterOpen(
+    string RequestId,
+    string Path,
+    QuickLook.Next.Contracts.FileProbe Probe,
+    uint TargetWidth,
+    uint TargetHeight);
