@@ -235,10 +235,12 @@ fn is_zero_usize(value: &usize) -> bool {
 // ── Text preview ─────────────────────────────────────────────────────────────
 
 const MAX_TEXT_BYTES: usize = 512 * 1024;
-// The WinUI grid currently realizes every displayed cell, so keep synchronous UI work bounded.
-const MAX_TABLE_ROWS: usize = 160;
+// The App viewport-virtualizes cells; these bounds cap the retained IPC model.
+const MAX_TABLE_ROWS: usize = 4_000;
 const MAX_TABLE_COLUMNS: usize = 64;
 const MAX_TABLE_CELL_CHARS: usize = 240;
+const MAX_TABLE_RETAINED_CELLS: usize = 65_536;
+const MAX_TABLE_RETAINED_CHARS: usize = 512 * 1024;
 const MAX_MARKDOWN_BLOCKS: usize = 500;
 const MAX_MARKDOWN_LIST_ITEMS: usize = 300;
 const MAX_MARKDOWN_TABLE_ROWS: usize = 120;
@@ -1785,9 +1787,10 @@ fn render_delimited_table_json(
             cells: normalize_table_cells(record, headers.len()),
         })
         .collect::<Vec<_>>();
+    let represented_rows = rows.len();
     let is_partial = input_truncated
         || parse_partial
-        || total_rows > MAX_TABLE_ROWS
+        || total_rows > represented_rows
         || display_total_columns > MAX_TABLE_COLUMNS;
 
     to_json(&PreviewReadyDto {
@@ -1826,6 +1829,9 @@ fn parse_delimited_records(
     let mut saw_any = false;
     let mut chars = text.chars().peekable();
     let mut processed = 0usize;
+    let mut retained_cells = 0usize;
+    let mut retained_chars = 0usize;
+    let mut retention_exhausted = false;
 
     while let Some(ch) = chars.next() {
         processed += 1;
@@ -1861,7 +1867,9 @@ fn parse_delimited_records(
                 chars.next();
             }
             finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-            finish_table_row(&mut records, &mut row, &mut total_records, &mut is_partial);
+            finish_table_row(
+                &mut records, &mut row, &mut total_records, &mut retained_cells,
+                &mut retained_chars, &mut retention_exhausted, &mut is_partial);
         } else if cell.chars().count() < MAX_TABLE_CELL_CHARS {
             cell.push(ch);
         } else {
@@ -1871,7 +1879,9 @@ fn parse_delimited_records(
 
     if saw_any && (!cell.is_empty() || !row.is_empty()) {
         finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-        finish_table_row(&mut records, &mut row, &mut total_records, &mut is_partial);
+        finish_table_row(
+            &mut records, &mut row, &mut total_records, &mut retained_cells,
+            &mut retained_chars, &mut retention_exhausted, &mut is_partial);
     }
 
     (records, total_records, total_columns, is_partial)
@@ -1902,12 +1912,24 @@ fn finish_table_row(
     records: &mut Vec<Vec<String>>,
     row: &mut Vec<String>,
     total_records: &mut usize,
+    retained_cells: &mut usize,
+    retained_chars: &mut usize,
+    retention_exhausted: &mut bool,
     is_partial: &mut bool,
 ) {
     *total_records += 1;
-    if records.len() < MAX_TABLE_ROWS + 1 {
+    let row_cells = row.len();
+    let row_chars = row.iter().map(|cell| cell.chars().count()).sum::<usize>();
+    if !*retention_exhausted
+        && records.len() < MAX_TABLE_ROWS + 1
+        && retained_cells.saturating_add(row_cells) <= MAX_TABLE_RETAINED_CELLS
+        && retained_chars.saturating_add(row_chars) <= MAX_TABLE_RETAINED_CHARS
+    {
+        *retained_cells += row_cells;
+        *retained_chars += row_chars;
         records.push(std::mem::take(row));
     } else {
+        *retention_exhausted = true;
         row.clear();
         *is_partial = true;
     }
@@ -15728,6 +15750,29 @@ mod tests {
             blocks[0].table_rows[0],
             vec!["1".to_string(), "2".to_string()]
         );
+    }
+
+    #[test]
+    fn delimited_table_retention_obeys_global_model_budgets() {
+        let wide = "x".repeat(MAX_TABLE_CELL_CHARS);
+        let text = (0..(MAX_TABLE_ROWS + 100))
+            .map(|index| format!("{index},{wide}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (records, total, columns, partial) = parse_delimited_records(&text, ',', None);
+        let retained_cells = records.iter().map(Vec::len).sum::<usize>();
+        let retained_chars = records
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(|cell| cell.chars().count())
+            .sum::<usize>();
+
+        assert_eq!(total, MAX_TABLE_ROWS + 100);
+        assert_eq!(columns, 2);
+        assert!(partial);
+        assert!(records.len() <= MAX_TABLE_ROWS + 1);
+        assert!(retained_cells <= MAX_TABLE_RETAINED_CELLS);
+        assert!(retained_chars <= MAX_TABLE_RETAINED_CHARS);
     }
 
     #[test]

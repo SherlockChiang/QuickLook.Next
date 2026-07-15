@@ -67,6 +67,12 @@ Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
     "Archive metadata scans must remain capped at 10000 records."
+Require-Pattern $nativePreview 'MAX_TABLE_ROWS:\s*usize\s*=\s*4_000' `
+    "Delimited table models must remain capped at 4000 represented rows."
+Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' `
+    "Delimited table models must retain their 65536-cell budget."
+Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
+    "Delimited table models must retain their 512 KiB character budget."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
@@ -94,10 +100,14 @@ if ((Get-Content -LiteralPath $textPresenter -Raw) -match 'TextLineItem[\s\S]{0,
 }
 
 $tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"
-Require-Pattern $tablePresenter 'if\s*\(!e\.IsIntermediate\)\s*\r?\n\s*RenderViewport\(\)' `
+Require-Pattern $tablePresenter 'if\s*\(e\.IsIntermediate\)\s*\r?\n\s*UpdateStickyHeaders\(rebuildColumns:\s*true\)' `
+    "Delimited tables must update sticky headers during intermediate scrolling."
+Require-Pattern $tablePresenter 'else\s*\r?\n\s*RenderViewport\(\)' `
     "Delimited tables must not rebuild cells during intermediate scroll events."
 Require-Pattern $tablePresenter 'MaxViewportCells\s*=\s*1024' `
     "Delimited table viewport rendering must retain its 1024-cell budget."
+Require-Pattern $tablePresenter 'TablePresentationPolicy\.Bound\(ready\.Table!\)' `
+    "Delimited tables must defensively bound host-provided presentation models."
 
 if ($failures.Count -gt 0) {
     Write-Host ""

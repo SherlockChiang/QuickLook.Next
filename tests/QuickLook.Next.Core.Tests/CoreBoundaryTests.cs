@@ -20,6 +20,29 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1, index.FindLineIndex(7));
         Assert.Equal(3, index.FindLineIndex(text.Length));
     }
+
+    [Fact]
+    public void Table_presentation_policy_bounds_untrusted_rows_cells_and_text()
+    {
+        var source = new PreviewTable("csv")
+        {
+            Headers = Enumerable.Range(0, TablePresentationPolicy.MaxColumns + 1).Select(i => $"H{i}").ToArray(),
+            Rows = Enumerable.Range(0, TablePresentationPolicy.MaxRows + 1)
+                .Select(_ => new PreviewTableRow([new string('x', TablePresentationPolicy.MaxCellCharacters + 1)]))
+                .ToArray(),
+            TotalRows = TablePresentationPolicy.MaxRows + 1,
+            TotalColumns = TablePresentationPolicy.MaxColumns + 1,
+        };
+
+        PreviewTable bounded = TablePresentationPolicy.Bound(source);
+
+        Assert.True(bounded.IsPartial);
+        Assert.Equal(TablePresentationPolicy.MaxColumns, bounded.Headers.Length);
+        Assert.True(bounded.Rows.Length <= TablePresentationPolicy.MaxRows);
+        Assert.All(bounded.Rows, row => Assert.All(row.Cells, cell => Assert.True(cell.Length <= TablePresentationPolicy.MaxCellCharacters)));
+        Assert.True(bounded.Rows.Sum(row => row.Cells.Sum(cell => cell.Length))
+            + bounded.Headers.Sum(header => header.Length) <= TablePresentationPolicy.MaxCharacters);
+    }
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextTests", Guid.NewGuid().ToString("n"));
 
     [Fact]
