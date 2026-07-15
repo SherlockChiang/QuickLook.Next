@@ -56,7 +56,7 @@ Completed entries move here with the verification commands and commit hash.
   preserving the normal application viewport range.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Guard: `tools/guard-performance-bounds.ps1`
-  - Commit: this change
+  - Commit: `c6792bf`
 
 - [x] Bound syntax-highlighted Markdown to 10000 Run elements per document and
   downgrade over-budget code blocks before creating colored runs.
