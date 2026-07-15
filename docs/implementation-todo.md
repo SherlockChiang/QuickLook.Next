@@ -25,7 +25,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
 - [ ] Add exact per-block Markdown search highlighting; AST-only documents now
   use a visible-text index and block-precise navigation anchors.
-- [ ] Add a Settings UI entry for the privacy-conscious diagnostics bundle.
 - [ ] Add stable codec error codes and actionable capability guidance.
 - [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
@@ -51,6 +50,11 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add an explicit-consent Settings workflow that writes a metadata-only
+  diagnostics ZIP directly to a user-selected stream without staging or upload.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Commit: this change
 
 - [x] Inventory metadata for exactly four known App/RasterHost log files without
   reading contents, enumerating directories, following reparse points, or

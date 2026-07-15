@@ -58,6 +58,16 @@
   <data name="SettingsOpenGitHub" xml:space="preserve"><value>打开 GitHub 项目</value></data>
   <data name="SettingsViewReleases" xml:space="preserve"><value>查看发布版本</value></data>
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>项目尚未发布正式软件许可证，请前往代码仓库查看当前条款和源码历史。</value></data>
+  <data name="SettingsDiagnostics" xml:space="preserve"><value>诊断</value></data>
+  <data name="SettingsDiagnosticsDescription" xml:space="preserve"><value>创建不包含文件名、文件内容、路径、设置文件、缓存或日志内容的小型支持摘要。</value></data>
+  <data name="SettingsCreateDiagnostics" xml:space="preserve"><value>创建诊断包</value></data>
+  <data name="DiagnosticsConsentTitle" xml:space="preserve"><value>创建诊断包？</value></data>
+  <data name="DiagnosticsConsentMessage" xml:space="preserve"><value>诊断包包含应用、系统、偏好模式、功能和日志大小元数据，不包含路径、文件名、文件内容、日志内容、设置文件、缓存或计算机/用户标识。不会自动上传任何数据。</value></data>
+  <data name="DiagnosticsZipType" xml:space="preserve"><value>ZIP 压缩包</value></data>
+  <data name="DiagnosticsSavedTitle" xml:space="preserve"><value>诊断包已保存</value></data>
+  <data name="DiagnosticsSavedMessage" xml:space="preserve"><value>未上传任何数据。附加到报告前请先检查诊断包。</value></data>
+  <data name="DiagnosticsFailedTitle" xml:space="preserve"><value>未保存诊断包</value></data>
+  <data name="DiagnosticsFailedMessage" xml:space="preserve"><value>QuickLook Next 无法创建诊断包。</value></data>
   <data name="SettingsSaveFailed" xml:space="preserve"><value>设置未保存</value></data>
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next 无法保存此设置。</value></data>
   <data name="ListingReading" xml:space="preserve"><value>正在读取文件夹...</value></data>

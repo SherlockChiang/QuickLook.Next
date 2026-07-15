@@ -128,6 +128,20 @@
                                     <TextBlock x:Name="ReleasesButtonText" />
                                 </Button>
                             </StackPanel>
+                            <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                            <StackPanel Spacing="5">
+                                <TextBlock x:Name="DiagnosticsTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="DiagnosticsDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <Button x:Name="CreateDiagnosticsButton" MinHeight="40" Margin="0,5,0,0"
+                                        HorizontalAlignment="Left" Click="OnCreateDiagnosticsClick">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                                        <TextBlock x:Name="CreateDiagnosticsButtonText" />
+                                    </StackPanel>
+                                </Button>
+                                <InfoBar x:Name="DiagnosticsInfo" IsOpen="False" IsClosable="True"
+                                         AutomationProperties.LiveSetting="Polite" />
+                            </StackPanel>
                             <TextBlock x:Name="LicenseText" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>

@@ -81,6 +81,16 @@ internal static class UiStrings
     public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
     public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
     public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "The project has not yet published a formal software license. See the repository for the current terms and source history.");
+    public static string SettingsDiagnostics => Get(nameof(SettingsDiagnostics), "Diagnostics");
+    public static string SettingsDiagnosticsDescription => Get(nameof(SettingsDiagnosticsDescription), "Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.");
+    public static string SettingsCreateDiagnostics => Get(nameof(SettingsCreateDiagnostics), "Create diagnostics bundle");
+    public static string DiagnosticsConsentTitle => Get(nameof(DiagnosticsConsentTitle), "Create diagnostics bundle?");
+    public static string DiagnosticsConsentMessage => Get(nameof(DiagnosticsConsentMessage), "The bundle contains application, system, preference mode, capability, and log-size metadata. It does not include paths, file names, file contents, log contents, settings files, caches, or machine/user identifiers. Nothing is uploaded automatically.");
+    public static string DiagnosticsZipType => Get(nameof(DiagnosticsZipType), "ZIP archive");
+    public static string DiagnosticsSavedTitle => Get(nameof(DiagnosticsSavedTitle), "Diagnostics bundle saved");
+    public static string DiagnosticsSavedMessage => Get(nameof(DiagnosticsSavedMessage), "No data was uploaded. Review the bundle before attaching it to a report.");
+    public static string DiagnosticsFailedTitle => Get(nameof(DiagnosticsFailedTitle), "Diagnostics bundle not saved");
+    public static string DiagnosticsFailedMessage => Get(nameof(DiagnosticsFailedMessage), "QuickLook Next could not create the diagnostics bundle.");
     public static string SettingsSaveFailed => Get(nameof(SettingsSaveFailed), "Setting not saved");
     public static string SettingsSaveFailedMessage => Get(nameof(SettingsSaveFailedMessage), "QuickLook Next could not save this setting.");
 

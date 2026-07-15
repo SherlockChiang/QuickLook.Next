@@ -1,11 +1,15 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
+using Windows.Storage;
+using Windows.Storage.Pickers;
+using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
@@ -16,6 +20,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Action _settingsChanged;
     private bool _initializing = true;
     private bool _resizePending;
+    private bool _diagnosticsBusy;
 
     public SettingsWindow(Func<string> resolveIconPath, Action settingsChanged)
     {
@@ -71,6 +76,9 @@ public sealed partial class SettingsWindow : Window
         HelpButtonText.Text = UiStrings.SettingsHelpShortcuts;
         GitHubButtonText.Text = UiStrings.SettingsOpenGitHub;
         ReleasesButtonText.Text = UiStrings.SettingsViewReleases;
+        DiagnosticsTitle.Text = UiStrings.SettingsDiagnostics;
+        DiagnosticsDescription.Text = UiStrings.SettingsDiagnosticsDescription;
+        CreateDiagnosticsButtonText.Text = UiStrings.SettingsCreateDiagnostics;
         LicenseText.Text = UiStrings.SettingsLicenseNotice;
     }
 
@@ -221,6 +229,97 @@ public sealed partial class SettingsWindow : Window
     private void OnGitHubClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl);
     private void OnReleasesClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl + "/releases");
     private void OnHelpClick(object sender, RoutedEventArgs e) => WelcomeWindow.Show(_resolveIconPath);
+
+    private async void OnCreateDiagnosticsClick(object sender, RoutedEventArgs e)
+    {
+        if (_diagnosticsBusy)
+            return;
+        var disclosure = new ContentDialog
+        {
+            Title = UiStrings.DiagnosticsConsentTitle,
+            Content = UiStrings.DiagnosticsConsentMessage,
+            PrimaryButtonText = UiStrings.SettingsCreateDiagnostics,
+            CloseButtonText = UiStrings.Cancel,
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await disclosure.ShowAsync() != ContentDialogResult.Primary)
+            return;
+
+        _diagnosticsBusy = true;
+        CreateDiagnosticsButton.IsEnabled = false;
+        DiagnosticsInfo.IsOpen = false;
+        StorageFile? file = null;
+        try
+        {
+            var picker = new FileSavePicker
+            {
+                SuggestedFileName = $"QuickLook-Next-Diagnostics-{GetVersion()}-{DateTime.UtcNow:yyyyMMdd}",
+            };
+            picker.FileTypeChoices.Add(UiStrings.DiagnosticsZipType, [".zip"]);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            file = await picker.PickSaveFileAsync();
+            if (file is null)
+                return;
+
+            DiagnosticsKnownLogs logs = DiagnosticsLogInventory.InspectKnownLogs();
+            var snapshot = new DiagnosticsSnapshot
+            {
+                ApplicationVersion = GetVersion(),
+                ProcessArchitecture = RuntimeInformation.ProcessArchitecture,
+                IsPackaged = IsPackaged(),
+                FrameworkVersion = Environment.Version,
+                OsVersion = Environment.OSVersion.Version,
+                SettingsSchemaVersion = AppSettings.Current.SchemaVersion,
+                LanguageMode = AppSettings.Current.Language,
+                AnimationMode = AppSettings.Current.Animation,
+                NativeBridgePresent = File.Exists(Path.Combine(AppContext.BaseDirectory, "quicklook_next_native.dll")),
+                RasterHostPresent = File.Exists(Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.RasterHost.exe")),
+                ParserHostPresent = File.Exists(Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.ParserHost.exe")),
+                AppLog = logs.AppLog,
+                PreviousAppLog = logs.PreviousAppLog,
+                RasterHostLog = logs.RasterHostLog,
+                PreviousRasterHostLog = logs.PreviousRasterHostLog,
+            };
+            await using Stream stream = await file.OpenStreamForWriteAsync();
+            stream.SetLength(0);
+            await DiagnosticsBundle.WriteAsync(stream, snapshot, DateTimeOffset.UtcNow);
+            await stream.FlushAsync();
+            DiagnosticsInfo.Severity = InfoBarSeverity.Success;
+            DiagnosticsInfo.Title = UiStrings.DiagnosticsSavedTitle;
+            DiagnosticsInfo.Message = UiStrings.DiagnosticsSavedMessage;
+            DiagnosticsInfo.IsOpen = true;
+        }
+        catch (Exception ex)
+        {
+            if (file is not null)
+            {
+                try
+                {
+                    await using Stream stream = await file.OpenStreamForWriteAsync();
+                    stream.SetLength(0);
+                }
+                catch { }
+            }
+            DiagLog.Write("App", $"diagnostics bundle failed; error={ex.GetType().Name}");
+            DiagnosticsInfo.Severity = InfoBarSeverity.Error;
+            DiagnosticsInfo.Title = UiStrings.DiagnosticsFailedTitle;
+            DiagnosticsInfo.Message = UiStrings.DiagnosticsFailedMessage;
+            DiagnosticsInfo.IsOpen = true;
+        }
+        finally
+        {
+            _diagnosticsBusy = false;
+            CreateDiagnosticsButton.IsEnabled = true;
+            QueueResizeToContent();
+        }
+    }
+
+    private static bool IsPackaged()
+    {
+        try { _ = Windows.ApplicationModel.Package.Current.Id.Name; return true; }
+        catch { return false; }
+    }
 
     private static void OpenUrl(string url)
     {

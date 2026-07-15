@@ -172,6 +172,16 @@
   <data name="SettingsOpenGitHub" xml:space="preserve"><value>Open GitHub project</value></data>
   <data name="SettingsViewReleases" xml:space="preserve"><value>View releases</value></data>
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>The project has not yet published a formal software license. See the repository for the current terms and source history.</value></data>
+  <data name="SettingsDiagnostics" xml:space="preserve"><value>Diagnostics</value></data>
+  <data name="SettingsDiagnosticsDescription" xml:space="preserve"><value>Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.</value></data>
+  <data name="SettingsCreateDiagnostics" xml:space="preserve"><value>Create diagnostics bundle</value></data>
+  <data name="DiagnosticsConsentTitle" xml:space="preserve"><value>Create diagnostics bundle?</value></data>
+  <data name="DiagnosticsConsentMessage" xml:space="preserve"><value>The bundle contains application, system, preference mode, capability, and log-size metadata. It does not include paths, file names, file contents, log contents, settings files, caches, or machine/user identifiers. Nothing is uploaded automatically.</value></data>
+  <data name="DiagnosticsZipType" xml:space="preserve"><value>ZIP archive</value></data>
+  <data name="DiagnosticsSavedTitle" xml:space="preserve"><value>Diagnostics bundle saved</value></data>
+  <data name="DiagnosticsSavedMessage" xml:space="preserve"><value>No data was uploaded. Review the bundle before attaching it to a report.</value></data>
+  <data name="DiagnosticsFailedTitle" xml:space="preserve"><value>Diagnostics bundle not saved</value></data>
+  <data name="DiagnosticsFailedMessage" xml:space="preserve"><value>QuickLook Next could not create the diagnostics bundle.</value></data>
   <data name="SettingsSaveFailed" xml:space="preserve"><value>Setting not saved</value></data>
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next could not save this setting.</value></data>
   <data name="ListingReading" xml:space="preserve"><value>Reading folder...</value></data>
