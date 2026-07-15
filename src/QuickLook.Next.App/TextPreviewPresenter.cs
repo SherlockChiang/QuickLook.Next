@@ -20,6 +20,7 @@ internal sealed class TextPreviewPresenter
     private const int MaxHighlightedRuns = 7000;
     private const int MaxSearchHighlightRanges = 5000;
     private const int MaxMarkdownBlocks = 2000;
+    private const int MaxMarkdownSyntaxRuns = 10000;
     private const double OutlineWidth = 188;
     private const double OutlineGap = 10;
 
@@ -50,6 +51,7 @@ internal sealed class TextPreviewPresenter
     private int _markdownSearchOffset;
     private int _markdownBlocksRendered;
     private bool _markdownRenderTruncated;
+    private int _markdownSyntaxRunsRemaining;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -88,6 +90,7 @@ internal sealed class TextPreviewPresenter
         _markdownSearchOffset = 0;
         _markdownBlocksRendered = 0;
         _markdownRenderTruncated = false;
+        _markdownSyntaxRunsRemaining = MaxMarkdownSyntaxRuns;
         ClearSearch();
         int renderVersion = ++_renderVersion;
         DiagLog.Write("App", $"text preview: format={ready.TextFormat}; language={ready.TextLanguage}; chars={ready.TextContent?.Length ?? 0}; displayed={text.Length}");
@@ -961,19 +964,21 @@ internal sealed class TextPreviewPresenter
         else
         {
             var spans = MergeAdjacentSpans(SyntaxHighlighter.Highlight(code, language));
-            int runs = 0;
-            foreach (var (txt, kind) in spans)
+            int runs = spans.Count(span => span.Text.Length > 0);
+            if (runs > MaxHighlightedRuns || runs > _markdownSyntaxRunsRemaining)
             {
-                if (txt.Length == 0) continue;
-                if (++runs > MaxHighlightedRuns)
+                DiagLog.Write("App", $"highlight run budget exceeded: language={language}; chars={code.Length}; runs={runs}; remaining={_markdownSyntaxRunsRemaining}");
+                bodyText.Foreground = BrushFor(TokenKind.Default);
+                bodyText.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+            }
+            else
+            {
+                _markdownSyntaxRunsRemaining -= runs;
+                foreach (var (txt, kind) in spans)
                 {
-                    DiagLog.Write("App", $"highlight run limit hit: language={language}; chars={code.Length}; runs>{MaxHighlightedRuns}");
-                    bodyText.Inlines.Clear();
-                    bodyText.Foreground = BrushFor(TokenKind.Default);
-                    bodyText.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
-                    break;
+                    if (txt.Length > 0)
+                        bodyText.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
                 }
-                bodyText.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
             }
         }
         
