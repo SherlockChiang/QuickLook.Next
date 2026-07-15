@@ -56,16 +56,20 @@ Require-Pattern $textSearchIndex 'MaxMarkdownTableCells\s*=\s*4096' `
     "Markdown table rendering must retain its 4096-cell budget."
 Require-Pattern $textSearchIndex 'MaxMarkdownInlineDepth\s*=\s*16' `
     "Markdown inline traversal must retain its depth limit of 16."
+Require-Pattern $textSearchIndex 'MaxMarkdownBlocks\s*=\s*2000' `
+    "Markdown search indexing must retain its 2000-block UI budget."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
     "Text search must retain its 5000-range visual highlight budget."
-Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*2000' `
-    "Structured Markdown rendering must retain its 2000-block UI budget."
+Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*TextSearchIndex\.MaxMarkdownBlocks' `
+    "Structured Markdown rendering and search indexing must share one block budget."
 Require-Pattern $textPresenter 'MaxMarkdownSyntaxRuns\s*=\s*10000' `
     "Markdown code highlighting must retain its 10000-run document budget."
 Require-Pattern $textPresenter 'private void RenderMarkdown\(string text\)[\s\S]*TryReserveMarkdownBlock\(\)' `
     "Raw Markdown fallback rendering must share the structured block budget."
+Require-Pattern $textPresenter 'ApplyMarkdownSearchHighlights\(\)' `
+    "Structured Markdown search must retain local visual highlighting."
 
 $tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"
 Require-Pattern $tablePresenter 'if\s*\(!e\.IsIntermediate\)\s*\r?\n\s*RenderViewport\(\)' `

@@ -73,6 +73,71 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.DoesNotContain("leaf", text);
     }
 
+    [Fact]
+    public void Markdown_search_segments_map_visible_offsets()
+    {
+        var document = new PreviewMarkdown
+        {
+            Blocks =
+            [
+                new PreviewMarkdownBlock("paragraph") { Text = "Alpha" },
+                new PreviewMarkdownBlock("table")
+                {
+                    TableHeaders = ["Name"],
+                    TableRows = [["QuickLook"]],
+                },
+            ],
+        };
+
+        MarkdownVisibleTextIndex index = TextSearchIndex.BuildMarkdownVisibleTextIndex(document, "Partial");
+
+        Assert.Equal("Alpha\nName\nQuickLook", index.Text);
+        Assert.Equal(
+            [new MarkdownVisibleSegment(0, "Alpha"), new(6, "Name"), new(11, "QuickLook")],
+            index.Segments);
+    }
+
+    [Fact]
+    public void Markdown_search_index_excludes_unrendered_blocks_and_indexes_notice()
+    {
+        var document = new PreviewMarkdown
+        {
+            Blocks =
+            [
+                new PreviewMarkdownBlock("unorderedList")
+                {
+                    Children = Enumerable.Range(0, TextSearchIndex.MaxMarkdownBlocks + 1)
+                        .Select(index => new PreviewMarkdownBlock("item") { Text = $"Item {index}" })
+                        .ToArray(),
+                },
+            ],
+        };
+
+        MarkdownVisibleTextIndex index = TextSearchIndex.BuildMarkdownVisibleTextIndex(document, "Partial");
+
+        Assert.Equal(TextSearchIndex.MaxMarkdownBlocks + 1, index.Segments.Count);
+        Assert.DoesNotContain($"Item {TextSearchIndex.MaxMarkdownBlocks}", index.Text);
+        Assert.Equal("Partial", index.Segments[^1].Text);
+    }
+
+    [Fact]
+    public void Markdown_search_segments_preserve_offsets_after_empty_blocks()
+    {
+        var document = new PreviewMarkdown
+        {
+            Blocks =
+            [
+                new PreviewMarkdownBlock("paragraph"),
+                new PreviewMarkdownBlock("paragraph") { Text = "Visible" },
+            ],
+        };
+
+        MarkdownVisibleTextIndex index = TextSearchIndex.BuildMarkdownVisibleTextIndex(document, "Partial");
+
+        Assert.Equal("\nVisible", index.Text);
+        Assert.Equal(1, index.Segments[1].Start);
+    }
+
     [Theory]
     [InlineData(FileAttributes.Offline)]
     [InlineData((FileAttributes)0x00040000)]

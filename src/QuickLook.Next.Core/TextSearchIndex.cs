@@ -3,11 +3,15 @@ using QuickLook.Next.Contracts;
 
 namespace QuickLook.Next.Core;
 
+public sealed record MarkdownVisibleTextIndex(string Text, IReadOnlyList<MarkdownVisibleSegment> Segments);
+public sealed record MarkdownVisibleSegment(int Start, string Text);
+
 public static class TextSearchIndex
 {
     public const int MaxMarkdownTableColumns = 64;
     public const int MaxMarkdownTableCells = 4096;
     public const int MaxMarkdownInlineDepth = 16;
+    public const int MaxMarkdownBlocks = 2000;
 
     public static List<int> FindMatches(string text, string query)
     {
@@ -25,13 +29,52 @@ public static class TextSearchIndex
     }
 
     public static string BuildMarkdownVisibleText(PreviewMarkdown document, string partialNotice)
+        => BuildMarkdownVisibleTextIndex(document, partialNotice).Text;
+
+    public static MarkdownVisibleTextIndex BuildMarkdownVisibleTextIndex(
+        PreviewMarkdown document,
+        string partialNotice)
     {
         var text = new StringBuilder();
+        var segments = new List<MarkdownVisibleSegment>();
+        int blocks = 0;
+        bool truncated = false;
         foreach (PreviewMarkdownBlock block in document.Blocks)
-            AppendMarkdownBlock(text, block);
-        if (document.IsPartial)
-            AppendLine(text, partialNotice);
-        return text.ToString().TrimEnd();
+        {
+            if (block.Kind is "unorderedList" or "orderedList")
+            {
+                foreach (PreviewMarkdownBlock item in block.Children)
+                {
+                    if (blocks++ >= MaxMarkdownBlocks)
+                    {
+                        truncated = true;
+                        break;
+                    }
+                    AppendSegment(text, segments, MarkdownInlineText(item.Inlines, item.Text));
+                }
+                if (truncated)
+                    break;
+                continue;
+            }
+
+            if (blocks++ >= MaxMarkdownBlocks)
+            {
+                truncated = true;
+                break;
+            }
+            if (block.Kind == "table")
+            {
+                foreach (string cell in MarkdownTableCells(block))
+                    AppendSegment(text, segments, cell);
+            }
+            else if (block.Kind != "thematicBreak")
+            {
+                AppendSegment(text, segments, MarkdownInlineText(block.Inlines, block.Text));
+            }
+        }
+        if (document.IsPartial || truncated)
+            AppendSegment(text, segments, partialNotice);
+        return new MarkdownVisibleTextIndex(text.ToString(), segments);
     }
 
     public static string MarkdownInlineText(
@@ -61,45 +104,44 @@ public static class TextSearchIndex
     public static string MarkdownTableText(PreviewMarkdownBlock block)
     {
         var text = new StringBuilder();
+        foreach (string cell in MarkdownTableCells(block))
+            AppendLine(text, cell);
+        return text.ToString().TrimEnd();
+    }
+
+    public static IReadOnlyList<string> MarkdownTableCells(PreviewMarkdownBlock block)
+    {
+        var cells = new List<string>();
         int columns = Math.Min(
             MaxMarkdownTableColumns,
             Math.Max(block.TableHeaders.Length, block.TableRows.Select(row => row.Length).DefaultIfEmpty(0).Max()));
         if (columns == 0)
-            return "";
+            return cells;
         foreach (string header in block.TableHeaders.Take(columns))
-            AppendLine(text, header);
+            cells.Add(header);
         int rows = Math.Min(120, Math.Max(0, MaxMarkdownTableCells / columns - 1));
         foreach (string[] row in block.TableRows.Take(rows))
         {
             foreach (string cell in row.Take(columns))
-                AppendLine(text, cell);
+                cells.Add(cell);
         }
-        return text.ToString().TrimEnd();
-    }
-
-    private static void AppendMarkdownBlock(StringBuilder text, PreviewMarkdownBlock block)
-    {
-        switch (block.Kind)
-        {
-            case "unorderedList":
-            case "orderedList":
-                foreach (PreviewMarkdownBlock item in block.Children)
-                    AppendLine(text, MarkdownInlineText(item.Inlines, item.Text));
-                break;
-            case "table":
-                AppendLine(text, MarkdownTableText(block));
-                break;
-            case "thematicBreak":
-                break;
-            default:
-                AppendLine(text, MarkdownInlineText(block.Inlines, block.Text));
-                break;
-        }
+        return cells;
     }
 
     private static void AppendLine(StringBuilder text, string value)
     {
         text.Append(value);
         text.Append('\n');
+    }
+
+    private static void AppendSegment(
+        StringBuilder text,
+        List<MarkdownVisibleSegment> segments,
+        string value)
+    {
+        if (segments.Count > 0)
+            text.Append('\n');
+        segments.Add(new MarkdownVisibleSegment(text.Length, value));
+        text.Append(value);
     }
 }

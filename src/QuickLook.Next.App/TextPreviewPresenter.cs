@@ -19,7 +19,7 @@ internal sealed class TextPreviewPresenter
     private const int MaxHighlightedChars = 256 * 1024;
     private const int MaxHighlightedRuns = 7000;
     private const int MaxSearchHighlightRanges = 5000;
-    private const int MaxMarkdownBlocks = 2000;
+    private const int MaxMarkdownBlocks = TextSearchIndex.MaxMarkdownBlocks;
     private const int MaxMarkdownSyntaxRuns = 10000;
     private const double OutlineWidth = 188;
     private const double OutlineGap = 10;
@@ -47,8 +47,10 @@ internal sealed class TextPreviewPresenter
     private string _searchQuery = "";
     private readonly List<int> _searchMatches = [];
     private readonly List<(int Start, FrameworkElement Anchor)> _markdownSearchAnchors = [];
+    private readonly List<MarkdownSearchTarget> _markdownSearchTargets = [];
     private int _currentSearchMatch = -1;
-    private int _markdownSearchOffset;
+    private MarkdownVisibleTextIndex? _markdownSearchIndex;
+    private int _nextMarkdownSearchSegment;
     private int _markdownBlocksRendered;
     private bool _markdownRenderTruncated;
     private int _markdownSyntaxRunsRemaining;
@@ -83,11 +85,13 @@ internal sealed class TextPreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         string text = TrimForDisplay(ready.TextContent ?? "");
-        _displayedText = ready.Markdown is null
-            ? text
-            : TextSearchIndex.BuildMarkdownVisibleText(ready.Markdown, UiStrings.TextPreviewTruncated);
+        _markdownSearchIndex = ready.Markdown is null
+            ? null
+            : TextSearchIndex.BuildMarkdownVisibleTextIndex(ready.Markdown, UiStrings.TextPreviewTruncated);
+        _displayedText = _markdownSearchIndex?.Text ?? text;
         _markdownSearchAnchors.Clear();
-        _markdownSearchOffset = 0;
+        _markdownSearchTargets.Clear();
+        _nextMarkdownSearchSegment = 0;
         _markdownBlocksRendered = 0;
         _markdownRenderTruncated = false;
         _markdownSyntaxRunsRemaining = MaxMarkdownSyntaxRuns;
@@ -137,8 +141,10 @@ internal sealed class TextPreviewPresenter
     {
         _lastReady = null;
         _displayedText = "";
+        _markdownSearchIndex = null;
         _markdownSearchAnchors.Clear();
-        _markdownSearchOffset = 0;
+        _markdownSearchTargets.Clear();
+        _nextMarkdownSearchSegment = 0;
         ClearSearch();
         _renderVersion++;
         _textBlock.Blocks.Clear();
@@ -176,6 +182,8 @@ internal sealed class TextPreviewPresenter
         _searchMatches.Clear();
         _currentSearchMatch = -1;
         _textBlock.TextHighlighters.Clear();
+        foreach (MarkdownSearchTarget target in _markdownSearchTargets)
+            target.TextBlock.TextHighlighters.Clear();
         return SearchState;
     }
 
@@ -185,12 +193,18 @@ internal sealed class TextPreviewPresenter
     private void ApplySearchHighlights()
     {
         _textBlock.TextHighlighters.Clear();
-        if (_searchMatches.Count == 0
-            || _lastReady?.Markdown is not null
-            || _lastReady?.TextFormat == "markdown")
+        foreach (MarkdownSearchTarget target in _markdownSearchTargets)
+            target.TextBlock.TextHighlighters.Clear();
+        if (_searchMatches.Count == 0)
+            return;
+
+        if (_lastReady?.Markdown is not null)
         {
+            ApplyMarkdownSearchHighlights();
             return;
         }
+        if (_lastReady?.TextFormat == "markdown")
+            return;
 
         var allMatches = new TextHighlighter
         {
@@ -212,6 +226,71 @@ internal sealed class TextPreviewPresenter
                 Length = _searchQuery.Length,
             });
             _textBlock.TextHighlighters.Add(current);
+        }
+    }
+
+    private void ApplyMarkdownSearchHighlights()
+    {
+        var allByTarget = new Dictionary<TextBlock, TextHighlighter>();
+        int ranges = 0;
+        int targetIndex = 0;
+        foreach (int matchStart in _searchMatches)
+        {
+            int matchEnd = matchStart + _searchQuery.Length;
+            while (targetIndex < _markdownSearchTargets.Count
+                && _markdownSearchTargets[targetIndex].Start + _markdownSearchTargets[targetIndex].Length <= matchStart)
+            {
+                targetIndex++;
+            }
+            for (int index = targetIndex; index < _markdownSearchTargets.Count; index++)
+            {
+                MarkdownSearchTarget target = _markdownSearchTargets[index];
+                if (target.Start >= matchEnd)
+                    break;
+                int start = Math.Max(matchStart, target.Start);
+                int end = Math.Min(matchEnd, target.Start + target.Length);
+                if (start >= end)
+                    continue;
+                if (!allByTarget.TryGetValue(target.TextBlock, out TextHighlighter? highlighter))
+                {
+                    highlighter = new TextHighlighter
+                    {
+                        Background = new SolidColorBrush(Windows.UI.Color.FromArgb(110, 255, 210, 64)),
+                    };
+                    allByTarget.Add(target.TextBlock, highlighter);
+                    target.TextBlock.TextHighlighters.Add(highlighter);
+                }
+                highlighter.Ranges.Add(new TextRange
+                {
+                    StartIndex = target.LocalStart + start - target.Start,
+                    Length = end - start,
+                });
+                if (++ranges >= MaxSearchHighlightRanges)
+                    goto CurrentMatch;
+            }
+        }
+
+    CurrentMatch:
+        if (_currentSearchMatch < 0)
+            return;
+        int currentStart = _searchMatches[_currentSearchMatch];
+        int currentEnd = currentStart + _searchQuery.Length;
+        foreach (MarkdownSearchTarget target in _markdownSearchTargets)
+        {
+            int start = Math.Max(currentStart, target.Start);
+            int end = Math.Min(currentEnd, target.Start + target.Length);
+            if (start >= end)
+                continue;
+            var current = new TextHighlighter
+            {
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 255, 145, 48)),
+            };
+            current.Ranges.Add(new TextRange
+            {
+                StartIndex = target.LocalStart + start - target.Start,
+                Length = end - start,
+            });
+            target.TextBlock.TextHighlighters.Add(current);
         }
     }
 
@@ -261,8 +340,12 @@ internal sealed class TextPreviewPresenter
         {
             var partial = CreateParagraph(12, "Segoe UI", 12, 0);
             partial.Foreground = UiGrayBrush;
-            partial.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
+            var partialText = CreateMarkdownTextBlock(12, "Segoe UI");
+            partialText.Foreground = UiGrayBrush;
+            partialText.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
+            partial.Inlines.Add(new InlineUIContainer { Child = partialText });
             _textBlock.Blocks.Add(partial);
+            RegisterMarkdownSearchTarget(partialText, partialText, 0);
         }
     }
 
@@ -310,10 +393,11 @@ internal sealed class TextPreviewPresenter
         var p = CreateParagraph(size, "Segoe UI", block.Level <= 2 ? 16 : 10, 8);
         FrameworkElement anchor = CreateHeadingAnchor();
         p.Inlines.Add(new InlineUIContainer { Child = anchor });
-        RegisterMarkdownSearchAnchor(anchor, TextSearchIndex.MarkdownInlineText(block.Inlines, block.Text));
-        var bold = new Bold();
-        AddMarkdownInlines(bold.Inlines, block.Inlines, block.Text);
-        p.Inlines.Add(bold);
+        var text = CreateMarkdownTextBlock(size, "Segoe UI");
+        text.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
+        AddMarkdownInlines(text.Inlines, block.Inlines, block.Text);
+        p.Inlines.Add(new InlineUIContainer { Child = text });
+        RegisterMarkdownSearchTarget(anchor, text, 0);
         _textBlock.Blocks.Add(p);
         AddOutlineItem(block, anchor);
     }
@@ -323,8 +407,10 @@ internal sealed class TextPreviewPresenter
         var p = CreateParagraph(14, "Segoe UI", 0, 9);
         FrameworkElement anchor = CreateHeadingAnchor();
         p.Inlines.Add(new InlineUIContainer { Child = anchor });
-        RegisterMarkdownSearchAnchor(anchor, TextSearchIndex.MarkdownInlineText(block.Inlines, block.Text));
-        AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
+        var text = CreateMarkdownTextBlock(14, "Segoe UI");
+        AddMarkdownInlines(text.Inlines, block.Inlines, block.Text);
+        p.Inlines.Add(new InlineUIContainer { Child = text });
+        RegisterMarkdownSearchTarget(anchor, text, 0);
         _textBlock.Blocks.Add(p);
     }
 
@@ -334,9 +420,12 @@ internal sealed class TextPreviewPresenter
         p.Foreground = UiGrayBrush;
         FrameworkElement anchor = CreateHeadingAnchor();
         p.Inlines.Add(new InlineUIContainer { Child = anchor });
-        RegisterMarkdownSearchAnchor(anchor, TextSearchIndex.MarkdownInlineText(block.Inlines, block.Text));
-        p.Inlines.Add(new Run { Text = "| " });
-        AddMarkdownInlines(p.Inlines, block.Inlines, block.Text);
+        var text = CreateMarkdownTextBlock(14, "Segoe UI");
+        text.Foreground = UiGrayBrush;
+        text.Inlines.Add(new Run { Text = "| " });
+        AddMarkdownInlines(text.Inlines, block.Inlines, block.Text);
+        p.Inlines.Add(new InlineUIContainer { Child = text });
+        RegisterMarkdownSearchTarget(anchor, text, 2);
         _textBlock.Blocks.Add(p);
     }
 
@@ -351,9 +440,12 @@ internal sealed class TextPreviewPresenter
             p.Margin = new Thickness(18, 0, 0, 5);
             FrameworkElement anchor = CreateHeadingAnchor();
             p.Inlines.Add(new InlineUIContainer { Child = anchor });
-            RegisterMarkdownSearchAnchor(anchor, TextSearchIndex.MarkdownInlineText(item.Inlines, item.Text));
-            p.Inlines.Add(new Run { Text = ordered ? $"{index}. " : "- " });
-            AddMarkdownInlines(p.Inlines, item.Inlines, item.Text);
+            string prefix = ordered ? $"{index}. " : "- ";
+            var text = CreateMarkdownTextBlock(14, "Segoe UI");
+            text.Inlines.Add(new Run { Text = prefix });
+            AddMarkdownInlines(text.Inlines, item.Inlines, item.Text);
+            p.Inlines.Add(new InlineUIContainer { Child = text });
+            RegisterMarkdownSearchTarget(anchor, text, prefix.Length);
             _textBlock.Blocks.Add(p);
             index++;
         }
@@ -423,6 +515,8 @@ internal sealed class TextPreviewPresenter
                 MaxWidth = 400,
                 IsTextSelectionEnabled = true
             };
+            if (c < block.TableHeaders.Length)
+                RegisterMarkdownSearchTarget(container, textBlock, 0);
             cellBorder.Child = textBlock;
             Grid.SetRow(cellBorder, currentRow);
             Grid.SetColumn(cellBorder, c);
@@ -448,6 +542,8 @@ internal sealed class TextPreviewPresenter
                     MaxWidth = 400,
                     IsTextSelectionEnabled = true
                 };
+                if (c < row.Length)
+                    RegisterMarkdownSearchTarget(container, textBlock, 0);
                 cellBorder.Child = textBlock;
                 Grid.SetRow(cellBorder, currentRow);
                 Grid.SetColumn(cellBorder, c);
@@ -464,17 +560,18 @@ internal sealed class TextPreviewPresenter
         };
         scroller.Content = grid;
         container.Child = scroller;
-        RegisterMarkdownSearchAnchor(container, TextSearchIndex.MarkdownTableText(block));
-
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });
         _textBlock.Blocks.Add(p);
     }
 
-    private void RegisterMarkdownSearchAnchor(FrameworkElement anchor, string text)
+    private void RegisterMarkdownSearchTarget(FrameworkElement anchor, TextBlock textBlock, int localStart)
     {
-        _markdownSearchAnchors.Add((_markdownSearchOffset, anchor));
-        _markdownSearchOffset += text.Length + 1;
+        if (_markdownSearchIndex is null || _nextMarkdownSearchSegment >= _markdownSearchIndex.Segments.Count)
+            return;
+        MarkdownVisibleSegment segment = _markdownSearchIndex.Segments[_nextMarkdownSearchSegment++];
+        _markdownSearchAnchors.Add((segment.Start, anchor));
+        _markdownSearchTargets.Add(new MarkdownSearchTarget(segment.Start, segment.Text.Length, textBlock, localStart));
     }
 
 
@@ -989,7 +1086,7 @@ internal sealed class TextPreviewPresenter
         container.Child = grid;
 
         if (_lastReady?.Markdown is not null)
-            RegisterMarkdownSearchAnchor(container, code);
+            RegisterMarkdownSearchTarget(container, bodyText, 0);
 
         var p = new Paragraph();
         p.Inlines.Add(new InlineUIContainer { Child = container });
@@ -1089,6 +1186,16 @@ internal sealed class TextPreviewPresenter
             Margin = new Thickness(0, top, 0, bottom),
         };
 
+    private static TextBlock CreateMarkdownTextBlock(double fontSize, string fontFamily)
+        => new()
+        {
+            FontSize = fontSize,
+            FontFamily = FontFamilyFor(fontFamily),
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            MaxWidth = 980,
+        };
+
     private static FrameworkElement CreateHeadingAnchor()
         => new Border
         {
@@ -1096,6 +1203,12 @@ internal sealed class TextPreviewPresenter
             Height = 0,
             IsHitTestVisible = false,
         };
+
+    private readonly record struct MarkdownSearchTarget(
+        int Start,
+        int Length,
+        TextBlock TextBlock,
+        int LocalStart);
 
     private static FontFamily FontFamilyFor(string fontFamily)
     {
