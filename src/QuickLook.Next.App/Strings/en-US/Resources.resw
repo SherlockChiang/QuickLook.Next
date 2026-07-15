@@ -278,6 +278,16 @@
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>Preview is deferred because file availability could not be verified without reading its contents.</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>Media playback is deferred until the cloud provider makes this file available locally.</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>Media playback is deferred because file availability could not be verified safely.</value></data>
+  <data name="CloudMetadataPreviewFormat" xml:space="preserve"><value>Name: {0}&#xA;Kind: {1}&#xA;Size: {2}&#xA;Modified: {3}&#xA;Status: {4}</value></data>
+  <data name="PreviewModifiedMetadataFormat" xml:space="preserve"><value>Modified: {0}</value></data>
+  <data name="PageCountSingularFormat" xml:space="preserve"><value>{0:N0} page</value></data>
+  <data name="PageCountFormat" xml:space="preserve"><value>{0:N0} pages</value></data>
+  <data name="PdfPageTimedOutStatusFormat" xml:space="preserve"><value>PDF page {0:N0} timed out. Reopen the file to try again.</value></data>
+  <data name="PdfPageFailedStatusFormat" xml:space="preserve"><value>PDF page {0:N0} could not be rendered.</value></data>
+  <data name="TextPreviewTruncatedAtCharacterCountFormat" xml:space="preserve"><value>[Preview truncated at {0:N0} characters]</value></data>
+  <data name="SyntaxHighlightingCharacterLimitFormat" xml:space="preserve"><value>[Syntax highlighting disabled after {0:N0} characters]</value></data>
+  <data name="SyntaxHighlightingSpanLimitFormat" xml:space="preserve"><value>[Syntax highlighting disabled after {0:N0} spans]</value></data>
+  <data name="OfficeEmbeddedImagePreviewFormat" xml:space="preserve"><value>{0} embedded image preview</value></data>
   <data name="TextFindPlaceholder" xml:space="preserve"><value>Find</value></data>
   <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve">
@@ -352,4 +362,47 @@
   <data name="ZoomPreset200Text.Text" xml:space="preserve">
     <value>200%</value>
   </data>
+  <data name="AppTitleBar.AutomationProperties.Name" xml:space="preserve"><value>Preview title bar</value></data>
+  <data name="AnimatedImagePreviewImage.AutomationProperties.Name" xml:space="preserve"><value>Animated image content</value></data>
+  <data name="PdfPageIndicatorText.AutomationProperties.Name" xml:space="preserve"><value>Current PDF page</value></data>
+  <data name="MarkdownOutlineList.AutomationProperties.Name" xml:space="preserve"><value>Markdown heading navigation</value></data>
+  <data name="TextPreviewBlock.AutomationProperties.Name" xml:space="preserve"><value>Text preview content</value></data>
+  <data name="PreviewInfoRail.AutomationProperties.Name" xml:space="preserve"><value>Preview details</value></data>
+  <data name="ExifScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>EXIF metadata</value></data>
+  <data name="ImagePreviewToolbar.AutomationProperties.Name" xml:space="preserve"><value>Image preview toolbar</value></data>
+  <data name="ImageFilmstrip.AutomationProperties.Name" xml:space="preserve"><value>Adjacent image thumbnails</value></data>
+  <data name="ImageFilmstripList.AutomationProperties.Name" xml:space="preserve"><value>Adjacent images</value></data>
+  <data name="ListingPanel.AutomationProperties.Name" xml:space="preserve"><value>Folder or archive preview</value></data>
+  <data name="ListingBreadcrumbPanel.AutomationProperties.Name" xml:space="preserve"><value>Listing path breadcrumbs</value></data>
+  <data name="ListingListView.AutomationProperties.Name" xml:space="preserve"><value>Preview listing</value></data>
+  <data name="PreviousPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Previous PDF page</value></data>
+  <data name="NextPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Next PDF page</value></data>
+  <data name="TextLineNumbersButton.ToolTipService.ToolTip" xml:space="preserve"><value>Toggle line numbers</value></data>
+  <data name="TextSearchButton.ToolTipService.ToolTip" xml:space="preserve"><value>Search (Ctrl+F)</value></data>
+  <data name="TextSearchButton.AutomationProperties.Name" xml:space="preserve"><value>Search text</value></data>
+  <data name="InfoTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show file information</value></data>
+  <data name="ExifTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show EXIF information</value></data>
+  <data name="MoreTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show more preview actions</value></data>
+  <data name="ExifGoogleMapsText.Text" xml:space="preserve"><value>Open in Google Maps</value></data>
+  <data name="ExifGoogleMapsButton.AutomationProperties.Name" xml:space="preserve"><value>Open image location in Google Maps</value></data>
+  <data name="CopyPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>Copy previewed file</value></data>
+  <data name="OpenPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>Open previewed file</value></data>
+  <data name="RevealPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>Reveal previewed file in File Explorer</value></data>
+  <data name="DeletePreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>Move previewed file to Recycle Bin</value></data>
+  <data name="OpenFileLocationButton.AutomationProperties.Name" xml:space="preserve"><value>Open file location</value></data>
+  <data name="ZoomOutButton.AutomationProperties.Name" xml:space="preserve"><value>Zoom out</value></data>
+  <data name="ImageZoomText.AutomationProperties.Name" xml:space="preserve"><value>Current zoom level</value></data>
+  <data name="ZoomInButton.AutomationProperties.Name" xml:space="preserve"><value>Zoom in</value></data>
+  <data name="FitToWindowButton.AutomationProperties.Name" xml:space="preserve"><value>Fit to window</value></data>
+  <data name="ZoomPreset50Button.AutomationProperties.Name" xml:space="preserve"><value>Set zoom to 50 percent</value></data>
+  <data name="ZoomPreset100Button.AutomationProperties.Name" xml:space="preserve"><value>Set zoom to 100 percent</value></data>
+  <data name="ZoomPreset200Button.AutomationProperties.Name" xml:space="preserve"><value>Set zoom to 200 percent</value></data>
+  <data name="ActualSizeButton.AutomationProperties.Name" xml:space="preserve"><value>Show image at actual size</value></data>
+  <data name="ResetViewButton.AutomationProperties.Name" xml:space="preserve"><value>Reset view</value></data>
+  <data name="PreviousImageButton.AutomationProperties.Name" xml:space="preserve"><value>Previous image</value></data>
+  <data name="NextImageButton.AutomationProperties.Name" xml:space="preserve"><value>Next image</value></data>
+  <data name="ListingNameHeader.AutomationProperties.Name" xml:space="preserve"><value>Sort by name</value></data>
+  <data name="ListingModifiedHeader.AutomationProperties.Name" xml:space="preserve"><value>Sort by modified date</value></data>
+  <data name="ListingTypeHeader.AutomationProperties.Name" xml:space="preserve"><value>Sort by type</value></data>
+  <data name="ListingSizeHeader.AutomationProperties.Name" xml:space="preserve"><value>Sort by size</value></data>
 </root>

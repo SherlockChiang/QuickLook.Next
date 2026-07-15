@@ -1184,7 +1184,7 @@ public sealed partial class MainWindow : Window
         parts.Add(PreviewTypeTextFor(ready, path));
         string modified = ModifiedText(path, probe);
         if (modified != UiStrings.EmptyValue)
-            parts.Add("Modified: " + modified);
+            parts.Add(UiStrings.Format(UiStrings.PreviewModifiedMetadataFormat, modified));
         return string.Join("  |  ", parts);
     }
 
@@ -1205,17 +1205,20 @@ public sealed partial class MainWindow : Window
     private static string BuildDimensionsText(PreviewReady ready)
     {
         if (ready.Kind == "pdf" && ready.PageCount > 0)
-            return $"{ready.PageCount:N0} pages";
+            return FormatPageCount(ready.PageCount);
         if (ready.PreferredWidth > 0 && ready.PreferredHeight > 0)
             return $"{ready.PreferredWidth:N0} x {ready.PreferredHeight:N0}";
         if (ready.OfficeLayout is { Pages.Length: > 0 } layout)
-            return $"{layout.Pages.Length:N0} pages";
+            return FormatPageCount(layout.Pages.Length);
         if (ready.Listing is { } listing)
             return listing.Summary;
         if (ready.Table is { } table)
-            return $"{table.TotalRows:N0} rows x {table.TotalColumns:N0} columns";
+            return UiStrings.Format(UiStrings.TableDimensionsFormat, table.TotalRows, table.TotalColumns);
         return UiStrings.EmptyValue;
     }
+
+    private static string FormatPageCount(int pageCount)
+        => UiStrings.Format(pageCount == 1 ? UiStrings.PageCountSingularFormat : UiStrings.PageCountFormat, pageCount);
 
     private static string PreviewTypeTextFor(PreviewReady ready, string? path)
     {
@@ -1262,7 +1265,13 @@ public sealed partial class MainWindow : Window
         string modified = ModifiedText(path, probe);
         return new PreviewReady(requestId, probe.Kind, fileName, 680, 420)
         {
-            TextContent = $"Name: {fileName}\nKind: {probe.Kind}\nSize: {probe.Size:N0} bytes\nModified: {modified}\nStatus: {status}",
+            TextContent = UiStrings.Format(
+                UiStrings.CloudMetadataPreviewFormat,
+                fileName,
+                probe.Kind,
+                FormatBytes(probe.Size),
+                modified,
+                status),
             TextFormat = "plain",
             TextLanguage = "text",
         };
@@ -1433,8 +1442,8 @@ public sealed partial class MainWindow : Window
             return;
 
         StatusText.Text = error.TimedOut
-            ? $"PDF page {error.PageIndex + 1:N0} timed out; reopen the file to retry"
-            : $"PDF page {error.PageIndex + 1:N0} failed: {error.Message}";
+            ? UiStrings.Format(UiStrings.PdfPageTimedOutStatusFormat, error.PageIndex + 1)
+            : UiStrings.Format(UiStrings.PdfPageFailedStatusFormat, error.PageIndex + 1);
     }
 
     private void ShowSurfaceFailure(string requestId, string message)
@@ -1817,7 +1826,9 @@ public sealed partial class MainWindow : Window
         string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
         return ready.Kind switch
         {
-            "office" => string.IsNullOrEmpty(ext) ? UiStrings.OfficeEmbeddedImagePreview : $"{ext} embedded image preview",
+            "office" => string.IsNullOrEmpty(ext)
+                ? UiStrings.OfficeEmbeddedImagePreview
+                : UiStrings.Format(UiStrings.OfficeEmbeddedImagePreviewFormat, ext),
             "package" => UiStrings.PackageHeroSubtitle,
             "executable" => UiStrings.ExecutableHeroSubtitle,
             "certificate" => UiStrings.CertificateHeroSubtitle,

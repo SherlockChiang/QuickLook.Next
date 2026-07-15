@@ -168,6 +168,16 @@
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>无法在不读取内容的情况下验证文件可用性，因此已推迟预览。</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>云服务提供商在本地提供此文件后才能播放媒体。</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>无法安全验证文件可用性，因此已推迟媒体播放。</value></data>
+  <data name="CloudMetadataPreviewFormat" xml:space="preserve"><value>名称：{0}&#xA;类型：{1}&#xA;大小：{2}&#xA;修改时间：{3}&#xA;状态：{4}</value></data>
+  <data name="PreviewModifiedMetadataFormat" xml:space="preserve"><value>修改时间：{0}</value></data>
+  <data name="PageCountSingularFormat" xml:space="preserve"><value>{0:N0} 页</value></data>
+  <data name="PageCountFormat" xml:space="preserve"><value>{0:N0} 页</value></data>
+  <data name="PdfPageTimedOutStatusFormat" xml:space="preserve"><value>PDF 第 {0:N0} 页渲染超时。请重新打开文件后重试。</value></data>
+  <data name="PdfPageFailedStatusFormat" xml:space="preserve"><value>无法渲染 PDF 第 {0:N0} 页。</value></data>
+  <data name="TextPreviewTruncatedAtCharacterCountFormat" xml:space="preserve"><value>[预览在 {0:N0} 个字符处截断]</value></data>
+  <data name="SyntaxHighlightingCharacterLimitFormat" xml:space="preserve"><value>[超过 {0:N0} 个字符后已禁用语法高亮]</value></data>
+  <data name="SyntaxHighlightingSpanLimitFormat" xml:space="preserve"><value>[超过 {0:N0} 个区段后已禁用语法高亮]</value></data>
+  <data name="OfficeEmbeddedImagePreviewFormat" xml:space="preserve"><value>{0} 嵌入图像预览</value></data>
   <data name="TextFindPlaceholder" xml:space="preserve"><value>查找</value></data>
   <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve"><value>QuickLook Next</value></data>
@@ -194,4 +204,47 @@
   <data name="ZoomPreset50Text.Text" xml:space="preserve"><value>50%</value></data>
   <data name="ZoomPreset100Text.Text" xml:space="preserve"><value>100%</value></data>
   <data name="ZoomPreset200Text.Text" xml:space="preserve"><value>200%</value></data>
+  <data name="AppTitleBar.AutomationProperties.Name" xml:space="preserve"><value>预览标题栏</value></data>
+  <data name="AnimatedImagePreviewImage.AutomationProperties.Name" xml:space="preserve"><value>动态图像内容</value></data>
+  <data name="PdfPageIndicatorText.AutomationProperties.Name" xml:space="preserve"><value>当前 PDF 页面</value></data>
+  <data name="MarkdownOutlineList.AutomationProperties.Name" xml:space="preserve"><value>Markdown 标题导航</value></data>
+  <data name="TextPreviewBlock.AutomationProperties.Name" xml:space="preserve"><value>文本预览内容</value></data>
+  <data name="PreviewInfoRail.AutomationProperties.Name" xml:space="preserve"><value>预览详细信息</value></data>
+  <data name="ExifScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>EXIF 元数据</value></data>
+  <data name="ImagePreviewToolbar.AutomationProperties.Name" xml:space="preserve"><value>图像预览工具栏</value></data>
+  <data name="ImageFilmstrip.AutomationProperties.Name" xml:space="preserve"><value>相邻图像缩略图</value></data>
+  <data name="ImageFilmstripList.AutomationProperties.Name" xml:space="preserve"><value>相邻图像</value></data>
+  <data name="ListingPanel.AutomationProperties.Name" xml:space="preserve"><value>文件夹或压缩包预览</value></data>
+  <data name="ListingBreadcrumbPanel.AutomationProperties.Name" xml:space="preserve"><value>列表路径导航</value></data>
+  <data name="ListingListView.AutomationProperties.Name" xml:space="preserve"><value>预览列表</value></data>
+  <data name="PreviousPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>上一 PDF 页</value></data>
+  <data name="NextPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>下一 PDF 页</value></data>
+  <data name="TextLineNumbersButton.ToolTipService.ToolTip" xml:space="preserve"><value>切换行号</value></data>
+  <data name="TextSearchButton.ToolTipService.ToolTip" xml:space="preserve"><value>搜索 (Ctrl+F)</value></data>
+  <data name="TextSearchButton.AutomationProperties.Name" xml:space="preserve"><value>搜索文本</value></data>
+  <data name="InfoTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示文件信息</value></data>
+  <data name="ExifTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示 EXIF 信息</value></data>
+  <data name="MoreTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示更多预览操作</value></data>
+  <data name="ExifGoogleMapsText.Text" xml:space="preserve"><value>在 Google 地图中打开</value></data>
+  <data name="ExifGoogleMapsButton.AutomationProperties.Name" xml:space="preserve"><value>在 Google 地图中打开图像位置</value></data>
+  <data name="CopyPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>复制正在预览的文件</value></data>
+  <data name="OpenPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>打开正在预览的文件</value></data>
+  <data name="RevealPreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>在文件资源管理器中显示正在预览的文件</value></data>
+  <data name="DeletePreviewFileButton.AutomationProperties.Name" xml:space="preserve"><value>将正在预览的文件移到回收站</value></data>
+  <data name="OpenFileLocationButton.AutomationProperties.Name" xml:space="preserve"><value>打开文件位置</value></data>
+  <data name="ZoomOutButton.AutomationProperties.Name" xml:space="preserve"><value>缩小</value></data>
+  <data name="ImageZoomText.AutomationProperties.Name" xml:space="preserve"><value>当前缩放级别</value></data>
+  <data name="ZoomInButton.AutomationProperties.Name" xml:space="preserve"><value>放大</value></data>
+  <data name="FitToWindowButton.AutomationProperties.Name" xml:space="preserve"><value>适应窗口</value></data>
+  <data name="ZoomPreset50Button.AutomationProperties.Name" xml:space="preserve"><value>将缩放设置为 50%</value></data>
+  <data name="ZoomPreset100Button.AutomationProperties.Name" xml:space="preserve"><value>将缩放设置为 100%</value></data>
+  <data name="ZoomPreset200Button.AutomationProperties.Name" xml:space="preserve"><value>将缩放设置为 200%</value></data>
+  <data name="ActualSizeButton.AutomationProperties.Name" xml:space="preserve"><value>以实际大小显示图像</value></data>
+  <data name="ResetViewButton.AutomationProperties.Name" xml:space="preserve"><value>重置视图</value></data>
+  <data name="PreviousImageButton.AutomationProperties.Name" xml:space="preserve"><value>上一张图像</value></data>
+  <data name="NextImageButton.AutomationProperties.Name" xml:space="preserve"><value>下一张图像</value></data>
+  <data name="ListingNameHeader.AutomationProperties.Name" xml:space="preserve"><value>按名称排序</value></data>
+  <data name="ListingModifiedHeader.AutomationProperties.Name" xml:space="preserve"><value>按修改时间排序</value></data>
+  <data name="ListingTypeHeader.AutomationProperties.Name" xml:space="preserve"><value>按类型排序</value></data>
+  <data name="ListingSizeHeader.AutomationProperties.Name" xml:space="preserve"><value>按大小排序</value></data>
 </root>

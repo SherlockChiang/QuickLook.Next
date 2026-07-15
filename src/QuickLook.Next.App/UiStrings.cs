@@ -44,6 +44,12 @@ internal static class UiStrings
     public static string CloudAvailabilityUnknownDeferred => Get(nameof(CloudAvailabilityUnknownDeferred), "Preview is deferred because file availability could not be verified without reading its contents.");
     public static string CloudMediaDeferred => Get(nameof(CloudMediaDeferred), "Media playback is deferred until the cloud provider makes this file available locally.");
     public static string CloudMediaAvailabilityUnknownDeferred => Get(nameof(CloudMediaAvailabilityUnknownDeferred), "Media playback is deferred because file availability could not be verified safely.");
+    public static string CloudMetadataPreviewFormat => Get(nameof(CloudMetadataPreviewFormat), "Name: {0}\nKind: {1}\nSize: {2}\nModified: {3}\nStatus: {4}");
+    public static string PreviewModifiedMetadataFormat => Get(nameof(PreviewModifiedMetadataFormat), "Modified: {0}");
+    public static string PageCountSingularFormat => Get(nameof(PageCountSingularFormat), "{0:N0} page");
+    public static string PageCountFormat => Get(nameof(PageCountFormat), "{0:N0} pages");
+    public static string PdfPageTimedOutStatusFormat => Get(nameof(PdfPageTimedOutStatusFormat), "PDF page {0:N0} timed out. Reopen the file to try again.");
+    public static string PdfPageFailedStatusFormat => Get(nameof(PdfPageFailedStatusFormat), "PDF page {0:N0} could not be rendered.");
 
     public static string TrayShowPreview => Get(nameof(TrayShowPreview), "Show preview");
     public static string TraySettings => Get(nameof(TraySettings), "Settings");
@@ -113,6 +119,9 @@ internal static class UiStrings
     public static string MoveToRecycleBin => Get(nameof(MoveToRecycleBin), "Move to Recycle Bin");
     public static string Cancel => Get(nameof(Cancel), "Cancel");
     public static string TextPreviewTruncated => Get(nameof(TextPreviewTruncated), "[Preview truncated]");
+    public static string TextPreviewTruncatedAtCharacterCountFormat => Get(nameof(TextPreviewTruncatedAtCharacterCountFormat), "[Preview truncated at {0:N0} characters]");
+    public static string SyntaxHighlightingCharacterLimitFormat => Get(nameof(SyntaxHighlightingCharacterLimitFormat), "[Syntax highlighting disabled after {0:N0} characters]");
+    public static string SyntaxHighlightingSpanLimitFormat => Get(nameof(SyntaxHighlightingSpanLimitFormat), "[Syntax highlighting disabled after {0:N0} spans]");
     public static string CopyAction => Get(nameof(CopyAction), "Copy");
     public static string CopiedAction => Get(nameof(CopiedAction), "Copied!");
     public static string DialogOk => Get(nameof(DialogOk), "OK");
@@ -141,6 +150,7 @@ internal static class UiStrings
     public static string PackageHeroSubtitle => Get(nameof(PackageHeroSubtitle), "App package icon");
     public static string ExecutableHeroSubtitle => Get(nameof(ExecutableHeroSubtitle), "Application icon");
     public static string OfficeEmbeddedImagePreview => Get(nameof(OfficeEmbeddedImagePreview), "Embedded image preview");
+    public static string OfficeEmbeddedImagePreviewFormat => Get(nameof(OfficeEmbeddedImagePreviewFormat), "{0} embedded image preview");
     public static string TableDimensionsFormat => Get(nameof(TableDimensionsFormat), "{0:N0} rows x {1:N0} columns");
     public static string TableShowingRowsFormat => Get(nameof(TableShowingRowsFormat), " - showing {0:N0} rows");
     public static string TableSummaryFormat => Get(nameof(TableSummaryFormat), "{0} table - {1}");

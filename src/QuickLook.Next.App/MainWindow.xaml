@@ -157,6 +157,7 @@
                     AutomationProperties.Name="Animated image preview">
                 <Grid>
                     <Image x:Name="AnimatedImagePreviewImage"
+                           x:Uid="AnimatedImagePreviewImage"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            Stretch="Fill"
@@ -200,6 +201,7 @@
                         <FontIcon Glyph="&#xE76B;" FontSize="14" />
                     </Button>
                     <TextBlock x:Name="PdfPageIndicatorText"
+                               x:Uid="PdfPageIndicatorText"
                                MinWidth="62"
                                VerticalAlignment="Center"
                                TextAlignment="Center"
@@ -232,6 +234,7 @@
                     CornerRadius="8"
                     AutomationProperties.Name="Markdown headings">
                 <ListView x:Name="MarkdownOutlineList"
+                          x:Uid="MarkdownOutlineList"
                           SelectionMode="Single"
                           IsItemClickEnabled="True"
                           HorizontalAlignment="Stretch"
@@ -395,6 +398,7 @@
                         <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
                     </ToggleButton>
                     <ToggleButton x:Name="TextLineNumbersButton"
+                                  x:Uid="TextLineNumbersButton"
                                   Visibility="Collapsed"
                                   IsChecked="True"
                                   ToolTipService.ToolTip="Toggle Line Numbers"
@@ -403,6 +407,7 @@
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
                     <Button x:Name="TextSearchButton"
+                            x:Uid="TextSearchButton"
                             Width="40" Height="40"
                             ToolTipService.ToolTip="Search (Ctrl+F)"
                             Padding="6" Background="Transparent" BorderThickness="0"
@@ -612,6 +617,7 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                         <ScrollViewer x:Name="ExifScrollViewer"
+                                      x:Uid="ExifScrollViewer"
                                       Visibility="Collapsed"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto"
@@ -832,6 +838,7 @@
                         <FontIcon Glyph="&#xE76B;" FontSize="15" />
                     </Button>
                     <ListView x:Name="ImageFilmstripList"
+                              x:Uid="ImageFilmstripList"
                               Grid.Column="1"
                               Height="64"
                               Padding="0"

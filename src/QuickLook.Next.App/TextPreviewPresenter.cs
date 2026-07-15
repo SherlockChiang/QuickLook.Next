@@ -936,7 +936,7 @@ internal sealed class TextPreviewPresenter
                 paragraph.Inlines.Add(new Run
                 {
                     Text = code[..MaxHighlightedChars]
-                        + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
+                        + "\n\n" + UiStrings.Format(UiStrings.SyntaxHighlightingCharacterLimitFormat, MaxHighlightedChars),
                 });
             }
             else
@@ -959,7 +959,7 @@ internal sealed class TextPreviewPresenter
                     DiagLog.Write("App", $"highlight run limit hit: language={language}; chars={code.Length}; runs>{MaxHighlightedRuns}");
                     paragraph.Inlines.Clear();
                     paragraph.Foreground = BrushFor(TokenKind.Default);
-                    paragraph.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+                    paragraph.Inlines.Add(new Run { Text = code + "\n\n" + UiStrings.Format(UiStrings.SyntaxHighlightingSpanLimitFormat, MaxHighlightedRuns) });
                     break;
                 }
                 paragraph.Inlines.Add(new Run { Text = txt, Foreground = BrushFor(kind) });
@@ -1078,7 +1078,7 @@ internal sealed class TextPreviewPresenter
                 bodyText.Inlines.Add(new Run
                 {
                     Text = code[..MaxHighlightedChars]
-                        + $"\n\n[Syntax highlighting disabled after {MaxHighlightedChars:N0} characters]",
+                        + "\n\n" + UiStrings.Format(UiStrings.SyntaxHighlightingCharacterLimitFormat, MaxHighlightedChars),
                 });
             }
             else
@@ -1094,7 +1094,7 @@ internal sealed class TextPreviewPresenter
             {
                 DiagLog.Write("App", $"highlight run budget exceeded: language={language}; chars={code.Length}; runs={runs}; remaining={_markdownSyntaxRunsRemaining}");
                 bodyText.Foreground = BrushFor(TokenKind.Default);
-                bodyText.Inlines.Add(new Run { Text = code + $"\n\n[Syntax highlighting disabled after {MaxHighlightedRuns:N0} spans]" });
+                bodyText.Inlines.Add(new Run { Text = code + "\n\n" + UiStrings.Format(UiStrings.SyntaxHighlightingSpanLimitFormat, MaxHighlightedRuns) });
             }
             else
             {
@@ -1204,7 +1204,7 @@ internal sealed class TextPreviewPresenter
     private static string TrimForDisplay(string text)
         => text.Length <= MaxHighlightedChars
             ? text
-            : text[..MaxHighlightedChars] + $"\n\n[Preview truncated at {MaxHighlightedChars:N0} characters]";
+            : text[..MaxHighlightedChars] + "\n\n" + UiStrings.Format(UiStrings.TextPreviewTruncatedAtCharacterCountFormat, MaxHighlightedChars);
 
     private static Paragraph CreateParagraph(double fontSize, string fontFamily, double top, double bottom)
         => new()

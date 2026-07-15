@@ -285,6 +285,48 @@ if ((Test-Path $englishResources) -and (Test-Path $chineseResources)) {
     foreach ($key in $chineseKeys | Where-Object { $_ -notin $englishKeys }) {
         Add-Failure "en-US resource is missing key: $key"
     }
+
+    foreach ($key in $englishKeys) {
+        $englishNode = $english.root.data | Where-Object { $_.name -eq $key }
+        $chineseNode = $chinese.root.data | Where-Object { $_.name -eq $key }
+        $englishPlaceholders = @([regex]::Matches([string]$englishNode.value, '\{(\d+)') |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        $chinesePlaceholders = @([regex]::Matches([string]$chineseNode.value, '\{(\d+)') |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        if (($englishPlaceholders -join ',') -ne ($chinesePlaceholders -join ',')) {
+            Add-Failure "Localized format placeholders differ for key: $key"
+        }
+    }
+
+    $uiStringsPath = Join-Path $Root "src\QuickLook.Next.App\UiStrings.cs"
+    if (Test-Path $uiStringsPath) {
+        $uiStringsText = Get-Content -LiteralPath $uiStringsPath -Raw
+        foreach ($keyMatch in [regex]::Matches($uiStringsText, 'Get\(nameof\(([^)]+)\)')) {
+            $resourceKey = $keyMatch.Groups[1].Value
+            if ($resourceKey -notin $englishKeys) {
+                Add-Failure "UiStrings property is missing resource key: $resourceKey"
+            }
+        }
+    }
+
+    $mainWindowXaml = Join-Path $Root "src\QuickLook.Next.App\MainWindow.xaml"
+    if (Test-Path $mainWindowXaml) {
+        $xamlText = Get-Content -LiteralPath $mainWindowXaml -Raw
+        foreach ($tagMatch in [regex]::Matches($xamlText, '<[^>]+>', [System.Text.RegularExpressions.RegexOptions]::Singleline)) {
+            $tag = $tagMatch.Value
+            $uidMatch = [regex]::Match($tag, 'x:Uid="([^"]+)"')
+            if (-not $uidMatch.Success) { continue }
+            $uid = $uidMatch.Groups[1].Value
+            foreach ($property in @('AutomationProperties.Name', 'ToolTipService.ToolTip')) {
+                if ($tag -match ([regex]::Escape($property) + '="[^"]+"')) {
+                    $resourceKey = "$uid.$property"
+                    if ($resourceKey -notin $englishKeys) {
+                        Add-Failure "MainWindow localizable property is missing resource key: $resourceKey"
+                    }
+                }
+            }
+        }
+    }
 }
 
 if ($failures.Count -gt 0) {
