@@ -56,7 +56,7 @@ public sealed class ListingRow : INotifyPropertyChanged
         string ext = System.IO.Path.GetExtension(item.Name).ToLowerInvariant();
         return ext switch
         {
-            ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".tif" or ".tiff" or ".ico" => "\uEB9F",
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".tif" or ".tiff" or ".ico" or ".svg" => "\uEB9F",
             ".mp4" or ".mkv" or ".mov" or ".avi" or ".webm" or ".wmv" => "\uE8B2",
             ".mp3" or ".wav" or ".flac" or ".aac" or ".m4a" or ".ogg" => "\uE8D6",
             ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" => "\uF012",

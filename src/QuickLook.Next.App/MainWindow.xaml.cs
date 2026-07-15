@@ -98,7 +98,7 @@ public sealed partial class MainWindow : Window
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
-        ".heic", ".heif", ".avif", ".jxl",
+        ".heic", ".heif", ".avif", ".jxl", ".svg",
     };
     private static readonly IReadOnlyDictionary<int, string> ExposureProgramNames = new Dictionary<int, string>
     {
@@ -3164,9 +3164,12 @@ public sealed partial class MainWindow : Window
         catch { /* probe is best-effort in the scaffold; the real probe comes from native */ }
         long size = 0;
         try { size = new FileInfo(path).Length; } catch { }
-        return new FileProbe(path, System.IO.Path.GetExtension(path), magic)
+        string extension = System.IO.Path.GetExtension(path);
+        return new FileProbe(path, extension, magic)
         {
-            Kind = FallbackFileProbe.IsText(path, magic, isEmptyFile: size == 0 && System.IO.File.Exists(path)) ? "text" : "unknown",
+            Kind = extension.Equals(".svg", StringComparison.OrdinalIgnoreCase)
+                ? "image"
+                : FallbackFileProbe.IsText(path, magic, isEmptyFile: size == 0 && System.IO.File.Exists(path)) ? "text" : "unknown",
             Size = size,
         };
     }

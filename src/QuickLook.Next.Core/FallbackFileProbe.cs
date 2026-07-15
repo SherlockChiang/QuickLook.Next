@@ -38,7 +38,7 @@ public static class FallbackFileProbe
         [".pdf"] = "pdf",
         [".png"] = "image", [".jpg"] = "image", [".jpeg"] = "image", [".jpe"] = "image", [".gif"] = "image",
         [".bmp"] = "image", [".dib"] = "image", [".tif"] = "image", [".tiff"] = "image", [".webp"] = "image",
-        [".ico"] = "image", [".heic"] = "image", [".heif"] = "image", [".avif"] = "image", [".jxl"] = "image",
+        [".ico"] = "image", [".heic"] = "image", [".heif"] = "image", [".avif"] = "image", [".jxl"] = "image", [".svg"] = "image",
         [".zip"] = "archive", [".jar"] = "archive", [".nupkg"] = "archive", [".vsix"] = "archive",
         [".whl"] = "archive", [".cbz"] = "archive", [".xpi"] = "archive", [".tar"] = "archive",
         [".tgz"] = "archive", [".gz"] = "archive",

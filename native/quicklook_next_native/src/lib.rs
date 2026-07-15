@@ -13,7 +13,7 @@ use std::io::{BufReader, Read};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{AnimationDecoder, ImageReader};
@@ -58,6 +58,7 @@ const WM_QL_SWITCH_DELAYED: u32 = WM_APP + 6;
 const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
+static SVG_FONT_DATABASE: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
 
 thread_local! {
     static SHELL_WINDOWS_CACHE: std::cell::RefCell<Option<IShellWindows>> = const { std::cell::RefCell::new(None) };
@@ -633,7 +634,7 @@ fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'stati
     const EBOOK_EXTS: &[&str] = &[".epub", ".fb2", ".mobi", ".azw", ".azw3"];
     const IMAGE_EXTS: &[&str] = &[
         ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
-        ".heic", ".heif", ".avif", ".jxl",
+        ".heic", ".heif", ".avif", ".jxl", ".svg",
     ];
     const PACKAGE_EXTS: &[&str] = &[
         ".apk",
@@ -922,6 +923,14 @@ fn decode_image_bgra(
         return None;
     }
 
+    if std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+    {
+        return decode_svg_bgra(path, target_width, target_height, cancel_cb);
+    }
+
     let jpeg_metadata = jpeg_metadata(path).ok()?;
     let (original_width, original_height) = match jpeg_metadata.dimensions {
         Some(dimensions) => dimensions,
@@ -1093,6 +1102,67 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, can
     }
     if cancel_requested(cancel_cb) { return None; }
     Some((width, height, decoded))
+}
+
+fn decode_svg_bgra(
+    path: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+    const MAX_SVG_INPUT_BYTES: u64 = 16 * 1024 * 1024;
+
+    if fs::metadata(path).ok()?.len() > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
+        return None;
+    }
+
+    let decode_start = Instant::now();
+    let data = fs::read(path).ok()?;
+    let mut options = resvg::usvg::Options::default();
+    options.image_href_resolver.resolve_data = Box::new(|_, _, _| None);
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options.fontdb = SVG_FONT_DATABASE
+        .get_or_init(|| {
+            let mut database = resvg::usvg::fontdb::Database::new();
+            database.load_system_fonts();
+            Arc::new(database)
+        })
+        .clone();
+    let tree = resvg::usvg::Tree::from_data(&data, &options).ok()?;
+    let original = tree.size();
+    let original_width = original.width().ceil() as u32;
+    let original_height = original.height().ceil() as u32;
+    if original_width == 0 || original_height == 0 || cancel_requested(cancel_cb) {
+        return None;
+    }
+    let decode_ms = elapsed_ms_u32(decode_start);
+
+    let target_width = if target_width > 0 { target_width } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_height = if target_height > 0 { target_height } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let scale = (target_width as f64 / original.width() as f64)
+        .min(target_height as f64 / original.height() as f64)
+        .min(1.0);
+    let width = ((original.width() as f64 * scale).round() as u32).max(1);
+    let height = ((original.height() as f64 * scale).round() as u32).max(1);
+
+    let resize_start = Instant::now();
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(scale as f32, scale as f32);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let resize_ms = elapsed_ms_u32(resize_start);
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+
+    let convert_start = Instant::now();
+    let mut bgra = pixmap.take();
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let convert_ms = elapsed_ms_u32(convert_start);
+    Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
 }
 
 fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
@@ -1566,6 +1636,11 @@ mod tests {
     }
 
     #[test]
+    fn classify_routes_svg_to_image_preview() {
+        assert_eq!(classify("drawing.svg", ".svg", b"<svg xmlns=", false), "image");
+    }
+
+    #[test]
     fn classify_accepts_known_text_file_names_with_empty_content() {
         assert_eq!(classify("Dockerfile", "", b"", true), "text");
         assert_eq!(classify("Makefile", "", b"", true), "text");
@@ -1644,6 +1719,46 @@ mod tests {
         assert_eq!(decoded.2, 4);
         assert_eq!(decoded.3, 4);
         assert_eq!(decoded.7.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn native_svg_decode_honors_target_size_and_premultiplies_alpha() {
+        let path = temp_image_path("svg");
+        fs::write(
+            &path,
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="#ff0000" fill-opacity="0.5"/></svg>"##,
+        )
+        .expect("write svg");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 100, 100, None).expect("decode svg");
+        let _ = fs::remove_file(path);
+
+        assert_eq!((decoded.0, decoded.1), (100, 50));
+        assert_eq!((decoded.2, decoded.3), (400, 200));
+        assert_eq!(decoded.7.len(), 100 * 50 * 4);
+        assert_eq!(&decoded.7[..4], &[0, 0, 128, 128]);
+    }
+
+    #[test]
+    fn native_svg_decode_does_not_read_external_images() {
+        let path = temp_image_path("svg");
+        let external_path = path.with_extension("png");
+        image::save_buffer(&external_path, &[255u8, 0, 0, 255], 1, 1, image::ColorType::Rgba8)
+            .expect("write external image");
+        let external_name = external_path.file_name().unwrap().to_string_lossy();
+        fs::write(
+            &path,
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><image href="{external_name}" width="1" height="1"/></svg>"#
+            ),
+        )
+        .expect("write svg");
+
+        let decoded = decode_image_bgra(path.to_str().unwrap(), 1, 1, None).expect("decode svg");
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(external_path);
+
+        assert_eq!(decoded.7, vec![0, 0, 0, 0]);
     }
 
     #[test]

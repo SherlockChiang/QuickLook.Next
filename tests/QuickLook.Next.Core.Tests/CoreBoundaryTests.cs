@@ -113,6 +113,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("cloud.pdf", "pdf")]
     [InlineData("cloud.docx", "office")]
     [InlineData("cloud.png", "image")]
+    [InlineData("cloud.svg", "image")]
     [InlineData("cloud.zip", "archive")]
     [InlineData("cloud.mp4", "video")]
     [InlineData("cloud.cer", "certificate")]
