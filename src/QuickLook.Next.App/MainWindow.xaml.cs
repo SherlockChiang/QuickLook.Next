@@ -3243,10 +3243,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static bool IsParserHostPreview(FileProbe probe)
-        => probe.Kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("package", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("office", StringComparison.OrdinalIgnoreCase)
-           || IsCloudParserHostPreview(probe);
+        => PreviewFormatPolicy.UsesParserHost(probe.Kind);
 
     private (string RequestId, Task<ControlMessage> Completion) BeginPinnedParserOpen(string path, FileProbe initialProbe)
     {

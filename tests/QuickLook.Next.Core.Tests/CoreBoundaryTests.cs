@@ -55,6 +55,42 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(ListingFilter.MaxItems, ListingFilter.CurrentLevel(items, "", "").Count);
     }
 
+    [Theory]
+    [InlineData("archive")]
+    [InlineData("PACKAGE")]
+    [InlineData("office")]
+    [InlineData("text")]
+    [InlineData("ebook")]
+    [InlineData("executable")]
+    [InlineData("torrent")]
+    [InlineData("certificate")]
+    public void Parser_host_policy_accepts_registered_kinds(string kind)
+        => Assert.True(PreviewFormatPolicy.UsesParserHost(kind));
+
+    [Theory]
+    [InlineData("image")]
+    [InlineData("pdf")]
+    [InlineData("unknown")]
+    public void Parser_host_policy_rejects_unregistered_kinds(string kind)
+        => Assert.False(PreviewFormatPolicy.UsesParserHost(kind));
+
+    [Fact]
+    public void Native_abi_rejects_mismatched_versions()
+    {
+        NativeAbi.EnsureCompatible(NativeAbi.Version);
+        Assert.Throws<InvalidOperationException>(() => NativeAbi.EnsureCompatible(NativeAbi.Version + 1));
+    }
+
+    [Theory]
+    [InlineData("file.vhdx", "disk-image")]
+    [InlineData("font.woff2", "font")]
+    [InlineData("mail.eml", "mail")]
+    [InlineData("data.sqlite", "database")]
+    [InlineData("dump.mdmp", "dump")]
+    [InlineData("library.so", "elf")]
+    public void Metadata_probe_preserves_registered_native_kinds(string path, string expectedKind)
+        => Assert.Equal(expectedKind, FallbackFileProbe.CreateMetadataOnlyProbe(path).Kind);
+
     [Fact]
     public void Preview_listing_json_preserves_encrypted_archive_metadata()
     {

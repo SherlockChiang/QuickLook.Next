@@ -23,6 +23,8 @@ internal sealed class NativeBridge
     private delegate bool NativeCancelCallback();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint ql_abi_version();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern void ql_set_callback(NativeCallback cb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_start();
@@ -75,6 +77,7 @@ internal sealed class NativeBridge
 
     public void Start(Action<NativeIntent> onIntent)
     {
+        NativeAbi.EnsureCompatible(ql_abi_version());
         _onIntent = onIntent;
         _callback = OnNative;
         ql_set_callback(_callback);

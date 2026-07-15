@@ -67,6 +67,12 @@ thread_local! {
 // A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
+const QL_NATIVE_ABI_VERSION: u32 = 1;
+
+#[no_mangle]
+pub extern "C" fn ql_abi_version() -> u32 {
+    QL_NATIVE_ABI_VERSION
+}
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
@@ -2838,3 +2844,7 @@ fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {
     }
     needed as i32
 }
+    #[test]
+    fn native_abi_version_is_stable() {
+        assert_eq!(ql_abi_version(), 1);
+    }

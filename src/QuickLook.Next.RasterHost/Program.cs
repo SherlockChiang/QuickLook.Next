@@ -7,6 +7,8 @@ using QuickLook.Next.RasterHost;
 
 // RasterHost: the .NET surface process. It owns D3D shared-surface production plus Windows-only render
 // bridges (PDF pages and shell thumbnails). Preview business logic should live in Rust or the App UI.
+NativeImageDecoder.EnsureCompatible();
+
 
 if (GetArg(args, "--smoke-system-image-corpus") is { } smokeCorpusDir)
 {
@@ -614,7 +616,7 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
 static bool PreferSystemImageDecoder(string path)
 {
     string ext = Path.GetExtension(path).ToLowerInvariant();
-    return ext is ".png" or ".bmp" or ".webp" or ".jpg" or ".jpeg" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
+    return ext is ".png" or ".bmp" or ".webp" or ".jpg" or ".jpeg" or ".jpe" or ".tif" or ".tiff" or ".heic" or ".heif" or ".avif" or ".jxl";
 }
 
 async Task HandlePageOpenAsync(PreviewPageOpen page)

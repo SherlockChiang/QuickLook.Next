@@ -36,7 +36,12 @@ internal static class NativeImageDecoder
     private delegate bool NativeCancelCallback();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint ql_abi_version();
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+
+    public static void EnsureCompatible() => NativeAbi.EnsureCompatible(ql_abi_version());
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
@@ -237,7 +242,7 @@ internal static class NativeImageDecoder
         return ext is ".png"
             or ".bmp"
             or ".webp"
-            or ".jpg" or ".jpeg"
+            or ".jpg" or ".jpeg" or ".jpe"
             or ".tif" or ".tiff"
             or ".heic" or ".heif"
             or ".avif"

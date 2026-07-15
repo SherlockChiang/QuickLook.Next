@@ -304,6 +304,11 @@ if (Test-Path $performanceBoundsGuard) {
     & $performanceBoundsGuard -Root $Root
 }
 
+$formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
+if (Test-Path $formatRegistryGuard) {
+    & $formatRegistryGuard -Root $Root
+}
+
 $restrictedHostLaunchSmoke = Join-Path $PSScriptRoot "smoke-restricted-host-launch.ps1"
 if (Test-Path $restrictedHostLaunchSmoke) {
     & $restrictedHostLaunchSmoke -Root $Root

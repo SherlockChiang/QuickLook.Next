@@ -101,7 +101,7 @@ public static partial class DiagnosticsBundle
                 parserHostPresent = snapshot.ParserHostPresent,
                 windowsAppSdkSelfContained = true,
                 systemCodecAvailability = "not-probed",
-                formatRegistryAvailable = false,
+                formatRegistryAvailable = true,
             },
             diagnosticLogs = new
             {

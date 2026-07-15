@@ -18,7 +18,12 @@ internal static class ParserNativePreview
     private delegate bool NativeCancelCallback();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint ql_abi_version();
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+
+    public static void EnsureCompatible() => NativeAbi.EnsureCompatible(ql_abi_version());
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);

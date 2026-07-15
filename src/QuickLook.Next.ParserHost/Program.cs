@@ -18,6 +18,8 @@ Environment.SetEnvironmentVariable("QUICKLOOK_NEXT_ARCHIVE_ROOT", archiveRoot);
 
 DiagLog.InitInDirectory(logRoot, "parser-host.log");
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
+try { ParserNativePreview.EnsureCompatible(); }
+catch (Exception ex) { DiagLog.Write("ParserHost", "native ABI check failed: " + ex.Message); return; }
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
 CleanupStaleHeroRasters(rasterRoot);
 CleanupStalePreviewInputs(inputRoot);
@@ -104,7 +106,7 @@ while (true)
                 try
                 {
                     string kind = open.Probe.Kind.ToLowerInvariant();
-                    if (kind is not ("archive" or "package" or "office" or "text" or "ebook" or "executable" or "torrent" or "certificate"))
+                    if (!PreviewFormatPolicy.UsesParserHost(kind))
                     {
                         await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
                         return;
@@ -168,7 +170,7 @@ while (true)
                     }
                     handleCts.Token.ThrowIfCancellationRequested();
                     string kind = open.Probe.Kind.ToLowerInvariant();
-                    if (kind is not ("archive" or "package" or "office" or "text" or "ebook" or "executable" or "torrent" or "certificate"))
+                    if (!PreviewFormatPolicy.UsesParserHost(kind))
                     {
                         await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
                         return;

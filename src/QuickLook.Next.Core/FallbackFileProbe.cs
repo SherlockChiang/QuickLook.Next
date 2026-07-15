@@ -54,6 +54,15 @@ public static class FallbackFileProbe
         [".cer"] = "certificate", [".crt"] = "certificate", [".der"] = "certificate", [".pem"] = "certificate",
         [".p7b"] = "certificate", [".p7c"] = "certificate",
         [".torrent"] = "torrent",
+        [".img"] = "disk-image", [".iso"] = "disk-image", [".vhd"] = "disk-image", [".vhdx"] = "disk-image",
+        [".vmdk"] = "disk-image", [".dmg"] = "disk-image",
+        [".ttf"] = "font", [".otf"] = "font", [".ttc"] = "font", [".otc"] = "font", [".woff"] = "font", [".woff2"] = "font",
+        [".sqlite"] = "database", [".sqlite3"] = "database", [".db"] = "database", [".db3"] = "database",
+        [".s3db"] = "database", [".sqlite-shm"] = "database", [".sqlite-wal"] = "database", [".mdb"] = "database", [".accdb"] = "database",
+        [".eml"] = "mail", [".msg"] = "mail", [".mbox"] = "mail", [".emlx"] = "mail",
+        [".chm"] = "chm",
+        [".dmp"] = "dump", [".mdmp"] = "dump", [".dump"] = "dump", [".core"] = "dump",
+        [".elf"] = "elf", [".so"] = "elf", [".o"] = "elf",
     };
 
     public static FileProbe CreateMetadataOnlyProbe(string path)

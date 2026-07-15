@@ -2104,7 +2104,7 @@ pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
 
     let mut context = OfficeContext::new(cancel_cb);
     match ext.as_str() {
-        "docx" => render_docx(path, &mut context).unwrap_or_default(),
+        "docx" | "docm" => render_docx(path, &mut context).unwrap_or_default(),
         "xlsx" | "xlsm" => render_xlsx(path, &mut context).unwrap_or_default(),
         "pptx" | "pptm" => render_pptx(path, &mut context).unwrap_or_default(),
         "odt" | "ods" | "odp" => render_odf(path, &mut context).unwrap_or_default(),

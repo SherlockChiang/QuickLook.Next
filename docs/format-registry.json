@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "nativeAbiVersion": 1,
+  "probeKinds": [
+    "archive", "audio", "binary", "certificate", "chm", "database", "disk-image",
+    "dump", "ebook", "elf", "executable", "folder", "font", "image", "mail",
+    "office", "package", "pdf", "text", "torrent", "video"
+  ],
+  "parserHostKinds": [
+    "archive", "certificate", "ebook", "executable", "office", "package", "text", "torrent"
+  ],
+  "imageAliases": {
+    "jpeg": [".jpg", ".jpeg", ".jpe"],
+    "heic": [".heic", ".heif"],
+    "tiff": [".tif", ".tiff"],
+    "bmp": [".bmp", ".dib"]
+  },
+  "systemRequiredImages": [".avif", ".heic", ".heif", ".jxl"],
+  "animatedImages": [".gif", ".webp"],
+  "unsupportedArchives": [".7z", ".rar"]
+}
