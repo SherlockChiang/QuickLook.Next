@@ -73,6 +73,12 @@ internal static class UiStrings
     public static string SettingsAnimationSystem => Get(nameof(SettingsAnimationSystem), "Follow Windows settings");
     public static string SettingsAnimationAlways => Get(nameof(SettingsAnimationAlways), "Always play");
     public static string SettingsAnimationStill => Get(nameof(SettingsAnimationStill), "Show still frame");
+    public static string SettingsTextWrapping => Get(nameof(SettingsTextWrapping), "Long lines in text and code previews");
+    public static string SettingsTextWrappingDescription => Get(nameof(SettingsTextWrappingDescription), "Choose whether long lines follow the file type, wrap, or scroll horizontally. Markdown layout is unchanged.");
+    public static string SettingsTextWrappingAutomatic => Get(nameof(SettingsTextWrappingAutomatic), "Automatic");
+    public static string SettingsTextWrappingAlways => Get(nameof(SettingsTextWrappingAlways), "Wrap lines");
+    public static string SettingsTextWrappingNever => Get(nameof(SettingsTextWrappingNever), "Do not wrap");
+    public static string ToggleWordWrap => Get(nameof(ToggleWordWrap), "Toggle word wrap");
     public static string SettingsRestartTitle => Get(nameof(SettingsRestartTitle), "Restart required");
     public static string SettingsRestartMessage => Get(nameof(SettingsRestartMessage), "Exit QuickLook Next from the tray and start it again to apply the language.");
     public static string SettingsAbout => Get(nameof(SettingsAbout), "About");

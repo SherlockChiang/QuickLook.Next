@@ -4,9 +4,13 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
-internal sealed record AppSettings(int SchemaVersion = 1, string Language = "system", string Animation = "system")
+internal sealed record AppSettings(
+    int SchemaVersion = 2,
+    string Language = "system",
+    string Animation = "system",
+    string TextWrapping = "automatic")
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     private static readonly string SettingsDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickLook.Next");
@@ -46,6 +50,13 @@ internal sealed record AppSettings(int SchemaVersion = 1, string Language = "sys
         return Save(Current with { Animation = animation });
     }
 
+    public static bool SaveTextWrapping(string textWrapping)
+    {
+        if (textWrapping is not ("automatic" or "always" or "never"))
+            return false;
+        return Save(Current with { TextWrapping = textWrapping });
+    }
+
     private static bool Save(AppSettings updated)
     {
         try
@@ -82,12 +93,13 @@ internal sealed record AppSettings(int SchemaVersion = 1, string Language = "sys
             if (settings is null
                 || settings.SchemaVersion is < 1 or > CurrentSchemaVersion
                 || settings.Language is not ("system" or "en-US" or "zh-CN")
-                || settings.Animation is not ("system" or "always" or "still"))
+                || settings.Animation is not ("system" or "always" or "still")
+                || settings.TextWrapping is not ("automatic" or "always" or "never"))
             {
                 PreserveInvalidSettings();
                 return new AppSettings();
             }
-            return settings;
+            return settings with { SchemaVersion = CurrentSchemaVersion };
         }
         catch (Exception ex)
         {

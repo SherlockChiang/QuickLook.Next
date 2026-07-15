@@ -54,6 +54,7 @@ internal sealed class TextPreviewPresenter
     private int _markdownBlocksRendered;
     private bool _markdownRenderTruncated;
     private int _markdownSyntaxRunsRemaining;
+    private bool _wrap;
 
     public TextPreviewPresenter(
         RichTextBlock textBlock,
@@ -80,7 +81,7 @@ internal sealed class TextPreviewPresenter
         _textListView.KeyDown += OnTextListViewKeyDown;
     }
 
-    public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
+    public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent, bool wrap)
     {
         _lastReady = ready;
         _lastMaxContent = maxContent;
@@ -104,7 +105,7 @@ internal sealed class TextPreviewPresenter
         ClearOutline();
 
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
-        bool wrap = ready.TextFormat is "markdown" or "plain";
+        _wrap = wrap;
         _scrollViewer.Visibility = Visibility.Visible;
         _textListView.Visibility = Visibility.Collapsed;
         
@@ -321,7 +322,34 @@ internal sealed class TextPreviewPresenter
     {
         _tokenBrushes.Clear();
         if (_lastReady is not null)
-            Render(_lastReady, _lastMaxContent);
+            Render(_lastReady, _lastMaxContent, _wrap);
+    }
+
+    public void SetWrapping(bool wrap)
+    {
+        _wrap = wrap;
+        _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        if (_textListView.ItemsSource is ObservableCollection<TextLineItem> items)
+        {
+            foreach (TextLineItem item in items)
+                if (item.Content is TextBlock textBlock)
+                    textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        }
+    }
+
+    public bool SupportsWrappingToggle
+        => _lastReady is not null
+            && _lastReady.Markdown is null
+            && !string.Equals(_lastReady.TextFormat, "markdown", StringComparison.OrdinalIgnoreCase);
+
+    public bool ApplyWrappingMode(string mode)
+    {
+        if (_lastReady is null)
+            return false;
+        bool wrap = TextWrappingPolicy.ShouldWrap(mode, _lastReady.TextFormat, _lastReady.Markdown is not null);
+        SetWrapping(wrap);
+        return wrap;
     }
 
     private void RenderMarkdownDocument(PreviewMarkdown document)

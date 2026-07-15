@@ -14,6 +14,20 @@ public sealed class CoreBoundaryTests : IDisposable
         => Assert.Equal([0, 4], TextSearchIndex.FindMatches("Testtest", "test"));
 
     [Theory]
+    [InlineData("automatic", "plain", false, true)]
+    [InlineData("automatic", "code", false, false)]
+    [InlineData("always", "code", false, true)]
+    [InlineData("never", "plain", false, false)]
+    [InlineData("never", "markdown", false, true)]
+    [InlineData("never", "code", true, true)]
+    public void Text_wrapping_policy_preserves_markdown_layout(
+        string mode,
+        string format,
+        bool structuredMarkdown,
+        bool expected)
+        => Assert.Equal(expected, TextWrappingPolicy.ShouldWrap(mode, format, structuredMarkdown));
+
+    [Theory]
     [InlineData(".AVIF", "avif", true)]
     [InlineData(".heif", "heic", true)]
     [InlineData(".JXL", "jxl", true)]

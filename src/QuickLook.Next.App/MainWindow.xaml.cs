@@ -1,6 +1,5 @@
 using System.Numerics;
 using System.IO;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -201,6 +200,8 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         TextFindBox.PlaceholderText = UiStrings.TextFindPlaceholder;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(TextWordWrapButton, UiStrings.ToggleWordWrap);
+        ToolTipService.SetToolTip(TextWordWrapButton, UiStrings.ToggleWordWrap);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
         _panelController = new PreviewPanelController(
             PreviewRoot,
@@ -1547,7 +1548,10 @@ public sealed partial class MainWindow : Window
         _panelController.ShowText();
         _rasterPresenter?.Clear();
 
-        TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
+        bool wrap = TextWrappingPolicy.ShouldWrap(AppSettings.Current.TextWrapping, ready.TextFormat, ready.Markdown is not null);
+        TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight), wrap);
+        TextWordWrapButton.IsChecked = wrap;
+        TextWordWrapButton.Visibility = _textPresenter.SupportsWrappingToggle ? Visibility.Visible : Visibility.Collapsed;
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
@@ -2483,6 +2487,11 @@ public sealed partial class MainWindow : Window
     {
         _animatedImagePresenter?.TogglePlayback();
         UpdateImageAnimationPlaybackButton();
+        if (_textPresenter is { } textPresenter && TextPreviewContainer.Visibility == Visibility.Visible)
+        {
+            TextWordWrapButton.IsChecked = textPresenter.ApplyWrappingMode(AppSettings.Current.TextWrapping);
+            TextWordWrapButton.Visibility = textPresenter.SupportsWrappingToggle ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
 
     private void OnCompactInfoRailToggleClick(object sender, RoutedEventArgs e)
@@ -3290,20 +3299,14 @@ public sealed partial class MainWindow : Window
     private void TextWordWrapButton_Click(object sender, RoutedEventArgs e)
     {
         bool wrap = TextWordWrapButton.IsChecked == true;
-        TextScrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-        TextPreviewBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        
-        // Also update TextListView items if they support wrap
-        if (TextListView.ItemsSource is ObservableCollection<TextLineItem> items)
+        string previous = AppSettings.Current.TextWrapping;
+        if (!AppSettings.SaveTextWrapping(wrap ? "always" : "never"))
         {
-            foreach (var item in items)
-            {
-                if (item.Content is TextBlock tb)
-                {
-                    tb.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
-                }
-            }
+            TextWordWrapButton.IsChecked = _textPresenter?.ApplyWrappingMode(previous) == true;
+            StatusText.Text = UiStrings.SettingsSaveFailedMessage;
+            return;
         }
+        _textPresenter?.SetWrapping(wrap);
     }
 
     private void TextLineNumbersButton_Click(object sender, RoutedEventArgs e)
@@ -3393,7 +3396,7 @@ public sealed partial class MainWindow : Window
     private void CloseTextSearch()
     {
         TextFindPanel.Visibility = Visibility.Collapsed;
-        TextWordWrapButton.Visibility = Visibility.Visible;
+        TextWordWrapButton.Visibility = _textPresenter?.SupportsWrappingToggle == true ? Visibility.Visible : Visibility.Collapsed;
         TextSearchButton.Visibility = Visibility.Visible;
         TextFindBox.Text = "";
         if (_textPresenter is { } textPresenter)

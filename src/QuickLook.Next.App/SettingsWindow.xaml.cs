@@ -48,6 +48,12 @@ public sealed partial class SettingsWindow : Window
             "still" => 2,
             _ => 0,
         };
+        TextWrappingCombo.SelectedIndex = AppSettings.Current.TextWrapping switch
+        {
+            "always" => 1,
+            "never" => 2,
+            _ => 0,
+        };
         _initializing = false;
     }
 
@@ -67,6 +73,11 @@ public sealed partial class SettingsWindow : Window
         SystemAnimationItem.Content = UiStrings.SettingsAnimationSystem;
         AlwaysAnimateItem.Content = UiStrings.SettingsAnimationAlways;
         StillAnimationItem.Content = UiStrings.SettingsAnimationStill;
+        TextWrappingTitle.Text = UiStrings.SettingsTextWrapping;
+        TextWrappingDescription.Text = UiStrings.SettingsTextWrappingDescription;
+        AutomaticTextWrappingItem.Content = UiStrings.SettingsTextWrappingAutomatic;
+        AlwaysTextWrappingItem.Content = UiStrings.SettingsTextWrappingAlways;
+        NeverTextWrappingItem.Content = UiStrings.SettingsTextWrappingNever;
         RestartInfo.Title = UiStrings.SettingsRestartTitle;
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         AboutHeading.Text = UiStrings.SettingsAbout;
@@ -116,8 +127,10 @@ public sealed partial class SettingsWindow : Window
     {
         bool compact = width > 0 && width < 560;
         ContentPanel.Padding = compact ? new Thickness(20, 20, 20, 32) : new Thickness(36, 20, 36, 32);
+        SetSettingLayout(AutoStartSettingGrid, AutoStartToggle, compact);
         SetSettingLayout(LanguageSettingGrid, LanguageCombo, compact);
         SetSettingLayout(AnimationSettingGrid, AnimationCombo, compact);
+        SetSettingLayout(TextWrappingSettingGrid, TextWrappingCombo, compact);
         ProjectLinksPanel.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
         GitHubButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
         ReleasesButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
@@ -209,6 +222,21 @@ public sealed partial class SettingsWindow : Window
         if (_initializing || AnimationCombo.SelectedItem is not ComboBoxItem { Tag: string animation })
             return;
         if (!AppSettings.SaveAnimation(animation))
+        {
+            RestartInfo.Severity = InfoBarSeverity.Error;
+            RestartInfo.Title = UiStrings.SettingsSaveFailed;
+            RestartInfo.Message = UiStrings.SettingsSaveFailedMessage;
+            RestartInfo.IsOpen = true;
+            return;
+        }
+        _settingsChanged();
+    }
+
+    private void OnTextWrappingSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing || TextWrappingCombo.SelectedItem is not ComboBoxItem { Tag: string textWrapping })
+            return;
+        if (!AppSettings.SaveTextWrapping(textWrapping))
         {
             RestartInfo.Severity = InfoBarSeverity.Error;
             RestartInfo.Title = UiStrings.SettingsSaveFailed;

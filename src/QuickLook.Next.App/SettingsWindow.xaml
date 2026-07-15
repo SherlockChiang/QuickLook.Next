@@ -28,7 +28,7 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
-                        <Grid x:Name="LanguageSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                        <Grid x:Name="AutoStartSettingGrid" ColumnSpacing="20" RowSpacing="10">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -49,7 +49,7 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
-                        <Grid x:Name="AnimationSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                        <Grid x:Name="LanguageSettingGrid" ColumnSpacing="20" RowSpacing="10">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -75,7 +75,8 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
-                        <Grid ColumnSpacing="20">
+                        <Grid x:Name="AnimationSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="220" />
@@ -90,6 +91,29 @@
                                 <ComboBoxItem x:Name="SystemAnimationItem" Tag="system" />
                                 <ComboBoxItem x:Name="AlwaysAnimateItem" Tag="always" />
                                 <ComboBoxItem x:Name="StillAnimationItem" Tag="still" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid x:Name="TextWrappingSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="TextWrappingTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="TextWrappingDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox x:Name="TextWrappingCombo" Grid.Column="1" MinHeight="40" HorizontalAlignment="Stretch"
+                                      AutomationProperties.LabeledBy="{x:Bind TextWrappingTitle}"
+                                      SelectionChanged="OnTextWrappingSelectionChanged">
+                                <ComboBoxItem x:Name="AutomaticTextWrappingItem" Tag="automatic" />
+                                <ComboBoxItem x:Name="AlwaysTextWrappingItem" Tag="always" />
+                                <ComboBoxItem x:Name="NeverTextWrappingItem" Tag="never" />
                             </ComboBox>
                         </Grid>
                     </Border>

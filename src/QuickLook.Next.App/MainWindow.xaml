@@ -389,11 +389,9 @@
                         </Button>
                     </StackPanel>
                     <ToggleButton x:Name="TextWordWrapButton" 
-                                   Width="40" Height="40"
-                                   ToolTipService.ToolTip="Toggle Word Wrap"
-                                   Padding="6" Background="Transparent" BorderThickness="0"
-                                   AutomationProperties.Name="Toggle word wrap"
-                                   Click="TextWordWrapButton_Click">
+                                    Width="40" Height="40"
+                                    Padding="6" Background="Transparent" BorderThickness="0"
+                                    Click="TextWordWrapButton_Click">
                         <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
                     </ToggleButton>
                     <ToggleButton x:Name="TextLineNumbersButton"

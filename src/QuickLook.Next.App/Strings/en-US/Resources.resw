@@ -167,6 +167,12 @@
   <data name="SettingsAnimationSystem" xml:space="preserve"><value>Follow Windows settings</value></data>
   <data name="SettingsAnimationAlways" xml:space="preserve"><value>Always play</value></data>
   <data name="SettingsAnimationStill" xml:space="preserve"><value>Show still frame</value></data>
+  <data name="SettingsTextWrapping" xml:space="preserve"><value>Long lines in text and code previews</value></data>
+  <data name="SettingsTextWrappingDescription" xml:space="preserve"><value>Choose whether long lines follow the file type, wrap, or scroll horizontally. Markdown layout is unchanged.</value></data>
+  <data name="SettingsTextWrappingAutomatic" xml:space="preserve"><value>Automatic</value></data>
+  <data name="SettingsTextWrappingAlways" xml:space="preserve"><value>Wrap lines</value></data>
+  <data name="SettingsTextWrappingNever" xml:space="preserve"><value>Do not wrap</value></data>
+  <data name="ToggleWordWrap" xml:space="preserve"><value>Toggle word wrap</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>
