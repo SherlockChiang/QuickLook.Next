@@ -200,6 +200,8 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         TextFindBox.PlaceholderText = UiStrings.TextFindPlaceholder;
+        ListingFilterBox.PlaceholderText = UiStrings.ListingFilterPlaceholder;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ListingFilterBox, UiStrings.ListingFilterAccessibleName);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(TextWordWrapButton, UiStrings.ToggleWordWrap);
         ToolTipService.SetToolTip(TextWordWrapButton, UiStrings.ToggleWordWrap);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
@@ -274,6 +276,7 @@ public sealed partial class MainWindow : Window
             ListingTitle,
             ListingSummary,
             ListingBreadcrumbPanel,
+            ListingFilterBox,
             ListingListView,
             ListingNameHeader,
             ListingModifiedHeader,
@@ -2712,6 +2715,13 @@ public sealed partial class MainWindow : Window
         if (textPreviewVisible && e.Key == Windows.System.VirtualKey.F3 && _textPresenter is { } textPresenter)
         {
             ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
+            e.Handled = true;
+            return;
+        }
+
+        if (ListingPanel.Visibility == Visibility.Visible && controlDown && e.Key == Windows.System.VirtualKey.F)
+        {
+            _listingPresenter?.FocusFilter();
             e.Handled = true;
             return;
         }

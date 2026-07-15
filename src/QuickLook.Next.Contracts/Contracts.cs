@@ -120,6 +120,7 @@ public sealed record PreviewListing(string RootName, string RootPath, string Lis
 {
     public string Summary { get; init; } = "";
     public bool IsPartial { get; init; }
+    public int EncryptedFileCount { get; init; }
     public PreviewListingItem[] Items { get; init; } = [];
 }
 
@@ -130,6 +131,7 @@ public sealed record PreviewListingItem(string Name, string Path, string ParentP
     public long ModifiedUnix { get; init; }
     public string Type { get; init; } = "";
     public string? NativePath { get; init; }
+    public bool IsEncrypted { get; init; }
 }
 
 public sealed record ImageMetadata

@@ -59,6 +59,15 @@ Require-Pattern $textSearchIndex 'MaxMarkdownInlineDepth\s*=\s*16' `
 Require-Pattern $textSearchIndex 'MaxMarkdownBlocks\s*=\s*2000' `
     "Markdown search indexing must retain its 2000-block UI budget."
 
+$listingFilter = Join-Path $Root "src/QuickLook.Next.Core/ListingFilter.cs"
+Require-Pattern $listingFilter 'MaxItems\s*=\s*5000' `
+    "Listing filtering must remain capped at 5000 items."
+$nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
+    "Archive listings must remain capped at 5000 represented entries."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
+    "Archive metadata scans must remain capped at 10000 records."
+
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
     "Text search must retain its 5000-range visual highlight budget."

@@ -142,6 +142,8 @@ struct PreviewListingDto {
     listing_kind: String,
     summary: String,
     is_partial: bool,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    encrypted_file_count: usize,
     items: Vec<PreviewListingItemDto>,
 }
 
@@ -159,6 +161,8 @@ struct PreviewListingItemDto {
     typ: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     native_path: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    is_encrypted: bool,
 }
 
 #[derive(Serialize)]
@@ -12623,6 +12627,7 @@ const MAX_ARCHIVE_EXTRACT_RATIO: u64 = 1000;
 const ARCHIVE_EXTRACT_DEADLINE: Duration = Duration::from_secs(4);
 const MAX_ARCHIVE_EXTRACT_ROOTS: usize = 32;
 const ARCHIVE_EXTRACT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+type ArchiveListingEntry = (String, String, bool, i64, i64, i64, bool);
 
 const ZIP_EXTS: &[&str] = &[
     ".zip",
@@ -12703,6 +12708,23 @@ pub fn extract_archive_entry_to_temp(
         return None;
     }
     let mut zip = ZipArchive::new(file).ok()?;
+    let mut found = false;
+    for index in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
+        let entry = match zip.by_index_raw(index) {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if normalize_archive_entry_path(entry.name()).as_deref() == Some(normalized.as_str()) {
+            if entry.is_dir() || entry.encrypted() {
+                return None;
+            }
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return None;
+    }
     let mut entry = zip.by_name(&normalized).ok()?;
     if entry.is_dir()
         || !archive_entry_within_extract_budget(entry.size(), entry.compressed_size())
@@ -13574,7 +13596,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         _ => 0,
     };
 
-    let mut entries: BTreeMap<String, (String, String, bool, i64, i64, i64)> = BTreeMap::new();
+    let mut entries: BTreeMap<String, ArchiveListingEntry> = BTreeMap::new();
     let mut total_size = 0i64;
     let mut file_count = 0u64;
     let mut partial = false;
@@ -13618,7 +13640,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
                 .unwrap_or_else(|| full_name.clone());
             entries.insert(
                 full_name.clone(),
-                (item_name, parent_of(&full_name), false, size, 0, 0),
+                (item_name, parent_of(&full_name), false, size, 0, 0, false),
             );
         }
     } else if let Some(length) = dict_get_int(info, b"length") {
@@ -13626,7 +13648,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         file_count = 1;
         entries.insert(
             name.clone(),
-            (name.clone(), String::new(), false, length, 0, 0),
+            (name.clone(), String::new(), false, length, 0, 0, false),
         );
     }
 
@@ -13654,7 +13676,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
     }
 
     let mut items = Vec::with_capacity(entries.len());
-    for (path, (name, parent, is_folder, size, packed, modified)) in &entries {
+    for (path, (name, parent, is_folder, size, packed, modified, is_encrypted)) in &entries {
         if preview_cancelled(cancel_cb) { return String::new(); }
         items.push(PreviewListingItemDto {
             name: name.clone(),
@@ -13670,6 +13692,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
                 type_for_ext(name).to_string()
             },
             native_path: None,
+            is_encrypted: *is_encrypted,
         });
     }
 
@@ -13696,6 +13719,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
             listing_kind: "torrent".to_string(),
             summary,
             is_partial: partial,
+            encrypted_file_count: 0,
             items,
         }),
         table: None,
@@ -13810,13 +13834,14 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         .and_then(|n| n.to_str())
         .unwrap_or("");
 
-    let mut entries: BTreeMap<String, (String, String, bool, i64, i64, i64)> = BTreeMap::new();
-    // key: virtual path → (name, parent, is_folder, size, packed_size, modified_unix)
+    let mut entries: BTreeMap<String, ArchiveListingEntry> = BTreeMap::new();
+    // key: virtual path → (name, parent, is_folder, size, packed_size, modified_unix, encrypted)
     let mut file_count = 0u64;
     let mut uncompressed = 0i64;
     let mut compressed = 0i64;
     let mut seen = 0usize;
     let mut partial = false;
+    let mut encrypted_file_count = 0usize;
 
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) {
@@ -13837,6 +13862,7 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         let is_folder = full_name.ends_with('/') || entry.name().is_empty();
         let size = entry.size() as i64;
         let packed = entry.compressed_size() as i64;
+        let is_encrypted = entry.encrypted();
         let modified = entry
             .last_modified()
             .map(|d| {
@@ -13863,10 +13889,13 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
                     .next()
                     .unwrap_or("")
                     .to_string();
-                entries.insert(path.clone(), (name, parent_of(&path), true, 0, 0, 0));
+                entries.insert(path.clone(), (name, parent_of(&path), true, 0, 0, 0, false));
             }
         } else {
             file_count += 1;
+            if is_encrypted {
+                encrypted_file_count += 1;
+            }
             uncompressed += size;
             compressed += packed;
             if seen < MAX_ARCHIVE_ENTRIES && entries.len() < MAX_ARCHIVE_ENTRIES {
@@ -13882,7 +13911,7 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
                     .to_string();
                 entries.insert(
                     full_name.clone(),
-                    (name, parent_of(&full_name), false, size, packed, modified),
+                    (name, parent_of(&full_name), false, size, packed, modified, is_encrypted),
                 );
                 seen += 1;
             } else {
@@ -13903,6 +13932,7 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         uncompressed,
         compressed,
         partial,
+        encrypted_file_count,
     )
 }
 
@@ -13970,7 +14000,7 @@ fn render_tar_entries<R: Read>(
         .and_then(|n| n.to_str())
         .unwrap_or("");
     let mut archive = TarArchive::new(TarScanReader::new(reader, cancel_cb));
-    let mut entries: BTreeMap<String, (String, String, bool, i64, i64, i64)> = BTreeMap::new();
+    let mut entries: BTreeMap<String, ArchiveListingEntry> = BTreeMap::new();
     let mut file_count = 0u64;
     let mut uncompressed = 0i64;
     let mut seen = 0usize;
@@ -14034,7 +14064,7 @@ fn render_tar_entries<R: Read>(
                     .to_string();
                 entries.insert(
                     folder_path.clone(),
-                    (name, parent_of(&folder_path), true, 0, 0, modified),
+                    (name, parent_of(&folder_path), true, 0, 0, modified, false),
                 );
             }
         } else {
@@ -14053,7 +14083,7 @@ fn render_tar_entries<R: Read>(
                     .to_string();
                 entries.insert(
                     full_name.clone(),
-                    (name, parent_of(&full_name), false, size, 0, modified),
+                    (name, parent_of(&full_name), false, size, 0, modified, false),
                 );
                 seen += 1;
             } else {
@@ -14071,6 +14101,7 @@ fn render_tar_entries<R: Read>(
         uncompressed,
         0,
         partial,
+        0,
     )
 }
 
@@ -14102,6 +14133,7 @@ fn render_gzip_member(path: &str) -> String {
             uncompressed,
             compressed,
             modified,
+            false,
         ),
     );
     archive_listing_json(
@@ -14113,6 +14145,7 @@ fn render_gzip_member(path: &str) -> String {
         uncompressed,
         compressed,
         false,
+        0,
     )
 }
 
@@ -14131,15 +14164,16 @@ fn archive_listing_json(
     filename: &str,
     root_path: &str,
     kind: &str,
-    entries: BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+    entries: BTreeMap<String, ArchiveListingEntry>,
     file_count: u64,
     uncompressed: i64,
     compressed: i64,
     partial: bool,
+    encrypted_file_count: usize,
 ) -> String {
     let folder_count = entries
         .values()
-        .filter(|(_, _, is_folder, _, _, _)| *is_folder)
+        .filter(|(_, _, is_folder, _, _, _, _)| *is_folder)
         .count();
     let mut summary = format!(
         "{} files, {} folders",
@@ -14161,7 +14195,7 @@ fn archive_listing_json(
     }
 
     let mut items = Vec::with_capacity(entries.len());
-    for (path, (name, parent, is_folder, size, packed, modified)) in &entries {
+    for (path, (name, parent, is_folder, size, packed, modified, is_encrypted)) in &entries {
         let typ = if *is_folder {
             "Folder"
         } else {
@@ -14177,6 +14211,7 @@ fn archive_listing_json(
             modified_unix: *modified,
             typ: typ.to_string(),
             native_path: None,
+            is_encrypted: *is_encrypted,
         });
     }
 
@@ -14196,6 +14231,7 @@ fn archive_listing_json(
             listing_kind: "archive".to_string(),
             summary,
             is_partial: partial,
+            encrypted_file_count,
             items,
         }),
         table: None,
@@ -14204,10 +14240,10 @@ fn archive_listing_json(
 }
 
 fn archive_type_summary(
-    entries: &BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+    entries: &BTreeMap<String, ArchiveListingEntry>,
 ) -> Option<String> {
     let mut counts = BTreeMap::<String, usize>::new();
-    for (name, _, is_folder, _, _, _) in entries.values() {
+    for (name, _, is_folder, _, _, _, _) in entries.values() {
         if *is_folder {
             continue;
         }
@@ -14229,10 +14265,10 @@ fn archive_type_summary(
 }
 
 fn archive_project_summary(
-    entries: &BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+    entries: &BTreeMap<String, ArchiveListingEntry>,
 ) -> Option<String> {
     let mut markers = Vec::<String>::new();
-    for (name, _, is_folder, _, _, _) in entries.values() {
+    for (name, _, is_folder, _, _, _, _) in entries.values() {
         if *is_folder {
             continue;
         }
@@ -14267,7 +14303,7 @@ fn archive_project_summary(
 
 fn add_parent_folders(
     path: &str,
-    entries: &mut BTreeMap<String, (String, String, bool, i64, i64, i64)>,
+    entries: &mut BTreeMap<String, ArchiveListingEntry>,
 ) {
     let mut start = 0;
     while let Some(idx) = path[start..].find('/') {
@@ -14284,7 +14320,7 @@ fn add_parent_folders(
                 .to_string();
             entries.insert(
                 folder_path.clone(),
-                (name, parent_of(&folder_path), true, 0, 0, 0),
+                (name, parent_of(&folder_path), true, 0, 0, 0, false),
             );
         }
         start = full_idx + 1;
@@ -14449,6 +14485,7 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
                         modified_unix: modified,
                         typ,
                         native_path: Some(native),
+                        is_encrypted: false,
                     });
                 } else {
                     skipped += 1;
@@ -14501,6 +14538,7 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
             listing_kind: "folder".to_string(),
             summary,
             is_partial: partial,
+            encrypted_file_count: 0,
             items,
         }),
         table: None,
@@ -14616,6 +14654,29 @@ mod tests {
         ));
         assert!(!archive_entry_within_extract_budget(1_000_001, 1000));
         assert!(!archive_entry_within_extract_budget(1, 0));
+    }
+
+    #[test]
+    fn encrypted_zip_entries_are_reported_and_not_extracted() {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-encrypted-{}.zip",
+            std::process::id()
+        ));
+        let file = fs::File::create(&path).expect("create encrypted zip");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .with_aes_encryption(zip::AesMode::Aes128, "test-password");
+        writer.start_file("secret.txt", options).expect("start encrypted entry");
+        writer.write_all(b"secret").expect("write encrypted entry");
+        writer.finish().expect("finish encrypted zip");
+
+        let json = render_zip_archive(path.to_str().unwrap(), None);
+        let extracted = extract_archive_entry_to_temp(path.to_str().unwrap(), "secret.txt", None);
+        let _ = fs::remove_file(path);
+
+        assert!(json.contains("\"encryptedFileCount\":1"));
+        assert!(json.contains("\"isEncrypted\":true"));
+        assert!(extracted.is_none());
     }
 
     #[test]
@@ -15021,19 +15082,19 @@ mod tests {
         let mut entries = BTreeMap::new();
         entries.insert(
             "src/".to_string(),
-            ("src".to_string(), "".to_string(), true, 0, 0, 0),
+            ("src".to_string(), "".to_string(), true, 0, 0, 0, false),
         );
         entries.insert(
             "src/main.rs".to_string(),
-            ("main.rs".to_string(), "src/".to_string(), false, 10, 8, 0),
+            ("main.rs".to_string(), "src/".to_string(), false, 10, 8, 0, false),
         );
         entries.insert(
             "src/lib.rs".to_string(),
-            ("lib.rs".to_string(), "src/".to_string(), false, 10, 8, 0),
+            ("lib.rs".to_string(), "src/".to_string(), false, 10, 8, 0, false),
         );
         entries.insert(
             "README.md".to_string(),
-            ("README.md".to_string(), "".to_string(), false, 10, 8, 0),
+            ("README.md".to_string(), "".to_string(), false, 10, 8, 0, false),
         );
 
         assert_eq!(
@@ -15054,6 +15115,7 @@ mod tests {
                 10,
                 8,
                 0,
+                false,
             ),
         );
         entries.insert(
@@ -15065,6 +15127,7 @@ mod tests {
                 10,
                 8,
                 0,
+                false,
             ),
         );
 

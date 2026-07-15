@@ -125,6 +125,13 @@ internal static class UiStrings
     public static string ListingSortSize => Get(nameof(ListingSortSize), "Size");
     public static string ListingPartialSuffix => Get(nameof(ListingPartialSuffix), " - partial contents");
     public static string ListingSummaryFormat => Get(nameof(ListingSummaryFormat), "{0:N0} files, {1:N0} folders - {2}");
+    public static string ListingFilterPlaceholder => Get(nameof(ListingFilterPlaceholder), "Filter this folder");
+    public static string ListingFilterAccessibleName => Get(nameof(ListingFilterAccessibleName), "Filter listing items");
+    public static string ListingFilterResultsFormat => Get(nameof(ListingFilterResultsFormat), "Showing {0:N0} of {1:N0} items");
+    public static string ListingEncryptedSummaryFormat => Get(nameof(ListingEncryptedSummaryFormat), " - {0:N0} encrypted");
+    public static string ListingEncryptedPartialSummaryFormat => Get(nameof(ListingEncryptedPartialSummaryFormat), " - at least {0:N0} encrypted");
+    public static string ListingEncryptedCannotPreview => Get(nameof(ListingEncryptedCannotPreview), "Encrypted archive entries cannot be previewed.");
+    public static string ListingEncryptedRowAccessibleNameFormat => Get(nameof(ListingEncryptedRowAccessibleNameFormat), "{0}, encrypted, {1}");
     public static string ListingOpenBreadcrumbFormat => Get(nameof(ListingOpenBreadcrumbFormat), "Open {0} in listing");
     public static string PdfPageIndicatorFormat => Get(nameof(PdfPageIndicatorFormat), "{0:N0} / {1:N0}");
     public static string PdfPageIndicatorPagedFormat => Get(nameof(PdfPageIndicatorPagedFormat), "{0:N0} / {1:N0} (paged)");

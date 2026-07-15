@@ -124,6 +124,13 @@
   <data name="ListingSummaryFormat" xml:space="preserve">
     <value>{0:N0} files, {1:N0} folders - {2}</value>
   </data>
+  <data name="ListingFilterPlaceholder" xml:space="preserve"><value>Filter this folder</value></data>
+  <data name="ListingFilterAccessibleName" xml:space="preserve"><value>Filter listing items</value></data>
+  <data name="ListingFilterResultsFormat" xml:space="preserve"><value>Showing {0:N0} of {1:N0} items</value></data>
+  <data name="ListingEncryptedSummaryFormat" xml:space="preserve"><value> - {0:N0} encrypted</value></data>
+  <data name="ListingEncryptedPartialSummaryFormat" xml:space="preserve"><value> - at least {0:N0} encrypted</value></data>
+  <data name="ListingEncryptedCannotPreview" xml:space="preserve"><value>Encrypted archive entries cannot be previewed.</value></data>
+  <data name="ListingEncryptedRowAccessibleNameFormat" xml:space="preserve"><value>{0}, encrypted, {1}</value></data>
   <data name="ListingOpenBreadcrumbFormat" xml:space="preserve">
     <value>Open {0} in listing</value>
   </data>

@@ -27,6 +27,47 @@ public sealed class CoreBoundaryTests : IDisposable
         bool expected)
         => Assert.Equal(expected, TextWrappingPolicy.ShouldWrap(mode, format, structuredMarkdown));
 
+    [Fact]
+    public void Listing_filter_matches_names_only_in_current_level()
+    {
+        PreviewListingItem[] items =
+        [
+            new("Root.txt", "Root.txt", "", false),
+            new("Docs", "Docs/", "", true),
+            new("Guide.txt", "Docs/Guide.txt", "Docs/", false),
+            new("Image.png", "Docs/Image.png", "Docs/", false),
+        ];
+
+        IReadOnlyList<PreviewListingItem> root = ListingFilter.CurrentLevel(items, "", "root");
+        IReadOnlyList<PreviewListingItem> docs = ListingFilter.CurrentLevel(items, "Docs/", ".txt");
+
+        Assert.Equal("Root.txt", Assert.Single(root).Name);
+        Assert.Equal("Guide.txt", Assert.Single(docs).Name);
+    }
+
+    [Fact]
+    public void Listing_filter_caps_untrusted_input_items()
+    {
+        PreviewListingItem[] items = Enumerable.Range(0, ListingFilter.MaxItems + 1)
+            .Select(index => new PreviewListingItem($"Item {index}", $"Item {index}", "", false))
+            .ToArray();
+
+        Assert.Equal(ListingFilter.MaxItems, ListingFilter.CurrentLevel(items, "", "").Count);
+    }
+
+    [Fact]
+    public void Preview_listing_json_preserves_encrypted_archive_metadata()
+    {
+        const string json = """
+            {"kind":"archive","title":"secure.zip","listing":{"rootName":"secure.zip","rootPath":"","listingKind":"archive","summary":"1 file","isPartial":false,"encryptedFileCount":1,"items":[{"name":"secret.txt","path":"secret.txt","parentPath":"","isFolder":false,"size":6,"packedSize":6,"modifiedUnix":0,"type":"TXT File","isEncrypted":true}]}}
+            """;
+
+        Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
+        Assert.NotNull(ready?.Listing);
+        Assert.Equal(1, ready.Listing.EncryptedFileCount);
+        Assert.True(Assert.Single(ready.Listing.Items).IsEncrypted);
+    }
+
     [Theory]
     [InlineData(".AVIF", "avif", true)]
     [InlineData(".heif", "heic", true)]

@@ -2,6 +2,7 @@ using QuickLook.Next.Contracts;
 using Microsoft.UI.Xaml.Media;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using Microsoft.UI.Xaml;
 
 namespace QuickLook.Next.App;
 
@@ -13,22 +14,30 @@ public sealed class ListingRow : INotifyPropertyChanged
         Path = item.Path;
         NativePath = item.NativePath;
         IsFolder = item.IsFolder;
+        IsEncrypted = item.IsEncrypted;
         Glyph = ChooseGlyph(item);
         TypeDisplay = item.IsFolder ? UiStrings.FolderTypeDisplay : item.Type;
         SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
         ModifiedDisplay = item.ModifiedUnix > 0
             ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
             : "";
+        EncryptedVisibility = IsEncrypted ? Visibility.Visible : Visibility.Collapsed;
+        AccessibleName = IsEncrypted
+            ? UiStrings.Format(UiStrings.ListingEncryptedRowAccessibleNameFormat, Name, TypeDisplay)
+            : Name;
     }
 
     public string Name { get; }
     public string Path { get; }
     public string? NativePath { get; }
     public bool IsFolder { get; }
+    public bool IsEncrypted { get; }
     public string Glyph { get; }
     public string ModifiedDisplay { get; }
     public string TypeDisplay { get; }
     public string SizeDisplay { get; }
+    public Visibility EncryptedVisibility { get; }
+    public string AccessibleName { get; }
 
     private ImageSource? _iconSource;
     public ImageSource? IconSource

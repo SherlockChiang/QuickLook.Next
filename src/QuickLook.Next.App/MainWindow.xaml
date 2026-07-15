@@ -894,6 +894,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
@@ -920,21 +921,28 @@
                                        FontWeight="SemiBold"
                                        TextTrimming="CharacterEllipsis"
                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                            <TextBlock x:Name="ListingSummary"
+                             <TextBlock x:Name="ListingSummary"
                                        FontSize="12"
                                        TextTrimming="CharacterEllipsis"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
                     </Grid>
 
+                    <TextBox x:Name="ListingFilterBox"
+                             Grid.Row="1"
+                             MinHeight="40"
+                             HorizontalAlignment="Stretch"
+                             AutomationProperties.LiveSetting="Polite" />
+
                     <StackPanel x:Name="ListingBreadcrumbPanel"
-                                Grid.Row="1"
+                                Grid.Row="2"
                                 Orientation="Horizontal"
                                 Spacing="4"
                                 x:Uid="ListingBreadcrumbPanel"
                                 AutomationProperties.Name="Listing path breadcrumbs" />
 
-                    <ScrollViewer Grid.Row="2"
+                    <ScrollViewer Grid.Row="3"
                                   Grid.RowSpan="2"
                                   HorizontalScrollMode="Enabled"
                                   HorizontalScrollBarVisibility="Auto"
@@ -1005,7 +1013,7 @@
                         </ListView.ItemContainerStyle>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Grid MinHeight="40" Padding="8,0">
+                                <Grid MinHeight="40" Padding="8,0" AutomationProperties.Name="{Binding AccessibleName}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="28" />
                                         <ColumnDefinition Width="*" MinWidth="220" />
@@ -1028,11 +1036,20 @@
                                                VerticalAlignment="Center"
                                                Source="{Binding IconSource, Mode=OneWay}" />
                                     </Grid>
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Name}"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"
-                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    <Grid Grid.Column="1" ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <FontIcon Glyph="&#xE72E;" FontSize="12"
+                                                  Visibility="{Binding EncryptedVisibility}"
+                                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding Name}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                    </Grid>
                                     <TextBlock Grid.Column="2"
                                                Text="{Binding ModifiedDisplay}"
                                                VerticalAlignment="Center"

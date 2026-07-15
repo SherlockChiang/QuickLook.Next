@@ -100,6 +100,13 @@
   <data name="ListingSortSize" xml:space="preserve"><value>大小</value></data>
   <data name="ListingPartialSuffix" xml:space="preserve"><value> - 内容不完整</value></data>
   <data name="ListingSummaryFormat" xml:space="preserve"><value>{0:N0} 个文件，{1:N0} 个文件夹 - {2}</value></data>
+  <data name="ListingFilterPlaceholder" xml:space="preserve"><value>筛选当前文件夹</value></data>
+  <data name="ListingFilterAccessibleName" xml:space="preserve"><value>筛选列表项目</value></data>
+  <data name="ListingFilterResultsFormat" xml:space="preserve"><value>显示 {0:N0} / {1:N0} 个项目</value></data>
+  <data name="ListingEncryptedSummaryFormat" xml:space="preserve"><value> - {0:N0} 个已加密</value></data>
+  <data name="ListingEncryptedPartialSummaryFormat" xml:space="preserve"><value> - 至少 {0:N0} 个已加密</value></data>
+  <data name="ListingEncryptedCannotPreview" xml:space="preserve"><value>无法预览加密的归档项目。</value></data>
+  <data name="ListingEncryptedRowAccessibleNameFormat" xml:space="preserve"><value>{0}，已加密，{1}</value></data>
   <data name="ListingOpenBreadcrumbFormat" xml:space="preserve"><value>在列表中打开 {0}</value></data>
   <data name="PdfPageIndicatorFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="PdfPageIndicatorPagedFormat" xml:space="preserve"><value>{0:N0} / {1:N0}（分页）</value></data>

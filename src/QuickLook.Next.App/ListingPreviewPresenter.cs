@@ -15,6 +15,7 @@ internal sealed class ListingPreviewPresenter
     private readonly TextBlock _summary;
     private readonly StackPanel _breadcrumbPanel;
     private readonly ListView _listView;
+    private readonly TextBox _filterBox;
     private readonly Button _nameHeader;
     private readonly Button _modifiedHeader;
     private readonly Button _typeHeader;
@@ -35,6 +36,7 @@ internal sealed class ListingPreviewPresenter
         TextBlock title,
         TextBlock summary,
         StackPanel breadcrumbPanel,
+        TextBox filterBox,
         ListView listView,
         Button nameHeader,
         Button modifiedHeader,
@@ -50,6 +52,7 @@ internal sealed class ListingPreviewPresenter
         _title = title;
         _summary = summary;
         _breadcrumbPanel = breadcrumbPanel;
+        _filterBox = filterBox;
         _listView = listView;
         _nameHeader = nameHeader;
         _modifiedHeader = modifiedHeader;
@@ -61,12 +64,23 @@ internal sealed class ListingPreviewPresenter
         _isGenerationCurrent = isGenerationCurrent;
         _previewItem = previewItem;
         _loadIconAsync = loadIconAsync;
+        _filterBox.TextChanged += (_, _) => RenderListing();
+        _filterBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Escape)
+            {
+                _filterBox.Text = "";
+                _listView.Focus(FocusState.Programmatic);
+                e.Handled = true;
+            }
+        };
     }
 
     public ListingPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
         _currentListing = ready.Listing;
         _currentPath = "";
+        _filterBox.Text = "";
         RenderListing();
         var size = EstimatePreviewSize(maxContent);
         return new ListingPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
@@ -78,6 +92,7 @@ internal sealed class ListingPreviewPresenter
         _currentPath = "";
         _listView.ItemsSource = null;
         _breadcrumbPanel.Children.Clear();
+        _filterBox.Text = "";
     }
 
     public void UpdateSortHeaders()
@@ -138,6 +153,11 @@ internal sealed class ListingPreviewPresenter
 
     private async Task PreviewOrNavigateAsync(ListingRow row)
     {
+        if (row.IsEncrypted)
+        {
+            _summary.Text = UiStrings.ListingEncryptedCannotPreview;
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(row.NativePath))
         {
             await _previewItem(_currentListing, row);
@@ -169,16 +189,18 @@ internal sealed class ListingPreviewPresenter
 
         RenderBreadcrumb();
 
-        var visibleItems = _currentListing.Items
-            .Where(i => string.Equals(NormalizePath(i.ParentPath), _currentPath, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        IReadOnlyList<PreviewListingItem> levelItems = ListingFilter.CurrentLevel(_currentListing.Items, _currentPath, "");
+        IReadOnlyList<PreviewListingItem> visibleItems = ListingFilter.CurrentLevel(
+            _currentListing.Items,
+            _currentPath,
+            _filterBox.Text);
         var rows = visibleItems
             .OrderBy(i => i, Comparer<PreviewListingItem>.Create(CompareItems))
             .Select(i => new ListingRow(i))
             .ToList();
 
         _title.Text = title;
-        _summary.Text = BuildSummary(_currentListing, visibleItems);
+        _summary.Text = BuildSummary(_currentListing, levelItems, visibleItems);
         _listView.ItemsSource = rows;
         UpdateSortHeaders();
         StartIconLoads(rows);
@@ -315,7 +337,7 @@ internal sealed class ListingPreviewPresenter
             var children = childListing.Items
                 .Select(i => PrefixItem(parentPath, i))
                 .ToArray();
-            var merged = _currentListing.Items
+            PreviewListingItem[] mergedItems = _currentListing.Items
                 .Concat(children)
                 .GroupBy(i => NormalizePath(i.Path), StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.Last())
@@ -323,8 +345,10 @@ internal sealed class ListingPreviewPresenter
 
             _currentListing = _currentListing with
             {
-                Items = merged,
-                IsPartial = _currentListing.IsPartial || childListing.IsPartial,
+                Items = mergedItems.Take(ListingFilter.MaxItems).ToArray(),
+                IsPartial = _currentListing.IsPartial
+                    || childListing.IsPartial
+                    || mergedItems.Length > ListingFilter.MaxItems,
             };
             if (string.Equals(_currentPath, parentPath, StringComparison.OrdinalIgnoreCase))
                 RenderListing();
@@ -364,15 +388,47 @@ internal sealed class ListingPreviewPresenter
             Math.Clamp(height, 320, maxContent.Height));
     }
 
-    private string BuildSummary(PreviewListing listing, IReadOnlyCollection<PreviewListingItem> visibleItems)
+    public void FocusFilter()
     {
-        if (string.IsNullOrEmpty(_currentPath))
-            return listing.Summary + (listing.IsPartial ? UiStrings.ListingPartialSuffix : "");
+        _filterBox.Focus(FocusState.Programmatic);
+        _filterBox.SelectAll();
+    }
 
-        int folders = visibleItems.Count(i => i.IsFolder);
-        int files = visibleItems.Count - folders;
-        long bytes = visibleItems.Where(i => !i.IsFolder).Sum(i => i.Size);
-        return UiStrings.Format(UiStrings.ListingSummaryFormat, files, folders, MainWindow.FormatBytes(bytes));
+    private string BuildSummary(
+        PreviewListing listing,
+        IReadOnlyCollection<PreviewListingItem> levelItems,
+        IReadOnlyCollection<PreviewListingItem> visibleItems)
+    {
+        string summary;
+        if (_filterBox.Text.Trim().Length > 0)
+        {
+            summary = UiStrings.Format(UiStrings.ListingFilterResultsFormat, visibleItems.Count, levelItems.Count);
+            if (listing.IsPartial)
+                summary += UiStrings.ListingPartialSuffix;
+        }
+        else if (string.IsNullOrEmpty(_currentPath))
+        {
+            summary = listing.Summary + (listing.IsPartial ? UiStrings.ListingPartialSuffix : "");
+        }
+        else
+        {
+            int folders = visibleItems.Count(i => i.IsFolder);
+            int files = visibleItems.Count - folders;
+            long bytes = visibleItems.Where(i => !i.IsFolder).Sum(i => i.Size);
+            summary = UiStrings.Format(UiStrings.ListingSummaryFormat, files, folders, MainWindow.FormatBytes(bytes));
+        }
+
+        int encrypted = string.IsNullOrEmpty(_currentPath) && _filterBox.Text.Trim().Length == 0
+            ? listing.EncryptedFileCount
+            : visibleItems.Count(item => item.IsEncrypted);
+        if (encrypted > 0)
+        {
+            string format = listing.IsPartial && string.IsNullOrEmpty(_currentPath)
+                ? UiStrings.ListingEncryptedPartialSummaryFormat
+                : UiStrings.ListingEncryptedSummaryFormat;
+            summary += UiStrings.Format(format, encrypted);
+        }
+        return summary;
     }
 
     private void SetHeader(Button button, string column, string label)
