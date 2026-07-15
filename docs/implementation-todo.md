@@ -54,19 +54,19 @@ Completed entries move here with the verification commands and commit hash.
 - [x] Add an explicit-consent Settings workflow that writes a metadata-only
   diagnostics ZIP directly to a user-selected stream without staging or upload.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
-  - Commit: this change
+  - Commit: `6432129`
 
 - [x] Inventory metadata for exactly four known App/RasterHost log files without
   reading contents, enumerating directories, following reparse points, or
   exposing a production API for arbitrary roots or file names.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter DiagnosticsLogInventoryTests`
-  - Commit: this change
+  - Commit: `559a9a7`
 
 - [x] Add a fixed-schema, metadata-only diagnostics ZIP writer with exactly two
   entries, normalized inputs, no path/attachment API, cancellation, and strict
   JSON, README, and archive size budgets.
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore --filter DiagnosticsBundleTests`
-  - Commit: this change
+  - Commit: `987a931`
 
 - [x] Cap each delimited-table viewport reconstruction at 1024 data cells while
   preserving the normal application viewport range.
