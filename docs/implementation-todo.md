@@ -23,7 +23,6 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Add more high-value behavior preferences to the versioned settings schema.
 - [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
   size policy.
 - [ ] Add bounded PDF text search and copy.
@@ -47,6 +46,16 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add a schema-v2 text wrapping preference with automatic, always-wrap, and
+  never-wrap modes; apply it live to text/code previews, persist toolbar changes,
+  preserve structured Markdown layout, and reflow every Settings card correctly.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore --no-build`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj --no-restore --no-build`
+  - Guard: `tools/guard-architecture.ps1`
+  - Commit: `573dc22`
 
 - [x] Add stable, path-free image codec error codes and localized guidance for
   system-required codecs and bounded decode failures; avoid caching arbitrary
