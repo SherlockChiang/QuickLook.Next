@@ -41,6 +41,21 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Apply a fail-closed conservative creation-time mitigation profile to both
+  hostile-format hosts: DEP, SEHOP, heap-terminate-on-corruption, bottom-up/high-
+  entropy ASLR, and extension-point disable. Add job UI restrictions for clipboard
+  access, display/system-parameter changes, desktop switching, and ExitWindows,
+  while preserving suspended-create, job-assign-before-resume, one-process and
+  memory limits. Runtime smoke now queries effective DEP/ASLR/extension-point and
+  job policies with policy-specific exit codes. AppContainer/restricting SID and
+  enforced network denial remain open because RasterHost WinRT/WIC/shell paths
+  require writable-root and ACL preparation first.
+  - Verification: Release and Debug App builds 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
+  - Verification: `tools/smoke-restricted-host-launch.ps1`
+  - Verification: ParserHost integration 15/15; RasterHost integration 7/7
+  - Guard: `tools/guard-architecture.ps1` passed through static/native/image-corpus stages; final system-image smoke remained blocked by missing pinned SDK 10.0.301
+  - Commit: `0a4f63c`
+
 - [x] Complete large-content presentation virtualization across code/plain text,
   structured Markdown, and CSV/TSV tables. Structured Markdown now uses a
   data-only flattened Core model and recycled `ListView` containers; list items
