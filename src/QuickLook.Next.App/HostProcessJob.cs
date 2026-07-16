@@ -13,6 +13,8 @@ internal sealed class HostProcessJob : IDisposable
     private const uint JobMemory = 0x00000200;
     private const uint KillOnClose = 0x00002000;
     private const int ExtendedLimitInformation = 9;
+    private const int BasicUiRestrictions = 4;
+    private const uint RequiredUiRestrictions = 0x000000DE;
     private SafeJobHandle? _handle;
 
     public HostProcessJob(nint memoryLimit)
@@ -39,6 +41,15 @@ internal sealed class HostProcessJob : IDisposable
             _handle = null;
             throw new Win32Exception(error, "SetInformationJobObject failed");
         }
+        var uiRestrictions = new JobObjectBasicUiRestrictions { UiRestrictionsClass = RequiredUiRestrictions };
+        if (!SetInformationJobObject(_handle, BasicUiRestrictions, ref uiRestrictions,
+                (uint)Marshal.SizeOf<JobObjectBasicUiRestrictions>()))
+        {
+            int error = Marshal.GetLastWin32Error();
+            _handle.Dispose();
+            _handle = null;
+            throw new Win32Exception(error, "SetInformationJobObject UI restrictions failed");
+        }
     }
 
     public void Assign(Process process)
@@ -55,6 +66,21 @@ internal sealed class HostProcessJob : IDisposable
     {
         Interlocked.Exchange(ref _handle, null)?.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    public static bool CurrentProcessHasRequiredPolicy()
+    {
+        var limits = new JobObjectExtendedLimitInformation();
+        var ui = new JobObjectBasicUiRestrictions();
+        if (!QueryInformationJobObject(0, ExtendedLimitInformation, ref limits,
+                (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>(), 0)
+            || !QueryInformationJobObject(0, BasicUiRestrictions, ref ui,
+                (uint)Marshal.SizeOf<JobObjectBasicUiRestrictions>(), 0))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "QueryInformationJobObject failed");
+        uint requiredLimits = KillOnClose | ActiveProcess | ProcessMemory | JobMemory;
+        return (limits.BasicLimitInformation.LimitFlags & requiredLimits) == requiredLimits
+            && limits.BasicLimitInformation.ActiveProcessLimit == 1
+            && (ui.UiRestrictionsClass & RequiredUiRestrictions) == RequiredUiRestrictions;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -93,6 +119,12 @@ internal sealed class HostProcessJob : IDisposable
         public nint PeakJobMemoryUsed;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicUiRestrictions
+    {
+        public uint UiRestrictionsClass;
+    }
+
     private sealed class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
     {
         public SafeJobHandle() : base(ownsHandle: true) { }
@@ -106,6 +138,21 @@ internal sealed class HostProcessJob : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetInformationJobObject(SafeJobHandle job, int informationClass,
         ref JobObjectExtendedLimitInformation information, uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(SafeJobHandle job, int informationClass,
+        ref JobObjectBasicUiRestrictions information, uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(nint job, int informationClass,
+        ref JobObjectExtendedLimitInformation information, uint informationLength, nint returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(nint job, int informationClass,
+        ref JobObjectBasicUiRestrictions information, uint informationLength, nint returnLength);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

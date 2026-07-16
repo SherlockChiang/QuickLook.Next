@@ -204,6 +204,32 @@ if (Test-Path $appNativeBridge) {
 }
 
 # Rule 7: ParserHost must not receive a process handle back into the App.
+$hostLauncher = Join-Path $Root "src/QuickLook.Next.App/HostProcessLauncher.cs"
+if (Test-Path $hostLauncher) {
+    $hostLauncherText = Get-Content -LiteralPath $hostLauncher -Raw
+    if ($hostLauncherText -notmatch 'RequiredMitigationPolicy\s*=\s*0x0000000100111005' -or
+        $hostLauncherText -notmatch 'ProcThreadAttributeMitigationPolicy\s*=\s*0x00020007' -or
+        $hostLauncherText -notmatch 'ExtendedStartupInfoPresent\s*=\s*0x00080000' -or
+        $hostLauncherText -notmatch 'CreateSuspended\s*\|\s*CreateNoWindow\s*\|\s*ExtendedStartupInfoPresent') {
+        Add-Failure "Host launch must apply the conservative creation-time mitigation profile"
+    }
+    if ($hostLauncherText -match 'PROHIBIT_DYNAMIC_CODE|WIN32K_SYSTEM_CALL_DISABLE|BLOCK_NON_MICROSOFT_BINARIES') {
+        Add-Failure "Shared managed host profile must not enable incompatible mitigations"
+    }
+    if ($hostLauncherText -notmatch 'job\.Assign\(information\.Process\)[\s\S]*ResumeThread\(information\.Thread\)') {
+        Add-Failure "Host process must enter its job before its initial thread resumes"
+    }
+}
+
+$hostJob = Join-Path $Root "src/QuickLook.Next.App/HostProcessJob.cs"
+if (Test-Path $hostJob) {
+    $hostJobText = Get-Content -LiteralPath $hostJob -Raw
+    if ($hostJobText -notmatch 'RequiredUiRestrictions\s*=\s*0x000000DE' -or
+        $hostJobText -notmatch 'BasicUiRestrictions\s*=\s*4') {
+        Add-Failure "Host jobs must retain headless UI restrictions"
+    }
+}
+
 $parserHostProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
 if (Test-Path $parserHostProgram) {
     $parserHostText = Get-Content -LiteralPath $parserHostProgram -Raw

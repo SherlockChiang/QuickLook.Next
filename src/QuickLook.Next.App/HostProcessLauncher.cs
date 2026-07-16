@@ -12,7 +12,10 @@ internal static class HostProcessLauncher
     private const uint TokenQuery = 0x0008;
     private const uint DisableMaxPrivilege = 0x00000001;
     private const uint CreateSuspended = 0x00000004;
+    private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
+    private const nuint ProcThreadAttributeMitigationPolicy = 0x00020007;
+    private const ulong RequiredMitigationPolicy = 0x0000000100111005;
 
     public static Process StartRestricted(string executablePath, IEnumerable<string> arguments, HostProcessJob job)
     {
@@ -27,45 +30,72 @@ internal static class HostProcessLauncher
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken failed.");
             try
             {
-                var startup = new StartupInfo { Cb = Marshal.SizeOf<StartupInfo>() };
+                nuint attributeListSize = 0;
+                InitializeProcThreadAttributeList(0, 1, 0, ref attributeListSize);
+                nint attributeList = Marshal.AllocHGlobal(checked((int)attributeListSize));
+                nint mitigationPolicy = Marshal.AllocHGlobal(sizeof(long));
+                var startup = new StartupInfoEx
+                {
+                    StartupInfo = new StartupInfo { Cb = Marshal.SizeOf<StartupInfoEx>() },
+                    AttributeList = attributeList,
+                };
                 string commandLine = QuoteArgument(executablePath) + string.Concat(arguments.Select(argument => " " + QuoteArgument(argument)));
                 var mutableCommandLine = new StringBuilder(commandLine);
-                if (!CreateProcessAsUser(
+                try
+                {
+                    if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
+                    Marshal.WriteInt64(mitigationPolicy, unchecked((long)RequiredMitigationPolicy));
+                    if (!UpdateProcThreadAttribute(
+                            attributeList, 0, ProcThreadAttributeMitigationPolicy,
+                            mitigationPolicy, (nuint)sizeof(long), 0, 0))
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
+                    }
+                    if (!CreateProcessAsUser(
                         restrictedToken,
                         executablePath,
                         mutableCommandLine,
                         0,
                         0,
                         false,
-                        CreateSuspended | CreateNoWindow,
+                        CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
                         0,
                         Path.GetDirectoryName(executablePath),
                         ref startup,
                         out ProcessInformation information))
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed.");
-                }
-
-                try
-                {
-                    job.Assign(information.Process);
-                    Process process = Process.GetProcessById(checked((int)information.ProcessId));
-                    if (ResumeThread(information.Thread) == uint.MaxValue)
                     {
-                        process.Dispose();
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed.");
                     }
-                    return process;
-                }
-                catch
-                {
-                    TerminateProcess(information.Process, 1);
-                    throw;
+
+                    try
+                    {
+                        job.Assign(information.Process);
+                        Process process = Process.GetProcessById(checked((int)information.ProcessId));
+                        _ = process.Handle;
+                        if (ResumeThread(information.Thread) == uint.MaxValue)
+                        {
+                            process.Dispose();
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                        }
+                        return process;
+                    }
+                    catch
+                    {
+                        TerminateProcess(information.Process, 1);
+                        throw;
+                    }
+                    finally
+                    {
+                        CloseHandle(information.Thread);
+                        CloseHandle(information.Process);
+                    }
                 }
                 finally
                 {
-                    CloseHandle(information.Thread);
-                    CloseHandle(information.Process);
+                    DeleteProcThreadAttributeList(attributeList);
+                    Marshal.FreeHGlobal(mitigationPolicy);
+                    Marshal.FreeHGlobal(attributeList);
                 }
             }
             finally
@@ -126,6 +156,19 @@ internal static class HostProcessLauncher
         }
     }
 
+    public static int CurrentProcessMitigationStatus()
+    {
+        if (!GetProcessMitigationPolicy(GetCurrentProcess(), 0, out ulong dep, sizeof(ulong))
+            || !GetProcessMitigationPolicy(GetCurrentProcess(), 1, out uint aslr, sizeof(uint))
+            || !GetProcessMitigationPolicy(GetCurrentProcess(), 6, out uint extensionPoints, sizeof(uint)))
+            return -Marshal.GetLastWin32Error();
+        int status = 0;
+        if ((dep & 0x1) != 0) status |= 1;
+        if ((aslr & 0x1) != 0 && (aslr & 0x4) != 0) status |= 2;
+        if ((extensionPoints & 0x1) != 0) status |= 4;
+        return status;
+    }
+
     private static string QuoteArgument(string argument)
     {
         if (argument.Length > 0 && !argument.Any(static c => char.IsWhiteSpace(c) || c == '"'))
@@ -169,6 +212,13 @@ internal static class HostProcessLauncher
         public nint StdInput;
         public nint StdOutput;
         public nint StdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        public StartupInfo StartupInfo;
+        public nint AttributeList;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -223,7 +273,31 @@ internal static class HostProcessLauncher
         nint token, string applicationName, StringBuilder commandLine,
         nint processAttributes, nint threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
         uint creationFlags, nint environment, string? currentDirectory,
-        ref StartupInfo startupInfo, out ProcessInformation processInformation);
+        ref StartupInfoEx startupInfo, out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool InitializeProcThreadAttributeList(
+        nint attributeList, int attributeCount, uint flags, ref nuint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateProcThreadAttribute(
+        nint attributeList, uint flags, nuint attribute, nint value, nuint size,
+        nint previousValue, nint returnSize);
+
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(nint attributeList);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessMitigationPolicy(
+        nint process, int mitigationPolicy, out uint buffer, int length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessMitigationPolicy(
+        nint process, int mitigationPolicy, out ulong buffer, int length);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(nint thread);

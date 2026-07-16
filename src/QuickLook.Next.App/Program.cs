@@ -16,20 +16,43 @@ public static class Program
         AppStartupTiming.Start();
         if (args is ["--restricted-host-probe-child"])
         {
-            if (!HostProcessLauncher.IsCurrentProcessInJob()
-                || !HostProcessLauncher.CurrentProcessHasOnlyTraversalPrivilege())
-                Thread.Sleep(TimeSpan.FromSeconds(30));
+            try
+            {
+                if (!HostProcessLauncher.IsCurrentProcessInJob()) Environment.ExitCode = 10;
+                else if (!HostProcessLauncher.CurrentProcessHasOnlyTraversalPrivilege()) Environment.ExitCode = 12;
+                else
+                {
+                    Environment.ExitCode = HostProcessLauncher.CurrentProcessMitigationStatus() switch
+                    {
+                        7 => 0,
+                        int status when status < 0 => 100 + Math.Min(99, -status),
+                        int status when (status & 1) == 0 => 13,
+                        int status when (status & 2) == 0 => 15,
+                        _ => 16,
+                    };
+                }
+                if (Environment.ExitCode == 0 && !HostProcessJob.CurrentProcessHasRequiredPolicy())
+                    Environment.ExitCode = 14;
+            }
+            catch { Environment.ExitCode = 19; }
             return;
         }
         if (args is ["--smoke-restricted-host-launch"])
         {
-            using var job = new HostProcessJob((nint)(128L * 1024 * 1024));
-            using Process child = HostProcessLauncher.StartRestricted(
-                Environment.ProcessPath ?? throw new InvalidOperationException("Current process path is unavailable."),
-                ["--restricted-host-probe-child"],
-                job);
-            child.WaitForExit(10_000);
-            Environment.ExitCode = child.HasExited ? 0 : 3;
+            try
+            {
+                using var job = new HostProcessJob((nint)(128L * 1024 * 1024));
+                using Process child = HostProcessLauncher.StartRestricted(
+                    Environment.ProcessPath ?? throw new InvalidOperationException("Current process path is unavailable."),
+                    ["--restricted-host-probe-child"],
+                    job);
+                Environment.ExitCode = child.WaitForExit(10_000) ? child.ExitCode : 3;
+            }
+            catch (System.ComponentModel.Win32Exception ex) { Environment.ExitCode = 1000 + ex.NativeErrorCode; }
+            catch
+            {
+                Environment.ExitCode = 21;
+            }
             return;
         }
 
