@@ -464,6 +464,21 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(message.Waveform.RgbDensity, decoded.Waveform.RgbDensity);
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{\"width\":191,\"height\":96,\"rgbDensity\":\"AA==\"}")]
+    [InlineData("{\"width\":192,\"height\":96,\"rgbDensity\":\"AA==\"}")]
+    public void ImageWaveform_validation_rejects_malformed_protocol_payloads(string waveformJson)
+    {
+        string json = $$"""
+            {"type":"preview.surface","requestId":"request","sharedHandle":1234,"width":64,"height":32,"dpi":96,"format":"B8G8R8A8_UNORM","waveform":{{waveformJson}}}
+            """;
+
+        PreviewSurface surface = Assert.IsType<PreviewSurface>(ProtocolJson.Deserialize(json));
+
+        Assert.False(ImageWaveformBuilder.IsValid(surface.Waveform));
+    }
+
     [Fact]
     public void ProtocolJson_round_trips_archive_handle_message()
     {

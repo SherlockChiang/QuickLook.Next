@@ -18,9 +18,6 @@
     <ProjectReference Include="..\QuickLook.Next.Contracts\QuickLook.Next.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="QuickLook.Next.RasterHost.IntegrationTests" />
-  </ItemGroup>
-  <ItemGroup>
     <None Include="..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll"
           Link="quicklook_next_native.dll"
           CopyToOutputDirectory="PreserveNewest"

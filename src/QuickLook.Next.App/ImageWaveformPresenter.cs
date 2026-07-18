@@ -19,27 +19,22 @@ internal sealed class ImageWaveformPresenter
 
     public void Show(ImageWaveform? waveform)
     {
-        if (waveform is null
-            || waveform.Width != ImageWaveformDimensions.Width
-            || waveform.Height != ImageWaveformDimensions.Height)
+        if (!ImageWaveformBuilder.IsValid(waveform))
         {
             Clear();
             return;
         }
 
+        ArgumentNullException.ThrowIfNull(waveform);
         int planeLength = checked(waveform.Width * waveform.Height);
-        if (waveform.RgbDensity.Length != checked(planeLength * 3))
-        {
-            Clear();
-            return;
-        }
+        byte[] density = waveform.RgbDensity;
 
         var pixels = new byte[checked(planeLength * 4)];
         for (int i = 0; i < planeLength; i++)
         {
-            pixels[i * 4] = waveform.RgbDensity[planeLength * 2 + i];
-            pixels[i * 4 + 1] = waveform.RgbDensity[planeLength + i];
-            pixels[i * 4 + 2] = waveform.RgbDensity[i];
+            pixels[i * 4] = density[planeLength * 2 + i];
+            pixels[i * 4 + 1] = density[planeLength + i];
+            pixels[i * 4 + 2] = density[i];
             pixels[i * 4 + 3] = 255;
         }
 
@@ -56,10 +51,4 @@ internal sealed class ImageWaveformPresenter
         _image.Source = null;
         _panel.Visibility = Visibility.Collapsed;
     }
-}
-
-internal static class ImageWaveformDimensions
-{
-    public const int Width = 192;
-    public const int Height = 96;
 }

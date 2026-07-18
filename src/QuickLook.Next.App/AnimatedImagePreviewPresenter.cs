@@ -15,6 +15,7 @@ internal sealed class AnimatedImagePreviewPresenter
     private const double MaxZoom = 12.0;
     private const double InfoRailWidth = 246;
     private const double ToolbarHeight = 162;
+    private const int WaveformUpdateIntervalMilliseconds = 100;
 
     private readonly Border _previewRoot;
     private readonly Image _image;
@@ -38,6 +39,9 @@ internal sealed class AnimatedImagePreviewPresenter
     private int[]? _nativeFrameTimeline;
     private int _nativeAnimationDurationMs;
     private Stopwatch? _nativeFrameClock;
+    private long _lastWaveformUpdateMilliseconds;
+    private bool _waveformUpdatePending;
+    private int _waveformVersion;
     private Stopwatch? _openWatch;
     private string _currentPath = "";
 
@@ -66,6 +70,7 @@ internal sealed class AnimatedImagePreviewPresenter
     public bool HasImage => _image.Source is not null;
     public bool CanTogglePlayback => _nativeFrames?.Frames.Count > 1 && _nativeFrameTimer is not null;
     public bool IsPlaybackPaused { get; private set; }
+    public Action<ImageWaveform>? WaveformChanged { get; init; }
 
     public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
     {
@@ -102,6 +107,8 @@ internal sealed class AnimatedImagePreviewPresenter
         _currentPath = path;
         _openWatch = null;
         _nativeFrames = frames;
+        _waveformVersion++;
+        _waveformUpdatePending = false;
         IsPlaybackPaused = false;
         _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
         _nativeFrameIndex = 0;
@@ -109,6 +116,7 @@ internal sealed class AnimatedImagePreviewPresenter
         _nativeAnimationDurationMs = _nativeFrameTimeline.Length == 0 ? 0 : _nativeFrameTimeline[^1];
         _sourceWidth = Math.Max(1, frames.Width);
         _sourceHeight = Math.Max(1, frames.Height);
+        _lastWaveformUpdateMilliseconds = -WaveformUpdateIntervalMilliseconds;
         _image.Width = frames.Width;
         _image.Height = frames.Height;
         double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
@@ -247,6 +255,32 @@ internal sealed class AnimatedImagePreviewPresenter
         stream.Write(bgra, 0, bgra.Length);
         _nativeFrameBitmap.Invalidate();
         _image.Source = _nativeFrameBitmap;
+        long elapsed = _nativeFrameClock?.ElapsedMilliseconds ?? 0;
+        if (elapsed - _lastWaveformUpdateMilliseconds >= WaveformUpdateIntervalMilliseconds)
+        {
+            _lastWaveformUpdateMilliseconds = elapsed;
+            QueueWaveformUpdate(bgra, _nativeFrames.Width, _nativeFrames.Height);
+        }
+    }
+
+    private void QueueWaveformUpdate(byte[] bgra, int width, int height)
+    {
+        if (_waveformUpdatePending || WaveformChanged is null)
+            return;
+
+        _waveformUpdatePending = true;
+        int version = _waveformVersion;
+        _ = Task.Run(() => ImageWaveformBuilder.Create(bgra, width, height)).ContinueWith(task =>
+        {
+            _previewRoot.DispatcherQueue.TryEnqueue(() =>
+            {
+                if (version != _waveformVersion)
+                    return;
+                _waveformUpdatePending = false;
+                if (task.IsCompletedSuccessfully)
+                    WaveformChanged?.Invoke(task.Result);
+            });
+        }, TaskScheduler.Default);
     }
 
     private void StopNativePlayback()
@@ -257,11 +291,14 @@ internal sealed class AnimatedImagePreviewPresenter
             _nativeFrameTimer = null;
         }
         _nativeFrames = null;
+        _waveformVersion++;
+        _waveformUpdatePending = false;
         _nativeFrameBitmap = null;
         _nativeFrameIndex = 0;
         _nativeFrameTimeline = null;
         _nativeAnimationDurationMs = 0;
         _nativeFrameClock = null;
+        _lastWaveformUpdateMilliseconds = 0;
         IsPlaybackPaused = false;
     }
 

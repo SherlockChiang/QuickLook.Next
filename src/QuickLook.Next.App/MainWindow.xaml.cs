@@ -245,8 +245,11 @@ public sealed partial class MainWindow : Window
             OfficePagesPanel,
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
-        _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
         _imageWaveformPresenter = new ImageWaveformPresenter(ImageWaveformPanel, ImageWaveformImage);
+        _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText)
+        {
+            WaveformChanged = waveform => _imageWaveformPresenter.Show(waveform),
+        };
         _imageSidecarController = new ImageSidecarController(
             ImageFilmstripList,
             ImageFilmstrip,

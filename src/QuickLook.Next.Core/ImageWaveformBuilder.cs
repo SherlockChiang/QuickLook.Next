@@ -1,12 +1,19 @@
 using QuickLook.Next.Core;
 
-namespace QuickLook.Next.RasterHost;
+namespace QuickLook.Next.Core;
 
-internal static class ImageWaveformBuilder
+public static class ImageWaveformBuilder
 {
-    internal const int ScopeWidth = 192;
-    internal const int ScopeHeight = 96;
+    public const int ScopeWidth = 192;
+    public const int ScopeHeight = 96;
     private const int ChannelCount = 3;
+
+    public static bool IsValid(ImageWaveform? waveform)
+        => waveform is not null
+            && waveform.Width == ScopeWidth
+            && waveform.Height == ScopeHeight
+            && waveform.RgbDensity is not null
+            && waveform.RgbDensity.Length == ScopeWidth * ScopeHeight * ChannelCount;
 
     public static ImageWaveform Create(byte[] bgra, int width, int height)
     {

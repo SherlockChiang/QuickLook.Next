@@ -30,7 +30,7 @@ Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAMES:\s*usize\s*=\s*120' `
 Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_BYTES:\s*usize\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
     "Animated frame packets must remain capped at 64 MiB."
 
-$imageWaveform = Join-Path $Root "src/QuickLook.Next.RasterHost/ImageWaveformBuilder.cs"
+$imageWaveform = Join-Path $Root "src/QuickLook.Next.Core/ImageWaveformBuilder.cs"
 Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `
     "Image waveforms must retain their fixed 192-column budget."
 Require-Pattern $imageWaveform 'ScopeHeight\s*=\s*96' `
@@ -38,8 +38,10 @@ Require-Pattern $imageWaveform 'ScopeHeight\s*=\s*96' `
 Require-Pattern $imageWaveform '1_000_000d' `
     "Image waveform generation must retain its one-million-sample ceiling."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
-Require-Pattern $waveformPresenter 'RgbDensity\.Length\s*!=\s*checked\(planeLength\s*\*\s*3\)' `
+Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."
+Require-Pattern $imageWaveform 'RgbDensity\s+is\s+not\s+null[\s\S]*RgbDensity\.Length\s*==\s*ScopeWidth\s*\*\s*ScopeHeight\s*\*\s*ChannelCount' `
+    "Image waveform validation must reject null or incorrectly sized channel payloads."
 $rasterPresenter = Join-Path $Root "src/QuickLook.Next.App/RasterPreviewPresenter.cs"
 Require-Pattern $rasterPresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
     "Static image wheel zoom must remain anchored at the pointer."
@@ -50,6 +52,12 @@ Require-Pattern $rasterPresenter 'public void PanBy\(double x, double y\)' `
     "Static images must retain bounded keyboard panning."
 Require-Pattern $animatedImagePresenter 'public void PanBy\(double x, double y\)' `
     "Animated images must retain bounded keyboard panning."
+Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100' `
+    "Animated image waveforms must remain throttled to at most ten updates per second."
+Require-Pattern $animatedImagePresenter 'Task\.Run\(\(\)\s*=>\s*ImageWaveformBuilder\.Create' `
+    "Animated image waveform generation must remain off the UI thread."
+Require-Pattern $animatedImagePresenter 'version\s*!=\s*_waveformVersion' `
+    "Animated image waveform callbacks must reject stale presenter generations."
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
 Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `

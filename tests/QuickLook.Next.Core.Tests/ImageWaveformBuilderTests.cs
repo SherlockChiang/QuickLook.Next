@@ -1,7 +1,7 @@
-using QuickLook.Next.RasterHost;
+using QuickLook.Next.Core;
 using Xunit;
 
-namespace QuickLook.Next.RasterHost.IntegrationTests;
+namespace QuickLook.Next.Core.Tests;
 
 public sealed class ImageWaveformBuilderTests
 {
