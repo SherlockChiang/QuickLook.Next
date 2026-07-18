@@ -446,6 +446,25 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_bounded_image_waveform()
+    {
+        var message = new PreviewSurface("request", 1234, 64, 32, 96, "B8G8R8A8_UNORM")
+        {
+            TransferId = "0".PadLeft(32, '0'),
+            Waveform = new ImageWaveform(2, 2, new byte[12]),
+        };
+
+        string json = ProtocolJson.Serialize(message);
+
+        PreviewSurface decoded = Assert.IsType<PreviewSurface>(ProtocolJson.Deserialize(json));
+        Assert.Equal(message.RequestId, decoded.RequestId);
+        Assert.Equal(message.TransferId, decoded.TransferId);
+        Assert.NotNull(decoded.Waveform);
+        Assert.Equal((2, 2), (decoded.Waveform.Width, decoded.Waveform.Height));
+        Assert.Equal(message.Waveform.RgbDensity, decoded.Waveform.RgbDensity);
+    }
+
+    [Fact]
     public void ProtocolJson_round_trips_archive_handle_message()
     {
         var message = new ArchiveEntryExtracted("2".PadLeft(32, '2'), 1234, 4096, "folder/report.pdf");

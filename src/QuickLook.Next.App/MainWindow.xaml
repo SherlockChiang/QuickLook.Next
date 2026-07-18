@@ -603,6 +603,25 @@
                             </Button>
                         </Grid>
                         <Rectangle Height="1" Fill="{ThemeResource PreviewSurfaceBorderBrush}" />
+                        <StackPanel x:Name="ImageWaveformPanel"
+                                    Visibility="Collapsed"
+                                    Spacing="6">
+                            <TextBlock x:Uid="ImageWaveformLabel"
+                                       Text="RGB waveform"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Border Height="112"
+                                    Padding="4"
+                                    Background="Black"
+                                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4">
+                                <Image x:Name="ImageWaveformImage"
+                                       x:Uid="ImageWaveformImage"
+                                       Stretch="Fill"
+                                       AutomationProperties.Name="RGB image waveform" />
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
                     <StackPanel x:Name="InfoDetailsPanel" Grid.Row="1" Spacing="12">
                         <StackPanel Spacing="2">

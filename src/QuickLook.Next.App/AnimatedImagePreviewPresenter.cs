@@ -343,6 +343,21 @@ internal sealed class AnimatedImagePreviewPresenter
         UpdateLayout();
     }
 
+    private void ZoomAt(double factor, Windows.Foundation.Point point)
+    {
+        if (_image.Source is null)
+            return;
+
+        double previousZoom = _zoom;
+        _zoom = Math.Clamp(_zoom * factor, MinZoom, MaxZoom);
+        double appliedFactor = _zoom / previousZoom;
+        double centerX = _previewRoot.ActualWidth / 2;
+        double centerY = _previewRoot.ActualHeight / 2;
+        _panX = (point.X - centerX) * (1 - appliedFactor) + _panX * appliedFactor;
+        _panY = (point.Y - centerY) * (1 - appliedFactor) + _panY * appliedFactor;
+        UpdateLayout();
+    }
+
     public void SetZoom(double zoom)
     {
         if (_image.Source is null)
@@ -388,16 +403,20 @@ internal sealed class AnimatedImagePreviewPresenter
         _previewRoot.ReleasePointerCapture(e.Pointer);
     }
 
+    public void OnPointerCaptureLost()
+        => _isPanning = false;
+
     public void OnPointerWheelChanged(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         if (_image.Source is null || _previewRoot.Visibility != Visibility.Visible)
             return;
 
-        int delta = e.GetCurrentPoint(_previewRoot).Properties.MouseWheelDelta;
+        var point = e.GetCurrentPoint(_previewRoot);
+        int delta = point.Properties.MouseWheelDelta;
         if (delta == 0)
             return;
 
-        ZoomBy(delta > 0 ? 1.15 : 1.0 / 1.15);
+        ZoomAt(delta > 0 ? 1.15 : 1.0 / 1.15, point.Position);
         e.Handled = true;
     }
 

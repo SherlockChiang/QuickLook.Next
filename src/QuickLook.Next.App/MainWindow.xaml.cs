@@ -54,6 +54,7 @@ public sealed partial class MainWindow : Window
     private OfficePreviewPresenter? _officePresenter;
     private RasterPreviewPresenter? _rasterPresenter;
     private AnimatedImagePreviewPresenter? _animatedImagePresenter;
+    private ImageWaveformPresenter? _imageWaveformPresenter;
     private bool _isRasterChromeEnabled;
     private bool _isCompactInfoRailOpen;
     private ImageSidecarController? _imageSidecarController;
@@ -245,6 +246,7 @@ public sealed partial class MainWindow : Window
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText);
+        _imageWaveformPresenter = new ImageWaveformPresenter(ImageWaveformPanel, ImageWaveformImage);
         _imageSidecarController = new ImageSidecarController(
             ImageFilmstripList,
             ImageFilmstrip,
@@ -309,11 +311,15 @@ public sealed partial class MainWindow : Window
         AnimatedImagePreviewRoot.PointerPressed += OnAnimatedImageRootPointerPressed;
         AnimatedImagePreviewRoot.PointerMoved += OnAnimatedImageRootPointerMoved;
         AnimatedImagePreviewRoot.PointerReleased += OnAnimatedImageRootPointerReleased;
+        AnimatedImagePreviewRoot.PointerCanceled += OnAnimatedImageRootPointerCaptureLost;
+        AnimatedImagePreviewRoot.PointerCaptureLost += OnAnimatedImageRootPointerCaptureLost;
         AnimatedImagePreviewRoot.DoubleTapped += OnAnimatedImageRootDoubleTapped;
         PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
         PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
         PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
+        PreviewRoot.PointerCanceled += OnPreviewRootPointerCaptureLost;
+        PreviewRoot.PointerCaptureLost += OnPreviewRootPointerCaptureLost;
         PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
         RootGrid.KeyDown += OnRootGridKeyDown;
         GetAppWindow().Closing += (appWindow, args) =>
@@ -1473,6 +1479,7 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
             var layoutWatch = Stopwatch.StartNew();
             _rasterPresenter.UpdateLayout();
+            _imageWaveformPresenter?.Show(surface.Waveform);
             layoutWatch.Stop();
             DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
         }
@@ -1742,6 +1749,7 @@ public sealed partial class MainWindow : Window
         DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         _rasterPresenter?.Clear();
         _animatedImagePresenter?.Clear();
+        _imageWaveformPresenter?.Clear();
         _mediaPresenter?.Clear();
         _pdfPresenter?.Clear();
         _textPresenter?.Clear();
@@ -3014,6 +3022,9 @@ public sealed partial class MainWindow : Window
     private void OnPreviewRootPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _rasterPresenter?.OnPointerReleased(e);
 
+    private void OnPreviewRootPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _rasterPresenter?.OnPointerCaptureLost();
+
     private void OnPreviewRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _rasterPresenter?.OnPointerWheelChanged(e);
 
@@ -3028,6 +3039,9 @@ public sealed partial class MainWindow : Window
 
     private void OnAnimatedImageRootPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _animatedImagePresenter?.OnPointerReleased(e);
+
+    private void OnAnimatedImageRootPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        => _animatedImagePresenter?.OnPointerCaptureLost();
 
     private void OnAnimatedImageRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _animatedImagePresenter?.OnPointerWheelChanged(e);

@@ -336,6 +336,8 @@
   <data name="DimensionsLabel.Text" xml:space="preserve">
     <value>Dimensions</value>
   </data>
+  <data name="ImageWaveformLabel.Text" xml:space="preserve"><value>RGB waveform</value></data>
+  <data name="ImageWaveformImage.AutomationProperties.Name" xml:space="preserve"><value>RGB image waveform</value></data>
   <data name="SizeLabel.Text" xml:space="preserve">
     <value>Size</value>
   </data>

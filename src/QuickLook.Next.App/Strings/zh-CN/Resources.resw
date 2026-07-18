@@ -196,6 +196,8 @@
   <data name="ErrorRevealFileButton.AutomationProperties.Name" xml:space="preserve"><value>在文件资源管理器中显示正在预览的文件</value></data>
   <data name="RevealPreviewFileText.Text" xml:space="preserve"><value>在文件资源管理器中显示</value></data>
   <data name="DimensionsLabel.Text" xml:space="preserve"><value>尺寸</value></data>
+  <data name="ImageWaveformLabel.Text" xml:space="preserve"><value>RGB 波形图</value></data>
+  <data name="ImageWaveformImage.AutomationProperties.Name" xml:space="preserve"><value>RGB 图像波形图</value></data>
   <data name="SizeLabel.Text" xml:space="preserve"><value>大小</value></data>
   <data name="TypeLabel.Text" xml:space="preserve"><value>类型</value></data>
   <data name="ModifiedLabel.Text" xml:space="preserve"><value>修改时间</value></data>

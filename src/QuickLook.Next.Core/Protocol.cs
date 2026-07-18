@@ -67,7 +67,11 @@ public sealed record PreviewSurface(
     int PageIndex = -1, long PageGeneration = 0) : ControlMessage
 {
     public string TransferId { get; init; } = "";
+    public ImageWaveform? Waveform { get; init; }
 }
+
+/// <summary>Bounded RGB density scope derived from decoded pixels; channels are planar and row-major.</summary>
+public sealed record ImageWaveform(int Width, int Height, byte[] RgbDensity);
 
 /// <summary>App → RasterHost: the host-local surface handle was copied or rejected and can be closed.</summary>
 public sealed record PreviewSurfaceRelease(string TransferId) : ControlMessage;

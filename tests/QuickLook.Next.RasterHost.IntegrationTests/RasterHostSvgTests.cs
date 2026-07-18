@@ -91,6 +91,10 @@ public sealed class RasterHostSvgTests
             using (var reader = new StreamReader(anchored))
                 Assert.StartsWith("<svg", await reader.ReadToEndAsync(timeout.Token));
             Assert.Equal((100u, 50u), (surface.Width, surface.Height));
+            Assert.NotNull(surface.Waveform);
+            Assert.Equal((192, 96), (surface.Waveform.Width, surface.Waveform.Height));
+            Assert.Equal(192 * 96 * 3, surface.Waveform.RgbDensity.Length);
+            Assert.Contains(surface.Waveform.RgbDensity, value => value > 0);
             Assert.Equal("image", ready.Kind);
             Assert.Equal((100d, 50d), (ready.PreferredWidth, ready.PreferredHeight));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
