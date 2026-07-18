@@ -59,7 +59,6 @@
   <data name="SettingsTextWrappingAutomatic" xml:space="preserve"><value>自动</value></data>
   <data name="SettingsTextWrappingAlways" xml:space="preserve"><value>自动换行</value></data>
   <data name="SettingsTextWrappingNever" xml:space="preserve"><value>不换行</value></data>
-  <data name="ToggleWordWrap" xml:space="preserve"><value>切换自动换行</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>需要重启</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>请从托盘退出 QuickLook Next 并重新启动，以应用新的语言。</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>关于</value></data>
@@ -155,10 +154,6 @@
   <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF 页面导航</value></data>
   <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown 标题</value></data>
   <data name="TextPreviewContainer.AutomationProperties.Name" xml:space="preserve"><value>文本预览</value></data>
-  <data name="TextFindBox.AutomationProperties.Name" xml:space="preserve"><value>在预览中查找</value></data>
-  <data name="TextFindPreviousButton.AutomationProperties.Name" xml:space="preserve"><value>上一个匹配项</value></data>
-  <data name="TextFindNextButton.AutomationProperties.Name" xml:space="preserve"><value>下一个匹配项</value></data>
-  <data name="TextFindCloseButton.AutomationProperties.Name" xml:space="preserve"><value>关闭搜索</value></data>
   <data name="MediaPreviewElement.AutomationProperties.Name" xml:space="preserve"><value>媒体预览播放器</value></data>
   <data name="LoadingRing.AutomationProperties.Name" xml:space="preserve"><value>正在加载预览</value></data>
   <data name="ErrorPanel.AutomationProperties.Name" xml:space="preserve"><value>预览错误</value></data>
@@ -181,8 +176,6 @@
   <data name="SyntaxHighlightingCharacterLimitFormat" xml:space="preserve"><value>[超过 {0:N0} 个字符后已禁用语法高亮]</value></data>
   <data name="SyntaxHighlightingSpanLimitFormat" xml:space="preserve"><value>[超过 {0:N0} 个区段后已禁用语法高亮]</value></data>
   <data name="OfficeEmbeddedImagePreviewFormat" xml:space="preserve"><value>{0} 嵌入图像预览</value></data>
-  <data name="TextFindPlaceholder" xml:space="preserve"><value>查找</value></data>
-  <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve"><value>QuickLook Next</value></data>
   <data name="InfoTabText.Text" xml:space="preserve"><value>信息</value></data>
   <data name="ExifTabText.Text" xml:space="preserve"><value>EXIF</value></data>
@@ -227,8 +220,6 @@
   <data name="PreviousPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>上一 PDF 页</value></data>
   <data name="NextPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>下一 PDF 页</value></data>
   <data name="TextLineNumbersButton.ToolTipService.ToolTip" xml:space="preserve"><value>切换行号</value></data>
-  <data name="TextSearchButton.ToolTipService.ToolTip" xml:space="preserve"><value>搜索 (Ctrl+F)</value></data>
-  <data name="TextSearchButton.AutomationProperties.Name" xml:space="preserve"><value>搜索文本</value></data>
   <data name="InfoTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示文件信息</value></data>
   <data name="ExifTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示 EXIF 信息</value></data>
   <data name="MoreTabButton.AutomationProperties.Name" xml:space="preserve"><value>显示更多预览操作</value></data>

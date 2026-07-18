@@ -180,7 +180,6 @@
   <data name="SettingsTextWrappingAutomatic" xml:space="preserve"><value>Automatic</value></data>
   <data name="SettingsTextWrappingAlways" xml:space="preserve"><value>Wrap lines</value></data>
   <data name="SettingsTextWrappingNever" xml:space="preserve"><value>Do not wrap</value></data>
-  <data name="ToggleWordWrap" xml:space="preserve"><value>Toggle word wrap</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>
@@ -265,10 +264,6 @@
   <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF page navigation</value></data>
   <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown headings</value></data>
   <data name="TextPreviewContainer.AutomationProperties.Name" xml:space="preserve"><value>Text preview</value></data>
-  <data name="TextFindBox.AutomationProperties.Name" xml:space="preserve"><value>Find in preview</value></data>
-  <data name="TextFindPreviousButton.AutomationProperties.Name" xml:space="preserve"><value>Previous match</value></data>
-  <data name="TextFindNextButton.AutomationProperties.Name" xml:space="preserve"><value>Next match</value></data>
-  <data name="TextFindCloseButton.AutomationProperties.Name" xml:space="preserve"><value>Close search</value></data>
   <data name="MediaPreviewElement.AutomationProperties.Name" xml:space="preserve"><value>Media preview player</value></data>
   <data name="LoadingRing.AutomationProperties.Name" xml:space="preserve"><value>Loading preview</value></data>
   <data name="ErrorPanel.AutomationProperties.Name" xml:space="preserve"><value>Preview error</value></data>
@@ -291,8 +286,6 @@
   <data name="SyntaxHighlightingCharacterLimitFormat" xml:space="preserve"><value>[Syntax highlighting disabled after {0:N0} characters]</value></data>
   <data name="SyntaxHighlightingSpanLimitFormat" xml:space="preserve"><value>[Syntax highlighting disabled after {0:N0} spans]</value></data>
   <data name="OfficeEmbeddedImagePreviewFormat" xml:space="preserve"><value>{0} embedded image preview</value></data>
-  <data name="TextFindPlaceholder" xml:space="preserve"><value>Find</value></data>
-  <data name="TextFindCountFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>
   <data name="AppBrandText.Text" xml:space="preserve">
     <value>QuickLook Next</value>
   </data>
@@ -385,8 +378,6 @@
   <data name="PreviousPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Previous PDF page</value></data>
   <data name="NextPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Next PDF page</value></data>
   <data name="TextLineNumbersButton.ToolTipService.ToolTip" xml:space="preserve"><value>Toggle line numbers</value></data>
-  <data name="TextSearchButton.ToolTipService.ToolTip" xml:space="preserve"><value>Search (Ctrl+F)</value></data>
-  <data name="TextSearchButton.AutomationProperties.Name" xml:space="preserve"><value>Search text</value></data>
   <data name="InfoTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show file information</value></data>
   <data name="ExifTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show EXIF information</value></data>
   <data name="MoreTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show more preview actions</value></data>

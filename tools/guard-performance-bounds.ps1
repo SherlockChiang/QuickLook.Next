@@ -83,6 +83,17 @@ Require-Pattern $mainWindow 'AnimatedImagePreviewRoot\.PointerCaptureLost\s*\+='
     "Animated image drag must recover from pointer capture loss."
 Require-Pattern $mainWindow 'shiftDown\s*&&\s*e\.Key\s+is\s+Windows\.System\.VirtualKey\.Left' `
     "Image keyboard panning must remain available without replacing arrow-key sibling navigation."
+Require-Pattern $mainWindow 'PreviewContentHost\.AddHandler\([\s\S]*PointerWheelChangedEvent[\s\S]*handledEventsToo:\s*true' `
+    "Preview wheel routing must receive events already handled by nested scroll viewers."
+Require-Pattern $mainWindow 'IsDescendantOrSelf\(source,\s*ImageFilmstrip\)' `
+    "Mouse wheel input over the image filmstrip must scroll preview entries."
+$mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
+$mainWindowXamlText = Get-Content -LiteralPath $mainWindowXaml -Raw
+foreach ($removedControl in @("TextFindPanel", "TextSearchButton", "TextWordWrapButton")) {
+    if ($mainWindowXamlText -match [regex]::Escape($removedControl)) {
+        $failures.Add("Preview flyout must not restore the removed $removedControl control.")
+    }
+}
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

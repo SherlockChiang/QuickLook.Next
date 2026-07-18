@@ -388,45 +388,6 @@
                     CornerRadius="8"
                     Padding="4">
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <StackPanel x:Name="TextFindPanel"
-                                Visibility="Collapsed"
-                                Orientation="Horizontal"
-                                Spacing="4">
-                        <TextBox x:Name="TextFindBox"
-                                 x:Uid="TextFindBox"
-                                 Width="220"
-                                 MinHeight="40"
-                                 PlaceholderText="Find"
-                                 TextChanged="OnTextFindTextChanged"
-                                 KeyDown="OnTextFindKeyDown"
-                                 AutomationProperties.Name="Find in preview" />
-                        <TextBlock x:Name="TextFindCountText"
-                                   MinWidth="54"
-                                   VerticalAlignment="Center"
-                                   TextAlignment="Center"
-                                   AutomationProperties.LiveSetting="Polite" />
-                        <Button x:Uid="TextFindPreviousButton" Width="40" Height="40"
-                                Click="OnTextFindPreviousClick"
-                                AutomationProperties.Name="Previous match">
-                            <FontIcon Glyph="&#xE70E;" FontSize="14" />
-                        </Button>
-                        <Button x:Uid="TextFindNextButton" Width="40" Height="40"
-                                Click="OnTextFindNextClick"
-                                AutomationProperties.Name="Next match">
-                            <FontIcon Glyph="&#xE70D;" FontSize="14" />
-                        </Button>
-                        <Button x:Uid="TextFindCloseButton" Width="40" Height="40"
-                                Click="OnTextFindCloseClick"
-                                AutomationProperties.Name="Close search">
-                            <FontIcon Glyph="&#xE711;" FontSize="14" />
-                        </Button>
-                    </StackPanel>
-                    <ToggleButton x:Name="TextWordWrapButton" 
-                                    Width="40" Height="40"
-                                    Padding="6" Background="Transparent" BorderThickness="0"
-                                    Click="TextWordWrapButton_Click">
-                        <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
-                    </ToggleButton>
                     <ToggleButton x:Name="TextLineNumbersButton"
                                   x:Uid="TextLineNumbersButton"
                                   Visibility="Collapsed"
@@ -436,15 +397,6 @@
                                   Click="TextLineNumbersButton_Click">
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
-                    <Button x:Name="TextSearchButton"
-                            x:Uid="TextSearchButton"
-                            Width="40" Height="40"
-                            ToolTipService.ToolTip="Search (Ctrl+F)"
-                            Padding="6" Background="Transparent" BorderThickness="0"
-                            AutomationProperties.Name="Search text"
-                            Click="TextSearchButton_Click">
-                        <FontIcon Glyph="&#xE721;" FontSize="14"/>
-                    </Button>
                 </StackPanel>
             </Border>
         </Grid>

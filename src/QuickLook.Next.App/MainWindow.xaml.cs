@@ -201,11 +201,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        TextFindBox.PlaceholderText = UiStrings.TextFindPlaceholder;
         ListingFilterBox.PlaceholderText = UiStrings.ListingFilterPlaceholder;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ListingFilterBox, UiStrings.ListingFilterAccessibleName);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(TextWordWrapButton, UiStrings.ToggleWordWrap);
-        ToolTipService.SetToolTip(TextWordWrapButton, UiStrings.ToggleWordWrap);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
         _panelController = new PreviewPanelController(
             PreviewRoot,
@@ -310,14 +307,12 @@ public sealed partial class MainWindow : Window
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
         PreviewContentHost.SizeChanged += OnPreviewContentHostSizeChanged;
-        AnimatedImagePreviewRoot.PointerWheelChanged += OnAnimatedImageRootPointerWheelChanged;
         AnimatedImagePreviewRoot.PointerPressed += OnAnimatedImageRootPointerPressed;
         AnimatedImagePreviewRoot.PointerMoved += OnAnimatedImageRootPointerMoved;
         AnimatedImagePreviewRoot.PointerReleased += OnAnimatedImageRootPointerReleased;
         AnimatedImagePreviewRoot.PointerCanceled += OnAnimatedImageRootPointerCaptureLost;
         AnimatedImagePreviewRoot.PointerCaptureLost += OnAnimatedImageRootPointerCaptureLost;
         AnimatedImagePreviewRoot.DoubleTapped += OnAnimatedImageRootDoubleTapped;
-        PreviewRoot.PointerWheelChanged += OnPreviewRootPointerWheelChanged;
         PreviewRoot.PointerPressed += OnPreviewRootPointerPressed;
         PreviewRoot.PointerMoved += OnPreviewRootPointerMoved;
         PreviewRoot.PointerReleased += OnPreviewRootPointerReleased;
@@ -338,7 +333,10 @@ public sealed partial class MainWindow : Window
         ImageFilmstripList.PointerReleased += OnImageFilmstripPointerReleased;
         ImageFilmstripList.PointerCanceled += OnImageFilmstripPointerCanceled;
         ImageFilmstripList.PointerCaptureLost += OnImageFilmstripPointerCaptureLost;
-        ImageFilmstripList.PointerWheelChanged += OnImageFilmstripPointerWheelChanged;
+        PreviewContentHost.AddHandler(
+            UIElement.PointerWheelChangedEvent,
+            new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPreviewContentPointerWheelChanged),
+            handledEventsToo: true);
         Closed += (_, _) =>
         {
             _lifetimeCts.Cancel();
@@ -1629,8 +1627,6 @@ public sealed partial class MainWindow : Window
 
         bool wrap = TextWrappingPolicy.ShouldWrap(AppSettings.Current.TextWrapping, ready.TextFormat, ready.Markdown is not null);
         TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight), wrap);
-        TextWordWrapButton.IsChecked = wrap;
-        TextWordWrapButton.Visibility = _textPresenter.SupportsWrappingToggle ? Visibility.Visible : Visibility.Collapsed;
         TextLineNumbersButton.Visibility = _textPresenter.SupportsLineNumbers ? Visibility.Visible : Visibility.Collapsed;
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
@@ -2570,11 +2566,6 @@ public sealed partial class MainWindow : Window
     {
         _animatedImagePresenter?.TogglePlayback();
         UpdateImageAnimationPlaybackButton();
-        if (_textPresenter is { } textPresenter && TextPreviewContainer.Visibility == Visibility.Visible)
-        {
-            TextWordWrapButton.IsChecked = textPresenter.ApplyWrappingMode(AppSettings.Current.TextWrapping);
-            TextWordWrapButton.Visibility = textPresenter.SupportsWrappingToggle ? Visibility.Visible : Visibility.Collapsed;
-        }
     }
 
     private void OnCompactInfoRailToggleClick(object sender, RoutedEventArgs e)
@@ -2659,22 +2650,44 @@ public sealed partial class MainWindow : Window
     private void OnImageFilmstripPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _imageFilmstripDragging = false;
 
-    private void OnImageFilmstripPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    private void OnPreviewContentPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
-        if (_imageFilmstripScrollViewer is null)
+        if (e.OriginalSource is not DependencyObject source)
             return;
 
-        int delta = e.GetCurrentPoint(ImageFilmstripList).Properties.MouseWheelDelta;
-        if (delta == 0)
-            return;
+        if (ImageFilmstrip.Visibility == Visibility.Visible && IsDescendantOrSelf(source, ImageFilmstrip))
+        {
+            _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
+            if (_imageFilmstripScrollViewer is null)
+                return;
 
-        _imageFilmstripScrollViewer.ChangeView(
-            _imageFilmstripScrollViewer.HorizontalOffset - delta,
-            null,
-            null,
-            disableAnimation: false);
-        e.Handled = true;
+            int delta = e.GetCurrentPoint(ImageFilmstripList).Properties.MouseWheelDelta;
+            if (delta == 0)
+                return;
+
+            _imageFilmstripScrollViewer.ChangeView(
+                _imageFilmstripScrollViewer.HorizontalOffset - delta,
+                null,
+                null,
+                disableAnimation: false);
+            e.Handled = true;
+            return;
+        }
+
+        if (PreviewRoot.Visibility == Visibility.Visible && IsDescendantOrSelf(source, PreviewRoot))
+            _rasterPresenter?.OnPointerWheelChanged(e);
+        else if (AnimatedImagePreviewRoot.Visibility == Visibility.Visible && IsDescendantOrSelf(source, AnimatedImagePreviewRoot))
+            _animatedImagePresenter?.OnPointerWheelChanged(e);
+    }
+
+    private static bool IsDescendantOrSelf(DependencyObject source, DependencyObject ancestor)
+    {
+        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+                return true;
+        }
+        return false;
     }
 
     private void EndImageFilmstripDrag(Microsoft.UI.Xaml.Input.Pointer pointer)
@@ -2782,20 +2795,6 @@ public sealed partial class MainWindow : Window
         {
             e.Handled = true;
             ClosePreviewFromKeyboard();
-            return;
-        }
-
-        bool textPreviewVisible = TextPreviewContainer.Visibility == Visibility.Visible;
-        if (textPreviewVisible && controlDown && e.Key == Windows.System.VirtualKey.F)
-        {
-            OpenTextSearch();
-            e.Handled = true;
-            return;
-        }
-        if (textPreviewVisible && e.Key == Windows.System.VirtualKey.F3 && _textPresenter is { } textPresenter)
-        {
-            ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
-            e.Handled = true;
             return;
         }
 
@@ -3054,9 +3053,6 @@ public sealed partial class MainWindow : Window
     private void OnPreviewRootPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _rasterPresenter?.OnPointerCaptureLost();
 
-    private void OnPreviewRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-        => _rasterPresenter?.OnPointerWheelChanged(e);
-
     private void OnPreviewRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         => _rasterPresenter?.OnDoubleTapped(e);
 
@@ -3071,9 +3067,6 @@ public sealed partial class MainWindow : Window
 
     private void OnAnimatedImageRootPointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         => _animatedImagePresenter?.OnPointerCaptureLost();
-
-    private void OnAnimatedImageRootPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
-        => _animatedImagePresenter?.OnPointerWheelChanged(e);
 
     private void OnAnimatedImageRootDoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         => _animatedImagePresenter?.OnDoubleTapped(e);
@@ -3415,87 +3408,6 @@ public sealed partial class MainWindow : Window
             ? themedPath
             : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
     }
-    private void TextWordWrapButton_Click(object sender, RoutedEventArgs e)
-    {
-        bool wrap = TextWordWrapButton.IsChecked == true;
-        string previous = AppSettings.Current.TextWrapping;
-        if (!AppSettings.SaveTextWrapping(wrap ? "always" : "never"))
-        {
-            TextWordWrapButton.IsChecked = _textPresenter?.ApplyWrappingMode(previous) == true;
-            StatusText.Text = UiStrings.SettingsSaveFailedMessage;
-            return;
-        }
-        _textPresenter?.SetWrapping(wrap);
-    }
-
     private void TextLineNumbersButton_Click(object sender, RoutedEventArgs e)
         => _textPresenter?.SetLineNumbersVisible(TextLineNumbersButton.IsChecked == true);
-
-    private void TextSearchButton_Click(object sender, RoutedEventArgs e)
-        => OpenTextSearch();
-
-    private void OpenTextSearch()
-    {
-        if (TextPreviewContainer.Visibility != Visibility.Visible || _textPresenter is not { } textPresenter)
-            return;
-        TextFindPanel.Visibility = Visibility.Visible;
-        TextWordWrapButton.Visibility = Visibility.Collapsed;
-        TextSearchButton.Visibility = Visibility.Collapsed;
-        TextFindBox.Focus(FocusState.Programmatic);
-        TextFindBox.SelectAll();
-        ApplyTextSearchState(textPresenter.SetSearchQuery(TextFindBox.Text));
-    }
-
-    private void OnTextFindTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_textPresenter is { } textPresenter)
-            ApplyTextSearchState(textPresenter.SetSearchQuery(TextFindBox.Text));
-    }
-
-    private void OnTextFindPreviousClick(object sender, RoutedEventArgs e)
-    {
-        if (_textPresenter is { } textPresenter)
-            ApplyTextSearchState(textPresenter.MoveSearch(-1));
-    }
-
-    private void OnTextFindNextClick(object sender, RoutedEventArgs e)
-    {
-        if (_textPresenter is { } textPresenter)
-            ApplyTextSearchState(textPresenter.MoveSearch(1));
-    }
-
-    private void OnTextFindCloseClick(object sender, RoutedEventArgs e) => CloseTextSearch();
-
-    private void OnTextFindKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
-    {
-        bool shiftDown = (Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
-            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
-        if (e.Key == Windows.System.VirtualKey.Enter)
-        {
-            if (_textPresenter is { } textPresenter)
-                ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
-            e.Handled = true;
-        }
-        else if (e.Key == Windows.System.VirtualKey.Escape)
-        {
-            CloseTextSearch();
-            e.Handled = true;
-        }
-    }
-
-    private void CloseTextSearch()
-    {
-        TextFindPanel.Visibility = Visibility.Collapsed;
-        TextWordWrapButton.Visibility = _textPresenter?.SupportsWrappingToggle == true ? Visibility.Visible : Visibility.Collapsed;
-        TextSearchButton.Visibility = Visibility.Visible;
-        TextFindBox.Text = "";
-        if (_textPresenter is { } textPresenter)
-            ApplyTextSearchState(textPresenter.ClearSearch());
-        FrameworkElement focusTarget = _textPresenter?.SupportsLineNumbers == true ? TextListView : TextPreviewBlock;
-        focusTarget.Focus(FocusState.Programmatic);
-    }
-
-    private void ApplyTextSearchState(TextSearchState state)
-        => TextFindCountText.Text = UiStrings.Format(UiStrings.TextFindCountFormat, state.Current, state.Count);
 }
