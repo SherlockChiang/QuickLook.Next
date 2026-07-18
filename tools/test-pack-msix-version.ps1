@@ -17,7 +17,10 @@ $requiredPatterns = @(
     @("\^\\d\+\\\.\\d\+\\\.\\d\+\\\.\\d\+\$", "Version must retain X.Y.Z.W validation."),
     @('\$_\s+-lt\s+0\s+-or\s+\$_\s+-gt\s+65535', "MSIX version components must remain bounded to 0..65535."),
     @('\$numericVersion\s*=\s*\$Version', "The explicit four-part version must flow to the MSIX manifest."),
-    @('\$VersionPrefix\s*=\s*\$versionParts\[0\.\.2\]\s+-join', "The build version prefix must derive from the first three components.")
+    @('\$VersionPrefix\s*=\s*\$versionParts\[0\.\.2\]\s+-join', "The build version prefix must derive from the first three components."),
+    @('\.signing[\s\S]*QuickLook\.Next-Release\.pfx', "MSIX packaging must discover the initialized local release certificate."),
+    @('QuickLook\.Next-Release\.password[\s\S]*Get-Content\s+-LiteralPath', "MSIX packaging must discover the initialized local certificate password."),
+    @('A signing certificate is required\.[\s\S]{0,300}test-installer-script\.ps1', "Missing signing credentials must fail before release packaging starts.")
 )
 foreach ($rule in $requiredPatterns) {
     if ($text -notmatch $rule[0]) {

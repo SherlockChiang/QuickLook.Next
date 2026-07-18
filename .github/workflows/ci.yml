@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.301
+          dotnet-version: 10.0.302
 
       - uses: dtolnay/rust-toolchain@stable
 

@@ -40,6 +40,20 @@ $msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
 $installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
 $installScript = Join-Path $root "packaging\Install.ps1"
 if (-not $ExpectedCertificatePath) { $ExpectedCertificatePath = Join-Path $root "packaging\QuickLook.Next-Release.cer" }
+$localSigningDirectory = Join-Path $root ".signing"
+if (-not $CertificatePath) {
+    $localCertificatePath = Join-Path $localSigningDirectory "QuickLook.Next-Release.pfx"
+    if (Test-Path -LiteralPath $localCertificatePath) { $CertificatePath = $localCertificatePath }
+}
+if (-not $CertificatePassword) {
+    $localPasswordPath = Join-Path $localSigningDirectory "QuickLook.Next-Release.password"
+    if (Test-Path -LiteralPath $localPasswordPath) {
+        $CertificatePassword = (Get-Content -LiteralPath $localPasswordPath -Raw).Trim()
+    }
+}
+if (-not $CreateDevelopmentCertificate -and -not (Test-Path -LiteralPath $CertificatePath -PathType Leaf)) {
+    throw "A signing certificate is required. Run tools/setup-release-signing.ps1 or pass CertificatePath and CertificatePassword."
+}
 
 & (Join-Path $PSScriptRoot "test-installer-script.ps1") -Path $installScript
 
