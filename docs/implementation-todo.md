@@ -41,6 +41,19 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Add a bounded RGB spatial waveform to the persistent right-side image
+  details rail. RasterHost derives a fixed 192x96 three-channel density scope
+  from its already-bounded decoded BGRA raster, including alpha unpremultiplication
+  and a one-million-sample ceiling, so raw image pixels still do not cross the
+  control channel. Static and animated image viewers support clamped drag-to-pan,
+  recover cleanly from pointer cancellation/capture loss, and wheel zoom around
+  the pointer rather than the viewport center. Labels and automation names are
+  localized in en-US and zh-CN.
+  - Verification: Release App build 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
+  - Verification: Core 109/109; RasterHost integration 7/7 via MSBuild `VSTest`
+  - Guard: `tools/guard-architecture.ps1` passed through static/native/image-corpus stages; final system-image smoke remained blocked by missing pinned SDK 10.0.301
+  - Commit: `9321e68`
+
 - [x] Apply a fail-closed conservative creation-time mitigation profile to both
   hostile-format hosts: DEP, SEHOP, heap-terminate-on-corruption, bottom-up/high-
   entropy ASLR, and extension-point disable. Add job UI restrictions for clipboard
