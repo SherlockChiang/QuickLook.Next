@@ -148,7 +148,9 @@
   <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>嵌入图像</value></data>
   <data name="PreviewContentHost.AutomationProperties.Name" xml:space="preserve"><value>预览内容</value></data>
   <data name="PreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>图像预览区域</value></data>
+  <data name="PreviewRoot.AutomationProperties.HelpText" xml:space="preserve"><value>使用鼠标滚轮缩放，拖动以平移，或按住 Shift 并按方向键平移。</value></data>
   <data name="AnimatedImagePreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>动态图像预览</value></data>
+  <data name="AnimatedImagePreviewRoot.AutomationProperties.HelpText" xml:space="preserve"><value>使用鼠标滚轮缩放，拖动以平移，或按住 Shift 并按方向键平移。</value></data>
   <data name="PdfScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>PDF 预览页面</value></data>
   <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF 页面导航</value></data>
   <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown 标题</value></data>
@@ -198,6 +200,7 @@
   <data name="DimensionsLabel.Text" xml:space="preserve"><value>尺寸</value></data>
   <data name="ImageWaveformLabel.Text" xml:space="preserve"><value>RGB 波形图</value></data>
   <data name="ImageWaveformImage.AutomationProperties.Name" xml:space="preserve"><value>RGB 图像波形图</value></data>
+  <data name="ImageWaveformPanel.AutomationProperties.HelpText" xml:space="preserve"><value>横向位置对应图像位置，纵向位置显示从 0 到 255 的通道强度。</value></data>
   <data name="SizeLabel.Text" xml:space="preserve"><value>大小</value></data>
   <data name="TypeLabel.Text" xml:space="preserve"><value>类型</value></data>
   <data name="ModifiedLabel.Text" xml:space="preserve"><value>修改时间</value></data>

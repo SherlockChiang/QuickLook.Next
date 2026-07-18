@@ -148,13 +148,15 @@
                     x:Uid="PreviewRoot"
                     Margin="14,0,14,14"
                     Background="{ThemeResource PreviewHeroSurfaceBrush}"
-                    AutomationProperties.Name="Image preview surface" />
+                    AutomationProperties.Name="Image preview surface"
+                    AutomationProperties.HelpText="Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan." />
             <Border x:Name="AnimatedImagePreviewRoot"
                     x:Uid="AnimatedImagePreviewRoot"
                     Visibility="Collapsed"
                     Margin="14,0,14,14"
                     Background="{ThemeResource PreviewHeroSurfaceBrush}"
-                    AutomationProperties.Name="Animated image preview">
+                    AutomationProperties.Name="Animated image preview"
+                    AutomationProperties.HelpText="Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan.">
                 <Grid>
                     <Image x:Name="AnimatedImagePreviewImage"
                            x:Uid="AnimatedImagePreviewImage"
@@ -604,22 +606,42 @@
                         </Grid>
                         <Rectangle Height="1" Fill="{ThemeResource PreviewSurfaceBorderBrush}" />
                         <StackPanel x:Name="ImageWaveformPanel"
+                                    x:Uid="ImageWaveformPanel"
                                     Visibility="Collapsed"
-                                    Spacing="6">
-                            <TextBlock x:Uid="ImageWaveformLabel"
-                                       Text="RGB waveform"
-                                       FontSize="11"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    Spacing="6"
+                                    AutomationProperties.HelpText="Horizontal position follows the image; vertical position shows channel intensity from 0 to 255.">
+                            <Grid>
+                                <TextBlock x:Uid="ImageWaveformLabel"
+                                           Text="RGB waveform"
+                                           FontSize="11"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="7">
+                                    <TextBlock Text="R" FontSize="11" FontWeight="SemiBold" Foreground="#FFFF656A" />
+                                    <TextBlock Text="G" FontSize="11" FontWeight="SemiBold" Foreground="#FF55D67B" />
+                                    <TextBlock Text="B" FontSize="11" FontWeight="SemiBold" Foreground="#FF62A8FF" />
+                                </StackPanel>
+                            </Grid>
                             <Border Height="112"
                                     Padding="4"
                                     Background="Black"
                                     BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="4">
-                                <Image x:Name="ImageWaveformImage"
-                                       x:Uid="ImageWaveformImage"
-                                       Stretch="Fill"
-                                       AutomationProperties.Name="RGB image waveform" />
+                                <Grid ColumnSpacing="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="18" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid>
+                                        <TextBlock Text="255" FontSize="8" VerticalAlignment="Top" Foreground="#FFB0B0B0" />
+                                        <TextBlock Text="0" FontSize="8" VerticalAlignment="Bottom" Foreground="#FFB0B0B0" />
+                                    </Grid>
+                                    <Image x:Name="ImageWaveformImage"
+                                           x:Uid="ImageWaveformImage"
+                                           Grid.Column="1"
+                                           Stretch="Fill"
+                                           AutomationProperties.Name="RGB image waveform" />
+                                </Grid>
                             </Border>
                         </StackPanel>
                     </StackPanel>

@@ -2820,6 +2820,32 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (shiftDown && e.Key is Windows.System.VirtualKey.Left
+            or Windows.System.VirtualKey.Right
+            or Windows.System.VirtualKey.Up
+            or Windows.System.VirtualKey.Down)
+        {
+            const double keyboardPanStep = 48;
+            double x = e.Key switch
+            {
+                Windows.System.VirtualKey.Left => keyboardPanStep,
+                Windows.System.VirtualKey.Right => -keyboardPanStep,
+                _ => 0,
+            };
+            double y = e.Key switch
+            {
+                Windows.System.VirtualKey.Up => keyboardPanStep,
+                Windows.System.VirtualKey.Down => -keyboardPanStep,
+                _ => 0,
+            };
+            if (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible)
+                _animatedImagePresenter.PanBy(x, y);
+            else
+                _rasterPresenter?.PanBy(x, y);
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Windows.System.VirtualKey.Left)
         {
             _ = NavigateImageSiblingAsync(-1);

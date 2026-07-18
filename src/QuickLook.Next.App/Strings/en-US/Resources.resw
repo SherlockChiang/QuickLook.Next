@@ -258,7 +258,9 @@
   <data name="OfficeEmbeddedImageAccessibleName" xml:space="preserve"><value>Embedded image</value></data>
   <data name="PreviewContentHost.AutomationProperties.Name" xml:space="preserve"><value>Preview content</value></data>
   <data name="PreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>Image preview surface</value></data>
+  <data name="PreviewRoot.AutomationProperties.HelpText" xml:space="preserve"><value>Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan.</value></data>
   <data name="AnimatedImagePreviewRoot.AutomationProperties.Name" xml:space="preserve"><value>Animated image preview</value></data>
+  <data name="AnimatedImagePreviewRoot.AutomationProperties.HelpText" xml:space="preserve"><value>Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan.</value></data>
   <data name="PdfScrollViewer.AutomationProperties.Name" xml:space="preserve"><value>PDF preview pages</value></data>
   <data name="PdfPagerBar.AutomationProperties.Name" xml:space="preserve"><value>PDF page navigation</value></data>
   <data name="MarkdownOutlinePanel.AutomationProperties.Name" xml:space="preserve"><value>Markdown headings</value></data>
@@ -338,6 +340,7 @@
   </data>
   <data name="ImageWaveformLabel.Text" xml:space="preserve"><value>RGB waveform</value></data>
   <data name="ImageWaveformImage.AutomationProperties.Name" xml:space="preserve"><value>RGB image waveform</value></data>
+  <data name="ImageWaveformPanel.AutomationProperties.HelpText" xml:space="preserve"><value>Horizontal position follows the image; vertical position shows channel intensity from 0 to 255.</value></data>
   <data name="SizeLabel.Text" xml:space="preserve">
     <value>Size</value>
   </data>

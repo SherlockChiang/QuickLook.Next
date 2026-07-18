@@ -46,6 +46,10 @@ Require-Pattern $rasterPresenter 'private void ZoomAt\(double factor, Windows\.F
 $animatedImagePresenter = Join-Path $Root "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs"
 Require-Pattern $animatedImagePresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
     "Animated image wheel zoom must remain anchored at the pointer."
+Require-Pattern $rasterPresenter 'public void PanBy\(double x, double y\)' `
+    "Static images must retain bounded keyboard panning."
+Require-Pattern $animatedImagePresenter 'public void PanBy\(double x, double y\)' `
+    "Animated images must retain bounded keyboard panning."
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
 Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `
@@ -69,6 +73,8 @@ Require-Pattern $mainWindow 'PreviewRoot\.PointerCanceled\s*\+=' `
     "Static image drag must recover from pointer cancellation."
 Require-Pattern $mainWindow 'AnimatedImagePreviewRoot\.PointerCaptureLost\s*\+=' `
     "Animated image drag must recover from pointer capture loss."
+Require-Pattern $mainWindow 'shiftDown\s*&&\s*e\.Key\s+is\s+Windows\.System\.VirtualKey\.Left' `
+    "Image keyboard panning must remain available without replacing arrow-key sibling navigation."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

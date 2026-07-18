@@ -180,6 +180,15 @@ internal sealed class RasterPreviewPresenter
     public void SetActualSize()
         => SetZoom(1.0);
 
+    public void PanBy(double x, double y)
+    {
+        if (_sprite is null)
+            return;
+        _panX += x;
+        _panY += y;
+        UpdateLayout();
+    }
+
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         if (_sprite is null || _previewRoot.Visibility != Visibility.Visible) return;

@@ -372,6 +372,15 @@ internal sealed class AnimatedImagePreviewPresenter
     public void SetActualSize()
         => SetZoom(1.0);
 
+    public void PanBy(double x, double y)
+    {
+        if (_image.Source is null)
+            return;
+        _panX += x;
+        _panY += y;
+        UpdateLayout();
+    }
+
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         if (_image.Source is null || _previewRoot.Visibility != Visibility.Visible)
