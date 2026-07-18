@@ -1627,7 +1627,6 @@ public sealed partial class MainWindow : Window
 
         bool wrap = TextWrappingPolicy.ShouldWrap(AppSettings.Current.TextWrapping, ready.TextFormat, ready.Markdown is not null);
         TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight), wrap);
-        TextLineNumbersButton.Visibility = _textPresenter.SupportsLineNumbers ? Visibility.Visible : Visibility.Collapsed;
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
@@ -2652,10 +2651,8 @@ public sealed partial class MainWindow : Window
 
     private void OnPreviewContentPointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        if (e.OriginalSource is not DependencyObject source)
-            return;
-
-        if (ImageFilmstrip.Visibility == Visibility.Visible && IsDescendantOrSelf(source, ImageFilmstrip))
+        if (ImageFilmstrip.Visibility == Visibility.Visible
+            && IsPointInside(e.GetCurrentPoint(ImageFilmstrip).Position, ImageFilmstrip))
         {
             _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
             if (_imageFilmstripScrollViewer is null)
@@ -2674,21 +2671,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (PreviewRoot.Visibility == Visibility.Visible && IsDescendantOrSelf(source, PreviewRoot))
+        if (PreviewRoot.Visibility == Visibility.Visible
+            && IsPointInside(e.GetCurrentPoint(PreviewRoot).Position, PreviewRoot))
             _rasterPresenter?.OnPointerWheelChanged(e);
-        else if (AnimatedImagePreviewRoot.Visibility == Visibility.Visible && IsDescendantOrSelf(source, AnimatedImagePreviewRoot))
+        else if (AnimatedImagePreviewRoot.Visibility == Visibility.Visible
+            && IsPointInside(e.GetCurrentPoint(AnimatedImagePreviewRoot).Position, AnimatedImagePreviewRoot))
             _animatedImagePresenter?.OnPointerWheelChanged(e);
     }
 
-    private static bool IsDescendantOrSelf(DependencyObject source, DependencyObject ancestor)
-    {
-        for (DependencyObject? current = source; current is not null; current = VisualTreeHelper.GetParent(current))
-        {
-            if (ReferenceEquals(current, ancestor))
-                return true;
-        }
-        return false;
-    }
+    private static bool IsPointInside(Windows.Foundation.Point point, FrameworkElement element)
+        => point.X >= 0 && point.Y >= 0 && point.X < element.ActualWidth && point.Y < element.ActualHeight;
 
     private void EndImageFilmstripDrag(Microsoft.UI.Xaml.Input.Pointer pointer)
     {
@@ -3408,6 +3400,4 @@ public sealed partial class MainWindow : Window
             ? themedPath
             : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
     }
-    private void TextLineNumbersButton_Click(object sender, RoutedEventArgs e)
-        => _textPresenter?.SetLineNumbersVisible(TextLineNumbersButton.IsChecked == true);
 }

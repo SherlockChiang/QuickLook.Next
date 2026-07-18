@@ -85,15 +85,21 @@ Require-Pattern $mainWindow 'shiftDown\s*&&\s*e\.Key\s+is\s+Windows\.System\.Vir
     "Image keyboard panning must remain available without replacing arrow-key sibling navigation."
 Require-Pattern $mainWindow 'PreviewContentHost\.AddHandler\([\s\S]*PointerWheelChangedEvent[\s\S]*handledEventsToo:\s*true' `
     "Preview wheel routing must receive events already handled by nested scroll viewers."
-Require-Pattern $mainWindow 'IsDescendantOrSelf\(source,\s*ImageFilmstrip\)' `
-    "Mouse wheel input over the image filmstrip must scroll preview entries."
+Require-Pattern $mainWindow 'IsPointInside\(e\.GetCurrentPoint\(ImageFilmstrip\)\.Position,\s*ImageFilmstrip\)' `
+    "Mouse wheel input over the image filmstrip must use geometric hit testing."
 $mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
 $mainWindowXamlText = Get-Content -LiteralPath $mainWindowXaml -Raw
-foreach ($removedControl in @("TextFindPanel", "TextSearchButton", "TextWordWrapButton")) {
+foreach ($removedControl in @("TextFindPanel", "TextSearchButton", "TextWordWrapButton", "TextLineNumbersButton")) {
     if ($mainWindowXamlText -match [regex]::Escape($removedControl)) {
         $failures.Add("Preview flyout must not restore the removed $removedControl control.")
     }
 }
+$pdfPresenter = Join-Path $Root "src/QuickLook.Next.App/PdfPreviewPresenter.cs"
+Require-Pattern $pdfPresenter 'targetPageWidth\s*=\s*Math\.Max\(320,\s*maxContent\.Width\s*-\s*32\)' `
+    "PDF pages must fit the available preview width instead of a fixed partial-width target."
+$textPreviewPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
+Require-Pattern $textPreviewPresenter 'private bool _showLineNumbers;' `
+    "Text preview line numbers must remain off by default after removing the flyout option."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

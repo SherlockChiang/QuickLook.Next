@@ -60,7 +60,7 @@ internal sealed class TextPreviewPresenter
     private bool _markdownRenderTruncated;
     private int _markdownSyntaxRunsRemaining;
     private bool _wrap;
-    private bool _showLineNumbers = true;
+    private bool _showLineNumbers;
     private TextLineIndex? _textLineIndex;
     private IReadOnlyList<TextLineItem>? _textLines;
     private MarkdownPresentation? _markdownPresentation;

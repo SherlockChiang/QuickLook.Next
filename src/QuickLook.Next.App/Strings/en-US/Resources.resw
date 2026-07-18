@@ -377,7 +377,6 @@
   <data name="ListingListView.AutomationProperties.Name" xml:space="preserve"><value>Preview listing</value></data>
   <data name="PreviousPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Previous PDF page</value></data>
   <data name="NextPdfPageButton.AutomationProperties.Name" xml:space="preserve"><value>Next PDF page</value></data>
-  <data name="TextLineNumbersButton.ToolTipService.ToolTip" xml:space="preserve"><value>Toggle line numbers</value></data>
   <data name="InfoTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show file information</value></data>
   <data name="ExifTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show EXIF information</value></data>
   <data name="MoreTabButton.AutomationProperties.Name" xml:space="preserve"><value>Show more preview actions</value></data>

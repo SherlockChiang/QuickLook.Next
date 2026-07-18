@@ -22,7 +22,6 @@ internal sealed class PdfPreviewPresenter
         Failed,
     }
 
-    private const double PageTargetWidth = 860;
     private const double PageSpacing = 16;
     private const double PagePanelTopPadding = 16;
     private const int OffscreenSurfaceCachePages = 5;
@@ -106,10 +105,9 @@ internal sealed class PdfPreviewPresenter
             pageWidth = geometries![0].Width;
             pageHeight = geometries[0].Height;
         }
-        double targetPageWidth = Math.Min(PageTargetWidth, Math.Max(320, maxContent.Width - 64));
-        double targetPageHeight = Math.Max(320, maxContent.Height - 96);
+        double targetPageWidth = Math.Max(320, maxContent.Width - 32);
         _scale = Math.Clamp(
-            Math.Min(targetPageWidth / pageWidth, targetPageHeight / pageHeight),
+            targetPageWidth / pageWidth,
             0.25,
             1.6);
         _pageDisplayWidths = new double[_pageCount];

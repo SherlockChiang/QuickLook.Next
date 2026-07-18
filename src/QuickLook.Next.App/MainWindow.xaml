@@ -377,28 +377,6 @@
                         </ListView.ItemTemplate>
                     </ListView>
 
-            <Border x:Name="TextToolbar"
-                    Grid.Row="1"
-                    Margin="0,12,24,0"
-                    Canvas.ZIndex="10"
-                    HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Background="{ThemeResource LayerFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8"
-                    Padding="4">
-                <StackPanel Orientation="Horizontal" Spacing="4">
-                    <ToggleButton x:Name="TextLineNumbersButton"
-                                  x:Uid="TextLineNumbersButton"
-                                  Visibility="Collapsed"
-                                  IsChecked="True"
-                                  ToolTipService.ToolTip="Toggle Line Numbers"
-                                  Padding="6" Background="Transparent" BorderThickness="0"
-                                  Click="TextLineNumbersButton_Click">
-                        <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
-                    </ToggleButton>
-                </StackPanel>
-            </Border>
         </Grid>
     </Border>
             <ScrollViewer x:Name="TableScrollViewer"
