@@ -52,6 +52,9 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: Release App build 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
   - Verification: Core 109/109; RasterHost integration 9/9 via MSBuild `VSTest`
   - Regression tests/guard: `4acc9e9`
+  - Accessibility/keyboard follow-up: `ad64ac3` adds RGB legend and intensity scale,
+    localized scope/viewer HelpText, and bounded `Shift+Arrow` panning without
+    replacing unmodified arrow-key sibling navigation.
   - Guard: `tools/guard-architecture.ps1` passed through static/native/image-corpus stages; final system-image smoke remained blocked by missing pinned SDK 10.0.301
   - Commit: `9321e68`
 
