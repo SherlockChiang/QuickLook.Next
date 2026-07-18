@@ -97,6 +97,16 @@ foreach ($removedControl in @("TextFindPanel", "TextSearchButton", "TextWordWrap
 $pdfPresenter = Join-Path $Root "src/QuickLook.Next.App/PdfPreviewPresenter.cs"
 Require-Pattern $pdfPresenter 'targetPageWidth\s*=\s*Math\.Max\(320,\s*maxContent\.Width\s*-\s*32\)' `
     "PDF pages must fit the available preview width instead of a fixed partial-width target."
+$pdfSession = Join-Path $Root "src/QuickLook.Next.RasterHost/PdfPreviewSession.cs"
+Require-Pattern $pdfSession 'ScaledWidth\s*=\s*targetW[\s\S]*ScaledHeight\s*=\s*targetH' `
+    "PDF stream decode must normalize high-DPI output to the requested surface size."
+Require-Pattern $pdfSession 'IsExpectedSize\(cached,\s*targetW,\s*targetH\)' `
+    "PDF caches must reject legacy high-DPI surfaces with mismatched dimensions."
+$inputHook = Join-Path $Root "src/QuickLook.Next.App/PreviewKeyboardHook.cs"
+Require-Pattern $inputHook 'WM_MOUSEWHEEL\s*=\s*0x020A' `
+    "Image wheel zoom must retain its HWND fallback for Composition surfaces."
+Require-Pattern $inputHook '_onMouseWheel\(delta,\s*point\.X,\s*point\.Y\)' `
+    "The HWND wheel hook must dispatch client coordinates to image presenters."
 $textPreviewPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPreviewPresenter 'private bool _showLineNumbers;' `
     "Text preview line numbers must remain off by default after removing the flyout option."

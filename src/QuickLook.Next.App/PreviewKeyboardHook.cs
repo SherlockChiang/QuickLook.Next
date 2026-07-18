@@ -11,6 +11,7 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private const uint WM_KEYUP = 0x0101;
     private const uint WM_SYSKEYDOWN = 0x0104;
     private const uint WM_SYSKEYUP = 0x0105;
+    private const uint WM_MOUSEWHEEL = 0x020A;
     private const int VK_SPACE = 0x20;
     private const int VK_SHIFT = 0x10;
     private const int VK_CONTROL = 0x11;
@@ -19,17 +20,23 @@ internal sealed class PreviewKeyboardHook : IDisposable
     private readonly nint _hwnd;
     private readonly Func<bool> _shouldHandleSpace;
     private readonly Action _onSpace;
+    private readonly Func<int, int, int, bool> _onMouseWheel;
     private readonly SUBCLASSPROC _subclassProc;
     private readonly nuint _subclassId;
     private bool _installed;
     private bool _disposed;
     private bool _spaceDownHandled;
 
-    public PreviewKeyboardHook(nint hwnd, Func<bool> shouldHandleSpace, Action onSpace)
+    public PreviewKeyboardHook(
+        nint hwnd,
+        Func<bool> shouldHandleSpace,
+        Action onSpace,
+        Func<int, int, int, bool> onMouseWheel)
     {
         _hwnd = hwnd;
         _shouldHandleSpace = shouldHandleSpace;
         _onSpace = onSpace;
+        _onMouseWheel = onMouseWheel;
         _subclassProc = WndProc;
         _subclassId = (nuint)GetHashCode();
         _installed = SetWindowSubclass(_hwnd, _subclassProc, _subclassId, nint.Zero);
@@ -52,6 +59,18 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     private nint WndProc(nint hwnd, uint msg, nint wParam, nint lParam, nuint subclassId, nint refData)
     {
+        if (msg == WM_MOUSEWHEEL)
+        {
+            int delta = unchecked((short)((wParam.ToInt64() >> 16) & 0xFFFF));
+            var point = new POINT
+            {
+                X = unchecked((short)(lParam.ToInt64() & 0xFFFF)),
+                Y = unchecked((short)((lParam.ToInt64() >> 16) & 0xFFFF)),
+            };
+            if (delta != 0 && ScreenToClient(hwnd, ref point) && _onMouseWheel(delta, point.X, point.Y))
+                return 0;
+        }
+
         if ((msg == WM_KEYUP || msg == WM_SYSKEYUP) && wParam == VK_SPACE)
             _spaceDownHandled = false;
 
@@ -86,6 +105,13 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     private delegate nint SUBCLASSPROC(nint hWnd, uint uMsg, nint wParam, nint lParam, nuint uIdSubclass, nint dwRefData);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("comctl32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetWindowSubclass(nint hWnd, SUBCLASSPROC pfnSubclass, nuint uIdSubclass, nint dwRefData);
@@ -99,4 +125,8 @@ internal sealed class PreviewKeyboardHook : IDisposable
 
     [DllImport("user32.dll")]
     private static extern short GetKeyState(int nVirtKey);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(nint hWnd, ref POINT lpPoint);
 }

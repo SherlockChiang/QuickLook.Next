@@ -64,8 +64,8 @@ public sealed class RasterHostPdfTests
             await channel.SendAsync(new PreviewPageOpen(requestId, 0, 2, 1), timeout.Token);
             var surface = Assert.IsType<PreviewSurface>(await ReceiveUntilAsync<PreviewSurface>(channel, timeout.Token));
             Assert.Equal((requestId, 0, 2L), (surface.RequestId, surface.PageIndex, surface.PageGeneration));
-            Assert.InRange(surface.Width, 1u, 2200u);
-            Assert.InRange(surface.Height, 1u, 2200u);
+            Assert.Equal(400u, surface.Width);
+            Assert.Equal(267u, surface.Height);
             using (var localSurface = new Microsoft.Win32.SafeHandles.SafeFileHandle(
                 WindowsHandleTransfer.DuplicateHandleFromProcess(host.SafeHandle, surface.SharedHandle), ownsHandle: true))
                 Assert.False(localSurface.IsInvalid);

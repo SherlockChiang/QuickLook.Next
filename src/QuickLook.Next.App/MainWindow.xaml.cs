@@ -303,7 +303,8 @@ public sealed partial class MainWindow : Window
         _previewKeyboardHook = new PreviewKeyboardHook(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ShouldHandleSpaceAsPreviewClose,
-            ClosePreviewFromKeyboard);
+            ClosePreviewFromKeyboard,
+            OnWindowMouseWheel);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
         PreviewContentHost.SizeChanged += OnPreviewContentHostSizeChanged;
@@ -2681,6 +2682,44 @@ public sealed partial class MainWindow : Window
 
     private static bool IsPointInside(Windows.Foundation.Point point, FrameworkElement element)
         => point.X >= 0 && point.Y >= 0 && point.X < element.ActualWidth && point.Y < element.ActualHeight;
+
+    private bool OnWindowMouseWheel(int delta, int clientPixelX, int clientPixelY)
+    {
+        double scale = RasterizationScale;
+        var rootPoint = new Windows.Foundation.Point(clientPixelX / scale, clientPixelY / scale);
+
+        if (ImageFilmstrip.Visibility == Visibility.Visible && TryGetPointInElement(rootPoint, ImageFilmstrip, out _))
+        {
+            _imageFilmstripScrollViewer ??= FindDescendant<ScrollViewer>(ImageFilmstripList);
+            if (_imageFilmstripScrollViewer is not { } scrollViewer)
+                return false;
+            scrollViewer.ChangeView(scrollViewer.HorizontalOffset - delta, null, null, disableAnimation: false);
+            return true;
+        }
+
+        if (PreviewRoot.Visibility == Visibility.Visible && TryGetPointInElement(rootPoint, PreviewRoot, out var imagePoint))
+        {
+            _rasterPresenter?.OnMouseWheel(delta, imagePoint);
+            return _rasterPresenter?.HasSurface == true;
+        }
+        if (AnimatedImagePreviewRoot.Visibility == Visibility.Visible
+            && TryGetPointInElement(rootPoint, AnimatedImagePreviewRoot, out imagePoint))
+        {
+            _animatedImagePresenter?.OnMouseWheel(delta, imagePoint);
+            return _animatedImagePresenter?.HasImage == true;
+        }
+        return false;
+    }
+
+    private bool TryGetPointInElement(
+        Windows.Foundation.Point rootPoint,
+        FrameworkElement element,
+        out Windows.Foundation.Point elementPoint)
+    {
+        Windows.Foundation.Point origin = element.TransformToVisual(RootGrid).TransformPoint(default);
+        elementPoint = new Windows.Foundation.Point(rootPoint.X - origin.X, rootPoint.Y - origin.Y);
+        return IsPointInside(elementPoint, element);
+    }
 
     private void EndImageFilmstripDrag(Microsoft.UI.Xaml.Input.Pointer pointer)
     {

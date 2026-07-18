@@ -462,8 +462,15 @@ internal sealed class AnimatedImagePreviewPresenter
         if (delta == 0)
             return;
 
-        ZoomAt(delta > 0 ? 1.15 : 1.0 / 1.15, point.Position);
+        OnMouseWheel(delta, point.Position);
         e.Handled = true;
+    }
+
+    public void OnMouseWheel(int delta, Windows.Foundation.Point point)
+    {
+        if (_image.Source is null || delta == 0)
+            return;
+        ZoomAt(delta > 0 ? 1.15 : 1.0 / 1.15, point);
     }
 
     public void OnDoubleTapped(Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)

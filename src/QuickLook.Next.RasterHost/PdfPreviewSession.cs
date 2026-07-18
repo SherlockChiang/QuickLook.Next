@@ -370,8 +370,9 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         uint targetH = Math.Max(1, (uint)Math.Round(pageSize.Height * targetScale));
 
         string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
-        if (TryGetCached(cacheKey, out var cached)) return cached;
-        if (TryGetDiskCached(cacheKey, out cached))
+        if (TryGetCached(cacheKey, out var cached) && IsExpectedSize(cached, targetW, targetH))
+            return cached;
+        if (TryGetDiskCached(cacheKey, out cached) && IsExpectedSize(cached, targetW, targetH))
         {
             StoreCached(cacheKey, cached.Bgra, cached.Width, cached.Height, writeDisk: false);
             return cached;
@@ -384,6 +385,11 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
         return rendered;
     }
+
+    private static bool IsExpectedSize((byte[] Bgra, int Width, int Height) raster, uint width, uint height)
+        => raster.Width == width
+            && raster.Height == height
+            && raster.Bgra.Length == checked((long)width * height * 4);
 
     private async Task<(byte[] Bgra, int Width, int Height)> RenderPageCoreAsync(
         int pageIndex,
@@ -413,14 +419,19 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
             PixelDataProvider pixels = await decoder.GetPixelDataAsync(
                 BitmapPixelFormat.Bgra8,
                 BitmapAlphaMode.Premultiplied,
-                new BitmapTransform(),
+                new BitmapTransform
+                {
+                    ScaledWidth = targetW,
+                    ScaledHeight = targetH,
+                    InterpolationMode = BitmapInterpolationMode.Fant,
+                },
                 ExifOrientationMode.IgnoreExifOrientation,
                 ColorManagementMode.DoNotColorManage);
 
             byte[] bgra = pixels.DetachPixelData();
             decodeWatch.Stop();
             DiagLog.Write("RasterHost", $"pdf page bitmap decode {decodeWatch.ElapsedMilliseconds}ms; page={pageIndex}; bytes={bgra.Length}; path={Path}");
-            return (bgra, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+            return (bgra, checked((int)targetW), checked((int)targetH));
         }
         finally
         {
