@@ -126,6 +126,8 @@ cargo build --release --locked --manifest-path native/quicklook_next_native/Carg
 dotnet build QuickLook.Next.slnx -c Release --no-restore
 dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 .\tools\pack-msix.ps1 -CreateDevelopmentCertificate
+# Or set an explicit four-part MSIX identity version:
+.\tools\pack-msix.ps1 -Version 1.4.0.0 -CreateDevelopmentCertificate
 ```
 
 The Installer ZIP, signed MSIX, certificate, and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging. Development certificates are for testing only; Store releases will use the Partner Center identity.

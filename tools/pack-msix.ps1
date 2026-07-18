@@ -1,4 +1,5 @@
 param(
+    [string]$Version = "",
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
     [string]$CertificatePath = "",
@@ -11,15 +12,30 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $versionFile = Join-Path $root "VERSION"
-if (-not $VersionPrefix) { $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
-if ($VersionPrefix -notmatch '^\d+\.\d+\.\d+$') { throw "VersionPrefix must use X.Y.Z format." }
+if ($Version -and ($VersionPrefix -or $VersionSuffix)) {
+    throw "Version cannot be combined with VersionPrefix or VersionSuffix."
+}
+if ($Version) {
+    if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Version must use X.Y.Z.W format." }
+    $versionParts = @($Version.Split('.') | ForEach-Object { [int]$_ })
+    if ($versionParts.Where({ $_ -lt 0 -or $_ -gt 65535 }).Count -ne 0) {
+        throw "Each Version component must be between 0 and 65535."
+    }
+    $VersionPrefix = $versionParts[0..2] -join '.'
+    $numericVersion = $Version
+    $packageVersion = $Version
+}
+else {
+    if (-not $VersionPrefix) { $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
+    if ($VersionPrefix -notmatch '^\d+\.\d+\.\d+$') { throw "VersionPrefix must use X.Y.Z format." }
+    $numericVersion = "$VersionPrefix.0"
+    $packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else { $VersionPrefix }
+}
 
 $artifacts = Join-Path $root "artifacts"
 $msixRoot = Join-Path $root "msix"
 $installerRoot = Join-Path $root "installer"
 $manifestTemplate = Join-Path $root "packaging\AppxManifest.xml"
-$numericVersion = "$VersionPrefix.0"
-$packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else { $VersionPrefix }
 $msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
 $installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
 $installScript = Join-Path $root "packaging\Install.ps1"

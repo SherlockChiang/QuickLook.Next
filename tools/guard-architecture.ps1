@@ -397,6 +397,11 @@ if (Test-Path $performanceBoundsGuard) {
     & $performanceBoundsGuard -Root $Root
 }
 
+$packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
+if (Test-Path $packMsixVersionTest) {
+    & $packMsixVersionTest -Root $Root
+}
+
 $formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
 if (Test-Path $formatRegistryGuard) {
     & $formatRegistryGuard -Root $Root

@@ -126,6 +126,8 @@ cargo build --release --locked --manifest-path native/quicklook_next_native/Carg
 dotnet build QuickLook.Next.slnx -c Release --no-restore
 dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 .\tools\pack-msix.ps1 -CreateDevelopmentCertificate
+# 或显式指定四段式 MSIX 标识版本：
+.\tools\pack-msix.ps1 -Version 1.4.0.0 -CreateDevelopmentCertificate
 ```
 
 Installer ZIP、已签名 MSIX、证书和校验文件会生成到 `artifacts/`，打包过程同时运行架构和图片语料守卫。开发证书仅用于测试；商店版本将改用 Partner Center 身份。
