@@ -14,7 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
-    <ProjectReference Include="..\..\src\QuickLook.Next.RasterHost\QuickLook.Next.RasterHost.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\QuickLook.Next.RasterHost\QuickLook.Next.RasterHost.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\testdata\image-corpus\external\gif-disposal-background.gif"

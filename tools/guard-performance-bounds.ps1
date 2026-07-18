@@ -30,6 +30,23 @@ Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAMES:\s*usize\s*=\s*120' `
 Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_BYTES:\s*usize\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
     "Animated frame packets must remain capped at 64 MiB."
 
+$imageWaveform = Join-Path $Root "src/QuickLook.Next.RasterHost/ImageWaveformBuilder.cs"
+Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `
+    "Image waveforms must retain their fixed 192-column budget."
+Require-Pattern $imageWaveform 'ScopeHeight\s*=\s*96' `
+    "Image waveforms must retain their fixed 96-row budget."
+Require-Pattern $imageWaveform '1_000_000d' `
+    "Image waveform generation must retain its one-million-sample ceiling."
+$waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
+Require-Pattern $waveformPresenter 'RgbDensity\.Length\s*!=\s*checked\(planeLength\s*\*\s*3\)' `
+    "Image waveform presentation must reject malformed channel payloads."
+$rasterPresenter = Join-Path $Root "src/QuickLook.Next.App/RasterPreviewPresenter.cs"
+Require-Pattern $rasterPresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
+    "Static image wheel zoom must remain anchored at the pointer."
+$animatedImagePresenter = Join-Path $Root "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs"
+Require-Pattern $animatedImagePresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
+    "Animated image wheel zoom must remain anchored at the pointer."
+
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
 Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `
     "Office preview must retain its bounded 16-page model."
@@ -48,6 +65,10 @@ Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
     "Preview reset must release retained Office layout state."
+Require-Pattern $mainWindow 'PreviewRoot\.PointerCanceled\s*\+=' `
+    "Static image drag must recover from pointer cancellation."
+Require-Pattern $mainWindow 'AnimatedImagePreviewRoot\.PointerCaptureLost\s*\+=' `
+    "Animated image drag must recover from pointer capture loss."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
