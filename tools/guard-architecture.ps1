@@ -402,6 +402,11 @@ if (Test-Path $packMsixVersionTest) {
     & $packMsixVersionTest -Root $Root
 }
 
+$packReleaseFailFastTest = Join-Path $PSScriptRoot "test-pack-release-failfast.ps1"
+if (Test-Path $packReleaseFailFastTest) {
+    & $packReleaseFailFastTest -Root $Root
+}
+
 $formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
 if (Test-Path $formatRegistryGuard) {
     & $formatRegistryGuard -Root $Root

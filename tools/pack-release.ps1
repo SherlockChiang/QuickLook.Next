@@ -14,6 +14,14 @@ $tfm  = "net10.0-windows10.0.19041.0\win-x64"
 $versionFile = Join-Path $root "VERSION"
 $artifacts = if ($ArtifactsDirectory) { $ArtifactsDirectory } else { Join-Path $root "artifacts" }
 
+$globalJsonPath = Join-Path $root "global.json"
+$requiredSdk = (Get-Content -LiteralPath $globalJsonPath -Raw | ConvertFrom-Json).sdk.version
+$installedSdks = @(dotnet --list-sdks 2>$null | ForEach-Object { ($_ -split '\s+')[0] })
+if ($LASTEXITCODE -ne 0) { throw "Could not enumerate installed .NET SDKs." }
+if ($installedSdks -notcontains $requiredSdk) {
+    throw "Release packaging requires .NET SDK $requiredSdk from global.json. Installed SDKs: $($installedSdks -join ', '). Install $requiredSdk before packaging; release builds do not roll forward to another SDK."
+}
+
 if (-not $VersionPrefix -and (Test-Path $versionFile)) {
     $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim()
 }
@@ -24,6 +32,7 @@ if ($VersionPrefix -and $VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
 
 Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
 cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
 Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
 $rasterHostRelease = Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release"
@@ -40,6 +49,7 @@ if ($VersionSuffix) {
     $buildArgs += "/p:VersionSuffix=$VersionSuffix"
 }
 dotnet @buildArgs
+if ($LASTEXITCODE -ne 0) { throw "Release solution build failed." }
 
 Write-Host "== assembling dist ==" -ForegroundColor Cyan
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
@@ -47,9 +57,12 @@ New-Item -ItemType Directory -Force "$dist\RasterHost" | Out-Null
 New-Item -ItemType Directory -Force "$dist\ParserHost" | Out-Null
 
 function Copy-Clean($src, $dst) {
+    if (-not (Test-Path -LiteralPath $src -PathType Container)) {
+        throw "Release build output is missing: $src"
+    }
     New-Item -ItemType Directory -Force $dst | Out-Null
-    Get-ChildItem $src -File | Where-Object { $_.Extension -ne ".pdb" } | ForEach-Object { Copy-Item $_.FullName $dst -Force }
-    Get-ChildItem $src -Directory | ForEach-Object { Copy-Item $_.FullName -Destination $dst -Recurse -Force }
+    Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -ne ".pdb" } | ForEach-Object { Copy-Item $_.FullName $dst -Force }
+    Get-ChildItem -LiteralPath $src -Directory | ForEach-Object { Copy-Item $_.FullName -Destination $dst -Recurse -Force }
 }
 
 Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
