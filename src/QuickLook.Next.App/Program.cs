@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 
@@ -9,10 +10,12 @@ namespace QuickLook.Next.App;
 public static class Program
 {
     private static Mutex? _singleInstanceMutex;
+    private static readonly nint DpiAwarenessContextPerMonitorAwareV2 = new(-4);
 
     [STAThread]
     private static void Main(string[] args)
     {
+        _ = SetProcessDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
         AppStartupTiming.Start();
         if (args is ["--restricted-host-probe-child"])
         {
@@ -70,4 +73,8 @@ public static class Program
             new App();
         });
     }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetProcessDpiAwarenessContext(nint value);
 }

@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:QuickLook.Next.App">
     <!-- Transparent root so the window's Mica/Acrylic backdrop shows through (margins & image letterbox). -->
-    <Grid x:Name="RootGrid" Background="Transparent">
+    <Grid x:Name="RootGrid" Background="Transparent" UseLayoutRounding="True">
         <Grid.Resources>
             <ResourceDictionary>
                 <Style x:Key="ListingHeaderButtonStyle" TargetType="Button">

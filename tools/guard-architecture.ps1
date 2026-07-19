@@ -297,6 +297,31 @@ if (Test-Path $rasterHostRoot) {
     }
 }
 
+$appManifestPath = Join-Path $Root "src/QuickLook.Next.App/app.manifest"
+$appProjectPath = Join-Path $Root "src/QuickLook.Next.App/QuickLook.Next.App.csproj"
+$programPath = Join-Path $Root "src/QuickLook.Next.App/Program.cs"
+$mainWindowXamlPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
+if (-not (Test-Path -LiteralPath $appManifestPath) -or
+    (Get-Content -LiteralPath $appManifestPath -Raw) -notmatch 'PerMonitorV2,\s*PerMonitor') {
+    Add-Failure "App executable manifest must declare Per-Monitor V2 DPI awareness"
+}
+if (-not (Test-Path -LiteralPath $appProjectPath) -or
+    (Get-Content -LiteralPath $appProjectPath -Raw) -notmatch '<ApplicationManifest>app\.manifest</ApplicationManifest>') {
+    Add-Failure "App project must embed the DPI-aware executable manifest"
+}
+if (-not (Test-Path -LiteralPath $programPath) -or
+    (Get-Content -LiteralPath $programPath -Raw) -notmatch 'SetProcessDpiAwarenessContext\(DpiAwarenessContextPerMonitorAwareV2\)') {
+    Add-Failure "Custom App startup must set Per-Monitor V2 awareness before WinUI initialization"
+}
+if (-not (Test-Path -LiteralPath $mainWindowXamlPath) -or
+    (Get-Content -LiteralPath $mainWindowXamlPath -Raw) -notmatch 'x:Name="RootGrid"[^>]*UseLayoutRounding="True"') {
+    Add-Failure "Main window root must align layout to physical pixels"
+}
+if (-not (Test-Path -LiteralPath $mainWindowPath) -or
+    (Get-Content -LiteralPath $mainWindowPath -Raw) -notmatch 'xamlRoot\.Changed\s*\+=\s*OnXamlRootChanged') {
+    Add-Failure "Main window must relayout when monitor DPI changes"
+}
+
 # Rule 8: every supported locale must define the same resource keys.
 $englishResources = Join-Path $Root "src\QuickLook.Next.App\Strings\en-US\Resources.resw"
 $chineseResources = Join-Path $Root "src\QuickLook.Next.App\Strings\zh-CN\Resources.resw"

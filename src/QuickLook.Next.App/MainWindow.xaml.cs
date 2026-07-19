@@ -338,6 +338,11 @@ public sealed partial class MainWindow : Window
             UIElement.PointerWheelChangedEvent,
             new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPreviewContentPointerWheelChanged),
             handledEventsToo: true);
+        RootGrid.Loaded += (_, _) =>
+        {
+            if (RootGrid.XamlRoot is { } xamlRoot)
+                xamlRoot.Changed += OnXamlRootChanged;
+        };
         Closed += (_, _) =>
         {
             _lifetimeCts.Cancel();
@@ -1226,6 +1231,14 @@ public sealed partial class MainWindow : Window
         bool wasCompact = e.PreviousSize.Width is > 0 and < CompactRasterChromeWidth;
         bool isCompact = e.NewSize.Width < CompactRasterChromeWidth;
         if (wasCompact != isCompact)
+            ApplyRasterChromeLayout();
+    }
+
+    private void OnXamlRootChanged(Microsoft.UI.Xaml.XamlRoot sender, Microsoft.UI.Xaml.XamlRootChangedEventArgs args)
+    {
+        _rasterPresenter?.UpdateLayout();
+        _animatedImagePresenter?.ScheduleLayoutUpdate();
+        if (_isRasterChromeEnabled)
             ApplyRasterChromeLayout();
     }
 
