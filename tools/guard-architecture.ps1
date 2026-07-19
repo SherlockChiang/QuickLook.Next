@@ -432,6 +432,11 @@ if (Test-Path $packReleaseFailFastTest) {
     & $packReleaseFailFastTest -Root $Root
 }
 
+$taskbarIconAssetTest = Join-Path $PSScriptRoot "test-taskbar-icon-assets.ps1"
+if (Test-Path $taskbarIconAssetTest) {
+    & $taskbarIconAssetTest -Root $Root
+}
+
 $formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
 if (Test-Path $formatRegistryGuard) {
     & $formatRegistryGuard -Root $Root
