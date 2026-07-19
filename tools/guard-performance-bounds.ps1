@@ -155,18 +155,16 @@ Require-Pattern $textPresenter 'ScrollIntoView\(_markdownItems\[item\.ItemIndex\
     "Markdown outline navigation must use stable render-item indices."
 Require-Pattern $textPresenter 'public sealed record MarkdownListItem\(MarkdownRenderItem Item\)' `
     "Virtual Markdown item models must remain data-only."
-Require-Pattern $textPresenter '_textListView\.ItemsSource\s*=\s*result\.Lines' `
-    "Code and plain text must use virtualized ListView rows."
-Require-Pattern $textPresenter 'ContainerContentChanging\s*\+=' `
-    "Virtual text rows must materialize only through realized containers."
-Require-Pattern $textPresenter 'MaxVirtualLineRuns\s*=\s*512' `
-    "Each realized virtual text row must retain its 512-run budget."
-Require-Pattern $textPresenter 'ScrollIntoView\(_textLines\[lineIndex\]' `
-    "Virtual text search must navigate to the exact indexed line."
-Require-Pattern $textPresenter 'public sealed record TextLineItem\(int LineNumber, int Start, string Text, IReadOnlyList<TextLineToken> Tokens\)' `
-    "Virtual text line models must remain data-only."
-if ((Get-Content -LiteralPath $textPresenter -Raw) -match 'TextLineItem[\s\S]{0,200}object\?\s+Content') {
-    $failures.Add("Virtual text line models must not retain pre-created UI content.")
+Require-Pattern $textPresenter '_scrollViewer\.Visibility\s*=\s*!isStructuredMarkdown\s*\?\s*Visibility\.Visible' `
+    "Plain text must use one continuous scrollable document surface."
+Require-Pattern $textPresenter 'else\s*\r?\n\s*_\s*=\s*RenderCodeOrPlainTextAsync\(text' `
+    "Plain text must render as a continuous selectable document, not ListView rows."
+Require-Pattern $textPresenter 'paragraph\.Inlines\.Add\(new Run \{ Text = code \}\)' `
+    "Plain text must retain the complete bounded payload when syntax highlighting is disabled."
+$mainWindowText = Get-Content -LiteralPath $mainWindow -Raw
+if ($mainWindowText -notmatch 'MaxTextWindowWidth\s*=\s*1440' -or
+    $mainWindowText -notmatch 'MaxTextWindowHeight\s*=\s*1000') {
+    $failures.Add("Text previews must retain expanded multi-resolution window bounds.")
 }
 
 $tablePresenter = Join-Path $Root "src/QuickLook.Next.App/TablePreviewPresenter.cs"

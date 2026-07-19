@@ -32,8 +32,8 @@ public sealed partial class MainWindow : Window
     private const double MaxImageWindowHeight = 900;
     private const double MaxPdfWindowWidth = 1040;
     private const double MaxPdfWindowHeight = 900;
-    private const double MaxTextWindowWidth = 1100;
-    private const double MaxTextWindowHeight = 860;
+    private const double MaxTextWindowWidth = 1440;
+    private const double MaxTextWindowHeight = 1000;
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 162;
     private const double CompactRasterChromeWidth = 720;

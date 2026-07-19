@@ -134,13 +134,14 @@ internal sealed class TextPreviewPresenter
 
         _wrap = wrap;
         bool isStructuredMarkdown = ready.Markdown is not null;
-        _scrollViewer.Visibility = isMarkdown && !isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
-        _textListView.Visibility = isMarkdown ? Visibility.Collapsed : Visibility.Visible;
+        _scrollViewer.Visibility = !isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
+        _textListView.Visibility = Visibility.Collapsed;
         _markdownListView.Visibility = isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
         
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
         _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        _textBlock.MaxWidth = isMarkdown ? 980 : Math.Max(1, maxContent.Width - 48);
 
         try
         {
@@ -149,7 +150,7 @@ internal sealed class TextPreviewPresenter
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
             else
-                _ = RenderVirtualTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
+                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
         }
         catch (Exception ex)
         {
@@ -163,14 +164,14 @@ internal sealed class TextPreviewPresenter
             }
             else
             {
-                _ = RenderVirtualTextAsync(text, "text", renderVersion);
+                _scrollViewer.Visibility = Visibility.Visible;
+                _textListView.Visibility = Visibility.Collapsed;
+                _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
             }
         }
 
         ApplyOutlineVisibility();
-        FrameworkElement focusTarget = isStructuredMarkdown
-            ? _markdownListView
-            : isMarkdown ? _textBlock : _textListView;
+        FrameworkElement focusTarget = isStructuredMarkdown ? _markdownListView : _textBlock;
         focusTarget.Focus(FocusState.Programmatic);
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         if (_outlineItems.Count > 0)
@@ -1288,7 +1289,6 @@ internal sealed class TextPreviewPresenter
         string[] lines = text.Length == 0 ? [""] : NormalizeLines(text);
         int lineCount = Math.Max(1, lines.Length);
         int maxLineLength = lines
-            .Take(500)
             .Select(line => line.Length)
             .DefaultIfEmpty(0)
             .Max();
@@ -1298,21 +1298,14 @@ internal sealed class TextPreviewPresenter
         double charWidth = code ? 8.2 : 7.2;
         double lineHeight = code ? 20 : 22;
 
-        double width;
+        double width = Math.Clamp(maxLineLength * charWidth + 96, markdown ? 620 : 460, maxContent.Width);
+        int visualLineCount = lineCount;
         if (wrap)
         {
-            double contentWeight = Math.Sqrt(Math.Min(text.Length, MaxHighlightedChars));
-            width = 500 + Math.Min(360, contentWeight * 8);
-            if (markdown)
-                width = Math.Max(width, 620);
+            int charsPerLine = Math.Max(1, (int)((width - 64) / charWidth));
+            visualLineCount = lines.Sum(line => Math.Max(1, (line.Length + charsPerLine - 1) / charsPerLine));
         }
-        else
-        {
-            width = Math.Min(980, Math.Max(520, Math.Min(maxLineLength, 120) * charWidth + 96));
-        }
-
-        int desiredLines = lineCount <= 12 ? lineCount : Math.Min(lineCount, code ? 30 : 26);
-        double height = desiredLines * lineHeight + (markdown ? 120 : 96);
+        double height = visualLineCount * lineHeight + (markdown ? 120 : 96);
 
         return (
             Math.Clamp(width, 460, maxContent.Width),
@@ -1458,18 +1451,7 @@ internal sealed class TextPreviewPresenter
         if (noHighlight)
         {
             paragraph.Foreground = BrushFor(TokenKind.Default);
-            if (code.Length > MaxHighlightedChars)
-            {
-                paragraph.Inlines.Add(new Run
-                {
-                    Text = code[..MaxHighlightedChars]
-                        + "\n\n" + UiStrings.Format(UiStrings.SyntaxHighlightingCharacterLimitFormat, MaxHighlightedChars),
-                });
-            }
-            else
-            {
-                paragraph.Inlines.Add(new Run { Text = code });
-            }
+            paragraph.Inlines.Add(new Run { Text = code });
         }
         else
         {
