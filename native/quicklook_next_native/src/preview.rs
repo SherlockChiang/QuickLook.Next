@@ -13440,11 +13440,81 @@ fn decode_android_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> 
     if bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'<') {
         return std::str::from_utf8(bytes).ok().map(str::to_owned);
     }
-    let resource_bytes = resources?.to_vec();
-    let xml_bytes = bytes.to_vec();
-    let buffered = abxml::decoder::BufferedDecoder::from(resource_bytes);
-    let decoder = buffered.get_decoder().ok()?;
-    decoder.xml_visitor(&xml_bytes).ok()?.into_string().ok()
+    decode_android_binary_xml(bytes, resources)
+}
+
+fn decode_android_binary_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> {
+    let (document_type, header_size, _) = android_chunk_header(bytes, 0)?;
+    if document_type != 0x0003 { return None; }
+    let string_pool_offset = android_find_chunk(bytes, header_size, 0x0001)?;
+    let strings = android_string_pool(bytes, string_pool_offset)?;
+    let (_, _, string_pool_size) = android_chunk_header(bytes, string_pool_offset)?;
+    let mut offset = string_pool_offset + string_pool_size;
+    let mut xml = String::new();
+    while offset < bytes.len() {
+        let (chunk_type, chunk_header, chunk_size) = android_chunk_header(bytes, offset)?;
+        match chunk_type {
+            0x0102 if chunk_header >= 16 && chunk_size >= 36 => {
+                let name = android_u32(bytes, offset + 20)
+                    .and_then(|index| strings.get(index as usize))?;
+                let attribute_start = android_u16(bytes, offset + 24)? as usize;
+                let attribute_size = android_u16(bytes, offset + 26)? as usize;
+                let attribute_count = android_u16(bytes, offset + 28)? as usize;
+                if attribute_size < 20 || attribute_count > 4096 { return None; }
+                xml.push('<');
+                xml.push_str(name);
+                let attributes = offset.checked_add(16 + attribute_start)?;
+                for index in 0..attribute_count {
+                    let attribute = attributes.checked_add(index.checked_mul(attribute_size)?)?;
+                    if attribute.checked_add(20)? > offset + chunk_size { return None; }
+                    let key = android_u32(bytes, attribute + 4)
+                        .and_then(|value| strings.get(value as usize))?;
+                    let raw = android_u32(bytes, attribute + 8)?;
+                    let value_type = *bytes.get(attribute + 15)?;
+                    let data = android_u32(bytes, attribute + 16)?;
+                    let value = if raw != u32::MAX {
+                        strings.get(raw as usize)?.clone()
+                    } else {
+                        android_typed_value(value_type, data, &strings, resources)?
+                    };
+                    xml.push(' ');
+                    xml.push_str(key);
+                    xml.push_str("=\"");
+                    xml.push_str(&xml_escape(&value));
+                    xml.push('"');
+                }
+                xml.push('>');
+            }
+            0x0103 if chunk_header >= 16 => {
+                let name = android_u32(bytes, offset + 20)
+                    .and_then(|index| strings.get(index as usize))?;
+                xml.push_str("</");
+                xml.push_str(name);
+                xml.push('>');
+            }
+            _ => {}
+        }
+        offset = offset.checked_add(chunk_size)?;
+    }
+    (!xml.is_empty()).then_some(xml)
+}
+
+fn android_typed_value(
+    value_type: u8,
+    data: u32,
+    strings: &[String],
+    resources: Option<&[u8]>,
+) -> Option<String> {
+    match value_type {
+        0x01 => Some(resources
+            .and_then(|table| android_resource_reference_by_id(table, data))
+            .unwrap_or_else(|| format!("@0x{data:08x}"))),
+        0x03 => strings.get(data as usize).cloned(),
+        0x10 => Some(data.to_string()),
+        0x12 => Some(if data == 0 { "false" } else { "true" }.to_string()),
+        0x1c..=0x1f => Some(format!("#{data:08x}")),
+        _ => Some(data.to_string()),
+    }
 }
 
 fn android_manifest_icon_reference(xml: &str) -> Option<String> {
@@ -13490,6 +13560,9 @@ fn load_android_resource_image(
             let resolved = match value {
                 AndroidResourceValue::Path(path) => load_android_archive_image(zip, resources, &path, depth, cancel_cb),
                 AndroidResourceValue::Color(color) => Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color))),
+                AndroidResourceValue::Reference(reference) => {
+                    load_android_resource_image(zip, resources, &reference, depth + 1, cancel_cb)
+                }
             };
             if resolved.is_some() {
                 return resolved;
@@ -13525,6 +13598,61 @@ fn load_android_archive_image(
 enum AndroidResourceValue {
     Path(String),
     Color(Rgba<u8>),
+    Reference(String),
+}
+
+fn android_resource_reference_by_id(table: &[u8], resource_id: u32) -> Option<String> {
+    let wanted_package = (resource_id >> 24) as u8;
+    let wanted_type = ((resource_id >> 16) & 0xff) as u8;
+    let wanted_entry = (resource_id & 0xffff) as usize;
+    let mut offset = 12usize;
+    while let Some((chunk_type, header_size, chunk_size)) = android_chunk_header(table, offset) {
+        if chunk_type == 0x0200 && header_size >= 284 {
+            let package_id = android_u32(table, offset + 8)? as u8;
+            if package_id == wanted_package {
+                let type_strings = android_u32(table, offset + 268)
+                    .and_then(|value| android_string_pool(table, offset + value as usize))?;
+                let key_strings = android_u32(table, offset + 276)
+                    .and_then(|value| android_string_pool(table, offset + value as usize))?;
+                let type_name = wanted_type.checked_sub(1)
+                    .and_then(|index| type_strings.get(index as usize))?;
+                let end = offset + chunk_size;
+                let mut child = offset + header_size;
+                while child < end {
+                    let (child_type, child_header, child_size) = android_chunk_header(table, child)?;
+                    if child_type == 0x0201 && table.get(child + 8).copied() == Some(wanted_type) {
+                        let count = android_u32(table, child + 12)? as usize;
+                        if wanted_entry < count {
+                            let entries_start = child + android_u32(table, child + 16)? as usize;
+                            let offsets_start = child + child_header;
+                            let sparse = table.get(child + 9).copied().unwrap_or(0) & 0x01 != 0;
+                            let relative = if sparse {
+                                let offset_count = entries_start.saturating_sub(offsets_start) / 4;
+                                (0..offset_count).find_map(|index| {
+                                    let at = offsets_start + index * 4;
+                                    if android_u16(table, at)? as usize != wanted_entry {
+                                        return None;
+                                    }
+                                    Some(u32::from(android_u16(table, at + 2)?) * 4)
+                                })?
+                            } else {
+                                android_u32(table, offsets_start + wanted_entry * 4)?
+                            };
+                            if relative != u32::MAX {
+                                let entry = entries_start + relative as usize;
+                                let key = android_u32(table, entry + 4)
+                                    .and_then(|index| key_strings.get(index as usize))?;
+                                return Some(format!("@{type_name}/{key}"));
+                            }
+                        }
+                    }
+                    child = child.checked_add(child_size)?;
+                }
+            }
+        }
+        offset = offset.checked_add(chunk_size)?;
+    }
+    None
 }
 
 fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<AndroidResourceValue> {
@@ -13562,8 +13690,9 @@ fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<Android
     }
     values.sort_by_key(|value| match value {
         AndroidResourceValue::Path(path) if path.to_ascii_lowercase().ends_with(".xml") => 0,
-        AndroidResourceValue::Path(_) => 1,
-        AndroidResourceValue::Color(_) => 2,
+        AndroidResourceValue::Reference(_) => 1,
+        AndroidResourceValue::Path(_) => 2,
+        AndroidResourceValue::Color(_) => 3,
     });
     values
 }
@@ -13582,9 +13711,21 @@ fn collect_android_type_values(
     let Some(entries_start) = android_u32(table, chunk + 16).map(|value| chunk + value as usize) else { return; };
     let offsets_start = chunk + header_size;
     let chunk_end = chunk.saturating_add(chunk_size).min(table.len());
-    for index in 0..entry_count {
-        let Some(relative) = android_u32(table, offsets_start + index * 4) else { break; };
-        if relative == u32::MAX { continue; }
+    let sparse = table.get(chunk + 9).copied().unwrap_or(0) & 0x01 != 0;
+    let offset_count = if sparse {
+        entries_start.saturating_sub(offsets_start) / 4
+    } else {
+        entry_count
+    };
+    for index in 0..offset_count {
+        let relative = if sparse {
+            let Some(value) = android_u16(table, offsets_start + index * 4 + 2) else { break; };
+            u32::from(value) * 4
+        } else {
+            let Some(value) = android_u32(table, offsets_start + index * 4) else { break; };
+            if value == u32::MAX { continue; }
+            value
+        };
         let entry = entries_start.saturating_add(relative as usize);
         if entry + 16 > chunk_end { continue; }
         let flags = android_u16(table, entry + 2).unwrap_or(0);
@@ -13594,6 +13735,11 @@ fn collect_android_type_values(
         let value_type = table[entry + 11];
         let data = android_u32(table, entry + 12).unwrap_or(0);
         match value_type {
+            0x01 => {
+                if let Some(reference) = android_resource_reference_by_id(table, data) {
+                    output.push(AndroidResourceValue::Reference(reference));
+                }
+            }
             0x03 => {
                 if let Some(path) = global_strings.get(data as usize) {
                     output.push(AndroidResourceValue::Path(path.replace('\\', "/")));
