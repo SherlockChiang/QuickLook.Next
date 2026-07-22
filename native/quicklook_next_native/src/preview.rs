@@ -13510,6 +13510,7 @@ fn android_typed_value(
             .and_then(|table| android_resource_reference_by_id(table, data))
             .unwrap_or_else(|| format!("@0x{data:08x}"))),
         0x03 => strings.get(data as usize).cloned(),
+        0x04 => Some(f32::from_bits(data).to_string()),
         0x10 => Some(data.to_string()),
         0x12 => Some(if data == 0 { "false" } else { "true" }.to_string()),
         0x1c..=0x1f => Some(format!("#{data:08x}")),
@@ -13944,6 +13945,7 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
     let mut viewport_width = 24.0_f32;
     let mut viewport_height = 24.0_f32;
     let mut paths = String::new();
+    let mut group_depth = 0usize;
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"vector" => {
@@ -13952,16 +13954,34 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
             }
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"path" => {
                 let data = android_string_attribute(&e, b"android:pathData")?;
-                let fill = android_string_attribute(&e, b"android:fillColor").unwrap_or_else(|| "#000000".to_string());
-                if parse_android_color(&fill).is_some() {
-                    paths.push_str(&format!("<path d=\"{}\" fill=\"{}\"/>", xml_escape(&data), fill));
+                let fill = android_string_attribute(&e, b"android:fillColor")
+                    .filter(|value| parse_android_color(value).is_some())
+                    .unwrap_or_else(|| "none".to_string());
+                let stroke = android_string_attribute(&e, b"android:strokeColor")
+                    .filter(|value| parse_android_color(value).is_some());
+                if fill != "none" || stroke.is_some() {
+                    paths.push_str(&format!("<path d=\"{}\" fill=\"{}\"", xml_escape(&data), fill));
+                    if let Some(stroke) = stroke {
+                        let width = android_float_attribute(&e, b"android:strokeWidth").unwrap_or(1.0);
+                        paths.push_str(&format!(" stroke=\"{}\" stroke-width=\"{}\"", stroke, width));
+                    }
+                    paths.push_str("/>");
                 }
+            }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"group" => {
+                paths.push_str(&android_svg_group_start(&e));
+                group_depth += 1;
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"group" && group_depth > 0 => {
+                paths.push_str("</g>");
+                group_depth -= 1;
             }
             Ok(Event::Eof) => break,
             Err(_) => return None,
             _ => {}
         }
     }
+    for _ in 0..group_depth { paths.push_str("</g>"); }
     if paths.is_empty() || viewport_width <= 0.0 || viewport_height <= 0.0 { return None; }
     let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {viewport_width} {viewport_height}\">{paths}</svg>");
     let options = resvg::usvg::Options::default();
@@ -13979,6 +13999,26 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
         }
     }
     RgbaImage::from_raw(512, 512, rgba).map(DynamicImage::ImageRgba8)
+}
+
+fn android_svg_group_start(element: &BytesStart<'_>) -> String {
+    let pivot_x = android_float_attribute(element, b"android:pivotX").unwrap_or(0.0);
+    let pivot_y = android_float_attribute(element, b"android:pivotY").unwrap_or(0.0);
+    let scale_x = android_float_attribute(element, b"android:scaleX").unwrap_or(1.0);
+    let scale_y = android_float_attribute(element, b"android:scaleY").unwrap_or(1.0);
+    let translate_x = android_float_attribute(element, b"android:translateX").unwrap_or(0.0);
+    let translate_y = android_float_attribute(element, b"android:translateY").unwrap_or(0.0);
+    let rotation = android_float_attribute(element, b"android:rotation").unwrap_or(0.0);
+    format!(
+        "<g transform=\"translate({},{}) rotate({}) scale({},{}) translate({},{})\">",
+        pivot_x + translate_x,
+        pivot_y + translate_y,
+        rotation,
+        scale_x,
+        scale_y,
+        -pivot_x,
+        -pivot_y,
+    )
 }
 
 fn android_string_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
@@ -15403,6 +15443,26 @@ mod tests {
 
         let values = resolve_android_resource_values(&table, "@mipmap/product_mark");
         assert!(matches!(values.as_slice(), [AndroidResourceValue::Path(path)] if path == "res/9w.png"));
+    }
+
+    #[test]
+    fn android_vector_groups_render_transformed_foreground() {
+        assert_eq!(
+            android_typed_value(0x04, 0.135_f32.to_bits(), &[], None).as_deref(),
+            Some("0.135")
+        );
+        let image = render_android_vector(
+            r##"<vector android:viewportWidth="108" android:viewportHeight="108">
+                <group android:scaleX="0.5" android:scaleY="0.5" android:translateX="27" android:translateY="27">
+                    <path android:fillColor="#ff336ab6" android:pathData="M0,0 H108 V108 H0 Z"/>
+                    <path android:fillColor="#ffffffff" android:pathData="M27,27 H81 V81 H27 Z"/>
+                </group>
+            </vector>"##,
+        ).expect("render grouped Android vector").to_rgba8();
+        let colors = image.pixels().map(|pixel| pixel.0).collect::<BTreeSet<_>>();
+
+        assert!(colors.len() > 2, "grouped vector should include foreground and antialiased edges");
+        assert!(image.get_pixel(256, 256).0[3] > 0);
     }
 
     #[test]

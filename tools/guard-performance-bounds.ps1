@@ -139,6 +139,10 @@ Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32
     "Android resource table decoding must retain its 32 MiB input cap."
 Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
     "APK icon extraction must resolve manifest-directed Android resources before heuristic images."
+Require-Pattern $nativePreview '0x04\s*=>\s*Some\(f32::from_bits\(data\)\.to_string\(\)\)' `
+    "Binary Android vector dimensions and transforms must decode TYPE_FLOAT values."
+Require-Pattern $nativePreview 'android_svg_group_start\(&e\)' `
+    "Android vector foreground rendering must preserve nested group transforms."
 Require-Pattern $nativePreview 'depth\s*>\s*6' `
     "Recursive Android drawable resolution must retain its depth bound."
 Require-Pattern $nativePreview 'candidates\.len\(\)\s*>=\s*256' `
