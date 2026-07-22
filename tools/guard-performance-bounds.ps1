@@ -143,6 +143,8 @@ Require-Pattern $nativePreview '0x04\s*=>\s*Some\(f32::from_bits\(data\)\.to_str
     "Binary Android vector dimensions and transforms must decode TYPE_FLOAT values."
 Require-Pattern $nativePreview 'android_svg_group_start\(&e\)' `
     "Android vector foreground rendering must preserve nested group transforms."
+Require-Pattern $nativePreview 'mask_android_adaptive_icon\(canvas\)' `
+    "Adaptive Android icons must crop their motion-safe perimeter and mask the background."
 Require-Pattern $nativePreview 'depth\s*>\s*6' `
     "Recursive Android drawable resolution must retain its depth bound."
 Require-Pattern $nativePreview 'candidates\.len\(\)\s*>=\s*256' `

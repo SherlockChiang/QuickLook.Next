@@ -13893,7 +13893,7 @@ fn render_android_icon_xml(
             .unwrap_or_else(|| RgbaImage::new(512, 512));
         let foreground = foreground.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8();
         image::imageops::overlay(&mut canvas, &foreground, 0, 0);
-        return Some(DynamicImage::ImageRgba8(canvas));
+        return Some(DynamicImage::ImageRgba8(mask_android_adaptive_icon(canvas)));
     }
     if xml.contains("<color") {
         let mut reader = Reader::from_str(xml);
@@ -13910,6 +13910,24 @@ fn render_android_icon_xml(
         }
     }
     render_android_vector(xml)
+}
+
+fn mask_android_adaptive_icon(canvas: RgbaImage) -> RgbaImage {
+    // Android adaptive layers use a 108dp canvas, while the launcher mask occupies the centered
+    // 72dp. Cropping that motion-safe perimeter matches the installed icon's apparent scale.
+    let crop_size = canvas.width().min(canvas.height()) * 2 / 3;
+    let crop_x = (canvas.width() - crop_size) / 2;
+    let crop_y = (canvas.height() - crop_size) / 2;
+    let cropped = image::imageops::crop_imm(&canvas, crop_x, crop_y, crop_size, crop_size).to_image();
+    let mut output = image::imageops::resize(&cropped, 512, 512, image::imageops::FilterType::Lanczos3);
+    let center = 255.5_f32;
+    let radius = 255.5_f32;
+    for (x, y, pixel) in output.enumerate_pixels_mut() {
+        let distance = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
+        let mask_alpha = ((radius + 0.5 - distance).clamp(0.0, 1.0) * 255.0).round() as u32;
+        pixel[3] = ((u32::from(pixel[3]) * mask_alpha + 127) / 255) as u8;
+    }
+    output
 }
 
 fn android_xml_drawable_reference(xml: &str, element: &str) -> Option<String> {
@@ -15463,6 +15481,23 @@ mod tests {
 
         assert!(colors.len() > 2, "grouped vector should include foreground and antialiased edges");
         assert!(image.get_pixel(256, 256).0[3] > 0);
+    }
+
+    #[test]
+    fn android_adaptive_icon_crops_safe_zone_and_masks_background() {
+        let mut source = RgbaImage::from_pixel(108, 108, Rgba([20, 40, 60, 255]));
+        for y in 45..63 {
+            for x in 45..63 {
+                source.put_pixel(x, y, Rgba([240, 180, 20, 255]));
+            }
+        }
+
+        let output = mask_android_adaptive_icon(source);
+
+        assert_eq!(output.get_pixel(0, 0).0[3], 0);
+        assert_eq!(output.get_pixel(511, 0).0[3], 0);
+        assert_eq!(output.get_pixel(256, 256).0, [240, 180, 20, 255]);
+        assert!(output.get_pixel(256, 4).0[3] > 0);
     }
 
     #[test]
