@@ -135,6 +135,14 @@ Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' 
     "Delimited table models must retain their 65536-cell budget."
 Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Delimited table models must retain their 512 KiB character budget."
+Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
+    "Android resource table decoding must retain its 32 MiB input cap."
+Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
+    "APK icon extraction must resolve manifest-directed Android resources before heuristic images."
+Require-Pattern $nativePreview 'depth\s*>\s*6' `
+    "Recursive Android drawable resolution must retain its depth bound."
+Require-Pattern $nativePreview 'candidates\.len\(\)\s*>=\s*256' `
+    "Package icon fallback collection must remain bounded."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `

@@ -476,8 +476,12 @@ public sealed class ParserHostIntegrationTests
         string apkPath = Path.Combine(tempDirectory, "hero.apk");
         using (var archive = ZipFile.Open(apkPath, ZipArchiveMode.Create))
         {
+            WriteEntry(archive, "AndroidManifest.xml",
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:icon=\"@mipmap/product_mark\"/></manifest>");
+            WriteEntry(archive, "res/mipmap-anydpi-v26/product_mark.xml",
+                "<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\"><background android:drawable=\"#224466\"/><foreground android:drawable=\"@drawable/product_foreground\"/></adaptive-icon>");
             byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mP4z8DwnxLMMGrAqAGjBgwXAwAwxP4QisZM5QAAAABJRU5ErkJggg==");
-            using Stream stream = archive.CreateEntry("res/mipmap-hdpi/product_mark.png").Open();
+            using Stream stream = archive.CreateEntry("res/drawable-xxxhdpi/product_foreground.png").Open();
             stream.Write(png);
         }
 
@@ -500,16 +504,16 @@ public sealed class ParserHostIntegrationTests
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
             handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
-            Assert.Equal(16, extracted.Width);
-            Assert.Equal(16, extracted.Height);
+            Assert.Equal(512, extracted.Width);
+            Assert.Equal(512, extracted.Height);
             using var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
             using var heroStream = new FileStream(heroHandle, FileAccess.Read);
             Assert.Equal(extracted.PacketLength, heroStream.Length);
             var raster = new byte[heroStream.Length];
             heroStream.ReadExactly(raster);
-            Assert.Equal(16, BitConverter.ToInt32(raster, 0));
-            Assert.Equal(16, BitConverter.ToInt32(raster, 4));
-            Assert.Equal(8 + 16 * 16 * 4, raster.Length);
+            Assert.Equal(512, BitConverter.ToInt32(raster, 0));
+            Assert.Equal(512, BitConverter.ToInt32(raster, 4));
+            Assert.Equal(8 + 512 * 512 * 4, raster.Length);
 
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);

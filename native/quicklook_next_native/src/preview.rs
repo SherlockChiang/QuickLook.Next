@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
-use image::GenericImageView;
+use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use serde::Serialize;
@@ -251,6 +251,7 @@ const MAX_BENCODE_DEPTH: usize = 64;
 const MAX_BENCODE_NODES: usize = 100_000;
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_ANDROID_RESOURCE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
 const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
 const MAX_EBOOK_XML_BYTES: u64 = 2 * 1024 * 1024;
@@ -13356,6 +13357,11 @@ pub fn extract_package_icon_bgra(
     if preview_cancelled(cancel_cb) { return None; }
     let file = fs::File::open(path).ok()?;
     let mut zip = ZipArchive::new(file).ok()?;
+    if path.to_ascii_lowercase().ends_with(".apk") {
+        if let Some(icon) = extract_android_package_icon(&mut zip, cancel_cb) {
+            return Some(icon);
+        }
+    }
     let mut candidates = Vec::new();
     let manifest_icons = read_zip_text(&mut zip, "AppxManifest.xml", MAX_APPX_MANIFEST_BYTES)
         .as_deref()
@@ -13365,7 +13371,9 @@ pub fn extract_package_icon_bgra(
 
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) { return None; }
-        let entry = zip.by_index_raw(i).ok()?;
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
         let raw_name = entry.name().to_string();
         let normalized_name = raw_name.replace('\\', "/");
         let score = package_icon_candidate_score(&normalized_name)
@@ -13406,6 +13414,439 @@ pub fn extract_package_icon_bgra(
     }
 
     best.map(|(_, width, height, bgra)| (width, height, bgra))
+}
+
+fn extract_android_package_icon(
+    zip: &mut ZipArchive<fs::File>,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let manifest = read_zip_bytes(zip, "AndroidManifest.xml", MAX_PACKAGE_ICON_BYTES)?;
+    let resources = read_zip_bytes(zip, "resources.arsc", MAX_ANDROID_RESOURCE_TABLE_BYTES);
+    let manifest = decode_android_xml(&manifest, resources.as_deref())?;
+    let icon_ref = android_manifest_icon_reference(&manifest)?;
+    let image = load_android_resource_image(zip, resources.as_deref(), &icon_ref, 0, cancel_cb)?;
+    image_to_bgra(image, 512)
+}
+
+fn read_zip_bytes(zip: &mut ZipArchive<fs::File>, name: &str, limit: u64) -> Option<Vec<u8>> {
+    let mut entry = zip.by_name(name).ok()?;
+    if entry.size() > limit {
+        return None;
+    }
+    read_limited_to_end(&mut entry, limit)
+}
+
+fn decode_android_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> {
+    if bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'<') {
+        return std::str::from_utf8(bytes).ok().map(str::to_owned);
+    }
+    let resource_bytes = resources?.to_vec();
+    let xml_bytes = bytes.to_vec();
+    let buffered = abxml::decoder::BufferedDecoder::from(resource_bytes);
+    let decoder = buffered.get_decoder().ok()?;
+    decoder.xml_visitor(&xml_bytes).ok()?.into_string().ok()
+}
+
+fn android_manifest_icon_reference(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut round_icon = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"application" => {
+                for attr in e.attributes().flatten() {
+                    let key = attr.key.as_ref();
+                    let Ok(value) = attr.unescape_value() else { continue; };
+                    if key == b"android:icon" || key == b"icon" {
+                        return Some(value.into_owned());
+                    }
+                    if key == b"android:roundIcon" || key == b"roundIcon" {
+                        round_icon = Some(value.into_owned());
+                    }
+                }
+                return round_icon;
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+    }
+}
+
+fn load_android_resource_image(
+    zip: &mut ZipArchive<fs::File>,
+    resources: Option<&[u8]>,
+    reference: &str,
+    depth: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<DynamicImage> {
+    if depth > 6 || preview_cancelled(cancel_cb) {
+        return None;
+    }
+    if let Some(color) = parse_android_color(reference) {
+        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color)));
+    }
+    if let Some(table) = resources {
+        for value in resolve_android_resource_values(table, reference) {
+            let resolved = match value {
+                AndroidResourceValue::Path(path) => load_android_archive_image(zip, resources, &path, depth, cancel_cb),
+                AndroidResourceValue::Color(color) => Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color))),
+            };
+            if resolved.is_some() {
+                return resolved;
+            }
+        }
+    }
+    let (kind, name) = parse_android_resource_reference(reference)?;
+    let candidates = android_resource_candidates(zip, kind, name);
+    for candidate in candidates {
+        if preview_cancelled(cancel_cb) { return None; }
+        if let Some(image) = load_android_archive_image(zip, resources, &candidate, depth, cancel_cb) {
+            return Some(image);
+        }
+    }
+    None
+}
+
+fn load_android_archive_image(
+    zip: &mut ZipArchive<fs::File>,
+    resources: Option<&[u8]>,
+    path: &str,
+    depth: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<DynamicImage> {
+    let bytes = read_zip_bytes(zip, path, MAX_PACKAGE_ICON_BYTES)?;
+    if is_supported_zip_image_name(&path.to_ascii_lowercase()) {
+        return image::load_from_memory(&bytes).ok();
+    }
+    let xml = decode_android_xml(&bytes, resources)?;
+    render_android_icon_xml(zip, resources, &xml, depth + 1, cancel_cb)
+}
+
+enum AndroidResourceValue {
+    Path(String),
+    Color(Rgba<u8>),
+}
+
+fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<AndroidResourceValue> {
+    let Some((kind, name)) = parse_android_resource_reference(reference) else { return Vec::new(); };
+    let Some(global_pool_offset) = android_find_chunk(table, 12, 0x0001) else { return Vec::new(); };
+    let Some(global_strings) = android_string_pool(table, global_pool_offset) else { return Vec::new(); };
+    let mut values = Vec::new();
+    let mut offset = 12usize;
+    while let Some((chunk_type, header_size, chunk_size)) = android_chunk_header(table, offset) {
+        if chunk_type == 0x0200 && header_size >= 284 {
+            let type_offset = android_u32(table, offset + 268).map(|value| offset + value as usize);
+            let key_offset = android_u32(table, offset + 276).map(|value| offset + value as usize);
+            let (Some(type_strings), Some(key_strings)) = (
+                type_offset.and_then(|at| android_string_pool(table, at)),
+                key_offset.and_then(|at| android_string_pool(table, at)),
+            ) else { offset += chunk_size; continue; };
+            let end = offset.saturating_add(chunk_size).min(table.len());
+            let mut child = offset + header_size;
+            while child < end {
+                let Some((child_type, child_header, child_size)) = android_chunk_header(table, child) else { break; };
+                if child_type == 0x0201 && child_header >= 20 {
+                    let type_id = table.get(child + 8).copied().unwrap_or(0);
+                    let type_name = type_id.checked_sub(1).and_then(|id| type_strings.get(id as usize));
+                    if type_name.map(String::as_str) == Some(kind) {
+                        collect_android_type_values(
+                            table, child, child_header, child_size, &key_strings, name,
+                            &global_strings, &mut values,
+                        );
+                    }
+                }
+                child = child.saturating_add(child_size);
+            }
+        }
+        offset = offset.saturating_add(chunk_size);
+    }
+    values.sort_by_key(|value| match value {
+        AndroidResourceValue::Path(path) if path.to_ascii_lowercase().ends_with(".xml") => 0,
+        AndroidResourceValue::Path(_) => 1,
+        AndroidResourceValue::Color(_) => 2,
+    });
+    values
+}
+
+fn collect_android_type_values(
+    table: &[u8],
+    chunk: usize,
+    header_size: usize,
+    chunk_size: usize,
+    keys: &[String],
+    wanted_name: &str,
+    global_strings: &[String],
+    output: &mut Vec<AndroidResourceValue>,
+) {
+    let Some(entry_count) = android_u32(table, chunk + 12).map(|value| value as usize) else { return; };
+    let Some(entries_start) = android_u32(table, chunk + 16).map(|value| chunk + value as usize) else { return; };
+    let offsets_start = chunk + header_size;
+    let chunk_end = chunk.saturating_add(chunk_size).min(table.len());
+    for index in 0..entry_count {
+        let Some(relative) = android_u32(table, offsets_start + index * 4) else { break; };
+        if relative == u32::MAX { continue; }
+        let entry = entries_start.saturating_add(relative as usize);
+        if entry + 16 > chunk_end { continue; }
+        let flags = android_u16(table, entry + 2).unwrap_or(0);
+        if flags & 1 != 0 { continue; }
+        let key = android_u32(table, entry + 4).and_then(|value| keys.get(value as usize));
+        if key.map(String::as_str) != Some(wanted_name) { continue; }
+        let value_type = table[entry + 11];
+        let data = android_u32(table, entry + 12).unwrap_or(0);
+        match value_type {
+            0x03 => {
+                if let Some(path) = global_strings.get(data as usize) {
+                    output.push(AndroidResourceValue::Path(path.replace('\\', "/")));
+                }
+            }
+            0x1c..=0x1f => output.push(AndroidResourceValue::Color(Rgba([
+                ((data >> 16) & 0xff) as u8,
+                ((data >> 8) & 0xff) as u8,
+                (data & 0xff) as u8,
+                ((data >> 24) & 0xff) as u8,
+            ]))),
+            _ => {}
+        }
+    }
+}
+
+fn android_find_chunk(bytes: &[u8], mut offset: usize, wanted: u16) -> Option<usize> {
+    while offset < bytes.len() {
+        let (chunk_type, _, chunk_size) = android_chunk_header(bytes, offset)?;
+        if chunk_type == wanted { return Some(offset); }
+        offset = offset.checked_add(chunk_size)?;
+    }
+    None
+}
+
+fn android_chunk_header(bytes: &[u8], offset: usize) -> Option<(u16, usize, usize)> {
+    let chunk_type = android_u16(bytes, offset)?;
+    let header_size = android_u16(bytes, offset + 2)? as usize;
+    let chunk_size = android_u32(bytes, offset + 4)? as usize;
+    (header_size >= 8 && chunk_size >= header_size && offset.checked_add(chunk_size)? <= bytes.len())
+        .then_some((chunk_type, header_size, chunk_size))
+}
+
+fn android_string_pool(bytes: &[u8], offset: usize) -> Option<Vec<String>> {
+    let (chunk_type, header_size, chunk_size) = android_chunk_header(bytes, offset)?;
+    if chunk_type != 0x0001 || header_size < 28 { return None; }
+    let count = android_u32(bytes, offset + 8)? as usize;
+    if count > 1_000_000 { return None; }
+    let flags = android_u32(bytes, offset + 16)?;
+    let strings_start = offset.checked_add(android_u32(bytes, offset + 20)? as usize)?;
+    let end = offset + chunk_size;
+    let offsets_start = offset + header_size;
+    let mut strings = Vec::with_capacity(count);
+    for index in 0..count {
+        let relative = android_u32(bytes, offsets_start + index * 4)? as usize;
+        let at = strings_start.checked_add(relative)?;
+        let value = if flags & 0x100 != 0 {
+            android_utf8_string(bytes, at, end)
+        } else {
+            android_utf16_string(bytes, at, end)
+        }?;
+        strings.push(value);
+    }
+    Some(strings)
+}
+
+fn android_utf8_string(bytes: &[u8], mut offset: usize, end: usize) -> Option<String> {
+    let (_, next) = android_length8(bytes, offset, end)?;
+    offset = next;
+    let (length, next) = android_length8(bytes, offset, end)?;
+    offset = next;
+    let value = bytes.get(offset..offset.checked_add(length)?.min(end))?;
+    std::str::from_utf8(value).ok().map(str::to_owned)
+}
+
+fn android_length8(bytes: &[u8], offset: usize, end: usize) -> Option<(usize, usize)> {
+    let first = *bytes.get(offset)?;
+    if offset >= end { return None; }
+    if first & 0x80 == 0 { Some((first as usize, offset + 1)) }
+    else { Some(((((first & 0x7f) as usize) << 8) | *bytes.get(offset + 1)? as usize, offset + 2)) }
+}
+
+fn android_utf16_string(bytes: &[u8], mut offset: usize, end: usize) -> Option<String> {
+    let first = android_u16(bytes, offset)?;
+    offset += 2;
+    let length = if first & 0x8000 == 0 { first as usize } else {
+        let second = android_u16(bytes, offset)?;
+        offset += 2;
+        (((first & 0x7fff) as usize) << 16) | second as usize
+    };
+    let byte_length = length.checked_mul(2)?;
+    if offset.checked_add(byte_length)? > end { return None; }
+    let units = bytes[offset..offset + byte_length]
+        .chunks_exact(2)
+        .map(|unit| u16::from_le_bytes([unit[0], unit[1]]));
+    Some(char::decode_utf16(units).map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER)).collect())
+}
+
+fn android_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?))
+}
+
+fn android_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+}
+
+fn parse_android_resource_reference(reference: &str) -> Option<(&str, &str)> {
+    let value = reference.trim().strip_prefix('@')?;
+    let value = value.split_once(':').map(|(_, value)| value).unwrap_or(value);
+    let (kind, name) = value.split_once('/')?;
+    (!kind.is_empty() && !name.is_empty()).then_some((kind, name))
+}
+
+fn android_resource_candidates(zip: &mut ZipArchive<fs::File>, kind: &str, name: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
+        let Ok(entry) = zip.by_index_raw(i) else { continue; };
+        let path = entry.name().replace('\\', "/");
+        let lower = path.to_ascii_lowercase();
+        let Some(file_name) = lower.rsplit('/').next() else { continue; };
+        let Some((stem, extension)) = file_name.rsplit_once('.') else { continue; };
+        let directory_match = lower.starts_with(&format!("res/{kind}"))
+            || lower.contains(&format!("/res/{kind}"));
+        if directory_match && stem == name.to_ascii_lowercase()
+            && matches!(extension, "png" | "webp" | "jpg" | "jpeg" | "bmp" | "xml")
+            && entry.size() <= MAX_PACKAGE_ICON_BYTES
+        {
+            candidates.push((android_density_score(&lower), path));
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    candidates.into_iter().map(|(_, path)| path).collect()
+}
+
+fn android_density_score(path: &str) -> i32 {
+    if path.contains("anydpi-v26") { 1000 }
+    else if path.contains("anydpi") { 900 }
+    else if path.contains("xxxhdpi") { 640 }
+    else if path.contains("xxhdpi") { 480 }
+    else if path.contains("xhdpi") { 320 }
+    else if path.contains("hdpi") { 240 }
+    else if path.contains("mdpi") { 160 }
+    else { 0 }
+}
+
+fn render_android_icon_xml(
+    zip: &mut ZipArchive<fs::File>,
+    resources: Option<&[u8]>,
+    xml: &str,
+    depth: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<DynamicImage> {
+    if xml.contains("<adaptive-icon") {
+        let background = android_xml_drawable_reference(xml, "background")
+            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, cancel_cb));
+        let foreground = android_xml_drawable_reference(xml, "foreground")
+            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, cancel_cb))?;
+        let mut canvas = background
+            .map(|image| image.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8())
+            .unwrap_or_else(|| RgbaImage::new(512, 512));
+        let foreground = foreground.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8();
+        image::imageops::overlay(&mut canvas, &foreground, 0, 0);
+        return Some(DynamicImage::ImageRgba8(canvas));
+    }
+    if xml.contains("<color") {
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Text(text)) => {
+                    if let Some(color) = text.unescape().ok().and_then(|value| parse_android_color(&value)) {
+                        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color)));
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+    render_android_vector(xml)
+}
+
+fn android_xml_drawable_reference(xml: &str, element: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == element.as_bytes() => {
+                for attr in e.attributes().flatten() {
+                    if matches!(attr.key.as_ref(), b"android:drawable" | b"drawable" | b"android:color" | b"color") {
+                        return attr.unescape_value().ok().map(|value| value.into_owned());
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+    }
+}
+
+fn parse_android_color(value: &str) -> Option<Rgba<u8>> {
+    let hex = value.trim().strip_prefix('#')?;
+    let raw = u32::from_str_radix(hex, 16).ok()?;
+    match hex.len() {
+        6 => Some(Rgba([((raw >> 16) & 0xff) as u8, ((raw >> 8) & 0xff) as u8, (raw & 0xff) as u8, 255])),
+        8 => Some(Rgba([((raw >> 16) & 0xff) as u8, ((raw >> 8) & 0xff) as u8, (raw & 0xff) as u8, ((raw >> 24) & 0xff) as u8])),
+        _ => None,
+    }
+}
+
+fn render_android_vector(xml: &str) -> Option<DynamicImage> {
+    if !xml.contains("<vector") { return None; }
+    let mut reader = Reader::from_str(xml);
+    let mut viewport_width = 24.0_f32;
+    let mut viewport_height = 24.0_f32;
+    let mut paths = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"vector" => {
+                viewport_width = android_float_attribute(&e, b"android:viewportWidth").unwrap_or(viewport_width);
+                viewport_height = android_float_attribute(&e, b"android:viewportHeight").unwrap_or(viewport_height);
+            }
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"path" => {
+                let data = android_string_attribute(&e, b"android:pathData")?;
+                let fill = android_string_attribute(&e, b"android:fillColor").unwrap_or_else(|| "#000000".to_string());
+                if parse_android_color(&fill).is_some() {
+                    paths.push_str(&format!("<path d=\"{}\" fill=\"{}\"/>", xml_escape(&data), fill));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+    }
+    if paths.is_empty() || viewport_width <= 0.0 || viewport_height <= 0.0 { return None; }
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {viewport_width} {viewport_height}\">{paths}</svg>");
+    let options = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &options).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(512, 512)?;
+    let transform = resvg::tiny_skia::Transform::from_scale(512.0 / viewport_width, 512.0 / viewport_height);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let mut rgba = pixmap.data().to_vec();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha > 0 && alpha < 255 {
+            pixel[0] = ((u32::from(pixel[0]) * 255 + alpha / 2) / alpha).min(255) as u8;
+            pixel[1] = ((u32::from(pixel[1]) * 255 + alpha / 2) / alpha).min(255) as u8;
+            pixel[2] = ((u32::from(pixel[2]) * 255 + alpha / 2) / alpha).min(255) as u8;
+        }
+    }
+    RgbaImage::from_raw(512, 512, rgba).map(DynamicImage::ImageRgba8)
+}
+
+fn android_string_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
+    element.attributes().flatten()
+        .find(|attr| attr.key.as_ref() == name || attr.key.as_ref() == name.strip_prefix(b"android:").unwrap_or(name))
+        .and_then(|attr| attr.unescape_value().ok().map(|value| value.into_owned()))
+}
+
+fn android_float_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<f32> {
+    android_string_attribute(element, name)?.trim_end_matches("dp").parse().ok()
+}
+
+fn xml_escape(value: &str) -> String {
+    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn expand_appx_icon_candidates(paths: &[String]) -> Vec<String> {
@@ -14707,6 +15148,115 @@ mod tests {
         assert!(package_icon_candidate_score("base/res/mipmap-hdpi/brand_asset.webp") > 0);
         assert_eq!(package_icon_candidate_score("res/drawable/random_photo.png"), 0);
         assert_eq!(package_icon_candidate_score("res/mipmap-anydpi-v26/product_mark.xml"), 0);
+    }
+
+    #[test]
+    fn package_icon_resolves_manifest_adaptive_icon_layers() {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-adaptive-icon-{}.apk",
+            std::process::id()
+        ));
+        let file = fs::File::create(&path).expect("create adaptive icon APK");
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("AndroidManifest.xml", options).expect("start manifest");
+        writer.write_all(br#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:icon="@mipmap/product_mark"/></manifest>"#).expect("write manifest");
+        writer.start_file("res/mipmap-anydpi-v26/product_mark.xml", options).expect("start adaptive icon");
+        writer.write_all(br##"<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="#112233"/><foreground android:drawable="@drawable/product_foreground"/></adaptive-icon>"##).expect("write adaptive icon");
+        let foreground = DynamicImage::ImageRgba8(RgbaImage::from_pixel(32, 32, Rgba([20, 220, 40, 255])));
+        let mut foreground_png = Cursor::new(Vec::new());
+        foreground.write_to(&mut foreground_png, image::ImageFormat::Png).expect("encode foreground");
+        writer.start_file("res/drawable-xxxhdpi/product_foreground.png", options).expect("start foreground");
+        writer.write_all(foreground_png.get_ref()).expect("write foreground");
+        let unrelated = DynamicImage::ImageRgba8(RgbaImage::from_pixel(256, 256, Rgba([240, 10, 10, 255])));
+        let mut unrelated_png = Cursor::new(Vec::new());
+        unrelated.write_to(&mut unrelated_png, image::ImageFormat::Png).expect("encode unrelated image");
+        writer.start_file("res/mipmap-xxxhdpi/unrelated.png", options).expect("start unrelated image");
+        writer.write_all(unrelated_png.get_ref()).expect("write unrelated image");
+        writer.finish().expect("finish adaptive icon APK");
+
+        let (width, height, bgra) = extract_package_icon_bgra(path.to_str().unwrap(), None)
+            .expect("extract adaptive icon");
+        let _ = fs::remove_file(path);
+
+        assert_eq!((width, height), (512, 512));
+        let center = ((256 * width + 256) * 4) as usize;
+        assert_eq!(&bgra[center..center + 4], &[40, 220, 20, 255]);
+    }
+
+    #[test]
+    fn android_resource_table_resolves_obfuscated_icon_path() {
+        fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        fn string_pool(values: &[&str]) -> Vec<u8> {
+            let mut data = Vec::new();
+            let mut offsets = Vec::new();
+            for value in values {
+                offsets.push(data.len() as u32);
+                data.push(value.len() as u8);
+                data.push(value.len() as u8);
+                data.extend_from_slice(value.as_bytes());
+                data.push(0);
+            }
+            while data.len() % 4 != 0 { data.push(0); }
+            let header_size = 28usize;
+            let size = header_size + offsets.len() * 4 + data.len();
+            let mut pool = vec![0; size];
+            put_u16(&mut pool, 0, 0x0001);
+            put_u16(&mut pool, 2, header_size as u16);
+            put_u32(&mut pool, 4, size as u32);
+            put_u32(&mut pool, 8, values.len() as u32);
+            put_u32(&mut pool, 16, 0x100);
+            put_u32(&mut pool, 20, (header_size + offsets.len() * 4) as u32);
+            for (index, offset) in offsets.into_iter().enumerate() {
+                put_u32(&mut pool, header_size + index * 4, offset);
+            }
+            pool[header_size + values.len() * 4..].copy_from_slice(&data);
+            pool
+        }
+
+        let global = string_pool(&["res/9w.png"]);
+        let types = string_pool(&["mipmap"]);
+        let keys = string_pool(&["product_mark"]);
+        let mut type_chunk = vec![0; 48];
+        put_u16(&mut type_chunk, 0, 0x0201);
+        put_u16(&mut type_chunk, 2, 28);
+        put_u32(&mut type_chunk, 4, 48);
+        type_chunk[8] = 1;
+        put_u32(&mut type_chunk, 12, 1);
+        put_u32(&mut type_chunk, 16, 32);
+        put_u32(&mut type_chunk, 20, 8);
+        put_u32(&mut type_chunk, 28, 0);
+        put_u16(&mut type_chunk, 32, 8);
+        put_u32(&mut type_chunk, 36, 0);
+        put_u16(&mut type_chunk, 40, 8);
+        type_chunk[43] = 0x03;
+        put_u32(&mut type_chunk, 44, 0);
+        let package_size = 288 + types.len() + keys.len() + type_chunk.len();
+        let mut package = vec![0; 288];
+        put_u16(&mut package, 0, 0x0200);
+        put_u16(&mut package, 2, 288);
+        put_u32(&mut package, 4, package_size as u32);
+        put_u32(&mut package, 268, 288);
+        put_u32(&mut package, 276, (288 + types.len()) as u32);
+        package.extend_from_slice(&types);
+        package.extend_from_slice(&keys);
+        package.extend_from_slice(&type_chunk);
+        let table_size = 12 + global.len() + package.len();
+        let mut table = vec![0; 12];
+        put_u16(&mut table, 0, 0x0002);
+        put_u16(&mut table, 2, 12);
+        put_u32(&mut table, 4, table_size as u32);
+        put_u32(&mut table, 8, 1);
+        table.extend_from_slice(&global);
+        table.extend_from_slice(&package);
+
+        let values = resolve_android_resource_values(&table, "@mipmap/product_mark");
+        assert!(matches!(values.as_slice(), [AndroidResourceValue::Path(path)] if path == "res/9w.png"));
     }
 
     #[test]
