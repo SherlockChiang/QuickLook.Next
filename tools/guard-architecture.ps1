@@ -432,6 +432,11 @@ if (Test-Path $packReleaseFailFastTest) {
     & $packReleaseFailFastTest -Root $Root
 }
 
+$releaseWorkflowTest = Join-Path $PSScriptRoot "test-release-workflows.ps1"
+if (Test-Path $releaseWorkflowTest) {
+    & $releaseWorkflowTest -Root $Root
+}
+
 $taskbarIconAssetTest = Join-Path $PSScriptRoot "test-taskbar-icon-assets.ps1"
 if (Test-Path $taskbarIconAssetTest) {
     & $taskbarIconAssetTest -Root $Root

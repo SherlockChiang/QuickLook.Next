@@ -7,25 +7,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 $range = if ($PreviousTag) { "$PreviousTag..HEAD" } else { "HEAD" }
-$subjects = @(git log $range --format=%s --no-merges)
+$records = (git log $range --format='%s%x1f%b%x1e' --no-merges) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "Could not read commits for release notes." }
 
 $groups = [ordered]@{
     "New features" = [Collections.Generic.List[string]]::new()
     "Fixes" = [Collections.Generic.List[string]]::new()
     "Performance" = [Collections.Generic.List[string]]::new()
-    "Documentation" = [Collections.Generic.List[string]]::new()
     "Other changes" = [Collections.Generic.List[string]]::new()
 }
-foreach ($subject in $subjects) {
+foreach ($record in $records.Split([char]0x1e, [StringSplitOptions]::RemoveEmptyEntries)) {
+    $parts = $record.Trim().Split([char]0x1f, 2)
+    $subject = $parts[0].Trim()
+    $body = if ($parts.Count -gt 1) { $parts[1] } else { "" }
+    $releaseNote = [regex]::Match($body, '(?im)^Release-Note:\s*(.+)$')
+    if ($releaseNote.Success -and $releaseNote.Groups[1].Value.Trim() -eq 'skip') { continue }
+    $explicitNote = if ($releaseNote.Success) { $releaseNote.Groups[1].Value.Trim() } else { "" }
     $heading = switch -Regex ($subject) {
         '^feat(?:\([^)]*\))?:\s*' { "New features"; break }
         '^fix(?:\([^)]*\))?:\s*' { "Fixes"; break }
         '^perf(?:\([^)]*\))?:\s*' { "Performance"; break }
-        '^docs(?:\([^)]*\))?:\s*' { "Documentation"; break }
+        '^(docs|test|ci|chore|build)(?:\([^)]*\))?:\s*' {
+            if ($explicitNote) { "Other changes" } else { "" }
+            break
+        }
         default { "Other changes" }
     }
-    $summary = $subject -replace '^[a-z]+(?:\([^)]*\))?!?:\s*', ''
+    if (-not $heading) { continue }
+    $summary = if ($explicitNote) { $explicitNote } else { $subject -replace '^[a-z]+(?:\([^)]*\))?!?:\s*', '' }
     $groups[$heading].Add($summary)
 }
 

@@ -4,6 +4,8 @@ param(
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
     [string]$ArtifactsDirectory = "",
+    [switch]$SkipBuild,
+    [switch]$SkipArchive,
     [switch]$SkipSystemImageSmoke
 )
 
@@ -30,26 +32,60 @@ if ($VersionPrefix -and $VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
     throw "VersionPrefix must use semantic X.Y.Z format. Current value: '$VersionPrefix'"
 }
 
-Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
-cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
-if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
+if (-not $SkipBuild) {
+    Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
+    cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+    if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
-Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
-$rasterHostRelease = Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release"
-if (Test-Path $rasterHostRelease) { Remove-Item $rasterHostRelease -Recurse -Force }
-$parserHostRelease = Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release"
-if (Test-Path $parserHostRelease) { Remove-Item $parserHostRelease -Recurse -Force }
+    Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
+    $rasterHostRelease = Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release"
+    if (Test-Path $rasterHostRelease) { Remove-Item $rasterHostRelease -Recurse -Force }
+    $parserHostRelease = Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release"
+    if (Test-Path $parserHostRelease) { Remove-Item $parserHostRelease -Recurse -Force }
 
-Write-Host "== building solution (Release) ==" -ForegroundColor Cyan
-$buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release", "--no-restore")
-if ($VersionPrefix) {
-    $buildArgs += "/p:VersionPrefix=$VersionPrefix"
+    Write-Host "== building solution (Release) ==" -ForegroundColor Cyan
+    $buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release", "--no-restore")
+    if ($VersionPrefix) {
+        $buildArgs += "/p:VersionPrefix=$VersionPrefix"
+    }
+    if ($VersionSuffix) {
+        $buildArgs += "/p:VersionSuffix=$VersionSuffix"
+    }
+    dotnet @buildArgs
+    if ($LASTEXITCODE -ne 0) { throw "Release solution build failed." }
 }
-if ($VersionSuffix) {
-    $buildArgs += "/p:VersionSuffix=$VersionSuffix"
+
+$requiredOutputs = @(
+    (Join-Path $root "native\quicklook_next_native\target\release\quicklook_next_native.dll"),
+    (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe"),
+    (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe"),
+    (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe")
+)
+foreach ($requiredOutput in $requiredOutputs) {
+    if (-not (Test-Path -LiteralPath $requiredOutput -PathType Leaf)) {
+        throw "Release build output is missing: $requiredOutput"
+    }
 }
-dotnet @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "Release solution build failed." }
+if ($SkipBuild) {
+    $proofPath = Join-Path $root "artifacts\.tested-release-build.json"
+    if (-not (Test-Path -LiteralPath $proofPath -PathType Leaf)) {
+        throw "No tested release build proof exists. Run tools/release.ps1 before using -SkipBuild."
+    }
+    $proof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+    if ($proof.versionPrefix -ne $VersionPrefix -or $proof.versionSuffix -ne $VersionSuffix) {
+        throw "Tested release build version does not match requested package version."
+    }
+    if ($proof.commit -ne (git -C $root rev-parse HEAD)) {
+        throw "Tested release build belongs to a different commit."
+    }
+    foreach ($property in $proof.outputs.PSObject.Properties) {
+        $outputPath = Join-Path $root $property.Name
+        $actualHash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash
+        if ($actualHash -ne $property.Value) {
+            throw "Tested release output changed after tests: $($property.Name)"
+        }
+    }
+}
 
 Write-Host "== assembling dist ==" -ForegroundColor Cyan
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
@@ -114,12 +150,16 @@ $archiveName = "QuickLook.Next-$packageVersion-win-x64.zip"
 $archivePath = Join-Path $artifacts $archiveName
 $checksumPath = "$archivePath.sha256"
 
-Write-Host "== creating release archive ==" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force $artifacts | Out-Null
-if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
-if (Test-Path $checksumPath) { Remove-Item $checksumPath -Force }
-Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $archivePath -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  $archiveName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
-
-Write-Host "== done: $archivePath ($size MB unpacked) ==" -ForegroundColor Green
+if (-not $SkipArchive) {
+    Write-Host "== creating release archive ==" -ForegroundColor Cyan
+    New-Item -ItemType Directory -Force $artifacts | Out-Null
+    if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+    if (Test-Path $checksumPath) { Remove-Item $checksumPath -Force }
+    Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $archivePath -CompressionLevel Optimal
+    $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $archiveName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
+    Write-Host "== done: $archivePath ($size MB unpacked) ==" -ForegroundColor Green
+}
+else {
+    Write-Host "== dist ready ($size MB unpacked) ==" -ForegroundColor Green
+}

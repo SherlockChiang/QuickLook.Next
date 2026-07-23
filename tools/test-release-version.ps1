@@ -16,8 +16,9 @@ $cargoManifest = Get-Content -LiteralPath (Join-Path $root "native\quicklook_nex
 if ($cargoManifest -notmatch '(?m)^version\s*=\s*"([^\"]+)"') {
     throw "Cargo package version was not found."
 }
-if ($Matches[1] -ne $version) {
-    throw "Cargo version ($($Matches[1])) does not match VERSION ($version)."
+$cargoVersion = [version]$Matches[1]
+if ($cargoVersion -gt [version]$version) {
+    throw "Cargo version ($cargoVersion) cannot be newer than release version ($version)."
 }
 
 $props = [xml](Get-Content -LiteralPath (Join-Path $root "Directory.Build.props") -Raw)

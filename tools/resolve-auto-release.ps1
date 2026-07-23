@@ -11,6 +11,7 @@ if ($baseVersion -notmatch '^\d+\.\d+\.\d+$') {
 $stableTags = @(git tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname)
 if ($LASTEXITCODE -ne 0) { throw "Could not enumerate release tags." }
 $latestTag = $stableTags | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+# VERSION is a floor for the next stable release; published tags remain the source of truth.
 $candidate = [version]$baseVersion
 if ($latestTag) {
     $latestVersion = [version]$latestTag.Substring(1)

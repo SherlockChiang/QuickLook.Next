@@ -132,6 +132,12 @@ dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 
 The Installer ZIP, signed MSIX, certificate, and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging. Development certificates are for testing only; Store releases will use the Partner Center identity.
 
+## Release Workflow
+
+Pull requests run CI. Ordinary pushes to `main` do not repeat that build remotely. After a locally tested group of commits is ready, push one commit whose subject starts with `release:` to run the shared stable packaging workflow and publish a signed GitHub Release. Beta releases remain manually dispatched and use the same Release build, test, signing, SBOM, and artifact-validation path.
+
+Stable tags are the source of truth for published versions. `VERSION` is the minimum version floor; the workflow advances the patch component beyond the latest stable tag automatically. Release notes include user-visible `feat`, `fix`, and `perf` commits since the previous stable tag. Other commit types can opt in with a `Release-Note: ...` footer or opt out with `Release-Note: skip`.
+
 ## Architecture
 
 - `QuickLook.Next.App`: WinUI 3 shell, preview presenters, input, and process supervision.

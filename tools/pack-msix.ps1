@@ -6,6 +6,7 @@ param(
     [string]$CertificatePassword = "",
     [string]$ExpectedCertificatePath = "",
     [switch]$CreateDevelopmentCertificate,
+    [switch]$SkipBuild,
     [switch]$SkipSystemImageSmoke
 )
 
@@ -59,7 +60,8 @@ if (-not $CreateDevelopmentCertificate -and -not (Test-Path -LiteralPath $Certif
 
 Remove-Item -LiteralPath $msixRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $installerRoot -Recurse -Force -ErrorAction SilentlyContinue
-& (Join-Path $PSScriptRoot "pack-release.ps1") -VersionPrefix $VersionPrefix -VersionSuffix $VersionSuffix -SkipSystemImageSmoke:$SkipSystemImageSmoke
+& (Join-Path $PSScriptRoot "pack-release.ps1") -VersionPrefix $VersionPrefix -VersionSuffix $VersionSuffix `
+    -SkipBuild:$SkipBuild -SkipArchive -SkipSystemImageSmoke:$SkipSystemImageSmoke
 if ($LASTEXITCODE -ne 0) { throw "Release packaging failed." }
 
 New-Item -ItemType Directory -Path $msixRoot, $installerRoot -Force | Out-Null
@@ -125,6 +127,12 @@ Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $installerPath -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $installerName" | Set-Content -LiteralPath "$installerPath.sha256" -Encoding ascii
+& (Join-Path $PSScriptRoot "test-release-artifacts.ps1") `
+    -InstallerPath $installerPath `
+    -ChecksumPath "$installerPath.sha256" `
+    -ExpectedMsixVersion $numericVersion `
+    -ExpectedCertificatePath $ExpectedCertificatePath `
+    -DistPath (Join-Path $root "dist")
 Remove-Item -LiteralPath $msixRoot -Recurse -Force
 Remove-Item -LiteralPath $installerRoot -Recurse -Force
 Write-Host "Installer created: $installerPath" -ForegroundColor Green
