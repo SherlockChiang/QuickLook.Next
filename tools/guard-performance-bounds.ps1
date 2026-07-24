@@ -102,6 +102,8 @@ Require-Pattern $pdfSession 'ScaledWidth\s*=\s*targetW[\s\S]*ScaledHeight\s*=\s*
     "PDF stream decode must normalize high-DPI output to the requested surface size."
 Require-Pattern $pdfSession 'IsExpectedSize\(cached,\s*targetW,\s*targetH\)' `
     "PDF caches must reject legacy high-DPI surfaces with mismatched dimensions."
+Require-Pattern $pdfSession 'BitmapEncoderId\s*=\s*BitmapEncoder\.BmpEncoderId' `
+    "PDF rendering must avoid the default PNG encode/decode round trip."
 $inputHook = Join-Path $Root "src/QuickLook.Next.App/PreviewKeyboardHook.cs"
 Require-Pattern $inputHook 'WM_MOUSEWHEEL\s*=\s*0x020A' `
     "Image wheel zoom must retain its HWND fallback for Composition surfaces."

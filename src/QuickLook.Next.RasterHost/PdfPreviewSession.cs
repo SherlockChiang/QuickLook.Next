@@ -409,6 +409,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
                 DestinationWidth = targetW,
                 DestinationHeight = targetH,
                 BackgroundColor = White,
+                BitmapEncoderId = BitmapEncoder.BmpEncoderId,
             });
             renderWatch.Stop();
             DiagLog.Write("RasterHost", $"pdf page render {renderWatch.ElapsedMilliseconds}ms; page={pageIndex}; target={targetW}x{targetH}; path={Path}");
