@@ -813,8 +813,8 @@ public sealed partial class MainWindow : Window
 
 
             PreviewReady? nativeReady = null;
-            if (!forceAnimatedFirstFrameRaster
-                && (IsParserHostPreview(probe) || (mayRequireHydration && IsCloudParserHostPreview(probe))))
+            if (IsParserHostPreview(probe)
+                && (!mayRequireHydration || PreviewFormatPolicy.UsesCloudParserHost(probe.Kind)))
             {
                 MarkPreviewPhase(generation, "route-selected", "route=parser-host");
                 await EnsureParserHostStartedAsync(previewToken);
@@ -3487,13 +3487,6 @@ public sealed partial class MainWindow : Window
             pinned.Handle?.Dispose();
         }
     }
-
-    private static bool IsCloudParserHostPreview(FileProbe probe)
-        => probe.Kind.Equals("text", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("ebook", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("torrent", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("certificate", StringComparison.OrdinalIgnoreCase);
 
     private string ResolveAppIconPath()
     {

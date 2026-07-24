@@ -146,6 +146,10 @@ Require-Pattern $mainWindow 'BuildDimensionsText\(PreviewReady ready\)[\s\S]*rea
 $parserPolicy = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
 Require-Pattern $parserPolicy 'ParserHostKinds[\s\S]*"database"' `
     "Database parsing must remain isolated in ParserHost."
+Require-Pattern $parserPolicy 'CloudParserHostKinds[\s\S]*"database"' `
+    "Hydrated cloud databases must remain eligible for ParserHost parsing."
+Require-Pattern $mainWindow 'IsParserHostPreview\(probe\)[\s\S]*!mayRequireHydration\s*\|\|\s*PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)' `
+    "Cloud ParserHost routing must not be blocked by animated-image raster staging."
 $parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
 Require-Pattern $parserNativePreview 'infoKindBytes[\s\S]*ql_preview_database_cancelable\([\s\S]*probe\.Size,[\s\S]*probe\.ModifiedUnix[\s\S]*cancel' `
     "ParserHost database previews must preserve pinned input metadata."

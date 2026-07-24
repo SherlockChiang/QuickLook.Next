@@ -111,6 +111,24 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Parser_host_policy_rejects_unregistered_kinds(string kind)
         => Assert.False(PreviewFormatPolicy.UsesParserHost(kind));
 
+    [Theory]
+    [InlineData("text")]
+    [InlineData("ebook")]
+    [InlineData("executable")]
+    [InlineData("torrent")]
+    [InlineData("certificate")]
+    [InlineData("database")]
+    public void Cloud_parser_host_policy_accepts_bounded_kinds(string kind)
+        => Assert.True(PreviewFormatPolicy.UsesCloudParserHost(kind));
+
+    [Theory]
+    [InlineData("archive")]
+    [InlineData("office")]
+    [InlineData("package")]
+    [InlineData("image")]
+    public void Cloud_parser_host_policy_rejects_unbounded_or_raster_kinds(string kind)
+        => Assert.False(PreviewFormatPolicy.UsesCloudParserHost(kind));
+
     [Fact]
     public void Native_abi_rejects_mismatched_versions()
     {
