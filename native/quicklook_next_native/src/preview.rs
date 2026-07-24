@@ -1344,11 +1344,7 @@ fn render_markdown_json(
         title: filename.to_string(),
         format: Some("markdown".to_string()),
         language: Some("markdown".to_string()),
-        text: Some(if input_truncated {
-            format!("{text}\n\n[Preview truncated at {MAX_TEXT_BYTES} bytes]")
-        } else {
-            text.to_string()
-        }),
+        text: None,
         office_layout: None,
         listing: None,
         table: None,
@@ -16606,6 +16602,15 @@ mod tests {
             blocks[0].table_rows[0],
             vec!["1".to_string(), "2".to_string()]
         );
+    }
+
+    #[test]
+    fn markdown_json_omits_duplicate_source_text() {
+        let json = render_markdown_json("README.md", "# Title\n\nBody", false, None);
+        let value: serde_json::Value = serde_json::from_str(&json).expect("markdown JSON");
+
+        assert!(value.get("markdown").is_some_and(|markdown| !markdown.is_null()));
+        assert!(value.get("text").is_none());
     }
 
     #[test]

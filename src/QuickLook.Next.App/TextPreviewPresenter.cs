@@ -111,7 +111,7 @@ internal sealed class TextPreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
-        string text = isMarkdown ? TrimForDisplay(ready.TextContent ?? "") : ready.TextContent ?? "";
+        string sourceText = isMarkdown ? TrimForDisplay(ready.TextContent ?? "") : ready.TextContent ?? "";
         _markdownPresentation = ready.Markdown is null
             ? null
             : MarkdownPresentationPolicy.Flatten(ready.Markdown, UiStrings.TextPreviewTruncated);
@@ -120,7 +120,8 @@ internal sealed class TextPreviewPresenter
             : new MarkdownVisibleTextIndex(
                 _markdownPresentation.Text,
                 _markdownPresentation.Items.SelectMany(item => item.Segments).ToArray());
-        _displayedText = _markdownSearchIndex?.Text ?? text;
+        string text = _markdownSearchIndex?.Text ?? sourceText;
+        _displayedText = text;
         _markdownSearchAnchors.Clear();
         _markdownSearchTargets.Clear();
         _nextMarkdownSearchSegment = 0;
