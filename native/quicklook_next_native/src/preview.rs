@@ -14854,6 +14854,16 @@ fn archive_listing_json(
             summary.push_str(&format!(" - {:.1}% saved", saved.clamp(0.0, 100.0)));
         }
     }
+    let top_level_folders = entries
+        .values()
+        .filter(|(_, parent, is_folder, _, _, _, _)| *is_folder && parent.is_empty())
+        .count();
+    if top_level_folders > 0 {
+        summary.push_str(&format!(" - {top_level_folders} top-level folders"));
+    }
+    if let Some(largest) = archive_largest_file_summary(&entries) {
+        summary.push_str(&format!(" - Largest: {largest}"));
+    }
     if let Some(types) = archive_type_summary(&entries) {
         summary.push_str(&format!(" - Types: {types}"));
     }
@@ -14904,6 +14914,43 @@ fn archive_listing_json(
         table: None,
         markdown: None,
     })
+}
+
+fn archive_largest_file_summary(entries: &BTreeMap<String, ArchiveListingEntry>) -> Option<String> {
+    let mut files = entries
+        .iter()
+        .filter_map(|(path, (_, _, is_folder, size, _, _, _))| {
+            (!*is_folder && *size > 0).then_some((path, *size))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    if files.is_empty() {
+        return None;
+    }
+    Some(
+        files
+            .into_iter()
+            .take(3)
+            .map(|(path, size)| {
+                let display = if path.chars().count() > 80 {
+                    format!(
+                        "...{}",
+                        path.chars()
+                            .rev()
+                            .take(77)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect::<String>()
+                    )
+                } else {
+                    path.clone()
+                };
+                format!("{display} ({})", format_bytes(size))
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn archive_type_summary(
@@ -15948,6 +15995,34 @@ mod tests {
             archive_project_summary(&entries).as_deref(),
             Some(".csproj, package.json")
         );
+    }
+
+    #[test]
+    fn archive_largest_file_summary_is_bounded_and_sorted() {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "small.txt".to_string(),
+            ("small.txt".to_string(), "".to_string(), false, 10, 8, 0, false),
+        );
+        entries.insert(
+            "assets/large.bin".to_string(),
+            ("large.bin".to_string(), "assets/".to_string(), false, 4096, 100, 0, false),
+        );
+        entries.insert(
+            "assets/medium.bin".to_string(),
+            ("medium.bin".to_string(), "assets/".to_string(), false, 2048, 100, 0, false),
+        );
+        entries.insert(
+            "assets/tiny.bin".to_string(),
+            ("tiny.bin".to_string(), "assets/".to_string(), false, 1, 1, 0, false),
+        );
+
+        let summary = archive_largest_file_summary(&entries).expect("largest files");
+        assert_eq!(
+            summary,
+            "assets/large.bin (4.00 KB), assets/medium.bin (2.00 KB), small.txt (10 B)"
+        );
+        assert!(!summary.contains("tiny.bin"));
     }
 
     #[test]
