@@ -46,6 +46,9 @@ Write-Host "root: $Root"
 
 $sourceFiles = @(Get-SourceFiles)
 
+& (Join-Path $PSScriptRoot "test-release-notes.ps1") -Root $Root
+if ($LASTEXITCODE -ne 0) { Add-Failure "Release notes tests failed." }
+
 # Rule 1: WebView/WebView2 must not re-enter product source.
 $webViewPattern = '\b(WebView|WebView2|Microsoft\.Web\.WebView2)\b'
 foreach ($file in $sourceFiles) {

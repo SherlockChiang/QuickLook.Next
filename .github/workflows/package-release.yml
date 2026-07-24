@@ -15,18 +15,13 @@ on:
         value: ${{ jobs.package.outputs.artifact-name }}
       msix-version:
         value: ${{ jobs.package.outputs.msix-version }}
-    secrets:
-      QUICKLOOK_RELEASE_PFX_BASE64:
-        required: true
-      QUICKLOOK_RELEASE_PFX_PASSWORD:
-        required: true
-
 permissions:
   contents: read
 
 jobs:
   package:
     runs-on: windows-2025
+    environment: ${{ inputs.channel == 'stable' && 'release' || 'beta' }}
     timeout-minutes: 40
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -46,6 +41,23 @@ jobs:
         with:
           toolchain: 1.96.0
           targets: x86_64-pc-windows-msvc
+
+      - name: Cache dependency downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: release-deps-${{ runner.os }}-dotnet-10.0.302-rust-1.96.0-${{ hashFiles('**/packages.lock.json', 'native/quicklook_next_native/Cargo.lock') }}
+          restore-keys: |
+            release-deps-${{ runner.os }}-dotnet-10.0.302-rust-1.96.0-
+
+      - name: Cache cargo-audit
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-audit.exe
+          key: cargo-audit-${{ runner.os }}-0.21.2
 
       - name: Resolve version
         id: version
@@ -74,14 +86,24 @@ jobs:
           "previous_tag=$previousTag" >> $env:GITHUB_OUTPUT
           "msix_version=$version.0" >> $env:GITHUB_OUTPUT
 
-      - name: Generate release notes
+      - name: Check release target and visible changes
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ./tools/new-release-notes.ps1 `
+          ./tools/test-release-target.ps1 `
+            -Tag "${{ steps.version.outputs.tag }}" `
+            -Commit "$env:GITHUB_SHA" `
+            -Repository "$env:GITHUB_REPOSITORY" | Out-Null
+          $notes = ./tools/new-release-notes.ps1 `
             -Version "${{ steps.version.outputs.version }}" `
             -PreviousTag "${{ steps.version.outputs.previous_tag }}" `
             -Repository "$env:GITHUB_REPOSITORY" `
             -OutputPath artifacts/release-notes.md
+          $allowEmpty = (git log -1 --format=%b) -match '(?im)^Release-Allow-Empty:\s*true\s*$'
+          if ("${{ inputs.channel }}" -eq "stable" -and $notes.UserVisibleChangeCount -eq 0 -and -not $allowEmpty) {
+            throw "Stable release has no user-visible changes. Add feat/fix/perf, Release-Note, or Release-Allow-Empty: true."
+          }
 
       - name: Check NuGet vulnerabilities
         shell: pwsh
@@ -90,7 +112,10 @@ jobs:
       - name: Audit Rust dependencies
         shell: pwsh
         run: |
-          cargo install cargo-audit --version 0.21.2 --locked
+          $audit = Get-Command cargo-audit -ErrorAction SilentlyContinue
+          if (-not $audit -or (& cargo audit --version) -notmatch '^cargo-audit 0\.21\.2$') {
+            cargo install cargo-audit --version 0.21.2 --locked --force
+          }
           cargo audit --file native/quicklook_next_native/Cargo.lock
 
       - name: Restore release signing certificate
@@ -127,6 +152,19 @@ jobs:
           format: spdx-json
           output-file: artifacts/QuickLook.Next-${{ steps.version.outputs.tag }}-win-x64.spdx.json
 
+      - name: Generate release metadata
+        shell: pwsh
+        run: |
+          ./tools/new-release-metadata.ps1 `
+            -Version "${{ steps.version.outputs.version }}" `
+            -Tag "${{ steps.version.outputs.tag }}" `
+            -Channel "${{ inputs.channel }}" `
+            -InstallerPath "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip" `
+            -ChecksumPath "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip.sha256" `
+            -SbomPath (Get-Item artifacts/*.spdx.json).FullName `
+            -Repository "$env:GITHUB_REPOSITORY" `
+            -OutputDirectory artifacts/release
+
       - name: Upload release artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -136,4 +174,5 @@ jobs:
             artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip.sha256
             artifacts/*.spdx.json
             artifacts/release-notes.md
+            artifacts/release/*.json
           if-no-files-found: error

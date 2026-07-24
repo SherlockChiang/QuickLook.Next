@@ -138,6 +138,8 @@ Pull requests run CI. Ordinary pushes to `main` do not repeat that build remotel
 
 Stable tags are the source of truth for published versions. `VERSION` is the minimum version floor; the workflow advances the patch component beyond the latest stable tag automatically. Release notes include user-visible `feat`, `fix`, and `perf` commits since the previous stable tag. Other commit types can opt in with a `Release-Note: ...` footer or opt out with `Release-Note: skip`.
 
+Use `Release-Note-ZH: ...` for an audited Chinese summary. A stable release with no visible change is rejected unless the release commit contains `Release-Allow-Empty: true`. Published assets include `release-metadata.json`, `update.json`, and `build-manifest.json` for recovery, update checks, and build auditing. Stable and beta signing credentials are isolated in their matching GitHub Environments.
+
 ## Architecture
 
 - `QuickLook.Next.App`: WinUI 3 shell, preview presenters, input, and process supervision.
