@@ -1650,7 +1650,12 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         bool wrap = TextWrappingPolicy.ShouldWrap(AppSettings.Current.TextWrapping, ready.TextFormat, ready.Markdown is not null);
-        TextPreviewResult result = _textPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight), wrap);
+        TextPreviewResult result = _textPresenter!.Render(
+            ready,
+            GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight),
+            wrap,
+            AppSettings.Current.TextSize,
+            AppSettings.Current.TextLineNumbers);
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
@@ -3315,6 +3320,10 @@ public sealed partial class MainWindow : Window
         if (PrefersReducedMotion)
             _animatedImagePresenter?.PausePlayback();
         UpdateImageAnimationPlaybackButton();
+        _textPresenter?.ApplyTextPreferences(
+            AppSettings.Current.TextWrapping,
+            AppSettings.Current.TextSize,
+            AppSettings.Current.TextLineNumbers);
     }
 
     private void RemoveTrayIcon()

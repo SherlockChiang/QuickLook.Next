@@ -61,6 +61,8 @@ internal sealed class TextPreviewPresenter
     private int _markdownSyntaxRunsRemaining;
     private bool _wrap;
     private bool _showLineNumbers;
+    private double _textScale = 1;
+    private string _textSize = "default";
     private TextLineIndex? _textLineIndex;
     private IReadOnlyList<TextLineItem>? _textLines;
     private MarkdownPresentation? _markdownPresentation;
@@ -96,8 +98,16 @@ internal sealed class TextPreviewPresenter
         _markdownListView.LayoutUpdated += OnMarkdownListViewLayoutUpdated;
     }
 
-    public TextPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent, bool wrap)
+    public TextPreviewResult Render(
+        PreviewReady ready,
+        (double Width, double Height) maxContent,
+        bool wrap,
+        string textSize,
+        bool lineNumbers)
     {
+        _textSize = textSize;
+        _textScale = TextScale(textSize);
+        _showLineNumbers = lineNumbers;
         _lastReady = ready;
         _lastMaxContent = maxContent;
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
@@ -134,12 +144,14 @@ internal sealed class TextPreviewPresenter
 
         _wrap = wrap;
         bool isStructuredMarkdown = ready.Markdown is not null;
-        _scrollViewer.Visibility = !isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
-        _textListView.Visibility = Visibility.Collapsed;
+        bool useLineList = !isMarkdown && _showLineNumbers;
+        _scrollViewer.Visibility = !isStructuredMarkdown && !useLineList ? Visibility.Visible : Visibility.Collapsed;
+        _textListView.Visibility = useLineList ? Visibility.Visible : Visibility.Collapsed;
         _markdownListView.Visibility = isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
         
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
+        _textBlock.FontSize = isMarkdown ? 14 : 14 * _textScale;
         _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         _textBlock.MaxWidth = isMarkdown ? 980 : Math.Max(1, maxContent.Width - 48);
 
@@ -149,6 +161,8 @@ internal sealed class TextPreviewPresenter
                 RenderVirtualMarkdown(_markdownPresentation!);
             else if (ready.TextFormat == "markdown")
                 RenderMarkdown(text);
+            else if (useLineList)
+                _ = RenderVirtualTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
             else
                 _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
         }
@@ -400,7 +414,7 @@ internal sealed class TextPreviewPresenter
     {
         _tokenBrushes.Clear();
         if (_lastReady is not null)
-            Render(_lastReady, _lastMaxContent, _wrap);
+            Render(_lastReady, _lastMaxContent, _wrap, _textSize, _showLineNumbers);
     }
 
     public void SetWrapping(bool wrap)
@@ -419,6 +433,21 @@ internal sealed class TextPreviewPresenter
         _showLineNumbers = visible;
         RefreshRealizedTextLines();
     }
+
+    public void ApplyTextPreferences(string wrappingMode, string textSize, bool lineNumbers)
+    {
+        if (_lastReady is not null)
+        {
+            bool wrap = TextWrappingPolicy.ShouldWrap(
+                wrappingMode,
+                _lastReady.TextFormat,
+                _lastReady.Markdown is not null);
+            Render(_lastReady, _lastMaxContent, wrap, textSize, lineNumbers);
+        }
+    }
+
+    private static double TextScale(string textSize)
+        => textSize switch { "small" => 0.9, "large" => 1.25, _ => 1.0 };
 
     public bool SupportsWrappingToggle
         => _lastReady is not null
@@ -547,7 +576,9 @@ internal sealed class TextPreviewPresenter
     {
         realized.Root.ColumnDefinitions[0].Width = _showLineNumbers ? new GridLength(60) : new GridLength(0);
         realized.LineNumber.Visibility = _showLineNumbers ? Visibility.Visible : Visibility.Collapsed;
+        realized.LineNumber.FontSize = 13 * _textScale;
         TextBlock textBlock = realized.TextBlock;
+        textBlock.FontSize = 13 * _textScale;
         textBlock.TextWrapping = _wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         textBlock.Inlines.Clear();
         textBlock.TextHighlighters.Clear();
@@ -1446,7 +1477,7 @@ internal sealed class TextPreviewPresenter
 
         string code = text.TrimEnd('\r', '\n');
         bool noHighlight = language is "text" or "log" || code.Length > MaxHighlightedChars;
-        var paragraph = CreateParagraph(13, "Cascadia Mono, Consolas", 0, 0);
+        var paragraph = CreateParagraph(13 * _textScale, "Cascadia Mono, Consolas", 0, 0);
         
         if (noHighlight)
         {

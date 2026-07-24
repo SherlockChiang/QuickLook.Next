@@ -85,6 +85,13 @@ internal static class UiStrings
     public static string SettingsTextWrappingAutomatic => Get(nameof(SettingsTextWrappingAutomatic), "Automatic");
     public static string SettingsTextWrappingAlways => Get(nameof(SettingsTextWrappingAlways), "Wrap lines");
     public static string SettingsTextWrappingNever => Get(nameof(SettingsTextWrappingNever), "Do not wrap");
+    public static string SettingsTextSize => Get(nameof(SettingsTextSize), "Text and code size");
+    public static string SettingsTextSizeDescription => Get(nameof(SettingsTextSizeDescription), "Adjust the reading size for plain text and code previews. Markdown layout is unchanged.");
+    public static string SettingsTextSizeSmall => Get(nameof(SettingsTextSizeSmall), "Small");
+    public static string SettingsTextSizeDefault => Get(nameof(SettingsTextSizeDefault), "Default");
+    public static string SettingsTextSizeLarge => Get(nameof(SettingsTextSizeLarge), "Large");
+    public static string SettingsTextLineNumbers => Get(nameof(SettingsTextLineNumbers), "Show line numbers");
+    public static string SettingsTextLineNumbersDescription => Get(nameof(SettingsTextLineNumbersDescription), "Display line numbers in plain text and code previews.");
     public static string SettingsRestartTitle => Get(nameof(SettingsRestartTitle), "Restart required");
     public static string SettingsRestartMessage => Get(nameof(SettingsRestartMessage), "Exit QuickLook Next from the tray and start it again to apply the language.");
     public static string SettingsAbout => Get(nameof(SettingsAbout), "About");

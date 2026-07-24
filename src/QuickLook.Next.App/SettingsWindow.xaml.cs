@@ -54,6 +54,13 @@ public sealed partial class SettingsWindow : Window
             "never" => 2,
             _ => 0,
         };
+        TextSizeCombo.SelectedIndex = AppSettings.Current.TextSize switch
+        {
+            "small" => 0,
+            "large" => 2,
+            _ => 1,
+        };
+        TextLineNumbersToggle.IsOn = AppSettings.Current.TextLineNumbers;
         _initializing = false;
     }
 
@@ -78,6 +85,13 @@ public sealed partial class SettingsWindow : Window
         AutomaticTextWrappingItem.Content = UiStrings.SettingsTextWrappingAutomatic;
         AlwaysTextWrappingItem.Content = UiStrings.SettingsTextWrappingAlways;
         NeverTextWrappingItem.Content = UiStrings.SettingsTextWrappingNever;
+        TextSizeTitle.Text = UiStrings.SettingsTextSize;
+        TextSizeDescription.Text = UiStrings.SettingsTextSizeDescription;
+        SmallTextSizeItem.Content = UiStrings.SettingsTextSizeSmall;
+        DefaultTextSizeItem.Content = UiStrings.SettingsTextSizeDefault;
+        LargeTextSizeItem.Content = UiStrings.SettingsTextSizeLarge;
+        TextLineNumbersTitle.Text = UiStrings.SettingsTextLineNumbers;
+        TextLineNumbersDescription.Text = UiStrings.SettingsTextLineNumbersDescription;
         RestartInfo.Title = UiStrings.SettingsRestartTitle;
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         AboutHeading.Text = UiStrings.SettingsAbout;
@@ -131,6 +145,8 @@ public sealed partial class SettingsWindow : Window
         SetSettingLayout(LanguageSettingGrid, LanguageCombo, compact);
         SetSettingLayout(AnimationSettingGrid, AnimationCombo, compact);
         SetSettingLayout(TextWrappingSettingGrid, TextWrappingCombo, compact);
+        SetSettingLayout(TextSizeSettingGrid, TextSizeCombo, compact);
+        SetSettingLayout(TextLineNumbersSettingGrid, TextLineNumbersToggle, compact);
         ProjectLinksPanel.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
         GitHubButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
         ReleasesButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
@@ -245,6 +261,38 @@ public sealed partial class SettingsWindow : Window
             return;
         }
         _settingsChanged();
+    }
+
+    private void OnTextSizeSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_initializing || TextSizeCombo.SelectedItem is not ComboBoxItem { Tag: string textSize })
+            return;
+        if (!AppSettings.SaveTextSize(textSize))
+        {
+            ShowSettingsSaveFailure();
+            return;
+        }
+        _settingsChanged();
+    }
+
+    private void OnTextLineNumbersToggled(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+            return;
+        if (!AppSettings.SaveTextLineNumbers(TextLineNumbersToggle.IsOn))
+        {
+            ShowSettingsSaveFailure();
+            return;
+        }
+        _settingsChanged();
+    }
+
+    private void ShowSettingsSaveFailure()
+    {
+        RestartInfo.Severity = InfoBarSeverity.Error;
+        RestartInfo.Title = UiStrings.SettingsSaveFailed;
+        RestartInfo.Message = UiStrings.SettingsSaveFailedMessage;
+        RestartInfo.IsOpen = true;
     }
 
     private static string GetVersion()

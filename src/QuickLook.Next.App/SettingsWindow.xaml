@@ -118,6 +118,48 @@
                         </Grid>
                     </Border>
 
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid x:Name="TextSizeSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="TextSizeTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="TextSizeDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox x:Name="TextSizeCombo" Grid.Column="1" MinHeight="40" HorizontalAlignment="Stretch"
+                                      AutomationProperties.LabeledBy="{x:Bind TextSizeTitle}"
+                                      SelectionChanged="OnTextSizeSelectionChanged">
+                                <ComboBoxItem x:Name="SmallTextSizeItem" Tag="small" />
+                                <ComboBoxItem x:Name="DefaultTextSizeItem" Tag="default" />
+                                <ComboBoxItem x:Name="LargeTextSizeItem" Tag="large" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid x:Name="TextLineNumbersSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="TextLineNumbersTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="TextLineNumbersDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="TextLineNumbersToggle" Grid.Column="1" MinHeight="40"
+                                          AutomationProperties.LabeledBy="{x:Bind TextLineNumbersTitle}"
+                                          Toggled="OnTextLineNumbersToggled" />
+                        </Grid>
+                    </Border>
+
                     <InfoBar x:Name="RestartInfo" Severity="Informational" IsOpen="False" IsClosable="True" />
 
                     <StackPanel Spacing="4" Margin="0,6,0,0">

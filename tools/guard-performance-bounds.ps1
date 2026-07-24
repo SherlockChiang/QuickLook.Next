@@ -118,6 +118,15 @@ Require-Pattern $inputHook '_onMouseWheel\(delta,\s*point\.X,\s*point\.Y\)' `
 $textPreviewPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPreviewPresenter 'private bool _showLineNumbers;' `
     "Text preview line numbers must remain off by default after removing the flyout option."
+Require-Pattern $textPreviewPresenter '13\s*\*\s*_textScale' `
+    "Text size preferences must scale plain text and code without unbounded input."
+$appSettings = Join-Path $Root "src/QuickLook.Next.App/AppSettings.cs"
+Require-Pattern $appSettings 'CurrentSchemaVersion\s*=\s*3' `
+    "Text display preferences must use settings schema version 3."
+Require-Pattern $appSettings 'TextSize\s*=\s*"default"[\s\S]*TextLineNumbers\s*=\s*false' `
+    "Text display preferences must retain safe defaults."
+Require-Pattern $appSettings 'SchemaVersion\s*<\s*3\s*\?\s*"default"\s*:\s*settings\.TextSize' `
+    "Older settings schemas must migrate text display preferences instead of being rejected."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
@@ -181,8 +190,8 @@ Require-Pattern $textPresenter 'ScrollIntoView\(_markdownItems\[item\.ItemIndex\
     "Markdown outline navigation must use stable render-item indices."
 Require-Pattern $textPresenter 'public sealed record MarkdownListItem\(MarkdownRenderItem Item\)' `
     "Virtual Markdown item models must remain data-only."
-Require-Pattern $textPresenter '_scrollViewer\.Visibility\s*=\s*!isStructuredMarkdown\s*\?\s*Visibility\.Visible' `
-    "Plain text must use one continuous scrollable document surface."
+Require-Pattern $textPresenter 'useLineList\s*=\s*!isMarkdown\s*&&\s*_showLineNumbers[\s\S]*_scrollViewer\.Visibility\s*=\s*!isStructuredMarkdown\s*&&\s*!useLineList' `
+    "Plain text must use one continuous document unless persistent line numbers require virtual rows."
 Require-Pattern $textPresenter 'else\s*\r?\n\s*_\s*=\s*RenderCodeOrPlainTextAsync\(text' `
     "Plain text must render as a continuous selectable document, not ListView rows."
 Require-Pattern $textPresenter 'paragraph\.Inlines\.Add\(new Run \{ Text = code \}\)' `

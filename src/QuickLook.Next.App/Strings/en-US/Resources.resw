@@ -180,6 +180,13 @@
   <data name="SettingsTextWrappingAutomatic" xml:space="preserve"><value>Automatic</value></data>
   <data name="SettingsTextWrappingAlways" xml:space="preserve"><value>Wrap lines</value></data>
   <data name="SettingsTextWrappingNever" xml:space="preserve"><value>Do not wrap</value></data>
+  <data name="SettingsTextSize" xml:space="preserve"><value>Text and code size</value></data>
+  <data name="SettingsTextSizeDescription" xml:space="preserve"><value>Adjust the reading size for plain text and code previews. Markdown layout is unchanged.</value></data>
+  <data name="SettingsTextSizeSmall" xml:space="preserve"><value>Small</value></data>
+  <data name="SettingsTextSizeDefault" xml:space="preserve"><value>Default</value></data>
+  <data name="SettingsTextSizeLarge" xml:space="preserve"><value>Large</value></data>
+  <data name="SettingsTextLineNumbers" xml:space="preserve"><value>Show line numbers</value></data>
+  <data name="SettingsTextLineNumbersDescription" xml:space="preserve"><value>Display line numbers in plain text and code previews.</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>

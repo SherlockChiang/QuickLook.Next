@@ -5,12 +5,14 @@ using QuickLook.Next.Core;
 namespace QuickLook.Next.App;
 
 internal sealed record AppSettings(
-    int SchemaVersion = 2,
+    int SchemaVersion = 3,
     string Language = "system",
     string Animation = "system",
-    string TextWrapping = "automatic")
+    string TextWrapping = "automatic",
+    string TextSize = "default",
+    bool TextLineNumbers = false)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     private static readonly string SettingsDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "QuickLook.Next");
@@ -57,6 +59,12 @@ internal sealed record AppSettings(
         return Save(Current with { TextWrapping = textWrapping });
     }
 
+    public static bool SaveTextSize(string textSize)
+        => textSize is ("small" or "default" or "large") && Save(Current with { TextSize = textSize });
+
+    public static bool SaveTextLineNumbers(bool visible)
+        => Save(Current with { TextLineNumbers = visible });
+
     private static bool Save(AppSettings updated)
     {
         try
@@ -93,8 +101,19 @@ internal sealed record AppSettings(
             if (settings is null
                 || settings.SchemaVersion is < 1 or > CurrentSchemaVersion
                 || settings.Language is not ("system" or "en-US" or "zh-CN")
-                || settings.Animation is not ("system" or "always" or "still")
-                || settings.TextWrapping is not ("automatic" or "always" or "never"))
+                || settings.Animation is not ("system" or "always" or "still"))
+            {
+                PreserveInvalidSettings();
+                return new AppSettings();
+            }
+            settings = settings with
+            {
+                TextWrapping = settings.SchemaVersion < 2 ? "automatic" : settings.TextWrapping,
+                TextSize = settings.SchemaVersion < 3 ? "default" : settings.TextSize,
+                TextLineNumbers = settings.SchemaVersion >= 3 && settings.TextLineNumbers,
+            };
+            if (settings.TextWrapping is not ("automatic" or "always" or "never")
+                || settings.TextSize is not ("small" or "default" or "large"))
             {
                 PreserveInvalidSettings();
                 return new AppSettings();

@@ -59,6 +59,13 @@
   <data name="SettingsTextWrappingAutomatic" xml:space="preserve"><value>自动</value></data>
   <data name="SettingsTextWrappingAlways" xml:space="preserve"><value>自动换行</value></data>
   <data name="SettingsTextWrappingNever" xml:space="preserve"><value>不换行</value></data>
+  <data name="SettingsTextSize" xml:space="preserve"><value>文本和代码字号</value></data>
+  <data name="SettingsTextSizeDescription" xml:space="preserve"><value>调整纯文本和代码预览的阅读字号。Markdown 布局不受影响。</value></data>
+  <data name="SettingsTextSizeSmall" xml:space="preserve"><value>小</value></data>
+  <data name="SettingsTextSizeDefault" xml:space="preserve"><value>默认</value></data>
+  <data name="SettingsTextSizeLarge" xml:space="preserve"><value>大</value></data>
+  <data name="SettingsTextLineNumbers" xml:space="preserve"><value>显示行号</value></data>
+  <data name="SettingsTextLineNumbersDescription" xml:space="preserve"><value>在纯文本和代码预览中显示行号。</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>需要重启</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>请从托盘退出 QuickLook Next 并重新启动，以应用新的语言。</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>关于</value></data>
