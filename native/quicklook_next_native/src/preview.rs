@@ -5760,6 +5760,7 @@ fn parse_sqlite_schema_summary(
         };
     }
     let mut stack = vec![1u32];
+    let text_encoding = read_u32_be(bytes, 56).unwrap_or(1);
     let mut seen = BTreeSet::<u32>::new();
     let mut rows = Vec::new();
     let mut partial = false;
@@ -5778,7 +5779,13 @@ fn parse_sqlite_schema_summary(
         let header = if page_no == 1 { 100usize } else { 0usize };
         match page.get(header).copied().unwrap_or(0) {
             0x0D => {
-                partial |= parse_sqlite_schema_leaf_page(page, header, limit, &mut rows)
+                partial |= parse_sqlite_schema_leaf_page(
+                    page,
+                    header,
+                    limit,
+                    text_encoding,
+                    &mut rows,
+                )
             }
             0x05 => {
                 for child in sqlite_table_interior_children(page, header) {
@@ -5795,6 +5802,7 @@ fn parse_sqlite_schema_leaf_page(
     page: &[u8],
     header: usize,
     limit: usize,
+    text_encoding: u32,
     rows: &mut Vec<SqliteSchemaRow>,
 ) -> bool {
     let declared_cell_count = read_u16_be(page, header + 3).unwrap_or(0) as usize;
@@ -5810,7 +5818,7 @@ fn parse_sqlite_schema_leaf_page(
             partial = true;
             break;
         };
-        if let Some(row) = parse_sqlite_schema_leaf_cell(page, cell_offset) {
+        if let Some(row) = parse_sqlite_schema_leaf_cell(page, cell_offset, text_encoding) {
             rows.push(row);
         } else {
             partial = true;
@@ -5819,15 +5827,19 @@ fn parse_sqlite_schema_leaf_page(
     partial
 }
 
-fn parse_sqlite_schema_leaf_cell(page: &[u8], offset: usize) -> Option<SqliteSchemaRow> {
+fn parse_sqlite_schema_leaf_cell(
+    page: &[u8],
+    offset: usize,
+    text_encoding: u32,
+) -> Option<SqliteSchemaRow> {
     let (payload_len, mut pos) = read_sqlite_varint(page, offset)?;
     let (_rowid, next) = read_sqlite_varint(page, pos)?;
     pos = next;
     let end = pos.checked_add(payload_len as usize)?;
-    parse_sqlite_schema_record(page.get(pos..end)?)
+    parse_sqlite_schema_record(page.get(pos..end)?, text_encoding)
 }
 
-fn parse_sqlite_schema_record(payload: &[u8]) -> Option<SqliteSchemaRow> {
+fn parse_sqlite_schema_record(payload: &[u8], text_encoding: u32) -> Option<SqliteSchemaRow> {
     let (header_len, mut pos) = read_sqlite_varint(payload, 0)?;
     let header_len = header_len as usize;
     if header_len == 0 || header_len > payload.len() {
@@ -5844,11 +5856,11 @@ fn parse_sqlite_schema_record(payload: &[u8]) -> Option<SqliteSchemaRow> {
     }
 
     let mut value_pos = header_len;
-    let typ = sqlite_record_text(payload, &mut value_pos, serials[0])?;
-    let name = sqlite_record_text(payload, &mut value_pos, serials[1])?;
-    let table_name = sqlite_record_text(payload, &mut value_pos, serials[2])?;
+    let typ = sqlite_record_text(payload, &mut value_pos, serials[0], text_encoding)?;
+    let name = sqlite_record_text(payload, &mut value_pos, serials[1], text_encoding)?;
+    let table_name = sqlite_record_text(payload, &mut value_pos, serials[2], text_encoding)?;
     let root_page = sqlite_record_integer(payload, &mut value_pos, serials[3])?;
-    let sql = sqlite_record_text(payload, &mut value_pos, serials[4])?;
+    let sql = sqlite_record_text(payload, &mut value_pos, serials[4], text_encoding)?;
     Some(SqliteSchemaRow {
         typ,
         name,
@@ -6063,16 +6075,40 @@ fn read_sqlite_varint(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
     None
 }
 
-fn sqlite_record_text(payload: &[u8], pos: &mut usize, serial: u64) -> Option<String> {
+fn sqlite_record_text(
+    payload: &[u8],
+    pos: &mut usize,
+    serial: u64,
+    text_encoding: u32,
+) -> Option<String> {
     if serial < 13 || serial % 2 == 0 {
         sqlite_skip_record_value(payload, pos, serial)?;
         return Some(String::new());
     }
     let len = ((serial - 13) / 2) as usize;
     let end = pos.checked_add(len)?;
-    let text = String::from_utf8_lossy(payload.get(*pos..end)?).to_string();
+    let bytes = payload.get(*pos..end)?;
+    let text = match text_encoding {
+        2 => decode_sqlite_utf16(bytes, true)?,
+        3 => decode_sqlite_utf16(bytes, false)?,
+        _ => String::from_utf8_lossy(bytes).to_string(),
+    };
     *pos = end;
     Some(text)
+}
+
+fn decode_sqlite_utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let units = bytes.chunks_exact(2).map(|unit| {
+        if little_endian {
+            u16::from_le_bytes([unit[0], unit[1]])
+        } else {
+            u16::from_be_bytes([unit[0], unit[1]])
+        }
+    });
+    Some(char::decode_utf16(units).map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER)).collect())
 }
 
 fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option<i64> {
@@ -16917,7 +16953,7 @@ mod tests {
         payload.push(2);
         payload.extend_from_slice(b"CREATE TABLE users(id INTEGER PRIMARY KEY)");
 
-        let row = parse_sqlite_schema_record(&payload).expect("schema row");
+        let row = parse_sqlite_schema_record(&payload, 1).expect("schema row");
         assert_eq!(row.typ, "table");
         assert_eq!(row.name, "users");
         assert_eq!(row.table_name, "users");
@@ -16984,7 +17020,7 @@ mod tests {
         page[8..10].copy_from_slice(&511u16.to_be_bytes());
         let mut rows = Vec::new();
 
-        let partial = parse_sqlite_schema_leaf_page(&page, 0, 8, &mut rows);
+        let partial = parse_sqlite_schema_leaf_page(&page, 0, 8, 1, &mut rows);
 
         assert!(rows.is_empty());
         assert!(partial);
@@ -17010,6 +17046,39 @@ mod tests {
             sqlite_record_integer(&[0xFF, 0xFF, 0xFE], &mut pos, 3),
             Some(-2)
         );
+    }
+
+    #[test]
+    fn sqlite_schema_record_decodes_utf16_text() {
+        fn utf16_le(value: &str) -> Vec<u8> {
+            value.encode_utf16().flat_map(u16::to_le_bytes).collect()
+        }
+
+        let typ = utf16_le("table");
+        let name = utf16_le("users");
+        let sql = utf16_le("CREATE TABLE t(x)");
+        let text_serial = |bytes: &[u8]| 13 + bytes.len() as u8 * 2;
+        let mut payload = vec![
+            6,
+            text_serial(&typ),
+            text_serial(&name),
+            text_serial(&name),
+            1,
+            text_serial(&sql),
+        ];
+        payload.extend_from_slice(&typ);
+        payload.extend_from_slice(&name);
+        payload.extend_from_slice(&name);
+        payload.push(2);
+        payload.extend_from_slice(&sql);
+
+        let row = parse_sqlite_schema_record(&payload, 2).expect("UTF-16 schema row");
+
+        assert_eq!(row.typ, "table");
+        assert_eq!(row.name, "users");
+        assert_eq!(row.root_page, 2);
+        assert_eq!(row.sql, "CREATE TABLE t(x)");
+        assert!(decode_sqlite_utf16(&[0x41], true).is_none());
     }
 
     #[test]

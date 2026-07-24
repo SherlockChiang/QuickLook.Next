@@ -193,6 +193,8 @@ Require-Pattern $nativePreview 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
     "SQLite row observations must retain their 128-page per-table budget."
 Require-Pattern $nativePreview 'append_sqlite_wal_summary[\s\S]*Frames observed' `
     "SQLite WAL files must remain metadata previews instead of generic file icons."
+Require-Pattern $nativePreview 'text_encoding\s*=\s*read_u32_be\(bytes,\s*56\)[\s\S]*decode_sqlite_utf16' `
+    "SQLite schema text must honor the database header encoding."
 Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Android resource table decoding must retain its 32 MiB input cap."
 Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
