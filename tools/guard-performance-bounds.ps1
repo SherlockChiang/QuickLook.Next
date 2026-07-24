@@ -137,6 +137,10 @@ Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
     "Archive metadata scans must remain capped at 10000 records."
+Require-Pattern $nativePreview 'let Ok\(meta\)\s*=\s*fs::symlink_metadata\(&entry_path\)[\s\S]*meta\.is_dir\(\)\s*\|\|\s*meta\.is_file\(\)' `
+    "Folder listings must query each entry's metadata only once."
+Require-Pattern $nativePreview 'items\.sort_by_cached_key\(\|item\|\s*\(!item\.is_folder,\s*item\.name\.to_ascii_lowercase\(\)\)\)' `
+    "Folder listing sort keys must be allocated once per item."
 Require-Pattern $nativePreview 'MAX_TABLE_ROWS:\s*usize\s*=\s*4_000' `
     "Delimited table models must remain capped at 4000 represented rows."
 Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' `

@@ -15153,57 +15153,53 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
                 break;
             }
             let entry_path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
+            let Ok(meta) = fs::symlink_metadata(&entry_path) else {
                 skipped += 1;
                 continue;
             };
-            if file_type.is_dir() || file_type.is_file() {
-                if let Ok(meta) = entry.metadata() {
-                    let is_folder = file_type.is_dir();
-                    let size = if is_folder { 0 } else { meta.len() as i64 };
-                    let name = entry_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let native = entry_path.to_string_lossy().to_string();
-                    let modified = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    if is_folder {
-                        folder_count += 1;
-                    } else {
-                        file_count += 1;
-                        total_bytes += size;
-                    }
-                    let virtual_path = if is_folder {
-                        format!("{}/", name)
-                    } else {
-                        name.clone()
-                    };
-                    let typ = if is_folder {
-                        "Folder".to_string()
-                    } else {
-                        type_for_ext(&name).to_string()
-                    };
-                    items.push(PreviewListingItemDto {
-                        name,
-                        path: virtual_path,
-                        parent_path: String::new(),
-                        is_folder,
-                        size,
-                        packed_size: 0,
-                        modified_unix: modified,
-                        typ,
-                        native_path: Some(native),
-                        is_encrypted: false,
-                    });
+            if meta.is_dir() || meta.is_file() {
+                let is_folder = meta.is_dir();
+                let size = if is_folder { 0 } else { meta.len() as i64 };
+                let name = entry_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let native = entry_path.to_string_lossy().to_string();
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                if is_folder {
+                    folder_count += 1;
                 } else {
-                    skipped += 1;
+                    file_count += 1;
+                    total_bytes += size;
                 }
+                let virtual_path = if is_folder {
+                    format!("{}/", name)
+                } else {
+                    name.clone()
+                };
+                let typ = if is_folder {
+                    "Folder".to_string()
+                } else {
+                    type_for_ext(&name).to_string()
+                };
+                items.push(PreviewListingItemDto {
+                    name,
+                    path: virtual_path,
+                    parent_path: String::new(),
+                    is_folder,
+                    size,
+                    packed_size: 0,
+                    modified_unix: modified,
+                    typ,
+                    native_path: Some(native),
+                    is_encrypted: false,
+                });
             }
         }
     } else {
@@ -15211,13 +15207,7 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
     }
 
     // Sort: folders first, then by name (case-insensitive)
-    items.sort_by(|a, b| {
-        b.is_folder.cmp(&a.is_folder).then_with(|| {
-            a.name
-                .to_ascii_lowercase()
-                .cmp(&b.name.to_ascii_lowercase())
-        })
-    });
+    items.sort_by_cached_key(|item| (!item.is_folder, item.name.to_ascii_lowercase()));
 
     let mut summary = format!(
         "{} files, {} folders - {}",
