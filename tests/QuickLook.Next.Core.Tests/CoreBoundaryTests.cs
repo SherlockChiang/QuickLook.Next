@@ -100,6 +100,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("executable")]
     [InlineData("torrent")]
     [InlineData("certificate")]
+    [InlineData("database")]
     public void Parser_host_policy_accepts_registered_kinds(string kind)
         => Assert.True(PreviewFormatPolicy.UsesParserHost(kind));
 

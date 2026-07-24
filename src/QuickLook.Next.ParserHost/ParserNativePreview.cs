@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
+using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.ParserHost;
@@ -49,6 +50,17 @@ internal static class ParserNativePreview
     private static extern int ql_preview_torrent_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_info(
+        byte[] pathUtf8,
+        nuint pathLen,
+        byte[] kindUtf8,
+        nuint kindLen,
+        long size,
+        long modifiedUnix,
+        byte[] outBuf,
+        nuint outCap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_archive_entry(
         byte[] archivePathUtf8,
         nuint archivePathLen,
@@ -77,7 +89,7 @@ internal static class ParserNativePreview
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_office_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
-    public static string? TryPreview(string kind, string path, CancellationToken cancellationToken)
+    public static string? TryPreview(string kind, string path, FileProbe probe, CancellationToken cancellationToken)
     {
         NativePreviewCall? simpleCall = kind.ToLowerInvariant() switch
         {
@@ -91,6 +103,9 @@ internal static class ParserNativePreview
             ? ql_preview_office
             : ql_preview_archive;
         byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+        byte[]? infoKindBytes = kind.Equals("database", StringComparison.OrdinalIgnoreCase)
+            ? Encoding.UTF8.GetBytes(kind)
+            : null;
         NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
         try
         {
@@ -101,9 +116,19 @@ internal static class ParserNativePreview
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
-                    int length = simpleCall is not null
-                        ? simpleCall(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel)
-                        : call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
+                    int length = infoKindBytes is not null
+                        ? ql_preview_info(
+                            pathBytes,
+                            (nuint)pathBytes.Length,
+                            infoKindBytes,
+                            (nuint)infoKindBytes.Length,
+                            probe.Size,
+                            probe.ModifiedUnix,
+                            buffer,
+                            (nuint)capacity)
+                        : simpleCall is not null
+                            ? simpleCall(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel)
+                            : call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (length > 0 && length <= capacity)
                         return Encoding.UTF8.GetString(buffer, 0, length);

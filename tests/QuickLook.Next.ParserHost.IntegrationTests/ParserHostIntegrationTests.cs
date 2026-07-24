@@ -147,6 +147,61 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Handle_open_previews_SQLite_as_database_text()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string path = Path.Combine(tempDirectory, "sample.db");
+        byte[] database = new byte[512];
+        "SQLite format 3\0"u8.CopyTo(database);
+        new byte[] { 0x02, 0x00 }.CopyTo(database, 16);
+        database[18] = 1;
+        database[19] = 1;
+        new byte[] { 0, 0, 0, 1 }.CopyTo(database, 28);
+        new byte[] { 0, 0, 0, 4 }.CopyTo(database, 44);
+        new byte[] { 0, 0, 0, 1 }.CopyTo(database, 56);
+        File.WriteAllBytes(path, database);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(path, ".db", database[..16])
+            {
+                Kind = "database",
+                Size = pinned.Length,
+                ModifiedUnix = 123,
+            };
+            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal("database", ready.Kind);
+            Assert.Contains("Format: SQLite 3", ready.TextContent);
+            Assert.Contains("Page size: 512 bytes", ready.TextContent);
+            Assert.Null(ready.MediaPath);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Handle_open_keeps_original_text_when_source_path_is_replaced()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));

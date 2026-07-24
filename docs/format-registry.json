@@ -7,7 +7,7 @@
     "office", "package", "pdf", "text", "torrent", "video"
   ],
   "parserHostKinds": [
-    "archive", "certificate", "ebook", "executable", "office", "package", "text", "torrent"
+    "archive", "certificate", "database", "ebook", "executable", "office", "package", "text", "torrent"
   ],
   "imageAliases": {
     "jpeg": [".jpg", ".jpeg", ".jpe"],

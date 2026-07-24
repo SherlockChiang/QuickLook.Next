@@ -141,6 +141,12 @@ Require-Pattern $nativeBridge 'CallInfoPreview[\s\S]*while\s*\(cap\s*<=\s*MaxNat
     "Native database summaries must honor the required output size instead of falling back to file icons."
 Require-Pattern $mainWindow 'nativeReady is null\s*&&\s*probe\.Kind\.Equals\("database"[\s\S]*DatabasePreviewUnavailable' `
     "Database parser failures must remain text previews instead of becoming Shell thumbnails."
+$parserPolicy = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
+Require-Pattern $parserPolicy 'ParserHostKinds[\s\S]*"database"' `
+    "Database parsing must remain isolated in ParserHost."
+$parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
+Require-Pattern $parserNativePreview 'infoKindBytes[\s\S]*ql_preview_info\([\s\S]*probe\.Size,[\s\S]*probe\.ModifiedUnix' `
+    "ParserHost database previews must preserve pinned input metadata."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

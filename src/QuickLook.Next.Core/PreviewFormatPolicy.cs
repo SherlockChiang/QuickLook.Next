@@ -4,7 +4,7 @@ public static class PreviewFormatPolicy
 {
     private static readonly HashSet<string> ParserHostKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "archive", "package", "office", "text", "ebook", "executable", "torrent", "certificate",
+        "archive", "package", "office", "text", "ebook", "executable", "torrent", "certificate", "database",
     };
 
     public static bool UsesParserHost(string? kind)

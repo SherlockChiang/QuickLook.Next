@@ -116,7 +116,7 @@ while (true)
                         await channel.SendAsync(CertificatePreview.Create(open.RequestId, open.Path, open.Probe.Size));
                         return;
                     }
-                    string? json = ParserNativePreview.TryPreview(kind, open.Path, cts.Token);
+                    string? json = ParserNativePreview.TryPreview(kind, open.Path, open.Probe, cts.Token);
                     cts.Token.ThrowIfCancellationRequested();
                     if (!PreviewReadyJson.TryParse(open.RequestId, json ?? "", out PreviewReady? ready, out string? error))
                         await channel.SendAsync(new PreviewError(open.RequestId, error ?? "Native parser returned no preview."));
@@ -181,7 +181,7 @@ while (true)
                         published = true;
                         return;
                     }
-                    string? json = ParserNativePreview.TryPreview(kind, input.Value.Path, handleCts.Token);
+                    string? json = ParserNativePreview.TryPreview(kind, input.Value.Path, open.Probe, handleCts.Token);
                     handleCts.Token.ThrowIfCancellationRequested();
                     if (!PreviewReadyJson.TryParse(open.RequestId, json ?? "", out PreviewReady? ready, out string? error))
                         await channel.SendAsync(new PreviewError(open.RequestId, error ?? "Native parser returned no preview."));
