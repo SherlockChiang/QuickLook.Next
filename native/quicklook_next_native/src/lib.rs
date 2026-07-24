@@ -1608,6 +1608,27 @@ mod tests {
     }
 
     #[test]
+    fn database_preview_export_honors_cancellation_before_file_access() {
+        extern "C" fn cancelled() -> bool {
+            true
+        }
+        let path = b"Z:\\missing\\cancelled.db";
+        let mut out = vec![0u8; 1024];
+
+        let result = ql_preview_database_cancelable(
+            path.as_ptr(),
+            path.len(),
+            0,
+            0,
+            out.as_mut_ptr(),
+            out.len(),
+            Some(cancelled),
+        );
+
+        assert_eq!(result, 0);
+    }
+
+    #[test]
     fn archive_entry_export_honors_cancellation_before_file_access() {
         let archive = b"missing.zip";
         let entry = b"entry.txt";
@@ -2663,6 +2684,34 @@ pub extern "C" fn ql_preview_executable(
     out_cap: usize,
 ) -> i32 {
     ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+}
+
+/// Render a bounded database metadata preview with cancellation support.
+#[no_mangle]
+pub extern "C" fn ql_preview_database_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    size: i64,
+    modified_unix: i64,
+    out_buf: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+        return 0;
+    }
+    if cancel_requested(cancel_cb) {
+        return 0;
+    }
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let json = preview::render_database_info(path, size, modified_unix, cancel_cb);
+    if cancel_requested(cancel_cb) || json.is_empty() {
+        return 0;
+    }
+    write_json_out(&json, out_buf, out_cap)
 }
 
 #[no_mangle]

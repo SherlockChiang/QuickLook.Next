@@ -61,6 +61,16 @@ internal static class ParserNativePreview
         nuint outCap);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_database_cancelable(
+        byte[] pathUtf8,
+        nuint pathLen,
+        long size,
+        long modifiedUnix,
+        byte[] outBuf,
+        nuint outCap,
+        NativeCancelCallback? cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_archive_entry(
         byte[] archivePathUtf8,
         nuint archivePathLen,
@@ -117,15 +127,14 @@ internal static class ParserNativePreview
                 try
                 {
                     int length = infoKindBytes is not null
-                        ? ql_preview_info(
+                        ? ql_preview_database_cancelable(
                             pathBytes,
                             (nuint)pathBytes.Length,
-                            infoKindBytes,
-                            (nuint)infoKindBytes.Length,
                             probe.Size,
                             probe.ModifiedUnix,
                             buffer,
-                            (nuint)capacity)
+                            (nuint)capacity,
+                            cancel)
                         : simpleCall is not null
                             ? simpleCall(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel)
                             : call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);

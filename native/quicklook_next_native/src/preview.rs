@@ -4787,7 +4787,7 @@ fn file_name(path: &str) -> &str {
 pub fn render_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
     match kind {
         "font" => return render_font_info(path, size, modified_unix),
-        "database" => return render_database_info(path, size, modified_unix),
+        "database" => return render_database_info(path, size, modified_unix, None),
         "mail" => return render_mail_info(path, size, modified_unix),
         "chm" => return render_chm_info(path, size, modified_unix),
         "dump" => return render_dump_info(path, size, modified_unix),
@@ -4894,9 +4894,20 @@ fn render_font_info(path: &str, size: i64, modified_unix: i64) -> String {
     generic_info_json(path, "font", size, modified_unix, Some(text))
 }
 
-fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
+pub fn render_database_info(
+    path: &str,
+    size: i64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> String {
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     let filename = file_name(path);
     let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     let mut text = base_info_text(filename, "database", size, modified_unix);
     let lower_path = path.to_ascii_lowercase();
     if lower_path.ends_with("-wal") {
@@ -4939,7 +4950,7 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
         }
         append_sqlite_header_details(&mut text, &bytes);
         text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
-        append_sqlite_schema_summary(&mut text, &bytes, page_size as usize);
+        append_sqlite_schema_summary(&mut text, &bytes, page_size as usize, cancel_cb);
     } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Microsoft Compound File database");
     } else {
@@ -5580,8 +5591,18 @@ const MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP: usize = 8;
 const MAX_SQLITE_SCHEMA_PAGES: usize = 32;
 const MAX_SQLITE_TABLE_ROW_PAGES: usize = 128;
 
-fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usize) {
-    let summary = parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS);
+fn append_sqlite_schema_summary(
+    text: &mut String,
+    bytes: &[u8],
+    page_size: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) {
+    let summary = parse_sqlite_schema_summary(
+        bytes,
+        page_size,
+        MAX_SQLITE_SCHEMA_OBJECTS,
+        cancel_cb,
+    );
     if summary.rows.is_empty() {
         return;
     }
@@ -5597,7 +5618,18 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
         ("index", "Indexes"),
         ("trigger", "Triggers"),
     ] {
-        append_sqlite_schema_group(text, bytes, page_size, &summary.rows, typ, heading);
+        if preview_cancelled(cancel_cb) {
+            return;
+        }
+        append_sqlite_schema_group(
+            text,
+            bytes,
+            page_size,
+            &summary.rows,
+            typ,
+            heading,
+            cancel_cb,
+        );
     }
     text.push_str(&format!(
         "\nInspection limits: {} schema objects, {} objects/group, {} schema pages, {} row pages/table",
@@ -5615,6 +5647,7 @@ fn append_sqlite_schema_group(
     rows: &[SqliteSchemaRow],
     typ: &str,
     heading: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
 ) {
     let matching = rows
         .iter()
@@ -5629,6 +5662,9 @@ fn append_sqlite_schema_group(
         if matching.len() > shown { " (partial)" } else { "" }
     ));
     for row in matching.into_iter().take(shown) {
+        if preview_cancelled(cancel_cb) {
+            return;
+        }
         text.push_str(&format!(
             "\n- {} (table: {}, root: {})",
             row.name, row.table_name, row.root_page
@@ -5650,6 +5686,7 @@ fn append_sqlite_schema_group(
                 page_size,
                 row.root_page,
                 MAX_SQLITE_TABLE_ROW_PAGES,
+                cancel_cb,
             ) {
                 text.push_str(&format!(
                     "\n  Rows observed: {}{}",
@@ -5676,6 +5713,7 @@ fn count_sqlite_table_rows(
     page_size: usize,
     root_page: i64,
     max_pages: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<SqliteRowCount> {
     if page_size < 512 || root_page <= 0 || max_pages == 0 {
         return None;
@@ -5685,6 +5723,9 @@ fn count_sqlite_table_rows(
     let mut rows = 0u64;
     let mut partial = false;
     while let Some(page_no) = stack.pop() {
+        if preview_cancelled(cancel_cb) {
+            return None;
+        }
         if seen.len() >= max_pages {
             partial = true;
             break;
@@ -5745,13 +5786,14 @@ fn sqlite_table_interior_children(page: &[u8], header: usize) -> Vec<u32> {
 
 #[cfg(test)]
 fn parse_sqlite_schema_rows(bytes: &[u8], page_size: usize, limit: usize) -> Vec<SqliteSchemaRow> {
-    parse_sqlite_schema_summary(bytes, page_size, limit).rows
+    parse_sqlite_schema_summary(bytes, page_size, limit, None).rows
 }
 
 fn parse_sqlite_schema_summary(
     bytes: &[u8],
     page_size: usize,
     limit: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> SqliteSchemaSummary {
     if page_size < 512 || bytes.len() < 128 || !bytes.starts_with(b"SQLite format 3\0") {
         return SqliteSchemaSummary {
@@ -5765,6 +5807,10 @@ fn parse_sqlite_schema_summary(
     let mut rows = Vec::new();
     let mut partial = false;
     while let Some(page_no) = stack.pop() {
+        if preview_cancelled(cancel_cb) {
+            partial = true;
+            break;
+        }
         if rows.len() >= limit || seen.len() >= MAX_SQLITE_SCHEMA_PAGES {
             partial = true;
             break;
@@ -17006,7 +17052,7 @@ mod tests {
         bytes[200..204].copy_from_slice(&2u32.to_be_bytes());
         bytes[204] = 1;
 
-        let summary = parse_sqlite_schema_summary(&bytes, page_size, 8);
+        let summary = parse_sqlite_schema_summary(&bytes, page_size, 8, None);
 
         assert!(summary.rows.is_empty());
         assert!(summary.partial);
@@ -17101,8 +17147,8 @@ mod tests {
         ];
         let mut text = String::new();
 
-        append_sqlite_schema_group(&mut text, &[], 512, &rows, "table", "Tables");
-        append_sqlite_schema_group(&mut text, &[], 512, &rows, "index", "Indexes");
+        append_sqlite_schema_group(&mut text, &[], 512, &rows, "table", "Tables", None);
+        append_sqlite_schema_group(&mut text, &[], 512, &rows, "index", "Indexes", None);
 
         assert!(text.contains("\nTables:"));
         assert!(text.contains("\nIndexes:"));
@@ -17148,7 +17194,7 @@ mod tests {
         bytes[page_size * 3] = 0x0D;
         bytes[page_size * 3 + 3..page_size * 3 + 5].copy_from_slice(&3u16.to_be_bytes());
 
-        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128).expect("row count");
+        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128, None).expect("row count");
 
         assert_eq!(count.rows, 5);
         assert!(!count.partial);
@@ -17163,7 +17209,7 @@ mod tests {
         bytes[page_size + 12..page_size + 14].copy_from_slice(&100u16.to_be_bytes());
         bytes[page_size + 100..page_size + 104].copy_from_slice(&3u32.to_be_bytes());
 
-        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128).expect("row count");
+        let count = count_sqlite_table_rows(&bytes, page_size, 2, 128, None).expect("row count");
 
         assert_eq!(count.rows, 0);
         assert!(count.partial);
