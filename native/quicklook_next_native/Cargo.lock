@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "quicklook_next_native"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "encoding_rs",
  "flate2",
