@@ -37,6 +37,14 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
             FullMode = BoundedChannelFullMode.DropWrite,
         });
     private static readonly Task DiskCacheWriter = Task.Run(ProcessDiskCacheWritesAsync);
+    private static readonly Channel<string> DiskCacheTouches = Channel.CreateBounded<string>(
+        new BoundedChannelOptions(64)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
+    private static readonly Task DiskCacheToucher = Task.Run(ProcessDiskCacheTouchesAsync);
     private static bool _diskCacheInitialized;
     private static long _diskCacheBytes;
 
@@ -54,6 +62,8 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly SemaphoreSlim _documentRenderLock = new(1, 1);
     private readonly object _lifetimeLock = new();
+    private readonly object _pageSizeLock = new();
+    private readonly Dictionary<int, WinSize> _pageSizes = new();
     private readonly long _mtimeTicks;
     private bool _disposed;
     private int _activeOperations;
@@ -66,6 +76,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         FirstPageSize = firstPageSize;
         PageGeometries = pageGeometries;
         _mtimeTicks = mtimeTicks;
+        _pageSizes[0] = firstPageSize;
     }
 
     public string Path { get; }
@@ -143,7 +154,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
 
             var bgra = new byte[(int)expectedBytes];
             stream.ReadExactly(bgra);
-            File.SetLastAccessTimeUtc(path, DateTime.UtcNow);
+            DiskCacheTouches.Writer.TryWrite(path);
             result = (bgra, width, height);
             return true;
         }
@@ -188,6 +199,15 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         InitializeDiskCache();
         await foreach (DiskCacheWrite write in DiskCacheWrites.Reader.ReadAllAsync())
             StoreDiskCached(write);
+    }
+
+    private static async Task ProcessDiskCacheTouchesAsync()
+    {
+        await foreach (string path in DiskCacheTouches.Reader.ReadAllAsync())
+        {
+            try { File.SetLastAccessTimeUtc(path, DateTime.UtcNow); }
+            catch { }
+        }
     }
 
     private static void InitializeDiskCache()
@@ -358,10 +378,8 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token);
         CancellationToken token = linkedCts.Token;
 
-        // Single GetPage call: read size and render from the same page object (was 2× GetPage before).
         token.ThrowIfCancellationRequested();
-        using PdfPage page = document.GetPage((uint)pageIndex);
-        WinSize pageSize = page.Size;
+        WinSize pageSize = GetPageSize(document, pageIndex);
 
         double targetScale = Math.Clamp(scale, 0.1, 4.0);
         targetScale = Math.Min(targetScale, MaxRenderDimension / Math.Max(pageSize.Width, pageSize.Height));
@@ -384,6 +402,20 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         waitWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
         return rendered;
+    }
+
+    private WinSize GetPageSize(PdfDocument document, int pageIndex)
+    {
+        lock (_pageSizeLock)
+        {
+            if (_pageSizes.TryGetValue(pageIndex, out WinSize size))
+                return size;
+
+            using PdfPage page = document.GetPage((uint)pageIndex);
+            size = page.Size;
+            _pageSizes[pageIndex] = size;
+            return size;
+        }
     }
 
     private static bool IsExpectedSize((byte[] Bgra, int Width, int Height) raster, uint width, uint height)

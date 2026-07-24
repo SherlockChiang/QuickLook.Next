@@ -106,6 +106,10 @@ Require-Pattern $pdfSession 'IsExpectedSize\(cached,\s*targetW,\s*targetH\)' `
     "PDF caches must reject legacy high-DPI surfaces with mismatched dimensions."
 Require-Pattern $pdfSession 'BitmapEncoderId\s*=\s*BitmapEncoder\.BmpEncoderId' `
     "PDF rendering must avoid the default PNG encode/decode round trip."
+Require-Pattern $pdfSession '_pageSizes\[0\]\s*=\s*firstPageSize' `
+    "PDF sessions must reuse the page geometry already read during open."
+Require-Pattern $pdfSession 'DiskCacheTouches\.Writer\.TryWrite\(path\)' `
+    "PDF disk cache hits must defer LRU metadata writes off the render path."
 $inputHook = Join-Path $Root "src/QuickLook.Next.App/PreviewKeyboardHook.cs"
 Require-Pattern $inputHook 'WM_MOUSEWHEEL\s*=\s*0x020A' `
     "Image wheel zoom must retain its HWND fallback for Composition surfaces."
