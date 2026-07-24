@@ -43,6 +43,7 @@ internal sealed class RasterHostSupervisor
     /// <summary>Raised on the UI thread when the host hands over a (new) shared surface to compose.</summary>
     public event Action<PreviewSurface>? SurfaceReceived;
     public event Action<PreviewPageError>? PageErrorReceived;
+    public event Action<PreviewImageWaveform>? ImageWaveformReceived;
 
     public long AdapterLuid { get; private set; }
 
@@ -200,6 +201,9 @@ internal sealed class RasterHostSupervisor
                 break;
             case PreviewReady ready:
                 _pending.TryComplete(ready.RequestId, ready);
+                break;
+            case PreviewImageWaveform waveform:
+                _ui.TryEnqueue(() => ImageWaveformReceived?.Invoke(waveform));
                 break;
             case PreviewAnimationFramesReady animation:
                 _pending.TryComplete(animation.RequestId, animation);

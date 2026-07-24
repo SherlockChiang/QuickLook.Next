@@ -385,6 +385,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
+            _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
             _native.Start(OnNativeIntent);
             AppStartupTiming.Mark("native-hook-ready");
             StatusText.Text = UiStrings.Ready.ToLowerInvariant();
@@ -599,6 +600,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SetBackgroundEfficiency(_backgroundEfficiencyEnabled ?? true);
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
+            _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
         }
 
         await _supervisor.EnsureStartedAsync(cancellationToken);
@@ -1517,6 +1519,12 @@ public sealed partial class MainWindow : Window
             if (!handleConsumed)
                 CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
         }
+    }
+
+    private void OnImageWaveformReceived(PreviewImageWaveform message)
+    {
+        if (_previewSession.IsCurrentRequest(message.RequestId))
+            _imageWaveformPresenter?.Show(message.Waveform);
     }
 
     private void OnPdfPageErrorReceived(PreviewPageError error)

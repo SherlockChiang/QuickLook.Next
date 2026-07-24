@@ -18,6 +18,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
 [JsonDerivedType(typeof(PreviewOpenHandle), "preview.open.handle")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
+[JsonDerivedType(typeof(PreviewImageWaveform), "preview.image.waveform")]
 [JsonDerivedType(typeof(PreviewSurfaceRelease), "preview.surface.release")]
 [JsonDerivedType(typeof(PreviewReady), "preview.ready")]
 [JsonDerivedType(typeof(PreviewError), "preview.error")]
@@ -72,6 +73,9 @@ public sealed record PreviewSurface(
 
 /// <summary>Bounded RGB density scope derived from decoded pixels; channels are planar and row-major.</summary>
 public sealed record ImageWaveform(int Width, int Height, byte[] RgbDensity);
+
+/// <summary>RasterHost → App: optional image analysis computed after the first surface is published.</summary>
+public sealed record PreviewImageWaveform(string RequestId, ImageWaveform Waveform) : ControlMessage;
 
 /// <summary>App → RasterHost: the host-local surface handle was copied or rejected and can be closed.</summary>
 public sealed record PreviewSurfaceRelease(string TransferId) : ControlMessage;

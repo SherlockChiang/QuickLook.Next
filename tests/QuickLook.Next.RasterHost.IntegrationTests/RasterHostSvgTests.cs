@@ -66,7 +66,8 @@ public sealed class RasterHostSvgTests
 
             PreviewSurface? surface = null;
             PreviewReady? ready = null;
-            while (surface is null || ready is null)
+            PreviewImageWaveform? waveform = null;
+            while (surface is null || ready is null || waveform is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
                     ?? throw new EndOfStreamException("RasterHost closed before completing the SVG preview");
@@ -82,6 +83,7 @@ public sealed class RasterHostSvgTests
                     await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), timeout.Token);
                 }
                 ready = message as PreviewReady ?? ready;
+                waveform = message as PreviewImageWaveform ?? waveform;
             }
 
             string anchoredPath = Path.Combine(
@@ -91,10 +93,10 @@ public sealed class RasterHostSvgTests
             using (var reader = new StreamReader(anchored))
                 Assert.StartsWith("<svg", await reader.ReadToEndAsync(timeout.Token));
             Assert.Equal((100u, 50u), (surface.Width, surface.Height));
-            Assert.NotNull(surface.Waveform);
-            Assert.Equal((192, 96), (surface.Waveform.Width, surface.Waveform.Height));
-            Assert.Equal(192 * 96 * 3, surface.Waveform.RgbDensity.Length);
-            Assert.Contains(surface.Waveform.RgbDensity, value => value > 0);
+            Assert.Equal(requestId, waveform.RequestId);
+            Assert.Equal((192, 96), (waveform.Waveform.Width, waveform.Waveform.Height));
+            Assert.Equal(192 * 96 * 3, waveform.Waveform.RgbDensity.Length);
+            Assert.Contains(waveform.Waveform.RgbDensity, value => value > 0);
             Assert.Equal("image", ready.Kind);
             Assert.Equal((100d, 50d), (ready.PreferredWidth, ready.PreferredHeight));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);

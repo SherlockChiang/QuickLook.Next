@@ -37,6 +37,9 @@ Require-Pattern $imageWaveform 'ScopeHeight\s*=\s*96' `
     "Image waveforms must retain their fixed 96-row budget."
 Require-Pattern $imageWaveform '1_000_000d' `
     "Image waveform generation must retain its one-million-sample ceiling."
+$rasterHostProgram = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
+Require-Pattern $rasterHostProgram 'PreviewReady\(open\.RequestId,\s*"image"[\s\S]*Task\.Run\([\s\S]*ImageWaveformBuilder\.Create' `
+    "Static image waveforms must be computed after first-frame readiness."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
 Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."

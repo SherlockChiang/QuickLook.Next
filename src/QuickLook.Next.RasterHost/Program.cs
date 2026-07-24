@@ -540,7 +540,6 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                     "RasterHost",
                     $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}; " +
                     $"native decode={image.DecodeMilliseconds}ms resize={image.ResizeMilliseconds}ms convert={image.ConvertMilliseconds}ms");
-                ImageWaveform waveform = ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height);
                 var uploadWatch = Stopwatch.StartNew();
                 await surfacePublishGate.WaitAsync(cancellationToken);
                 try
@@ -553,10 +552,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                     DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
                     await channel.SendAsync(new PreviewSurface(
                         open.RequestId, imageHandle.HostHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM")
-                    {
-                        TransferId = imageHandle.TransferId,
-                        Waveform = waveform,
-                    });
+                    { TransferId = imageHandle.TransferId });
                     string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
                         ? Path.GetFileName(open.Probe.Path)
                         : $"{Path.GetFileName(open.Probe.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
@@ -566,6 +562,11 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                 {
                     surfacePublishGate.Release();
                 }
+                ImageWaveform waveform = await Task.Run(
+                    () => ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height),
+                    cancellationToken);
+                if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                    await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
                 return;
             }
 
@@ -576,7 +577,6 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             DiagLog.Write("RasterHost", $"shell thumbnail {fallbackThumb.Width}x{fallbackThumb.Height}");
-            ImageWaveform waveform = ImageWaveformBuilder.Create(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
             await surfacePublishGate.WaitAsync(cancellationToken);
             try
             {
@@ -586,10 +586,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                 SurfaceTransfer fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
                 await channel.SendAsync(new PreviewSurface(
                     open.RequestId, fallbackHandle.HostHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM")
-                {
-                    TransferId = fallbackHandle.TransferId,
-                    Waveform = waveform,
-                });
+                { TransferId = fallbackHandle.TransferId });
                 await channel.SendAsync(new PreviewReady(
                     open.RequestId, "thumbnail", Path.GetFileName(open.Probe.Path), fallbackThumb.Width, fallbackThumb.Height));
             }
@@ -597,6 +594,11 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
             {
                 surfacePublishGate.Release();
             }
+            ImageWaveform waveform = await Task.Run(
+                () => ImageWaveformBuilder.Create(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height),
+                cancellationToken);
+            if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
             return;
         }
 

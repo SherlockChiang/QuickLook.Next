@@ -76,10 +76,15 @@ public sealed class RasterHostAnimationTests
             string animationRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             await channel.SendAsync(new PreviewAnimationFramesOpen(
                 animationRequestId, previewRequestId, 2048, 2048), timeout.Token);
-            ControlMessage? receivedTerminal = await channel.ReceiveAsync(timeout.Token);
-            Assert.NotNull(receivedTerminal);
-            ControlMessage terminal = receivedTerminal;
-            var frames = Assert.IsType<PreviewAnimationFramesReady>(terminal);
+            PreviewAnimationFramesReady? frames = null;
+            while (frames is null)
+            {
+                ControlMessage message = await channel.ReceiveAsync(timeout.Token)
+                    ?? throw new EndOfStreamException("RasterHost closed before returning animation frames");
+                if (message is PreviewError error)
+                    throw new Xunit.Sdk.XunitException(error.Message);
+                frames = message as PreviewAnimationFramesReady;
+            }
             Assert.Equal(previewRequestId, frames.PreviewRequestId);
             Assert.InRange(frames.FrameCount, 2, 120);
             Assert.InRange(frames.Width, 1, 1024);
