@@ -66,6 +66,7 @@
   <data name="SettingsTextSizeLarge" xml:space="preserve"><value>大</value></data>
   <data name="SettingsTextLineNumbers" xml:space="preserve"><value>显示行号</value></data>
   <data name="SettingsTextLineNumbersDescription" xml:space="preserve"><value>在纯文本和代码预览中显示行号。</value></data>
+  <data name="DatabasePreviewUnavailable" xml:space="preserve"><value>无法安全读取数据库摘要。不会将文件图标或缩略图作为数据库内容显示。</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>需要重启</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>请从托盘退出 QuickLook Next 并重新启动，以应用新的语言。</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>关于</value></data>

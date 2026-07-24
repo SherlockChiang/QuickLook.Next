@@ -136,6 +136,11 @@ Require-Pattern $appSettings 'TextSize\s*=\s*"default"[\s\S]*TextLineNumbers\s*=
     "Text display preferences must retain safe defaults."
 Require-Pattern $appSettings 'SchemaVersion\s*<\s*3\s*\?\s*"default"\s*:\s*settings\.TextSize' `
     "Older settings schemas must migrate text display preferences instead of being rejected."
+$nativeBridge = Join-Path $Root "src/QuickLook.Next.App/NativeBridge.cs"
+Require-Pattern $nativeBridge 'CallInfoPreview[\s\S]*while\s*\(cap\s*<=\s*MaxNativePreviewJsonBytes\)[\s\S]*needed\s*=\s*-n' `
+    "Native database summaries must honor the required output size instead of falling back to file icons."
+Require-Pattern $mainWindow 'nativeReady is null\s*&&\s*probe\.Kind\.Equals\("database"[\s\S]*DatabasePreviewUnavailable' `
+    "Database parser failures must remain text previews instead of becoming Shell thumbnails."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `

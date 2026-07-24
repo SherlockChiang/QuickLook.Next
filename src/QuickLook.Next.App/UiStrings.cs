@@ -92,6 +92,7 @@ internal static class UiStrings
     public static string SettingsTextSizeLarge => Get(nameof(SettingsTextSizeLarge), "Large");
     public static string SettingsTextLineNumbers => Get(nameof(SettingsTextLineNumbers), "Show line numbers");
     public static string SettingsTextLineNumbersDescription => Get(nameof(SettingsTextLineNumbersDescription), "Display line numbers in plain text and code previews.");
+    public static string DatabasePreviewUnavailable => Get(nameof(DatabasePreviewUnavailable), "The database summary could not be read safely. No file icon or thumbnail will be shown as database content.");
     public static string SettingsRestartTitle => Get(nameof(SettingsRestartTitle), "Restart required");
     public static string SettingsRestartMessage => Get(nameof(SettingsRestartMessage), "Exit QuickLook Next from the tray and start it again to apply the language.");
     public static string SettingsAbout => Get(nameof(SettingsAbout), "About");

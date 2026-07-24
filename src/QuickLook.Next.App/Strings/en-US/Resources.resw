@@ -187,6 +187,7 @@
   <data name="SettingsTextSizeLarge" xml:space="preserve"><value>Large</value></data>
   <data name="SettingsTextLineNumbers" xml:space="preserve"><value>Show line numbers</value></data>
   <data name="SettingsTextLineNumbersDescription" xml:space="preserve"><value>Display line numbers in plain text and code previews.</value></data>
+  <data name="DatabasePreviewUnavailable" xml:space="preserve"><value>The database summary could not be read safely. No file icon or thumbnail will be shown as database content.</value></data>
   <data name="SettingsRestartTitle" xml:space="preserve"><value>Restart required</value></data>
   <data name="SettingsRestartMessage" xml:space="preserve"><value>Exit QuickLook Next from the tray and start it again to apply the language.</value></data>
   <data name="SettingsAbout" xml:space="preserve"><value>About</value></data>

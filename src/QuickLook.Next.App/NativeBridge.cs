@@ -378,29 +378,43 @@ internal sealed class NativeBridge
             byte[] pathBytes = Encoding.UTF8.GetBytes(path);
             byte[] kindBytes = Encoding.UTF8.GetBytes(probe.Kind);
             int cap = 64 * 1024;
-            byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
-            try
+            while (cap <= MaxNativePreviewJsonBytes)
             {
-                int n = ql_preview_info(
-                    pathBytes,
-                    (nuint)pathBytes.Length,
-                    kindBytes,
-                    (nuint)kindBytes.Length,
-                    probe.Size,
-                    probe.ModifiedUnix,
-                    outBuf,
-                    (nuint)outBuf.Length);
-                return n > 0 ? Encoding.UTF8.GetString(outBuf, 0, n) : null;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(outBuf);
+                byte[] outBuf = ArrayPool<byte>.Shared.Rent(cap);
+                try
+                {
+                    int n = ql_preview_info(
+                        pathBytes,
+                        (nuint)pathBytes.Length,
+                        kindBytes,
+                        (nuint)kindBytes.Length,
+                        probe.Size,
+                        probe.ModifiedUnix,
+                        outBuf,
+                        (nuint)outBuf.Length);
+                    if (n > 0)
+                        return Encoding.UTF8.GetString(outBuf, 0, n);
+                    if (n < 0)
+                    {
+                        int needed = -n;
+                        if (needed <= cap || needed > MaxNativePreviewJsonBytes)
+                            return null;
+                        cap = needed;
+                        continue;
+                    }
+                    return null;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(outBuf);
+                }
             }
         }
         catch
         {
             return null;
         }
+        return null;
     }
 
 }

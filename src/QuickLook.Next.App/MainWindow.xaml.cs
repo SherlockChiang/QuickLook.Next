@@ -847,6 +847,20 @@ public sealed partial class MainWindow : Window
                     nativeReady = await Task.Run(
                         () => FallbackFileProbe.TryCreateTextPreview($"managed-{generation}", path, previewToken),
                         previewToken);
+                if (nativeReady is null && probe.Kind.Equals("database", StringComparison.OrdinalIgnoreCase))
+                {
+                    nativeReady = new PreviewReady(
+                        $"database-{generation}",
+                        "database",
+                        System.IO.Path.GetFileName(path),
+                        720,
+                        500)
+                    {
+                        TextContent = UiStrings.DatabasePreviewUnavailable,
+                        TextFormat = "plain",
+                        TextLanguage = "text",
+                    };
+                }
             }
             DiagLog.Write("App", $"preview native ready end gen={generation}; hasReady={nativeReady is not null}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
@@ -1887,11 +1901,16 @@ public sealed partial class MainWindow : Window
     }
 
     private static bool ShouldLoadPreviewHero(PreviewReady ready, string path)
-        => ready.OfficeLayout is null
+        => !IsDatabasePath(path)
+           && ready.OfficeLayout is null
            && (IsPackagePreview(ready, path)
            || IsExecutablePreview(ready, path)
            || ready.Kind == "certificate"
            || IsOfficePreviewWithImages(ready));
+
+    private static bool IsDatabasePath(string path)
+        => System.IO.Path.GetExtension(path).ToLowerInvariant()
+            is ".sqlite" or ".sqlite3" or ".db" or ".db3" or ".s3db" or ".sqlite-shm" or ".sqlite-wal" or ".mdb" or ".accdb";
 
     private static bool IsPackagePreview(PreviewReady ready, string path)
     {
