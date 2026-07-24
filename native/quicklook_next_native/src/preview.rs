@@ -4926,6 +4926,7 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
             text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
         }
         append_sqlite_header_details(&mut text, &bytes);
+        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
         append_sqlite_schema_summary(&mut text, &bytes, page_size as usize);
     } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Microsoft Compound File database");
@@ -5535,22 +5536,63 @@ struct SqliteSchemaRow {
     sql: String,
 }
 
+const MAX_SQLITE_SCHEMA_OBJECTS: usize = 32;
+const MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP: usize = 8;
+const MAX_SQLITE_SCHEMA_PAGES: usize = 32;
+const MAX_SQLITE_TABLE_ROW_PAGES: usize = 128;
+
 fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usize) {
-    let summary = parse_sqlite_schema_summary(bytes, page_size, 8);
-    let rows = summary.rows;
-    if rows.is_empty() {
+    let summary = parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS);
+    if summary.rows.is_empty() {
         return;
     }
 
-    text.push_str(if summary.partial {
-        "\nSchema objects (partial):"
-    } else {
-        "\nSchema objects:"
-    });
-    for row in rows {
+    text.push_str(&format!(
+        "\nSchema objects observed: {}{}",
+        summary.rows.len(),
+        if summary.partial { " (partial)" } else { "" }
+    ));
+    for (typ, heading) in [
+        ("table", "Tables"),
+        ("view", "Views"),
+        ("index", "Indexes"),
+        ("trigger", "Triggers"),
+    ] {
+        append_sqlite_schema_group(text, bytes, page_size, &summary.rows, typ, heading);
+    }
+    text.push_str(&format!(
+        "\nInspection limits: {} schema objects, {} objects/group, {} schema pages, {} row pages/table",
+        MAX_SQLITE_SCHEMA_OBJECTS,
+        MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP,
+        MAX_SQLITE_SCHEMA_PAGES,
+        MAX_SQLITE_TABLE_ROW_PAGES
+    ));
+}
+
+fn append_sqlite_schema_group(
+    text: &mut String,
+    bytes: &[u8],
+    page_size: usize,
+    rows: &[SqliteSchemaRow],
+    typ: &str,
+    heading: &str,
+) {
+    let matching = rows
+        .iter()
+        .filter(|row| row.typ.eq_ignore_ascii_case(typ))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return;
+    }
+    let shown = matching.len().min(MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP);
+    text.push_str(&format!(
+        "\n{heading}{}:",
+        if matching.len() > shown { " (partial)" } else { "" }
+    ));
+    for row in matching.into_iter().take(shown) {
         text.push_str(&format!(
-            "\n- {} {} (table: {}, root: {})",
-            row.typ, row.name, row.table_name, row.root_page
+            "\n- {} (table: {}, root: {})",
+            row.name, row.table_name, row.root_page
         ));
         if !row.sql.is_empty() {
             text.push_str(&format!(
@@ -5564,7 +5606,12 @@ fn append_sqlite_schema_summary(text: &mut String, bytes: &[u8], page_size: usiz
                 text.push_str("\n  Columns: ");
                 text.push_str(&columns.join(", "));
             }
-            if let Some(count) = count_sqlite_table_rows(bytes, page_size, row.root_page, 128) {
+            if let Some(count) = count_sqlite_table_rows(
+                bytes,
+                page_size,
+                row.root_page,
+                MAX_SQLITE_TABLE_ROW_PAGES,
+            ) {
                 text.push_str(&format!(
                     "\n  Rows observed: {}{}",
                     format_number(count.rows as i64),
@@ -5678,7 +5725,7 @@ fn parse_sqlite_schema_summary(
     let mut rows = Vec::new();
     let mut partial = false;
     while let Some(page_no) = stack.pop() {
-        if rows.len() >= limit || seen.len() >= 32 {
+        if rows.len() >= limit || seen.len() >= MAX_SQLITE_SCHEMA_PAGES {
             partial = true;
             break;
         }
@@ -5691,7 +5738,9 @@ fn parse_sqlite_schema_summary(
         };
         let header = if page_no == 1 { 100usize } else { 0usize };
         match page.get(header).copied().unwrap_or(0) {
-            0x0D => parse_sqlite_schema_leaf_page(page, header, limit, &mut rows),
+            0x0D => {
+                partial |= parse_sqlite_schema_leaf_page(page, header, limit, &mut rows)
+            }
             0x05 => {
                 for child in sqlite_table_interior_children(page, header) {
                     stack.push(child);
@@ -5708,20 +5757,27 @@ fn parse_sqlite_schema_leaf_page(
     header: usize,
     limit: usize,
     rows: &mut Vec<SqliteSchemaRow>,
-) {
-    let cell_count = read_u16_be(page, header + 3).unwrap_or(0).min(256) as usize;
+) -> bool {
+    let declared_cell_count = read_u16_be(page, header + 3).unwrap_or(0) as usize;
+    let cell_count = declared_cell_count.min(256);
+    let mut partial = declared_cell_count > cell_count;
     for index in 0..cell_count {
         if rows.len() >= limit {
+            partial = true;
             break;
         }
         let ptr_offset = header + 8 + index * 2;
         let Some(cell_offset) = read_u16_be(page, ptr_offset).map(usize::from) else {
+            partial = true;
             break;
         };
         if let Some(row) = parse_sqlite_schema_leaf_cell(page, cell_offset) {
             rows.push(row);
+        } else {
+            partial = true;
         }
     }
+    partial
 }
 
 fn parse_sqlite_schema_leaf_cell(page: &[u8], offset: usize) -> Option<SqliteSchemaRow> {
@@ -5994,12 +6050,15 @@ fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option
             *pos = end;
             Some(value)
         }
+        3 => sqlite_record_signed_integer(payload, pos, 3),
         4 => {
             let end = pos.checked_add(4)?;
             let value = i32::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?) as i64;
             *pos = end;
             Some(value)
         }
+        5 => sqlite_record_signed_integer(payload, pos, 6),
+        6 => sqlite_record_signed_integer(payload, pos, 8),
         8 => Some(0),
         9 => Some(1),
         _ => {
@@ -6007,6 +6066,17 @@ fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option
             Some(0)
         }
     }
+}
+
+fn sqlite_record_signed_integer(payload: &[u8], pos: &mut usize, len: usize) -> Option<i64> {
+    let end = pos.checked_add(len)?;
+    let bytes = payload.get(*pos..end)?;
+    let mut value = if bytes.first()? & 0x80 != 0 { -1i64 } else { 0i64 };
+    for byte in bytes {
+        value = (value << 8) | i64::from(*byte);
+    }
+    *pos = end;
+    Some(value)
 }
 
 fn sqlite_skip_record_value(payload: &[u8], pos: &mut usize, serial: u64) -> Option<()> {
@@ -16848,6 +16918,71 @@ mod tests {
 
         assert!(summary.rows.is_empty());
         assert!(summary.partial);
+    }
+
+    #[test]
+    fn sqlite_schema_leaf_marks_invalid_cells_partial() {
+        let mut page = vec![0u8; 512];
+        page[0] = 0x0D;
+        page[3..5].copy_from_slice(&1u16.to_be_bytes());
+        page[8..10].copy_from_slice(&511u16.to_be_bytes());
+        let mut rows = Vec::new();
+
+        let partial = parse_sqlite_schema_leaf_page(&page, 0, 8, &mut rows);
+
+        assert!(rows.is_empty());
+        assert!(partial);
+    }
+
+    #[test]
+    fn sqlite_record_integer_decodes_wide_root_pages() {
+        for (serial, bytes, expected) in [
+            (3, vec![0x01, 0x02, 0x03], 0x010203),
+            (5, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06], 0x010203040506),
+            (6, vec![0, 0, 0, 0, 0, 0, 0x01, 0x02], 0x0102),
+        ] {
+            let mut pos = 0;
+            assert_eq!(
+                sqlite_record_integer(&bytes, &mut pos, serial),
+                Some(expected)
+            );
+            assert_eq!(pos, bytes.len());
+        }
+
+        let mut pos = 0;
+        assert_eq!(
+            sqlite_record_integer(&[0xFF, 0xFF, 0xFE], &mut pos, 3),
+            Some(-2)
+        );
+    }
+
+    #[test]
+    fn sqlite_schema_groups_keep_indexes_from_displacing_tables() {
+        let rows = vec![
+            SqliteSchemaRow {
+                typ: "index".to_string(),
+                name: "users_name".to_string(),
+                table_name: "users".to_string(),
+                root_page: 3,
+                sql: "CREATE INDEX users_name ON users(name)".to_string(),
+            },
+            SqliteSchemaRow {
+                typ: "table".to_string(),
+                name: "users".to_string(),
+                table_name: "users".to_string(),
+                root_page: 2,
+                sql: "CREATE TABLE users(id INTEGER, name TEXT)".to_string(),
+            },
+        ];
+        let mut text = String::new();
+
+        append_sqlite_schema_group(&mut text, &[], 512, &rows, "table", "Tables");
+        append_sqlite_schema_group(&mut text, &[], 512, &rows, "index", "Indexes");
+
+        assert!(text.contains("\nTables:"));
+        assert!(text.contains("\nIndexes:"));
+        assert!(text.contains("- users (table: users, root: 2)"));
+        assert!(text.contains("- users_name (table: users, root: 3)"));
     }
 
     #[test]

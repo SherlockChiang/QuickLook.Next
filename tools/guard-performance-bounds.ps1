@@ -172,6 +172,14 @@ Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' 
     "Delimited table models must retain their 65536-cell budget."
 Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Delimited table models must retain their 512 KiB character budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_OBJECTS:\s*usize\s*=\s*32' `
+    "SQLite previews must retain their 32-object schema budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP:\s*usize\s*=\s*8' `
+    "SQLite schema groups must retain their eight-object display budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_PAGES:\s*usize\s*=\s*32' `
+    "SQLite schema traversal must retain its 32-page budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
+    "SQLite row observations must retain their 128-page per-table budget."
 Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Android resource table decoding must retain its 32 MiB input cap."
 Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
