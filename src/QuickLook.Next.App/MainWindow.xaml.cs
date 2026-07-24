@@ -1303,6 +1303,8 @@ public sealed partial class MainWindow : Window
 
     private static string BuildDimensionsText(PreviewReady ready)
     {
+        if (ready.Kind == "database")
+            return UiStrings.EmptyValue;
         if (ready.Kind == "pdf" && ready.PageCount > 0)
             return FormatPageCount(ready.PageCount);
         if (ready.PreferredWidth > 0 && ready.PreferredHeight > 0)
@@ -1909,8 +1911,13 @@ public sealed partial class MainWindow : Window
            || IsOfficePreviewWithImages(ready));
 
     private static bool IsDatabasePath(string path)
-        => System.IO.Path.GetExtension(path).ToLowerInvariant()
-            is ".sqlite" or ".sqlite3" or ".db" or ".db3" or ".s3db" or ".sqlite-shm" or ".sqlite-wal" or ".mdb" or ".accdb";
+    {
+        string fileName = System.IO.Path.GetFileName(path);
+        return fileName.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("-shm", StringComparison.OrdinalIgnoreCase)
+            || System.IO.Path.GetExtension(path).ToLowerInvariant()
+                is ".sqlite" or ".sqlite3" or ".db" or ".db3" or ".s3db" or ".sqlite-shm" or ".sqlite-wal" or ".mdb" or ".accdb";
+    }
 
     private static bool IsPackagePreview(PreviewReady ready, string path)
     {

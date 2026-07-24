@@ -4898,7 +4898,14 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
     let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, "database", size, modified_unix);
-    if bytes.starts_with(b"SQLite format 3\0") {
+    let lower_path = path.to_ascii_lowercase();
+    if lower_path.ends_with("-wal") {
+        append_sqlite_wal_summary(&mut text, &bytes, size);
+    } else if lower_path.ends_with("-shm") {
+        text.push_str("\nFormat: SQLite shared-memory WAL index");
+        text.push_str("\nRole: transient index for the associated SQLite WAL file");
+        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+    } else if bytes.starts_with(b"SQLite format 3\0") {
         let page_size = read_u16_be(&bytes, 16)
             .map(|value| if value == 1 { 65536 } else { value as u32 })
             .unwrap_or(0);
@@ -4907,10 +4914,15 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
         if let Some(pages) = read_u32_be(&bytes, 28) {
             text.push_str(&format!("\nPages: {}", format_number(pages as i64)));
             if page_size > 0 {
-                text.push_str(&format!(
-                    "\nDatabase size from header: {}",
-                    format_bytes(pages as i64 * page_size as i64)
-                ));
+                let header_size = pages as i64 * page_size as i64;
+                text.push_str(&format!("\nDatabase size from header: {}", format_bytes(header_size)));
+                if size >= 0 && header_size != size {
+                    let difference = size.abs_diff(header_size);
+                    let relation = if header_size > size { "larger" } else { "smaller" };
+                    text.push_str(&format!(
+                        "\nSize status: header is {relation} than the file by {difference} bytes (the database may be incomplete or have uncheckpointed WAL data)"
+                    ));
+                }
             }
         }
         if let Some(encoding) = read_u32_be(&bytes, 56) {
@@ -4934,6 +4946,33 @@ fn render_database_info(path: &str, size: i64, modified_unix: i64) -> String {
         text.push_str("\nFormat: database file");
     }
     generic_info_json(path, "database", size, modified_unix, Some(text))
+}
+
+fn append_sqlite_wal_summary(text: &mut String, bytes: &[u8], size: i64) {
+    text.push_str("\nFormat: SQLite write-ahead log");
+    let magic = read_u32_be(bytes, 0).unwrap_or(0);
+    if !matches!(magic, 0x377F_0682 | 0x377F_0683) {
+        text.push_str("\nHeader: unrecognized or incomplete");
+        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+        return;
+    }
+    if let Some(version) = read_u32_be(bytes, 4) {
+        text.push_str(&format!("\nWAL version: {}", version));
+    }
+    if let Some(page_size) = read_u32_be(bytes, 8).filter(|value| *value > 0) {
+        text.push_str(&format!("\nPage size: {} bytes", page_size));
+        if size >= 32 {
+            let frame_size = i64::from(page_size) + 24;
+            text.push_str(&format!("\nFrames observed: {}", (size - 32) / frame_size));
+            if (size - 32) % frame_size != 0 {
+                text.push_str(" (trailing partial frame)");
+            }
+        }
+    }
+    if let Some(sequence) = read_u32_be(bytes, 12) {
+        text.push_str(&format!("\nCheckpoint sequence: {}", sequence));
+    }
+    text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
 }
 
 fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
@@ -16850,6 +16889,23 @@ mod tests {
         assert!(text.contains("Schema cookie: 11"));
         assert!(text.contains("Freelist pages: 7"));
         assert!(text.contains("SQLite version: 3045000"));
+    }
+
+    #[test]
+    fn sqlite_wal_summary_reports_frames_and_partial_tail() {
+        let mut bytes = vec![0u8; 32 + 2 * (24 + 512) + 1];
+        bytes[0..4].copy_from_slice(&0x377F_0682u32.to_be_bytes());
+        bytes[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+        bytes[8..12].copy_from_slice(&512u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(&7u32.to_be_bytes());
+        let mut text = String::new();
+
+        append_sqlite_wal_summary(&mut text, &bytes, bytes.len() as i64);
+
+        assert!(text.contains("Format: SQLite write-ahead log"));
+        assert!(text.contains("Page size: 512 bytes"));
+        assert!(text.contains("Frames observed: 2 (trailing partial frame)"));
+        assert!(text.contains("Checkpoint sequence: 7"));
     }
 
     #[test]

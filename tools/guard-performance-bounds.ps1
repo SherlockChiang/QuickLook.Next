@@ -141,12 +141,17 @@ Require-Pattern $nativeBridge 'CallInfoPreview[\s\S]*while\s*\(cap\s*<=\s*MaxNat
     "Native database summaries must honor the required output size instead of falling back to file icons."
 Require-Pattern $mainWindow 'nativeReady is null\s*&&\s*probe\.Kind\.Equals\("database"[\s\S]*DatabasePreviewUnavailable' `
     "Database parser failures must remain text previews instead of becoming Shell thumbnails."
+Require-Pattern $mainWindow 'BuildDimensionsText\(PreviewReady ready\)[\s\S]*ready\.Kind\s*==\s*"database"[\s\S]*UiStrings\.EmptyValue' `
+    "Database previews must not expose preferred window dimensions as file dimensions."
 $parserPolicy = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
 Require-Pattern $parserPolicy 'ParserHostKinds[\s\S]*"database"' `
     "Database parsing must remain isolated in ParserHost."
 $parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
 Require-Pattern $parserNativePreview 'infoKindBytes[\s\S]*ql_preview_info\([\s\S]*probe\.Size,[\s\S]*probe\.ModifiedUnix' `
     "ParserHost database previews must preserve pinned input metadata."
+$parserProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
+Require-Pattern $parserProgram 'EndsWith\("-wal"[\s\S]*"-wal"[\s\S]*EndsWith\("-shm"[\s\S]*"-shm"' `
+    "ParserHost anchors must preserve SQLite WAL and SHM identities."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
@@ -186,6 +191,8 @@ Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_PAGES:\s*usize\s*=\s*32' `
     "SQLite schema traversal must retain its 32-page budget."
 Require-Pattern $nativePreview 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
     "SQLite row observations must retain their 128-page per-table budget."
+Require-Pattern $nativePreview 'append_sqlite_wal_summary[\s\S]*Frames observed' `
+    "SQLite WAL files must remain metadata previews instead of generic file icons."
 Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Android resource table decoding must retain its 32 MiB input cap."
 Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `

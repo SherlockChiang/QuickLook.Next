@@ -68,9 +68,13 @@ public static class FallbackFileProbe
     public static FileProbe CreateMetadataOnlyProbe(string path)
     {
         string extension = Path.GetExtension(path);
-        string kind = TextExtensions.Contains(extension) || TextFileNames.Contains(Path.GetFileName(path))
+        string fileName = Path.GetFileName(path);
+        string kind = TextExtensions.Contains(extension) || TextFileNames.Contains(fileName)
             ? "text"
-            : MetadataKinds.GetValueOrDefault(extension, "unknown");
+            : fileName.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
+                || fileName.EndsWith("-shm", StringComparison.OrdinalIgnoreCase)
+                ? "database"
+                : MetadataKinds.GetValueOrDefault(extension, "unknown");
         long size = 0;
         long modifiedUnix = 0;
         try

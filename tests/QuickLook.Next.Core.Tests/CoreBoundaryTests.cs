@@ -123,6 +123,8 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("font.woff2", "font")]
     [InlineData("mail.eml", "mail")]
     [InlineData("data.sqlite", "database")]
+    [InlineData("data.db-wal", "database")]
+    [InlineData("data.sqlite3-shm", "database")]
     [InlineData("dump.mdmp", "dump")]
     [InlineData("library.so", "elf")]
     public void Metadata_probe_preserves_registered_native_kinds(string path, string expectedKind)

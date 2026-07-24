@@ -685,7 +685,11 @@ fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'stati
     if FONT_EXTS.contains(&ext) {
         return "font";
     }
-    if DATABASE_EXTS.contains(&ext) {
+    let lower_file_name = file_name.to_ascii_lowercase();
+    if DATABASE_EXTS.contains(&ext)
+        || lower_file_name.ends_with("-wal")
+        || lower_file_name.ends_with("-shm")
+    {
         return "database";
     }
     if MAIL_EXTS.contains(&ext) {
@@ -1677,6 +1681,15 @@ mod tests {
     #[test]
     fn classify_routes_svg_to_image_preview() {
         assert_eq!(classify("drawing.svg", ".svg", b"<svg xmlns=", false), "image");
+    }
+
+    #[test]
+    fn classify_routes_sqlite_auxiliary_suffixes_to_database_preview() {
+        assert_eq!(classify("data.db-wal", ".db-wal", &[], false), "database");
+        assert_eq!(
+            classify("data.sqlite3-shm", ".sqlite3-shm", &[], false),
+            "database"
+        );
     }
 
     #[test]

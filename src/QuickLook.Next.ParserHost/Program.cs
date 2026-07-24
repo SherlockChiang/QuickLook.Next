@@ -570,8 +570,13 @@ static void CleanupStalePreviewInputs(string root)
     long sourceLength,
     string root)
 {
-    string extension = Path.GetExtension(logicalPath);
-    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
+    string fileName = Path.GetFileName(logicalPath);
+    string extension = fileName.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
+        ? "-wal"
+        : fileName.EndsWith("-shm", StringComparison.OrdinalIgnoreCase)
+            ? "-shm"
+            : Path.GetExtension(logicalPath);
+    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c is not '.' and not '-'))
         extension = "";
     string directory = Path.Combine(root, "input-" + requestId);
     string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
