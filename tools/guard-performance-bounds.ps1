@@ -75,6 +75,8 @@ Require-Pattern $officePresenter 'PageSlot\?\s+pageToMaterialize\s*=\s*null' `
 Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
     "Office virtual-page updates must remain dispatcher-queued."
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
+Require-Pattern $mainWindow 'Task\.WhenAll\([\s\S]*PrewarmHostAsync\("ParserHost"[\s\S]*PrewarmHostAsync\("RasterHost"' `
+    "ParserHost and RasterHost idle prewarming must run concurrently."
 Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
     "Preview reset must release retained Office layout state."
 Require-Pattern $mainWindow 'PreviewRoot\.PointerCanceled\s*\+=' `

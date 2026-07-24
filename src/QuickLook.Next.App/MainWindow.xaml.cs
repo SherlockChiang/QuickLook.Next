@@ -413,19 +413,29 @@ public sealed partial class MainWindow : Window
         try
         {
             await Task.Delay(1500, cancellationToken);
-            using (DiagLog.TraceScope("App", "ParserHost idle prewarm", 500))
-                await EnsureParserHostStartedAsync(cancellationToken);
-
-            await Task.Delay(1500, cancellationToken);
-            using (DiagLog.TraceScope("App", "RasterHost idle prewarm", 750))
-                await EnsureRasterHostStartedAsync(cancellationToken);
+            await Task.WhenAll(
+                PrewarmHostAsync("ParserHost", 500, () => EnsureParserHostStartedAsync(cancellationToken)),
+                PrewarmHostAsync("RasterHost", 750, () => EnsureRasterHostStartedAsync(cancellationToken)));
         }
         catch (OperationCanceledException)
         {
         }
-        catch (Exception ex)
+
+        async Task PrewarmHostAsync(string hostName, int warningMilliseconds, Func<Task> start)
         {
-            DiagLog.Write("App", "preview host prewarm failed: " + ex.Message);
+            try
+            {
+                using (DiagLog.TraceScope("App", $"{hostName} idle prewarm", warningMilliseconds))
+                    await start();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                DiagLog.Write("App", $"{hostName} prewarm failed: {ex.Message}");
+            }
         }
     }
 
