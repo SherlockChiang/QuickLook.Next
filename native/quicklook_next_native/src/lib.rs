@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use image::{AnimationDecoder, ImageReader};
+use image::{AnimationDecoder, ImageDecoder, ImageReader};
 
 mod preview;
 
@@ -919,6 +919,28 @@ pub extern "C" fn ql_decode_webp_frames_sized_cancelable(
     write_animation_frames(width, height, frames, out, out_cap)
 }
 
+#[no_mangle]
+pub extern "C" fn ql_decode_png_frames_sized_cancelable(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out: *mut u8,
+    out_cap: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        Some(s) => s,
+        None => return -1,
+    };
+    if cancel_requested(cancel_cb) { return -3; }
+    let (width, height, frames) = match decode_png_frames_bgra(path, target_width, target_height, cancel_cb) {
+        Some(decoded) => decoded,
+        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+    };
+    write_animation_frames(width, height, frames, out, out_cap)
+}
+
 fn decode_image_bgra(
     path: &str,
     target_width: u32,
@@ -1184,10 +1206,19 @@ fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, ca
         }
     };
     decode_animation_frames_bgra(
-        std::iter::once(first).chain(frames.map_while(|frame| frame.ok())),
-        target_width,
-        target_height,
-        cancel_cb)
+        std::iter::once(Ok(first)).chain(frames), target_width, target_height, cancel_cb)
+}
+
+fn decode_png_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) { return None; }
+    let file = std::fs::File::open(path).ok()?;
+    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(file)).ok()?;
+    let (original_width, original_height) = decoder.dimensions();
+    if !decoder.is_apng().ok()?
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
+        return None;
+    }
+    decode_animation_frames_bgra(decoder.apng().ok()?.into_frames(), target_width, target_height, cancel_cb)
 }
 
 fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
@@ -1215,10 +1246,10 @@ fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, 
     total as i32
 }
 
-fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::Frame>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::ImageResult<image::Frame>>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     if cancel_requested(cancel_cb) { return None; }
     let mut frames = frames.into_iter();
-    let first = frames.next()?;
+    let first = frames.next()?.ok()?;
     let original_width = first.buffer().width();
     let original_height = first.buffer().height();
     if should_skip_native_image_decode(original_width, original_height)
@@ -1242,7 +1273,8 @@ fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::Frame>, 
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
-    for frame in std::iter::once(first).chain(frames).take(max_frames) {
+    for frame in std::iter::once(Ok(first)).chain(frames).take(max_frames) {
+        let frame = frame.ok()?;
         if cancel_requested(cancel_cb) { return None; }
         let (num, den) = frame.delay().numer_denom_ms();
         let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
@@ -2098,6 +2130,35 @@ mod tests {
 
     fn jpeg_with_icc_segment() -> Vec<u8> {
         jpeg_with_icc_chunks(&[b"quicklook-next-test-icc".as_slice()])
+    }
+
+    #[test]
+    fn native_apng_frame_extraction_returns_composited_frames() {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-animation-{}.png",
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&path).expect("create APNG");
+        let mut encoder = png::Encoder::new(file, 2, 1);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_animated(2, 0).expect("enable APNG");
+        let mut writer = encoder.write_header().expect("write APNG header");
+        writer.set_frame_delay(1, 10).expect("first delay");
+        writer.write_image_data(&[255, 0, 0, 255, 255, 0, 0, 255]).expect("first frame");
+        writer.set_frame_delay(2, 10).expect("second delay");
+        writer.write_image_data(&[0, 255, 0, 255, 0, 255, 0, 255]).expect("second frame");
+        writer.finish().expect("finish APNG");
+
+        let (width, height, frames) = decode_png_frames_bgra(path.to_str().unwrap(), 2, 1, None)
+            .expect("decode APNG");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!((width, height, frames.len()), (2, 1, 2));
+        assert_eq!(frames[0].0, 100);
+        assert_eq!(frames[1].0, 200);
+        assert_eq!(&frames[0].1[..4], &[0, 0, 255, 255]);
+        assert_eq!(&frames[1].1[..4], &[0, 255, 0, 255]);
     }
 
     fn jpeg_with_split_icc_segments() -> Vec<u8> {

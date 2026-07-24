@@ -29,6 +29,8 @@ Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAMES:\s*usize\s*=\s*120' `
     "Animated image decoding must remain capped at 120 frames."
 Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_BYTES:\s*usize\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
     "Animated frame packets must remain capped at 64 MiB."
+Require-Pattern $nativeLibrary 'PngDecoder::new[\s\S]*is_apng\(\)[\s\S]*\.apng\(\)' `
+    "APNG playback must use the bounded native animation pipeline."
 
 $imageWaveform = Join-Path $Root "src/QuickLook.Next.Core/ImageWaveformBuilder.cs"
 Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `
@@ -61,6 +63,10 @@ Require-Pattern $animatedImagePresenter 'Task\.Run\(\(\)\s*=>\s*ImageWaveformBui
     "Animated image waveform generation must remain off the UI thread."
 Require-Pattern $animatedImagePresenter 'version\s*!=\s*_waveformVersion' `
     "Animated image waveform callbacks must reject stale presenter generations."
+Require-Pattern $animatedImagePresenter '"\.png"\s*=>\s*TryReadAnimatedPngSize' `
+    "Animated PNG detection must require APNG chunk inspection."
+Require-Pattern $animatedImagePresenter 'type\.SequenceEqual\("IDAT"u8\)[\s\S]*return null' `
+    "Static PNG files must not trigger animation frame extraction."
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
 Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `

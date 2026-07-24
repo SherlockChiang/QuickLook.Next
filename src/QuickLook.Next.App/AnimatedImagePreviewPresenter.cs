@@ -487,6 +487,7 @@ internal sealed class AnimatedImagePreviewPresenter
         {
             ".gif" => TryReadGifSize(path),
             ".webp" => TryReadAnimatedWebPSize(path),
+            ".png" => TryReadAnimatedPngSize(path),
             _ => null,
         };
 
@@ -509,6 +510,57 @@ internal sealed class AnimatedImagePreviewPresenter
         {
             return null;
         }
+    }
+
+    private static (int Width, int Height)? TryReadAnimatedPngSize(string path)
+    {
+        const long maxHeaderScanBytes = 4L * 1024 * 1024;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> signature = stackalloc byte[8];
+            Span<byte> chunkHeader = stackalloc byte[8];
+            Span<byte> ihdr = stackalloc byte[13];
+            ReadOnlySpan<byte> pngSignature = [0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A];
+            if (stream.Read(signature) != signature.Length
+                || !signature.SequenceEqual(pngSignature)
+                || stream.Read(chunkHeader) != chunkHeader.Length
+                || System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(chunkHeader[..4]) != 13
+                || !chunkHeader[4..].SequenceEqual("IHDR"u8)
+                || stream.Read(ihdr) != ihdr.Length)
+            {
+                return null;
+            }
+            int width = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(ihdr[..4]));
+            int height = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(ihdr[4..8]));
+            stream.Position += 4; // IHDR CRC
+            while (stream.Position + chunkHeader.Length <= stream.Length
+                && stream.Position <= maxHeaderScanBytes)
+            {
+                if (stream.Read(chunkHeader) != chunkHeader.Length)
+                    return null;
+                uint length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(chunkHeader[..4]);
+                ReadOnlySpan<byte> type = chunkHeader[4..];
+                long next = checked(stream.Position + length + 4L);
+                if (next > stream.Length)
+                    return null;
+                if (type.SequenceEqual("acTL"u8))
+                {
+                    Span<byte> control = stackalloc byte[8];
+                    if (length != control.Length || stream.Read(control) != control.Length)
+                        return null;
+                    uint frames = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(control[..4]);
+                    return frames > 0 && width > 0 && height > 0 ? (width, height) : null;
+                }
+                if (type.SequenceEqual("IDAT"u8) || type.SequenceEqual("IEND"u8))
+                    return null;
+                stream.Position = next;
+            }
+        }
+        catch
+        {
+        }
+        return null;
     }
 
     public static AnimatedImageRenderPlan? CreateRenderPlan(string path)

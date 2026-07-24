@@ -31,15 +31,22 @@ internal static class NativeAnimationPacketDecoder
         byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
         byte[] outBuf, nuint outCap, NativeCancelCallback cancelCallback);
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_png_frames_sized_cancelable(
+        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+        byte[] outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+
     public static async Task<byte[]?> TryDecodeAsync(
         string path, uint targetWidth, uint targetHeight, CancellationToken cancellationToken)
     {
         string extension = Path.GetExtension(path);
-        NativeAnimationCall? call = extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-            ? ql_decode_gif_frames_sized_cancelable
-            : extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
-                ? ql_decode_webp_frames_sized_cancelable
-                : null;
+        NativeAnimationCall? call = extension.ToLowerInvariant() switch
+        {
+            ".gif" => ql_decode_gif_frames_sized_cancelable,
+            ".webp" => ql_decode_webp_frames_sized_cancelable,
+            ".png" => ql_decode_png_frames_sized_cancelable,
+            _ => null,
+        };
         if (call is null || !File.Exists(path) || new FileInfo(path).Length > MaxInputBytes)
             return null;
 
