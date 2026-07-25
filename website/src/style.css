@@ -19,8 +19,37 @@ body {
   overflow-x: hidden;
 }
 
-.hero-media {
+.hero-backdrop {
+  inset: -5rem;
+  width: calc(100% + 10rem);
+  height: calc(100% + 10rem);
   object-fit: cover;
+  object-position: center;
+  opacity: 0.62;
+  filter: blur(64px) saturate(1.16) brightness(0.7);
+  transform: scale(1.08);
+}
+
+.hero-poster-frame {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 1.5rem;
+  background: rgb(2 6 23 / 0.34);
+  box-shadow:
+    0 30px 90px rgb(0 0 0 / 0.32),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+  backdrop-filter: blur(10px);
+}
+
+.hero-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   object-position: center;
   filter: saturate(1.04) contrast(1.02);
 }
@@ -271,9 +300,14 @@ body {
 }
 
 @media (max-width: 767px) {
-  .hero-media {
-    object-position: 72% center;
-    filter: saturate(0.92) brightness(0.68);
+  .hero-backdrop {
+    opacity: 0.5;
+    filter: blur(52px) saturate(1.08) brightness(0.62);
+  }
+
+  .hero-poster-frame {
+    min-height: 13.5rem;
+    border-radius: 1.25rem;
   }
 }
 
