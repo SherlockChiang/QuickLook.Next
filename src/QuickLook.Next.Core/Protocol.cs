@@ -141,7 +141,14 @@ public sealed record PreviewPageError(
 public sealed record PreviewClose(string RequestId) : ControlMessage;
 
 /// <summary>App → ParserHost: extract one archive listing entry into the native bounded temp cache.</summary>
-public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, string EntryPath) : ControlMessage;
+public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, string EntryPath) : ControlMessage
+{
+    /// <summary>
+    /// For a local HANDLE preview, identifies the parent source retained by ParserHost. When present,
+    /// ParserHost must fail closed if that exact parent is unavailable and must not fall back to ArchivePath.
+    /// </summary>
+    public string? ParentPreviewRequestId { get; init; }
+}
 
 /// <summary>ParserHost → App: terminal successful archive entry extraction.</summary>
 public sealed record ArchiveEntryExtracted(

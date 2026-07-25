@@ -120,6 +120,7 @@ public sealed record PreviewListing(string RootName, string RootPath, string Lis
 {
     public string Summary { get; init; } = "";
     public bool IsPartial { get; init; }
+    public bool CanPreviewEntries { get; init; } = true;
     public int EncryptedFileCount { get; init; }
     public PreviewListingItem[] Items { get; init; } = [];
 }

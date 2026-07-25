@@ -23,11 +23,12 @@ left visible instead of hidden behind vague TODOs.
   `PreviewResult.Bgra` is marked obsolete and the hot path uses Rust/native JSON
   plus shared raster surfaces instead.
 - Native Reader and XML preview boundaries are hardened:
-  - ABI 2 text, executable, torrent, and SQLite snapshot previews accept authenticated ParserHost
-    disk-file handles directly, validate exact lengths, and reopen them with independent file
-    positions before Rust reads them.
-  - Plain text, Markdown, CSV, TSV, executable metadata, torrent listings, and database previews no
-    longer create ParserHost input anchors or reopen the logical source path.
+  - ABI 2 text, executable, torrent, SQLite snapshot, archive, ebook, and archive-entry previews
+    accept authenticated ParserHost disk-file handles directly, validate exact lengths, and reopen
+    them with independent file positions before Rust reads them.
+  - Plain text, Markdown, CSV, TSV, executable metadata, torrent listings, database previews,
+    archive listings, and ebook previews no longer create ParserHost input anchors or reopen the
+    logical source path.
   - Executable reads remain capped at a cancellable 4 MiB prefix. Torrent reads are exact and
     cancellable with a 16 MiB cap before the existing depth-64/node-100000 bencode limits.
   - SQLite uses the dedicated `PreviewOpenSqliteHandles` IPC envelope and
@@ -38,7 +39,26 @@ left visible instead of hidden behind vague TODOs.
     first invalid frame, and applies only frames through the last valid commit marker.
   - Local SQLite files and existing companions are pinned read-only with `FILE_SHARE_READ` only.
     Sharing violations fail closed; only a missing optional companion is treated as absent.
-  - The HANDLE ABI keeps stable capability bits 0-3 and status codes through
+  - Published direct HANDLE archive listings retain their owning source handle by parent preview
+    request ID. This includes an EPUB presented as an archive when its already-open ZIP reader has
+    no usable OPF. Entry extraction resolves that parent before the legacy path fallback and calls
+     the dedicated archive-entry HANDLE ABI. Parent close, failed publication, replacement, and
+     disconnect dispose retained owners and reject new leases; an in-flight extraction keeps its
+     independently reopened lease until completion. Normal content ebook previews remain stateless.
+  - Archive HANDLE inputs are capped at 256 MiB. ZIP container validation limits central-directory
+    work to 32 MiB and declared entries to 100,000 before listing scans apply their existing
+    10,000-record/5,000-item bounds. TAR/TGZ scans retain their 512 MiB decompressed-read, four-second,
+    and cancellation limits. Entry extraction retains 64 MiB compressed/uncompressed caps, a
+     1,000:1 expansion-ratio cap, and a four-second deadline. ZIP-compatible listings advertise entry
+     preview; TAR/TGZ/GZip listings are browse-only until bounded extraction is implemented.
+  - Ebook HANDLE inputs are capped at 256 MiB. EPUB processing limits central-directory work to
+    32 MiB, ZIP entries to 8,192, cumulative decompression to 16 MiB, metadata XML to 2 MiB, chapter
+     input to 768 KiB, retained chapters to ten, and retained text to 140 Ki characters. Missing or
+     unusable OPF data reuses that same validated ZIP reader to publish a bounded archive listing with no root
+    path; it never reopens the logical name through the path-based archive renderer.
+  - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
+    snapshot (3), archive (4), reserved Office (5), ebook (6), and archive entry (7). The Office bit
+    is not advertised as migrated. Implemented HANDLE exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
     and direct invalid-handle/file-position tests.
   - UTF-8 text preview truncation backs up to a valid char boundary.
@@ -146,8 +166,13 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   CHM topic extraction, Outlook MSG property streams, and database schema
   browsing should only be added with bounded parsers and no WebView fallback.
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
-  input. SQLite main/WAL/SHM snapshots now have an explicit multi-handle boundary; archive,
-  Office/ebook, and raster formats still require broader adapters.
+  input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
+  boundaries. Office main/layout and follow-up hero extraction must migrate together before the
+  reserved Office capability is advertised; raster formats still require broader adapters.
+- The legacy path entry points remain for cloud and explicit compatibility inputs. Local
+  Archive/Ebook requests must stay on the HANDLE routes. The App's initial probe and the extracted
+  archive child's downstream App/RasterHost compatibility anchor are still path-based and remain
+  visible limitations rather than being described as complete migration.
 
 ## Why Legacy Plugin Source Remains
 

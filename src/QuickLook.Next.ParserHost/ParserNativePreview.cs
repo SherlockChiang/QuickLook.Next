@@ -36,6 +36,16 @@ internal static class ParserNativePreview
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_archive_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     public static void EnsureCompatible()
     {
@@ -100,6 +110,16 @@ internal static class ParserNativePreview
     private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_ebook_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_ebook_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -149,6 +169,18 @@ internal static class ParserNativePreview
         nuint entryPathLen,
         byte[] outBuf,
         nuint outCap,
+        NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_archive_entry_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] entryPathUtf8,
+        nuint entryPathLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -237,6 +269,8 @@ internal static class ParserNativePreview
             "text" => ql_preview_text_handle,
             "executable" => ql_preview_executable_handle,
             "torrent" => ql_preview_torrent_handle,
+            "archive" => ql_preview_archive_handle,
+            "ebook" => ql_preview_ebook_handle,
             _ => null,
         };
         if (handleCall is null
@@ -398,7 +432,9 @@ internal static class ParserNativePreview
     public static bool UsesHandleInput(string kind)
         => kind.Equals("text", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
-            || kind.Equals("torrent", StringComparison.OrdinalIgnoreCase);
+            || kind.Equals("torrent", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("ebook", StringComparison.OrdinalIgnoreCase);
 
     public static string DescribeHandleFailure(int status)
         => status switch
@@ -444,6 +480,71 @@ internal static class ParserNativePreview
         }
         catch (OperationCanceledException) { throw; }
         catch { return null; }
+    }
+
+    public static (int Status, string? Path) TryExtractArchiveEntryHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName,
+        string entryPath,
+        CancellationToken cancellationToken)
+    {
+        const int maxPathBytes = 32 * 1024;
+        if (sourceLength < 0
+            || sourceHandle.IsInvalid
+            || sourceHandle.IsClosed
+            || string.IsNullOrWhiteSpace(entryPath))
+        {
+            return (NativeAbi.StatusInvalidArgument, null);
+        }
+
+        logicalName = Path.GetFileName(logicalName);
+        if (string.IsNullOrEmpty(logicalName))
+            return (NativeAbi.StatusInvalidArgument, null);
+        byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
+        if (logicalNameBytes.Length > NativeAbi.MaxLogicalNameUtf8Bytes)
+            return (NativeAbi.StatusInvalidArgument, null);
+
+        byte[] entryPathBytes = Encoding.UTF8.GetBytes(entryPath);
+        NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
+        bool addRef = false;
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(maxPathBytes);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sourceHandle.DangerousAddRef(ref addRef);
+            int status = ql_extract_archive_entry_handle(
+                sourceHandle.DangerousGetHandle(),
+                checked((ulong)sourceLength),
+                logicalNameBytes,
+                (nuint)logicalNameBytes.Length,
+                entryPathBytes,
+                (nuint)entryPathBytes.Length,
+                buffer,
+                (nuint)maxPathBytes,
+                out nuint required,
+                cancel);
+            if (status != NativeAbi.StatusOk)
+                return (status, null);
+            if (required is 0 or > maxPathBytes)
+                return (NativeAbi.StatusInternal, null);
+            return (status, Encoding.UTF8.GetString(buffer, 0, checked((int)required)));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (ObjectDisposedException)
+        {
+            return (NativeAbi.StatusInvalidHandle, null);
+        }
+        catch (OverflowException)
+        {
+            return (NativeAbi.StatusLengthMismatch, null);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+            if (addRef) sourceHandle.DangerousRelease();
+            GC.KeepAlive(cancel);
+        }
     }
 
     public static byte[]? TryExtractHeroRaster(string kind, string path, CancellationToken cancellationToken)

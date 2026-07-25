@@ -1813,15 +1813,56 @@ public sealed partial class MainWindow : Window
 
     private async Task PreviewListingItemAsync(PreviewListing? listing, ListingRow row)
     {
+        int generation = _previewSession.Generation;
+        CancellationToken token = CurrentPreviewToken;
+        string? requestId = _previewSession.CurrentRequestId;
+        if (!IsPreviewGenerationCurrent(generation, token))
+            return;
+
         string? path = row.NativePath;
         ArchiveEntryHandoff? archiveHandoff = null;
+        string? currentParserPreviewRequestId = null;
+        if (!_currentPreviewWasCloudPlaceholder
+            && _previewSession.CurrentRequestId is { } currentRequestId
+            && _requestHosts.TryGetValue(currentRequestId, out PreviewHostOwner owner)
+            && owner == PreviewHostOwner.Parser)
+        {
+            currentParserPreviewRequestId = currentRequestId;
+        }
+        // Direct HANDLE archive listings deliberately omit RootPath. Anchored package and legacy/cloud
+        // listings retain a real path and must continue through the compatibility extraction branch.
+        bool isParentBoundArchiveListing =
+            listing is not null
+            && string.IsNullOrWhiteSpace(listing.RootPath)
+            && (string.Equals(_currentProbe?.Kind, "archive", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(_currentProbe?.Kind, "ebook", StringComparison.OrdinalIgnoreCase));
+        string? archiveParentRequestId =
+            isParentBoundArchiveListing
+                ? currentParserPreviewRequestId
+                : null;
         if (string.IsNullOrWhiteSpace(path)
             && listing is not null
             && listing.ListingKind.Equals("archive", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(listing.RootPath))
+            && (archiveParentRequestId is not null || !string.IsNullOrWhiteSpace(listing.RootPath)))
         {
             await EnsureParserHostStartedAsync();
-            archiveHandoff = await _parserSupervisor!.ExtractArchiveEntryAsync(listing.RootPath, row.Path, CurrentPreviewToken);
+            if (!IsPreviewGenerationCurrent(generation, token)
+                || !string.Equals(_previewSession.CurrentRequestId, requestId, StringComparison.Ordinal))
+            {
+                return;
+            }
+            archiveHandoff = await _parserSupervisor!.ExtractArchiveEntryAsync(
+                listing.RootPath,
+                row.Path,
+                archiveParentRequestId,
+                token);
+            if (!IsPreviewGenerationCurrent(generation, token)
+                || !string.Equals(_previewSession.CurrentRequestId, requestId, StringComparison.Ordinal))
+            {
+                if (archiveHandoff is not null)
+                    await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
+                return;
+            }
             if (archiveHandoff is not null)
             {
                 path = archiveHandoff.Path;
@@ -1831,7 +1872,15 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await PreviewWindowPathAsync(path, archiveHandoff);
+        if (IsPreviewGenerationCurrent(generation, token)
+            && string.Equals(_previewSession.CurrentRequestId, requestId, StringComparison.Ordinal))
+        {
+            await PreviewWindowPathAsync(path, archiveHandoff);
+        }
+        else if (archiveHandoff is not null)
+        {
+            await _parserSupervisor!.ReleaseArchiveEntryAsync(archiveHandoff);
+        }
     }
 
     private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)

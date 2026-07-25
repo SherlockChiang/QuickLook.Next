@@ -247,6 +247,9 @@ if (Test-Path $protocolPath) {
     if ($protocolText -match 'ArchiveEntryExtracted\([^\)]*TempPath') {
         Add-Failure "Archive entry handoffs must not expose a temporary path"
     }
+    if ($protocolText -notmatch 'record\s+ArchiveEntryExtract\([^;]*ArchivePath,[^;]*EntryPath\)\s*:\s*ControlMessage\s*\{[\s\S]*?string\?\s+ParentPreviewRequestId\s*\{\s*get;\s*init;\s*\}') {
+        Add-Failure "Archive entry requests must carry an optional parent preview request ID before the legacy path fallback"
+    }
     if ($protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewOpenSqliteHandles\),\s*"preview\.open\.sqlite-handles"\)' -or
         $protocolText -notmatch 'record PreviewOpenSqliteHandles\([^;]*MainHandle,[^;]*MainLength,[^;]*WalHandle,[^;]*WalLength,[^;]*ShmHandle,[^;]*ShmLength,[^;]*LogicalPath,[^;]*FileProbe Probe\)\s*:\s*ControlMessage;') {
         Add-Failure "SQLite snapshots must use a dedicated main/WAL/SHM handle IPC envelope"
@@ -462,8 +465,8 @@ if (Test-Path $parserHostProgram) {
         -1
     }
     $handleTask = $handleCaseText.IndexOf("_ = Task.Run(async () =>", [StringComparison]::Ordinal)
-    $ownedHandleScope = $handleCaseText.IndexOf(
-        "using var ownedSourceHandle = sourceHandle;",
+    $ownedHandleAssignment = $handleCaseText.IndexOf(
+        "var ownedSourceHandle = sourceHandle;",
         [StringComparison]::Ordinal)
     if ($takeHandle -lt 0 -or
         $envelopeValidation -le $takeHandle -or
@@ -475,7 +478,9 @@ if (Test-Path $parserHostProgram) {
         $duplicateHandleDispose -le $requestRegistration -or
         $duplicateHandleBreak -le $duplicateHandleDispose -or
         $handleTask -le $duplicateHandleBreak -or
-        $ownedHandleScope -le $handleTask) {
+        $ownedHandleAssignment -le $handleTask -or
+        $handleCaseText -notmatch 'bool\s+sourceRetained\s*=\s*false' -or
+        $handleCaseText -notmatch 'finally\s*\{[\s\S]*if\s*\(!published\)[\s\S]*DeleteRetainedPreviewSource\(open\.RequestId\)[\s\S]*if\s*\(!sourceRetained\)\s*\r?\n\s*ownedSourceHandle\.Dispose\(\)') {
         Add-Failure "ParserHost must adopt each transferred HANDLE before validation and dispose every early-return path"
     }
     $directHandleBranch = $handleCaseText.IndexOf(
@@ -490,11 +495,39 @@ if (Test-Path $parserHostProgram) {
     $anchorCreation = $handleCaseText.IndexOf("var input = CreatePreviewInput(", [StringComparison]::Ordinal)
     $directHandleBranchEndsBeforeAnchor = $handleCaseText -match 'if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)\s*\{[\s\S]*ParserNativePreview\.TryPreviewHandle\([\s\S]*\r?\n\s*return;\s*\r?\n\s*\}\s*\r?\n\s*var input = CreatePreviewInput\('
     if ($directHandleBranch -lt 0 -or $handlePreview -le $directHandleBranch -or $directHandleReturn -le $handlePreview -or $anchorCreation -le $directHandleReturn -or -not $directHandleBranchEndsBeforeAnchor) {
-        Add-Failure "ParserHost text, executable, and torrent previews must use the native HANDLE ABI before any input anchor is created"
+        Add-Failure "ParserHost text, executable, torrent, archive, and ebook previews must use the native HANDLE ABI before any input anchor is created"
     }
     if ($handleCaseText -notmatch 'ParserNativePreview\.TryPreviewHandle\(\s*kind,\s*ownedSourceHandle,' -or
         $handleCaseText -notmatch 'CreatePreviewInput\([^;]*ownedSourceHandle,') {
         Add-Failure "ParserHost must pass only the adopted owning HANDLE to native and anchored preview paths"
+    }
+    $retainedSourcePath = Join-Path $Root "src/QuickLook.Next.ParserHost/RetainedPreviewSource.cs"
+    $retainedSourceText = Get-Content -LiteralPath $retainedSourcePath -Raw
+    if ($parserHostProgramText -notmatch 'retainedPreviewSources\s*=\s*new\s+ConcurrentDictionary<string,\s*RetainedPreviewSource>\(\)' -or
+        $handleCaseText -notmatch 'handleReady\?\.Listing\?\.CanPreviewEntries\s*==\s*true\s*\?\s*RetainedPreviewFollowUps\.ArchiveEntry\s*:\s*RetainedPreviewFollowUps\.None' -or
+        $handleCaseText -notmatch 'if\s*\(followUps\s*!=\s*RetainedPreviewFollowUps\.None\)\s*\{[\s\S]*new\s+RetainedPreviewSource\(\s*ownedSourceHandle,[\s\S]*retainedPreviewSources\.TryAdd\(open\.RequestId,\s*retainedSource\)' -or
+        $handleCaseText -notmatch 'sourceRetained\s*=\s*true' -or
+        $parserHostProgramText -notmatch 'case\s+PreviewClose\s+close[\s\S]*?DeleteRetainedPreviewSource\(close\.RequestId\)' -or
+        $parserHostProgramText -notmatch 'foreach\s*\(string requestId in retainedPreviewSources\.Keys\)\s*\r?\n\s*DeleteRetainedPreviewSource\(requestId\)' -or
+        $parserHostProgramText -notmatch 'void\s+DeleteRetainedPreviewSource\(string requestId\)[\s\S]*retainedPreviewSources\.TryRemove\(requestId,\s*out var source\)[\s\S]*source\.Dispose\(\)' -or
+        $retainedSourceText -notmatch 'bool\s+TryAcquire\([^)]*RetainedPreviewFollowUps followUp,[^)]*out RetainedPreviewSourceLease\? lease\)' -or
+        $retainedSourceText -notmatch 'WindowsHandleTransfer\.ReopenReadOnlyFile\(Handle,\s*Length\)' -or
+        $retainedSourceText -notmatch 'class\s+RetainedPreviewSourceLease[\s\S]*Handle\.Dispose\(\)') {
+        Add-Failure "Interactive archive sources must be retained by request ID and disposed on failure, close, replacement, and disconnect"
+    }
+    if (([regex]::Matches(
+            $parserHostProgramText,
+            'DeleteRetainedPreviewSource\(activePreviewRequestId\)')).Count -lt 2) {
+        Add-Failure "Replacing any active ParserHost preview must release its retained source HANDLE"
+    }
+
+    $archiveExtractCase = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+ArchiveEntryExtract\s+extract[\s\S]*?(?=\r?\n\s*case\s+ArchiveEntryExtractClose)').Value
+    if ($archiveExtractCase -notmatch 'if\s*\(extract\.ParentPreviewRequestId\s+is\s+\{\s*\}\s+parentRequestId\)\s*\{[\s\S]*retainedPreviewSources\.TryGetValue\(parentRequestId,[\s\S]*retainedArchiveSource\.TryAcquire\(\s*RetainedPreviewFollowUps\.ArchiveEntry,\s*out retainedArchiveLease\)[\s\S]*break;\s*\}' -or
+        $archiveExtractCase -notmatch 'if\s*\(retainedArchiveLease\s+is\s+not\s+null\)\s*\{[\s\S]*ParserNativePreview\.TryExtractArchiveEntryHandle\([\s\S]*\}\s*else\s*\{[\s\S]*ParserNativePreview\.TryExtractArchiveEntry\(\s*extract\.ArchivePath,' -or
+        $archiveExtractCase -notmatch 'finally\s*\{[\s\S]*retainedArchiveLease\?\.Dispose\(\)[\s\S]*if\s*\(!handoffDelivered[\s\S]*archiveEntries\.TryRemove\(extract\.RequestId,\s*out var failedEntry\)') {
+        Add-Failure "Archive entry extraction must resolve and validate an optional retained parent before an else-only legacy path fallback"
     }
 
     $parserNativePreviewPath = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
@@ -503,6 +536,8 @@ if (Test-Path $parserHostProgram) {
         text = "ql_preview_text_handle"
         executable = "ql_preview_executable_handle"
         torrent = "ql_preview_torrent_handle"
+        archive = "ql_preview_archive_handle"
+        ebook = "ql_preview_ebook_handle"
     }
     foreach ($mapping in $handleMappings.GetEnumerator()) {
         $kind = [Regex]::Escape($mapping.Key)
@@ -511,24 +546,49 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "ParserHost HANDLE routing for '$($mapping.Key)' must call $($mapping.Value)"
         }
     }
-    if ($parserNativePreviewText -notmatch 'UsesHandleInput[\s\S]*"text"[\s\S]*"executable"[\s\S]*"torrent"' -or
-        $parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
-        Add-Failure "ParserHost direct HANDLE routing must include text, executable, and torrent"
+    $usesHandleInput = [regex]::Match(
+        $parserNativePreviewText,
+        'UsesHandleInput\s*\(string kind\)[\s\S]*?(?=\r?\n\s*public\s+static|\r?\n\s*private\s+static)').Value
+    foreach ($kind in @("text", "executable", "torrent", "archive", "ebook")) {
+        if ($usesHandleInput -notmatch ('"' + [Regex]::Escape($kind) + '"')) {
+            Add-Failure "ParserHost direct HANDLE routing must include '$kind'"
+        }
+    }
+    if ($parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
+        Add-Failure "ParserHost must require every advertised Parser HANDLE capability"
     }
     if ($parserNativePreviewText -notmatch 'ql_preview_sqlite_handles\(' -or
         $parserNativePreviewText -notmatch 'TryPreviewSqliteHandles\([\s\S]*ql_preview_sqlite_handles\(') {
         Add-Failure "ParserHost SQLite snapshots must call the dedicated native HANDLE entry point"
     }
+    if ($parserNativePreviewText -notmatch 'ql_extract_archive_entry_handle\(' -or
+        $parserNativePreviewText -notmatch 'TryExtractArchiveEntryHandle\([\s\S]*ql_extract_archive_entry_handle\(') {
+        Add-Failure "ParserHost archive entry extraction must call the dedicated native HANDLE entry point"
+    }
 
     $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
     $nativeAbiText = Get-Content -LiteralPath $nativeAbiPath -Raw
+    $parserHandleInputs = [regex]::Match(
+        $nativeAbiText,
+        'ParserHandleInputs\s*=\s*[\s\S]*?;').Value
     if ($nativeAbiText -notmatch 'HandleText\s*=\s*1UL\s*<<\s*0' -or
         $nativeAbiText -notmatch 'HandleExecutable\s*=\s*1UL\s*<<\s*1' -or
         $nativeAbiText -notmatch 'HandleTorrent\s*=\s*1UL\s*<<\s*2' -or
         $nativeAbiText -notmatch 'HandleSqliteSnapshot\s*=\s*1UL\s*<<\s*3' -or
-        $nativeAbiText -notmatch 'ParserHandleInputs\s*=\s*HandleText\s*\|\s*HandleExecutable\s*\|\s*HandleTorrent\s*\|\s*HandleSqliteSnapshot' -or
+        $nativeAbiText -notmatch 'HandleArchive\s*=\s*1UL\s*<<\s*4' -or
+        $nativeAbiText -notmatch 'HandleOffice\s*=\s*1UL\s*<<\s*5' -or
+        $nativeAbiText -notmatch 'HandleEbook\s*=\s*1UL\s*<<\s*6' -or
+        $nativeAbiText -notmatch 'HandleArchiveEntry\s*=\s*1UL\s*<<\s*7' -or
+        $parserHandleInputs -notmatch '\bHandleText\b' -or
+        $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
+        $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
+        $parserHandleInputs -notmatch '\bHandleSqliteSnapshot\b' -or
+        $parserHandleInputs -notmatch '\bHandleArchive\b' -or
+        $parserHandleInputs -notmatch '\bHandleEbook\b' -or
+        $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
+        $parserHandleInputs -match '\bHandleOffice\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-3 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-7, reserved Office exclusion, and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -552,7 +612,9 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
         "ql_preview_torrent_handle",
-        "ql_preview_sqlite_handles"
+        "ql_preview_sqlite_handles",
+        "ql_preview_archive_handle",
+        "ql_preview_ebook_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
@@ -571,13 +633,41 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
         }
     }
+    $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_handle('
+    $archiveEntryStart = $nativeLibText.IndexOf($archiveEntrySignature, [StringComparison]::Ordinal)
+    $archiveEntryEnd = if ($archiveEntryStart -ge 0) {
+        $nativeLibText.IndexOf("#[no_mangle]", $archiveEntryStart + $archiveEntrySignature.Length, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $archiveEntryBody = if ($archiveEntryStart -ge 0 -and $archiveEntryEnd -gt $archiveEntryStart) {
+        $nativeLibText.Substring($archiveEntryStart, $archiveEntryEnd - $archiveEntryStart)
+    } else {
+        ""
+    }
+    if ($archiveEntryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+        $archiveEntryBody -notmatch 'reopen_handle_input_v2\(' -or
+        $archiveEntryBody -notmatch 'write_v2_out\(') {
+        Add-Failure "ql_extract_archive_entry_handle must contain panics and use the shared validated ABI 2 HANDLE/output contract"
+    }
+
+    $capabilitiesBody = [regex]::Match(
+        $nativeLibText,
+        'pub extern "C" fn ql_capabilities\(\)\s*->\s*u64\s*\{[\s\S]*?\}').Value
     if ($nativeLibText -notmatch 'QL_FEATURE_HANDLE_SQLITE_SNAPSHOT:\s*u64\s*=\s*1\s*<<\s*3' -or
-        $nativeLibText -notmatch 'pub extern "C" fn ql_capabilities\(\)\s*->\s*u64\s*\{[^}]*QL_FEATURE_HANDLE_SQLITE_SNAPSHOT[^}]*\}' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE:\s*u64\s*=\s*1\s*<<\s*4' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_OFFICE:\s*u64\s*=\s*1\s*<<\s*5' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_EBOOK:\s*u64\s*=\s*1\s*<<\s*6' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY:\s*u64\s*=\s*1\s*<<\s*7' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY\b' -or
+        $capabilitiesBody -match '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise the stable SQLite snapshot capability and LIMIT_EXCEEDED status"
+        Add-Failure "Rust must advertise archive/ebook/archive-entry bits, reserve Office bit 5, and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
-        $nativeLibText -match 'fs::File::open\(\s*logical_name') {
+        $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
         Add-Failure "Native HANDLE logical names must be reduced to basenames and never opened as paths"
     }
 }
@@ -597,6 +687,32 @@ if (Test-Path $mainWindowPath) {
     if ($pinnedParserOpen -notmatch 'if\s*\(IsSqliteMainDatabase\(path,\s*verifiedProbe\)\)\s*\{\s*wal\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-wal"\s*\);\s*shm\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-shm"\s*\);\s*\}' -or
         $pinnedParserOpen -notmatch 'return _parserSupervisor!\.BeginOpenSqliteHandles\(') {
         Add-Failure "Only the App may derive pinned -wal/-shm companions and send the dedicated SQLite snapshot"
+    }
+    if ($mainWindowText -notmatch 'bool\s+isParentBoundArchiveListing\s*=\s*listing\s+is\s+not\s+null\s*&&\s*string\.IsNullOrWhiteSpace\(listing\.RootPath\)[\s\S]*string\.Equals\(_currentProbe\?\.Kind,\s*"archive",\s*StringComparison\.OrdinalIgnoreCase\)[\s\S]*string\.Equals\(_currentProbe\?\.Kind,\s*"ebook",\s*StringComparison\.OrdinalIgnoreCase\)' -or
+        $mainWindowText -notmatch 'string\?\s+archiveParentRequestId\s*=\s*isParentBoundArchiveListing\s*\?\s*currentParserPreviewRequestId\s*:\s*null' -or
+        $mainWindowText -notmatch 'ExtractArchiveEntryAsync\(\s*listing\.RootPath,\s*row\.Path,\s*archiveParentRequestId,') {
+        Add-Failure "Direct HANDLE archive listing clicks must send the current parent request ID while anchored compatibility listings remain path-based"
+    }
+    $listingPreviewMethod = [regex]::Match(
+        $mainWindowText,
+        'private\s+async\s+Task\s+PreviewListingItemAsync\([\s\S]*?(?=\r?\n\s*private\s+async\s+Task<ImageSource\?>)').Value
+    if ($listingPreviewMethod -notmatch 'int\s+generation\s*=\s*_previewSession\.Generation' -or
+        $listingPreviewMethod -notmatch 'CancellationToken\s+token\s*=\s*CurrentPreviewToken' -or
+        ([regex]::Matches($listingPreviewMethod, 'IsPreviewGenerationCurrent\(generation,\s*token\)')).Count -lt 3 -or
+        $listingPreviewMethod -notmatch 'ReleaseArchiveEntryAsync\(archiveHandoff\)') {
+        Add-Failure "Archive listing clicks must retain their generation/token and release stale handoffs"
+    }
+}
+
+$parserSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/ParserHostSupervisor.cs"
+if (Test-Path $parserSupervisorPath) {
+    $parserSupervisorText = Get-Content -LiteralPath $parserSupervisorPath -Raw
+    $archiveExtractMethod = [regex]::Match(
+        $parserSupervisorText,
+        'ExtractArchiveEntryAsync\([\s\S]*?(?=\r?\n\s*public\s+async\s+Task)').Value
+    if ($archiveExtractMethod -notmatch 'string\?\s+parentPreviewRequestId' -or
+        $archiveExtractMethod -notmatch 'new\s+ArchiveEntryExtract\([^)]*\)\s*\{\s*ParentPreviewRequestId\s*=\s*parentPreviewRequestId') {
+        Add-Failure "The App must forward the optional archive parent request ID to ParserHost"
     }
 }
 

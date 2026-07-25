@@ -70,11 +70,17 @@ thread_local! {
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
+const MAX_ARCHIVE_ENTRY_NAME_BYTES: usize = u16::MAX as usize;
 const QL_NATIVE_ABI_VERSION: u32 = 2;
 const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
 const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
 const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
 const QL_FEATURE_HANDLE_SQLITE_SNAPSHOT: u64 = 1 << 3;
+const QL_FEATURE_HANDLE_ARCHIVE: u64 = 1 << 4;
+#[allow(dead_code)] // Reserved for the Office main/hero HANDLE slice; intentionally not advertised yet.
+const QL_FEATURE_HANDLE_OFFICE: u64 = 1 << 5;
+const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
+const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -98,6 +104,9 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_EXECUTABLE
         | QL_FEATURE_HANDLE_TORRENT
         | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
+        | QL_FEATURE_HANDLE_ARCHIVE
+        | QL_FEATURE_HANDLE_EBOOK
+        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -2757,6 +2766,48 @@ pub extern "C" fn ql_preview_database_cancelable(
 /// # Safety
 /// The pointer and handle requirements are the same as the exported HANDLE entry points. The caller
 /// must contain this function in `ffi_boundary`.
+unsafe fn reopen_handle_input_v2(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    cancel_cb: Option<CancelCallback>,
+) -> std::result::Result<(fs::File, String, i64, i64), i32> {
+    if cancel_requested(cancel_cb) {
+        return Err(QL_ERROR_CANCELLED);
+    }
+    let logical_name = unsafe {
+        owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES)
+    }
+    .ok_or(QL_ERROR_INVALID_ARGUMENT)?;
+    let logical_name = std::path::Path::new(&logical_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .map(str::to_string)
+        .ok_or(QL_ERROR_INVALID_ARGUMENT)?;
+
+    let file = native_input::reopen_borrowed_disk_file(source_handle, expected_length).map_err(
+        |error| match error {
+            native_input::NativeInputError::InvalidHandle => QL_ERROR_INVALID_HANDLE,
+            native_input::NativeInputError::Io => QL_ERROR_IO,
+            native_input::NativeInputError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
+        },
+    )?;
+    let size = i64::try_from(expected_length).map_err(|_| QL_ERROR_LENGTH_MISMATCH)?;
+    let modified_unix = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0);
+    if cancel_requested(cancel_cb) {
+        return Err(QL_ERROR_CANCELLED);
+    }
+    Ok((file, logical_name, size, modified_unix))
+}
+
 unsafe fn preview_handle_v2(
     source_handle: isize,
     expected_length: u64,
@@ -2778,41 +2829,20 @@ unsafe fn preview_handle_v2(
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
-    let logical_name = match unsafe {
-        owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES)
+    let (mut file, logical_name, size, modified_unix) = match unsafe {
+        reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        )
     } {
-        Some(value) => value,
-        None => return QL_ERROR_INVALID_ARGUMENT,
-    };
-    let logical_name = match std::path::Path::new(&logical_name)
-        .file_name()
-        .and_then(|value| value.to_str())
-    {
-        Some(value) if !value.is_empty() && value != "." && value != ".." => value,
-        _ => return QL_ERROR_INVALID_ARGUMENT,
+        Ok(input) => input,
+        Err(status) => return status,
     };
 
-    let mut file = match native_input::reopen_borrowed_disk_file(source_handle, expected_length) {
-        Ok(file) => file,
-        Err(native_input::NativeInputError::InvalidHandle) => return QL_ERROR_INVALID_HANDLE,
-        Err(native_input::NativeInputError::Io) => return QL_ERROR_IO,
-        Err(native_input::NativeInputError::LengthMismatch) => {
-            return QL_ERROR_LENGTH_MISMATCH;
-        }
-    };
-    let size = match i64::try_from(expected_length) {
-        Ok(size) => size,
-        Err(_) => return QL_ERROR_LENGTH_MISMATCH,
-    };
-    let modified_unix = file
-        .metadata()
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or(0);
-
-    let rendered = renderer(&mut file, logical_name, size, modified_unix);
+    let rendered = renderer(&mut file, &logical_name, size, modified_unix);
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
@@ -2970,6 +3000,89 @@ pub unsafe extern "C" fn ql_preview_torrent_handle(
             |file, logical_name, size, modified_unix| {
                 preview::render_torrent_reader(file, logical_name, size, modified_unix, cancel_cb)
                     .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
+/// Render an archive listing from a borrowed Windows file handle.
+///
+/// Package formats intentionally remain on the legacy path pipeline. The returned archive listing
+/// has an empty root path so callers cannot accidentally resolve the logical filename as a path.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_archive_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, modified_unix| {
+                preview::render_archive_reader(
+                    file,
+                    logical_name,
+                    expected_length,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
+/// Render an ebook from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_ebook_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, modified_unix| {
+                preview::render_ebook_reader(
+                    file,
+                    logical_name,
+                    expected_length,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
             },
         )
     })
@@ -3152,6 +3265,90 @@ pub extern "C" fn ql_extract_archive_entry_cancelable(
     write_json_out(&path, out_buf, out_cap)
 }
 
+/// Extract a bounded ZIP entry from a borrowed Windows file handle into the private temp cache.
+///
+/// On success, output is the non-NUL-terminated UTF-8 temp path. A size probe or undersized buffer
+/// returns `QL_ERROR_BUFFER_TOO_SMALL`, sets `out_required`, and removes the temporary extraction so
+/// two-pass negotiation cannot leak temp roots.
+///
+/// # Safety
+/// Both UTF-8 pointers must be readable for their declared lengths. `out_required` must be writable.
+/// When non-null, `out_buf` must be writable for `out_cap` bytes. The source handle must remain open
+/// and stable for the complete call; ownership remains with the caller.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_archive_entry_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    entry_path_utf8: *const u8,
+    entry_path_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        let entry_path = match owned_utf8_arg(
+            entry_path_utf8,
+            entry_path_len,
+            MAX_ARCHIVE_ENTRY_NAME_BYTES,
+        ) {
+            Some(entry_path) => entry_path,
+            None => return QL_ERROR_INVALID_ARGUMENT,
+        };
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let extracted = match preview::extract_archive_entry_to_temp_reader(
+            &mut file,
+            expected_length,
+            &logical_name,
+            &entry_path,
+            cancel_cb,
+        ) {
+            Ok(path) => path,
+            Err(error) => return reader_preview_status(error),
+        };
+        if cancel_requested(cancel_cb) {
+            preview::discard_archive_extract_path(&extracted);
+            return QL_ERROR_CANCELLED;
+        }
+        let status = write_v2_out(
+            extracted.as_bytes(),
+            out_buf,
+            out_cap,
+            out_required,
+        );
+        if status != QL_OK || cancel_requested(cancel_cb) {
+            preview::discard_archive_extract_path(&extracted);
+            return if cancel_requested(cancel_cb) {
+                QL_ERROR_CANCELLED
+            } else {
+                status
+            };
+        }
+        QL_OK
+    })
+}
+
 /// Render an ebook preview. Returns JSON length, 0 on failure.
 #[no_mangle]
 pub extern "C" fn ql_preview_ebook(
@@ -3331,14 +3528,18 @@ fn native_abi_version_is_stable() {
     let required = QL_FEATURE_HANDLE_TEXT
         | QL_FEATURE_HANDLE_EXECUTABLE
         | QL_FEATURE_HANDLE_TORRENT
-        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT;
+        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
+        | QL_FEATURE_HANDLE_ARCHIVE
+        | QL_FEATURE_HANDLE_EBOOK
+        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
     assert_eq!(ql_capabilities() & required, required);
+    assert_eq!(ql_capabilities() & QL_FEATURE_HANDLE_OFFICE, 0);
 }
 
 #[cfg(test)]
 mod handle_v2_tests {
     use super::*;
-    use std::io::{Seek, SeekFrom};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
     use std::os::windows::io::AsRawHandle;
     use std::path::PathBuf;
 
@@ -3431,6 +3632,111 @@ mod handle_v2_tests {
                 cancel_cb,
             )
         }
+    }
+
+    fn call_archive_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_archive_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_ebook_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_ebook_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_archive_entry_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        entry_path_utf8: *const u8,
+        entry_path_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_extract_archive_entry_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                entry_path_utf8,
+                entry_path_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .expect("start ZIP entry");
+            writer.write_all(bytes).expect("write ZIP entry");
+        }
+        writer.finish().expect("finish ZIP").into_inner()
+    }
+
+    fn valid_epub_bytes() -> Vec<u8> {
+        zip_bytes(&[
+            (
+                "META-INF/container.xml",
+                br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            ),
+            (
+                "OEBPS/content.opf",
+                br#"<package><metadata><dc:title>Handle Book</dc:title><dc:creator>Rust</dc:creator></metadata><manifest><item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#,
+            ),
+            (
+                "OEBPS/chapter.xhtml",
+                br#"<html><body><h1>Handle Chapter</h1><p>Reader content.</p></body></html>"#,
+            ),
+        ])
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3802,6 +4108,311 @@ mod handle_v2_tests {
         assert_eq!(required, 0);
         drop(malformed_file);
         let _ = fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn archive_handle_preview_uses_pinned_bytes_empty_root_and_buffer_contract() {
+        let bytes = zip_bytes(&[
+            ("folder/readme.txt", b"pinned archive content"),
+            ("root.bin", b"\x01\x02"),
+        ]);
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(11)).expect("position archive handle");
+        let position = file.stream_position().unwrap();
+        let json = preview_json_with(
+            call_archive_handle,
+            &file,
+            r"C:\does-not-exist\logical.zip",
+        );
+        assert_eq!(json["kind"], "archive");
+        assert_eq!(json["listing"]["rootName"], "logical.zip");
+        assert_eq!(json["listing"]["rootPath"], "");
+        assert_eq!(json["listing"]["canPreviewEntries"], true);
+        assert!(json["listing"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "folder/readme.txt"));
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let logical_name = b"logical.zip";
+        let mut small = [0u8; 8];
+        let mut required = usize::MAX;
+        let status = call_archive_handle(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            small.as_mut_ptr(),
+            small.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > small.len());
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_archive_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+        assert_eq!(
+            call_archive_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len() + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn archive_entry_handle_extracts_original_zip_index_without_logical_path() {
+        let bytes = zip_bytes(&[(r"folder\item.txt", b"entry from pinned ZIP")]);
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(9)).expect("position archive entry handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = br"C:\missing\renamed.zip";
+        let entry_path = b"folder/item.txt";
+        let mut required = usize::MAX;
+
+        let status = call_archive_entry_handle(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            entry_path.as_ptr(),
+            entry_path.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut output = vec![0u8; required];
+        let status = call_archive_entry_handle(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            entry_path.as_ptr(),
+            entry_path.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        let extracted = std::str::from_utf8(&output[..required])
+            .expect("UTF-8 extraction path")
+            .to_string();
+        assert_eq!(
+            fs::read(&extracted).expect("read extracted entry"),
+            b"entry from pinned ZIP"
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+        preview::discard_archive_extract_path(&extracted);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_archive_entry_handle(
+                0,
+                0,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ebook_handle_renders_epub_fb2_and_binary_metadata_from_reader() {
+        let epub = valid_epub_bytes();
+        let (epub_path, mut epub_file) = create_input("bin", &epub);
+        epub_file
+            .seek(SeekFrom::Start(13))
+            .expect("position EPUB handle");
+        let epub_position = epub_file.stream_position().unwrap();
+        let epub_json = preview_json_with(
+            call_ebook_handle,
+            &epub_file,
+            r"C:\missing\renamed.epub",
+        );
+        assert_eq!(epub_json["kind"], "ebook");
+        assert_eq!(epub_json["title"], "Handle Book - epub");
+        assert!(epub_json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Handle Chapter"));
+        assert!(epub_json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Reader content."));
+        assert_eq!(epub_file.stream_position().unwrap(), epub_position);
+
+        let fb2 = br#"<?xml version="1.0"?><FictionBook><description><title-info><book-title>Handle FB2</book-title><lang>en</lang></title-info></description><body><section><title><p>Chapter One</p></title><p>FB2 reader text.</p></section></body></FictionBook>"#;
+        let (fb2_path, fb2_file) = create_input("bin", fb2);
+        let fb2_json =
+            preview_json_with(call_ebook_handle, &fb2_file, r"C:\missing\logical.fb2");
+        assert_eq!(fb2_json["kind"], "ebook");
+        assert_eq!(fb2_json["title"], "Handle FB2 - fb2");
+        assert!(fb2_json["text"]
+            .as_str()
+            .unwrap()
+            .contains("FB2 reader text."));
+
+        let (binary_path, binary_file) = create_input("bin", b"binary ebook");
+        let binary_json =
+            preview_json_with(call_ebook_handle, &binary_file, r"C:\missing\logical.mobi");
+        assert_eq!(binary_json["kind"], "ebook");
+        assert_eq!(binary_json["title"], "logical.mobi - ebook");
+        assert!(binary_json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Size: 12"));
+
+        drop(epub_file);
+        drop(fb2_file);
+        drop(binary_file);
+        let _ = fs::remove_file(epub_path);
+        let _ = fs::remove_file(fb2_path);
+        let _ = fs::remove_file(binary_path);
+    }
+
+    #[test]
+    fn ebook_handle_missing_opf_falls_back_to_same_zip_and_malformed_is_stable() {
+        let fallback = zip_bytes(&[
+            (
+                "META-INF/container.xml",
+                br#"<container><rootfiles><rootfile full-path="missing.opf"/></rootfiles></container>"#,
+            ),
+            ("notes.txt", b"archive fallback"),
+        ]);
+        let (fallback_path, fallback_file) = create_input("bin", &fallback);
+        let json = preview_json_with(
+            call_ebook_handle,
+            &fallback_file,
+            r"C:\missing\fallback.epub",
+        );
+        assert_eq!(json["kind"], "archive");
+        assert_eq!(json["listing"]["listingKind"], "archive");
+        assert_eq!(json["listing"]["rootPath"], "");
+        assert_eq!(json["listing"]["canPreviewEntries"], true);
+        assert!(json["listing"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "notes.txt"));
+
+        let unusable = zip_bytes(&[
+            (
+                "META-INF/container.xml",
+                br#"<container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>"#,
+            ),
+            ("content.opf", b"<package><manifest>"),
+            ("fallback.txt", b"invalid OPF fallback"),
+        ]);
+        let (unusable_path, unusable_file) = create_input("bin", &unusable);
+        let unusable_json = preview_json_with(
+            call_ebook_handle,
+            &unusable_file,
+            r"C:\missing\unusable.epub",
+        );
+        assert_eq!(unusable_json["kind"], "archive");
+        assert_eq!(unusable_json["listing"]["canPreviewEntries"], true);
+        assert!(unusable_json["listing"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "fallback.txt"));
+
+        let (malformed_path, malformed_file) = create_input("bin", b"not an EPUB");
+        let logical_name = b"broken.epub";
+        let mut required = usize::MAX;
+        let status = call_ebook_handle(
+            malformed_file.as_raw_handle() as isize,
+            malformed_file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_MALFORMED);
+        assert_eq!(required, 0);
+
+        drop(fallback_file);
+        drop(unusable_file);
+        drop(malformed_file);
+        let _ = fs::remove_file(fallback_path);
+        let _ = fs::remove_file(unusable_path);
+        let _ = fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn ebook_handle_rejects_sparse_input_over_limit() {
+        let (path, read_only) = create_input("bin", &[]);
+        drop(read_only);
+        let writer = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open sparse ebook");
+        writer
+            .set_len(preview::MAX_EBOOK_HANDLE_INPUT_BYTES + 1)
+            .expect("create sparse oversized ebook");
+        drop(writer);
+        let file = fs::File::open(&path).expect("open sparse ebook for reading");
+        let logical_name = b"oversized.mobi";
+        let mut required = usize::MAX;
+        let status = call_ebook_handle(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_LIMIT_EXCEEDED);
+        assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
     }
 
     #[test]

@@ -229,10 +229,68 @@ Require-Pattern $nativePreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
     "Torrent bencode parsing must retain its depth limit of 64."
 Require-Pattern $nativePreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
     "Torrent bencode parsing must retain its 100000-node budget."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
+    "Archive HANDLE inputs must remain capped at 256 MiB."
+Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
+    "Ebook HANDLE inputs must remain capped at 256 MiB."
+Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
+    "Archive and ebook ZIP central directories must remain capped at 32 MiB."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
+    "Archive ZIP preflight must reject more than 100000 declared entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
     "Archive metadata scans must remain capped at 10000 records."
+Require-Pattern $nativePreview 'MAX_TAR_SCAN_BYTES:\s*u64\s*=\s*512\s*\*\s*1024\s*\*\s*1024' `
+    "TAR and compressed TAR scans must retain their 512 MiB decompressed-read budget."
+Require-Pattern $nativePreview 'TAR_SCAN_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
+    "TAR scans must retain their four-second deadline."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+    "Archive entry extraction must remain capped at 64 MiB uncompressed."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+    "Archive entry extraction must remain capped at 64 MiB compressed."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_RATIO:\s*u64\s*=\s*1000' `
+    "Archive entry extraction must retain its 1000-to-1 expansion-ratio limit."
+Require-Pattern $nativePreview 'ARCHIVE_EXTRACT_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
+    "Archive entry extraction must retain its four-second deadline."
+Require-Pattern $nativePreview 'MAX_EBOOK_ZIP_ENTRIES:\s*usize\s*=\s*8_192' `
+    "EPUB ZIP preflight must remain capped at 8192 entries."
+Require-Pattern $nativePreview 'MAX_EBOOK_DECOMPRESSED_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
+    "EPUB reads must retain their 16 MiB cumulative decompression budget."
+Require-Pattern $nativePreview 'MAX_EBOOK_XML_BYTES:\s*u64\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `
+    "Ebook metadata XML must remain capped at 2 MiB per part."
+Require-Pattern $nativePreview 'MAX_EBOOK_CHAPTER_BYTES:\s*u64\s*=\s*768\s*\*\s*1024' `
+    "EPUB chapter input must remain capped at 768 KiB per chapter."
+Require-Pattern $nativePreview 'MAX_EBOOK_CHAPTERS:\s*usize\s*=\s*10' `
+    "EPUB previews must remain capped at ten retained chapters."
+Require-Pattern $nativePreview 'MAX_EBOOK_TEXT_CHARS:\s*usize\s*=\s*140\s*\*\s*1024' `
+    "Ebook previews must remain capped at 140 Ki retained characters."
+Require-Pattern $nativePreview 'for\s+idref\s+in\s+opf\.spine\.iter\(\)\.take\(40\)' `
+    "EPUB contents lists must remain capped at 40 spine items."
+Require-Pattern $nativePreview 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(512\)' `
+    "EPUB fallback OPF discovery must remain capped at 512 entries."
+Require-Pattern $nativePreview 'fn\s+validate_zip_container<R:\s*Read\s*\+\s*Seek>[\s\S]*read_exact_cancelable\([\s\S]*entries\s*>\s*max_entries\s*\|\|\s*central_size\s*>\s*MAX_ZIP_CENTRAL_DIRECTORY_BYTES' `
+    "ZIP preflight must read cancellably and reject entry-count or central-directory budget overflow."
+Require-Pattern $nativePreview 'struct\s+CancelableSeekReader<R>[\s\S]*impl<R:\s*Read>\s+Read\s+for\s+CancelableSeekReader<R>[\s\S]*preview_cancelled\(self\.cancel_cb\)[\s\S]*impl<R:\s*Seek>\s+Seek\s+for\s+CancelableSeekReader<R>' `
+    "ZIP archive construction and seeks must remain cancellation-aware."
+Require-Pattern $nativePreview 'fn\s+open_validated_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*validate_zip_container\([\s\S]*ZipArchive::new\(\s*CancelableSeekReader::new\(' `
+    "Archive and ebook readers must share cancellable ZIP validation before parsing the central directory."
+Require-Pattern $nativePreview 'render_archive_reader_with_root<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES' `
+    "Archive path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
+Require-Pattern $nativePreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
+    "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
+Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
+    "Archive entry HANDLE extraction must validate the source and enforce cancellation, deadline, and output bounds."
+Require-Pattern $nativePreview 'struct\s+EbookContext[\s\S]*remaining_decompressed_bytes[\s\S]*MAX_EBOOK_DECOMPRESSED_BYTES[\s\S]*fn\s+read_ebook_limited_to_end<R:\s*Read>[\s\S]*context\.check_cancelled\(\)[\s\S]*context\.consume\(' `
+    "EPUB parts must share a cumulative decompression budget with per-chunk cancellation."
+$nativePreviewText = Get-Content -LiteralPath $nativePreview -Raw
+if ($nativePreviewText -match 'fs::File::open\(\s*&?\s*logical_name\b' -or
+    $nativePreviewText -match 'render_archive\(\s*&?\s*logical_name\b') {
+    $failures.Add("Logical HANDLE names must never be reopened as paths or sent to the EPUB archive fallback.")
+}
+if ($nativePreviewText -notmatch 'fn\s+render_epub_from_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+Some\(opf_xml\)[\s\S]*else\s*\{\s*return\s+render_zip_archive_from_zip\(\s*zip,\s*logical_name,\s*"",\s*cancel_cb\s*\)') {
+    $failures.Add("An EPUB without usable OPF data must reuse the same validated ZIP reader for its rootless archive listing.")
+}
 Require-Pattern $nativePreview 'fn render_markdown_json[\s\S]*text:\s*None,[\s\S]*markdown:\s*Some\(PreviewMarkdownDto' `
     "Structured Markdown must not duplicate its source text alongside the AST."
 Require-Pattern $nativePreview 'let Ok\(meta\)\s*=\s*fs::symlink_metadata\(&entry_path\)[\s\S]*meta\.is_dir\(\)\s*\|\|\s*meta\.is_file\(\)' `

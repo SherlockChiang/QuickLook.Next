@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
+using QuickLook.Next.ParserHost;
 using Xunit;
 
 namespace QuickLook.Next.ParserHost.IntegrationTests;
@@ -13,6 +14,46 @@ namespace QuickLook.Next.ParserHost.IntegrationTests;
 public sealed class ParserHostIntegrationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+
+    [Fact]
+    public void Retained_preview_source_lease_survives_parent_close_and_blocks_new_leases()
+    {
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string path = Path.Combine(tempDirectory, "retained.zip");
+        const string original = "retained source bytes";
+        File.WriteAllText(path, original);
+
+        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        var source = new RetainedPreviewSource(
+            pinned.Handle,
+            pinned.Length,
+            "retained.zip",
+            "archive",
+            RetainedPreviewFollowUps.ArchiveEntry);
+        Assert.True(source.TryAcquire(
+            RetainedPreviewFollowUps.ArchiveEntry,
+            out RetainedPreviewSourceLease? lease));
+        Assert.NotNull(lease);
+
+        source.Dispose();
+        Assert.False(source.TryAcquire(
+            RetainedPreviewFollowUps.ArchiveEntry,
+            out RetainedPreviewSourceLease? rejected));
+        Assert.Null(rejected);
+        Assert.False(TryOverwriteFile(path, "replacement"));
+
+        using (lease)
+        using (var stream = new FileStream(lease.Handle, FileAccess.Read))
+        using (var reader = new StreamReader(stream))
+            Assert.Equal(original, reader.ReadToEnd());
+
+        Assert.True(TryOverwriteFile(path, "released"));
+        try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+    }
 
     [Fact]
     public async Task Host_rejects_bad_session_token_without_becoming_ready()
@@ -985,6 +1026,230 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal(requestId, ready.RequestId);
             Assert.Contains("CN=QuickLook Cloud Test", ready.TextContent);
             Assert.Contains("Thumbprint:", ready.TextContent);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Archive_handle_preview_uses_retained_parent_for_entry_extraction()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-archive.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.zip");
+        const string entryName = "folder/retained-marker.txt";
+        const string contents = "retained HANDLE archive entry";
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
+            WriteEntry(archive, entryName, contents);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string previewRequestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".zip", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "archive",
+                Size = pinned.Length,
+            };
+            Assert.False(File.Exists(logicalPath));
+            await channel.SendAsync(
+                new PreviewOpenHandle(previewRequestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            PreviewListing listing = Assert.IsType<PreviewListing>(ready.Listing);
+            Assert.Equal("archive", listing.ListingKind);
+            Assert.Empty(listing.RootPath);
+            Assert.Contains(listing.Items, item => item.Path == entryName);
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + previewRequestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            Assert.False(TryOverwriteFile(sourcePath, "replacement"));
+
+            string missingParentRequestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new ArchiveEntryExtract(missingParentRequestId, sourcePath, entryName)
+            {
+                ParentPreviewRequestId = Guid.NewGuid().ToString("n"),
+            }, timeout.Token);
+            PreviewError missingParentError =
+                Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Contains("parent", missingParentError.Message, StringComparison.OrdinalIgnoreCase);
+
+            string extractRequestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new ArchiveEntryExtract(extractRequestId, "", entryName)
+            {
+                ParentPreviewRequestId = previewRequestId,
+            }, timeout.Token);
+            ArchiveEntryExtracted extracted =
+                Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            {
+                using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                    host.SafeHandle, extracted.FileHandle, extracted.FileLength);
+                using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+                using var reader = new StreamReader(entryStream);
+                Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
+            }
+
+            await channel.SendAsync(new ArchiveEntryExtractClose(extractRequestId), timeout.Token);
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Ebook_handle_preview_reads_valid_EPUB_without_an_anchor()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-ebook.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.epub");
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
+        {
+            WriteEntry(archive, "META-INF/container.xml",
+                "<container><rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>");
+            WriteEntry(archive, "OEBPS/content.opf",
+                "<package><metadata><dc:title>HANDLE EPUB marker</dc:title></metadata><manifest><item id=\"c1\" href=\"chapter.xhtml\" media-type=\"application/xhtml+xml\"/></manifest><spine><itemref idref=\"c1\"/></spine></package>");
+            WriteEntry(archive, "OEBPS/chapter.xhtml",
+                "<html><body><h1>Direct reader chapter</h1><p>Exact source content.</p></body></html>");
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".epub", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "ebook",
+                Size = pinned.Length,
+            };
+            Assert.False(File.Exists(logicalPath));
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal("ebook", ready.Kind);
+            Assert.Equal("HANDLE EPUB marker - epub", ready.Title);
+            Assert.Contains("Direct reader chapter", ready.TextContent);
+            Assert.Equal("markdown", ready.TextFormat);
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + requestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
+
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Ebook_handle_archive_fallback_keeps_parent_entry_interactive()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-fallback.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-fallback.epub");
+        const string entryName = "Text/fallback-marker.txt";
+        const string contents = "EPUB archive fallback entry";
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
+            WriteEntry(archive, entryName, contents);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string previewRequestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".epub", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "ebook",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(previewRequestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            PreviewListing listing = Assert.IsType<PreviewListing>(ready.Listing);
+            Assert.Equal("archive", listing.ListingKind);
+            Assert.Empty(listing.RootPath);
+            Assert.Contains(listing.Items, item => item.Path == entryName);
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + previewRequestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            Assert.False(TryOverwriteFile(sourcePath, "replacement"));
+
+            string extractRequestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new ArchiveEntryExtract(extractRequestId, "", entryName)
+            {
+                ParentPreviewRequestId = previewRequestId,
+            }, timeout.Token);
+            ArchiveEntryExtracted extracted =
+                Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            {
+                using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                    host.SafeHandle, extracted.FileHandle, extracted.FileLength);
+                using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+                using var reader = new StreamReader(entryStream);
+                Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
+            }
+
+            await channel.SendAsync(new ArchiveEntryExtractClose(extractRequestId), timeout.Token);
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
         finally
         {

@@ -142,6 +142,7 @@ struct PreviewListingDto {
     listing_kind: String,
     summary: String,
     is_partial: bool,
+    can_preview_entries: bool,
     #[serde(skip_serializing_if = "is_zero_usize")]
     encrypted_file_count: usize,
     items: Vec<PreviewListingItemDto>,
@@ -281,6 +282,9 @@ const MAX_EBOOK_XML_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_EBOOK_CHAPTER_BYTES: u64 = 768 * 1024;
 const MAX_EBOOK_CHAPTERS: usize = 10;
 const MAX_EBOOK_TEXT_CHARS: usize = 140 * 1024;
+pub(crate) const MAX_EBOOK_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_EBOOK_ZIP_ENTRIES: usize = 8_192;
+const MAX_EBOOK_DECOMPRESSED_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_EXIF_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -13018,15 +13022,62 @@ fn subsystem_name(subsystem: u16) -> &'static str {
 // ── Ebook preview ───────────────────────────────────────────────────────────
 
 pub fn render_ebook(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let lower = path.to_ascii_lowercase();
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return String::new(),
+    };
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return String::new(),
+    };
+    let modified_unix = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0);
+    render_ebook_reader(file, path, metadata.len(), modified_unix, cancel_cb)
+        .unwrap_or_default()
+}
+
+pub fn render_ebook_reader<R: Read + Seek>(
+    mut reader: R,
+    logical_name: &str,
+    source_len: u64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if source_len > MAX_EBOOK_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let lower = logical_name.to_ascii_lowercase();
     if lower.ends_with(".epub") {
-        return render_epub(path, cancel_cb);
+        let mut zip = open_validated_zip(
+            reader,
+            source_len,
+            MAX_EBOOK_ZIP_ENTRIES as u64,
+            cancel_cb,
+        )?;
+        return render_epub_from_zip(&mut zip, logical_name, cancel_cb);
     }
+
+    prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
     if lower.ends_with(".fb2") {
-        return render_fb2(path, cancel_cb);
+        render_fb2_reader(&mut reader, logical_name, cancel_cb)
+    } else {
+        let size = i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?;
+        Ok(render_binary_ebook_info(
+            logical_name,
+            size,
+            modified_unix,
+        ))
     }
-    render_binary_ebook_info(path)
 }
 
 #[derive(Default)]
@@ -13048,26 +13099,83 @@ struct EpubManifestItem {
     media_type: String,
 }
 
-fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let filename = file_name(path);
-    let mut zip = match open_zip(path) {
-        Some(zip) => zip,
-        None => return String::new(),
-    };
+struct EbookContext {
+    remaining_decompressed_bytes: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+}
 
-    let container = read_zip_text(&mut zip, "META-INF/container.xml", MAX_EBOOK_XML_BYTES);
-    let rootfile = container
+impl EbookContext {
+    fn new(cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
+        Self {
+            remaining_decompressed_bytes: MAX_EBOOK_DECOMPRESSED_BYTES,
+            cancel_cb,
+        }
+    }
+
+    fn check_cancelled(&self) -> Result<(), ReaderPreviewError> {
+        if preview_cancelled(self.cancel_cb) {
+            Err(ReaderPreviewError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn consume(&mut self, bytes: u64) -> Result<(), ReaderPreviewError> {
+        self.check_cancelled()?;
+        if bytes > self.remaining_decompressed_bytes {
+            return Err(ReaderPreviewError::LimitExceeded);
+        }
+        self.remaining_decompressed_bytes -= bytes;
+        Ok(())
+    }
+
+    fn check_xml_event(&self, event_count: usize) -> Result<(), ReaderPreviewError> {
+        if event_count % 256 == 0 {
+            self.check_cancelled()?;
+        }
+        Ok(())
+    }
+}
+
+fn render_epub_from_zip<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    logical_name: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    let filename = file_name(logical_name);
+    let mut context = EbookContext::new(cancel_cb);
+    let container = read_ebook_zip_text(
+        &mut context,
+        zip,
+        "META-INF/container.xml",
+        MAX_EBOOK_XML_BYTES,
+    )?;
+    let container_rootfile = container
         .as_deref()
-        .and_then(parse_epub_rootfile)
-        .or_else(|| find_epub_opf_path(&mut zip, cancel_cb))
+        .map(|xml| parse_epub_rootfile_with_context(&context, xml))
+        .transpose()?
+        .flatten();
+    let rootfile = match container_rootfile {
+        Some(rootfile) => Some(rootfile),
+        None => find_epub_opf_path(&context, zip)?,
+    }
         .unwrap_or_else(|| "content.opf".to_string());
 
-    let Some(opf_xml) = read_zip_text(&mut zip, &rootfile, MAX_EBOOK_XML_BYTES) else {
-        return render_archive(path, cancel_cb);
+    let Some(opf_xml) =
+        read_ebook_zip_text(&mut context, zip, &rootfile, MAX_EBOOK_XML_BYTES)?
+    else {
+        return render_zip_archive_from_zip(zip, logical_name, "", cancel_cb);
     };
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let opf = parse_epub_opf(&opf_xml);
+    context.check_cancelled()?;
+    let opf = match parse_epub_opf_with_context(&context, &opf_xml) {
+        Ok(opf)
+            if !opf.manifest.is_empty()
+                && opf.spine.iter().any(|idref| opf.manifest.contains_key(idref)) => opf,
+        Ok(_) | Err(ReaderPreviewError::Malformed) => {
+            return render_zip_archive_from_zip(zip, logical_name, "", cancel_cb);
+        }
+        Err(error) => return Err(error),
+    };
     let title = first_non_empty_owned([opf.title.as_str(), filename]).to_string();
     let base_dir = rootfile
         .rsplit_once('/')
@@ -13092,7 +13200,7 @@ fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String
     if !opf.spine.is_empty() {
         markdown.push_str("\n## Contents\n\n");
         for idref in opf.spine.iter().take(40) {
-            if preview_cancelled(cancel_cb) { return String::new(); }
+            context.check_cancelled()?;
             if let Some(item) = opf.manifest.get(idref) {
                 markdown.push_str("- ");
                 markdown.push_str(&markdown_escape_line(&ebook_item_label(&item.href)));
@@ -13103,7 +13211,7 @@ fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String
 
     let mut extracted = 0usize;
     for idref in &opf.spine {
-        if preview_cancelled(cancel_cb) { return String::new(); }
+        context.check_cancelled()?;
         if extracted >= MAX_EBOOK_CHAPTERS || markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
             break;
         }
@@ -13114,12 +13222,21 @@ fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String
             continue;
         }
         let chapter_path = normalize_zip_target(&base_dir, &item.href);
-        let Some(chapter_xml) = read_zip_text(&mut zip, &chapter_path, MAX_EBOOK_CHAPTER_BYTES)
+        let Some(chapter_xml) = read_ebook_zip_text(
+            &mut context,
+            zip,
+            &chapter_path,
+            MAX_EBOOK_CHAPTER_BYTES,
+        )?
         else {
             continue;
         };
-        if preview_cancelled(cancel_cb) { return String::new(); }
-        let chapter = extract_xhtml_markdown(&chapter_xml, &ebook_item_label(&item.href));
+        context.check_cancelled()?;
+        let chapter = extract_xhtml_markdown_with_context(
+            &context,
+            &chapter_xml,
+            &ebook_item_label(&item.href),
+        )?;
         if chapter.trim().is_empty() {
             continue;
         }
@@ -13132,59 +13249,157 @@ fn render_epub(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String
         markdown.push_str("\n\n_No readable spine chapters were found. The archive listing is still available by opening the EPUB as a ZIP-compatible file._\n");
     }
 
-    ebook_markdown_json("epub", &title, markdown)
+    Ok(ebook_markdown_json("epub", &title, markdown))
 }
 
+fn read_ebook_zip_text<R: Read + Seek>(
+    context: &mut EbookContext,
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    max_size: u64,
+) -> Result<Option<String>, ReaderPreviewError> {
+    context.check_cancelled()?;
+    if let Ok(mut entry) = zip.by_name(name) {
+        if entry.size() > max_size {
+            return Err(ReaderPreviewError::LimitExceeded);
+        }
+        let bytes = read_ebook_limited_to_end(context, &mut entry, max_size)?;
+        return Ok(Some(String::from_utf8_lossy(&bytes).to_string()));
+    }
+    context.check_cancelled()?;
+
+    for index in 0..zip.len().min(MAX_EBOOK_ZIP_ENTRIES) {
+        context.check_cancelled()?;
+        let mut entry = match zip.by_index(index) {
+            Ok(entry) => entry,
+            Err(_) if preview_cancelled(context.cancel_cb) => {
+                return Err(ReaderPreviewError::Cancelled)
+            }
+            Err(_) => continue,
+        };
+        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
+            continue;
+        }
+        if entry.size() > max_size {
+            return Err(ReaderPreviewError::LimitExceeded);
+        }
+        let bytes = read_ebook_limited_to_end(context, &mut entry, max_size)?;
+        return Ok(Some(String::from_utf8_lossy(&bytes).to_string()));
+    }
+    Ok(None)
+}
+
+fn read_ebook_limited_to_end<R: Read>(
+    context: &mut EbookContext,
+    reader: &mut R,
+    max_size: u64,
+) -> Result<Vec<u8>, ReaderPreviewError> {
+    let mut bytes = Vec::with_capacity(max_size.min(64 * 1024) as usize);
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        context.check_cancelled()?;
+        let max_read = buffer.len().min(
+            max_size
+                .saturating_add(1)
+                .saturating_sub(bytes.len() as u64) as usize,
+        );
+        if max_read == 0 {
+            return Err(ReaderPreviewError::LimitExceeded);
+        }
+        let read = match reader.read(&mut buffer[..max_read]) {
+            Ok(read) => read,
+            Err(_) if preview_cancelled(context.cancel_cb) => {
+                return Err(ReaderPreviewError::Cancelled)
+            }
+            Err(_) => return Err(ReaderPreviewError::Malformed),
+        };
+        if read == 0 {
+            return Ok(bytes);
+        }
+        context.consume(read as u64)?;
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+}
+
+#[cfg(test)]
 fn parse_epub_rootfile(xml: &str) -> Option<String> {
+    parse_epub_rootfile_with_context(&EbookContext::new(None), xml)
+        .ok()
+        .flatten()
+}
+
+fn parse_epub_rootfile_with_context(
+    context: &EbookContext,
+    xml: &str,
+) -> Result<Option<String>, ReaderPreviewError> {
     let mut reader = Reader::from_str(xml);
     let mut first = None;
+    let mut event_count = 0usize;
     loop {
+        event_count = event_count.saturating_add(1);
+        context.check_xml_event(event_count)?;
         match reader.read_event() {
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
                 if local_xml_name(e.name().as_ref()) != "rootfile" {
                     continue;
                 }
-                let full_path = attr_value(&e, "full-path")?;
+                let Some(full_path) = attr_value(&e, "full-path") else {
+                    continue;
+                };
                 if first.is_none() {
                     first = Some(full_path.clone());
                 }
                 let media_type = attr_value(&e, "media-type").unwrap_or_default();
                 if media_type.contains("oebps-package") || full_path.ends_with(".opf") {
-                    return Some(full_path);
+                    return Ok(Some(full_path));
                 }
             }
             Ok(Event::Eof) => break,
-            Err(_) => break,
+            Err(_) => return Err(ReaderPreviewError::Malformed),
             _ => {}
         }
     }
-    first
+    Ok(first)
 }
 
-fn find_epub_opf_path(
-    zip: &mut ZipArchive<fs::File>,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Option<String> {
+fn find_epub_opf_path<R: Read + Seek>(
+    context: &EbookContext,
+    zip: &mut ZipArchive<R>,
+) -> Result<Option<String>, ReaderPreviewError> {
     for i in 0..zip.len().min(512) {
-        if preview_cancelled(cancel_cb) { return None; }
+        context.check_cancelled()?;
         let Ok(entry) = zip.by_index_raw(i) else {
+            if preview_cancelled(context.cancel_cb) {
+                return Err(ReaderPreviewError::Cancelled);
+            }
             continue;
         };
         let name = entry.name().replace('\\', "/");
         if name.to_ascii_lowercase().ends_with(".opf") {
-            return Some(name);
+            return Ok(Some(name));
         }
     }
-    None
+    Ok(None)
 }
 
+#[cfg(test)]
 fn parse_epub_opf(xml: &str) -> EpubOpf {
+    parse_epub_opf_with_context(&EbookContext::new(None), xml).unwrap_or_default()
+}
+
+fn parse_epub_opf_with_context(
+    context: &EbookContext,
+    xml: &str,
+) -> Result<EpubOpf, ReaderPreviewError> {
     let mut reader = Reader::from_str(xml);
     let mut opf = EpubOpf::default();
     let mut in_metadata = false;
     let mut current_meta = String::new();
+    let mut event_count = 0usize;
 
     loop {
+        event_count = event_count.saturating_add(1);
+        context.check_xml_event(event_count)?;
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13236,7 +13451,7 @@ fn parse_epub_opf(xml: &str) -> EpubOpf {
             _ => {}
         }
     }
-    opf
+    Ok(opf)
 }
 
 fn add_epub_manifest_item(opf: &mut EpubOpf, e: &BytesStart<'_>) {
@@ -13276,7 +13491,17 @@ fn is_epub_document_item(item: &EpubManifestItem) -> bool {
         || href.ends_with(".htm")
 }
 
+#[cfg(test)]
 fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
+    extract_xhtml_markdown_with_context(&EbookContext::new(None), xml, fallback_title)
+        .unwrap_or_default()
+}
+
+fn extract_xhtml_markdown_with_context(
+    context: &EbookContext,
+    xml: &str,
+    fallback_title: &str,
+) -> Result<String, ReaderPreviewError> {
     let mut reader = Reader::from_str(xml);
     let mut out = String::new();
     let mut in_body = false;
@@ -13285,8 +13510,11 @@ fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
     let mut current_block = String::new();
     let mut heading_level = 0usize;
     let mut saw_heading = false;
+    let mut event_count = 0usize;
 
     loop {
+        event_count = event_count.saturating_add(1);
+        context.check_xml_event(event_count)?;
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13385,13 +13613,13 @@ fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
 
     flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
     if !saw_heading && !out.trim().is_empty() {
-        format!(
+        Ok(format!(
             "## {}\n\n{}",
             markdown_escape_line(fallback_title),
             out.trim()
-        )
+        ))
     } else {
-        out.trim().to_string()
+        Ok(out.trim().to_string())
     }
 }
 
@@ -13420,14 +13648,20 @@ fn flush_ebook_block(
     out.push_str("\n\n");
 }
 
-fn render_fb2(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let filename = file_name(path);
-    let Some(bytes) = read_file_prefix(path, MAX_EBOOK_XML_BYTES as usize) else {
-        return String::new();
-    };
+fn render_fb2_reader<R: Read>(
+    reader: &mut R,
+    logical_name: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let filename = file_name(logical_name);
+    let bytes =
+        read_reader_prefix_cancelable(reader, MAX_EBOOK_XML_BYTES as usize, cancel_cb)?;
     let xml = String::from_utf8_lossy(&bytes);
     let mut reader = Reader::from_str(&xml);
+    let context = EbookContext::new(cancel_cb);
     let mut title = String::new();
     let mut lang = String::new();
     let mut author_parts = Vec::<String>::new();
@@ -13437,8 +13671,11 @@ fn render_fb2(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String 
     let mut current_block = String::new();
     let mut markdown = String::new();
     let mut saw_body_heading = false;
+    let mut event_count = 0usize;
 
     loop {
+        event_count = event_count.saturating_add(1);
+        context.check_xml_event(event_count)?;
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13542,13 +13779,12 @@ fn render_fb2(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String 
     append_metadata_line(&mut out, "Language", &lang);
     out.push('\n');
     push_markdown_limited(&mut out, markdown.trim(), MAX_EBOOK_TEXT_CHARS);
-    ebook_markdown_json("fb2", &title, out)
+    Ok(ebook_markdown_json("fb2", &title, out))
 }
 
-fn render_binary_ebook_info(path: &str) -> String {
-    let filename = file_name(path);
-    let (size, modified_unix) = file_size_modified(path);
-    let ext = Path::new(path)
+fn render_binary_ebook_info(logical_name: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(logical_name);
+    let ext = Path::new(logical_name)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -13644,6 +13880,11 @@ fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
 const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
+pub(crate) const MAX_ARCHIVE_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ARCHIVE_ZIP_ENTRIES: u64 = 100_000;
+const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 32 * 1024 * 1024;
+const ZIP_EOCD_MIN_BYTES: u64 = 22;
+const ZIP_EOCD_MAX_TAIL_BYTES: u64 = ZIP_EOCD_MIN_BYTES + u16::MAX as u64;
 const MAX_TAR_SCAN_BYTES: u64 = 512 * 1024 * 1024;
 const TAR_SCAN_DEADLINE: Duration = Duration::from_secs(4);
 const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
@@ -13674,6 +13915,209 @@ const TAR_EXTS: &[&str] = &[".tar"];
 const TAR_GZ_EXTS: &[&str] = &[".tar.gz", ".tgz"];
 const GZ_EXTS: &[&str] = &[".gz"];
 
+fn prepare_seekable_reader<R: Seek>(
+    reader: &mut R,
+    expected_length: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(), ReaderPreviewError> {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let actual_length = reader
+        .seek(SeekFrom::End(0))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    if actual_length != expected_length {
+        return Err(ReaderPreviewError::LengthMismatch);
+    }
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(())
+}
+
+fn validate_zip_container<R: Read + Seek>(
+    reader: &mut R,
+    source_len: u64,
+    max_entries: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(), ReaderPreviewError> {
+    if source_len < ZIP_EOCD_MIN_BYTES {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    prepare_seekable_reader(reader, source_len, cancel_cb)?;
+    let tail_len = source_len.min(ZIP_EOCD_MAX_TAIL_BYTES);
+    reader
+        .seek(SeekFrom::Start(source_len - tail_len))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    let mut tail = vec![0u8; tail_len as usize];
+    read_exact_cancelable(reader, &mut tail, cancel_cb)?;
+
+    let eocd_index = (0..=tail.len().saturating_sub(ZIP_EOCD_MIN_BYTES as usize))
+        .rev()
+        .find(|index| {
+            tail.get(*index..index + 4) == Some(b"PK\x05\x06")
+                && read_u16(&tail, index + 20)
+                    .is_some_and(|comment_len| index + 22 + comment_len as usize == tail.len())
+        })
+        .ok_or(ReaderPreviewError::Malformed)?;
+    let eocd_offset = source_len - tail_len + eocd_index as u64;
+    let disk = read_u16(&tail, eocd_index + 4).ok_or(ReaderPreviewError::Malformed)?;
+    let central_disk = read_u16(&tail, eocd_index + 6).ok_or(ReaderPreviewError::Malformed)?;
+    let entries_on_disk =
+        read_u16(&tail, eocd_index + 8).ok_or(ReaderPreviewError::Malformed)?;
+    let entries = read_u16(&tail, eocd_index + 10).ok_or(ReaderPreviewError::Malformed)?;
+    let central_size =
+        read_u32(&tail, eocd_index + 12).ok_or(ReaderPreviewError::Malformed)?;
+    let central_offset =
+        read_u32(&tail, eocd_index + 16).ok_or(ReaderPreviewError::Malformed)?;
+    if disk != 0 || central_disk != 0 || entries_on_disk != entries {
+        return Err(ReaderPreviewError::Malformed);
+    }
+
+    let is_zip64 = entries == u16::MAX
+        || central_size == u32::MAX
+        || central_offset == u32::MAX;
+    let (entries, central_size, central_offset, central_end_limit) = if is_zip64 {
+        let locator_offset = eocd_offset
+            .checked_sub(20)
+            .ok_or(ReaderPreviewError::Malformed)?;
+        reader
+            .seek(SeekFrom::Start(locator_offset))
+            .map_err(|_| ReaderPreviewError::Io)?;
+        let mut locator = [0u8; 20];
+        read_exact_cancelable(reader, &mut locator, cancel_cb)?;
+        if locator.get(..4) != Some(b"PK\x06\x07")
+            || read_u32(&locator, 4) != Some(0)
+            || read_u32(&locator, 16) != Some(1)
+        {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        let zip64_offset = read_u64(&locator, 8).ok_or(ReaderPreviewError::Malformed)?;
+        if zip64_offset >= locator_offset {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        reader
+            .seek(SeekFrom::Start(zip64_offset))
+            .map_err(|_| ReaderPreviewError::Io)?;
+        let mut zip64 = [0u8; 56];
+        read_exact_cancelable(reader, &mut zip64, cancel_cb)?;
+        if zip64.get(..4) != Some(b"PK\x06\x06")
+            || read_u64(&zip64, 4).is_none_or(|size| size < 44)
+            || read_u32(&zip64, 16) != Some(0)
+            || read_u32(&zip64, 20) != Some(0)
+        {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        let entries_on_disk = read_u64(&zip64, 24).ok_or(ReaderPreviewError::Malformed)?;
+        let entries = read_u64(&zip64, 32).ok_or(ReaderPreviewError::Malformed)?;
+        if entries_on_disk != entries {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        (
+            entries,
+            read_u64(&zip64, 40).ok_or(ReaderPreviewError::Malformed)?,
+            read_u64(&zip64, 48).ok_or(ReaderPreviewError::Malformed)?,
+            zip64_offset,
+        )
+    } else {
+        (
+            entries as u64,
+            central_size as u64,
+            central_offset as u64,
+            eocd_offset,
+        )
+    };
+
+    if entries > max_entries || central_size > MAX_ZIP_CENTRAL_DIRECTORY_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    let central_end = central_offset
+        .checked_add(central_size)
+        .ok_or(ReaderPreviewError::Malformed)?;
+    if central_end > central_end_limit || central_end > source_len {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    Ok(())
+}
+
+struct CancelableSeekReader<R> {
+    reader: R,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+}
+
+impl<R> CancelableSeekReader<R> {
+    fn new(reader: R, cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
+        Self { reader, cancel_cb }
+    }
+
+    fn cancelled_error() -> io::Error {
+        io::Error::new(io::ErrorKind::Other, "preview cancelled")
+    }
+}
+
+impl<R: Read> Read for CancelableSeekReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if preview_cancelled(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        let read = self.reader.read(buffer)?;
+        if preview_cancelled(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        Ok(read)
+    }
+}
+
+impl<R: Seek> Seek for CancelableSeekReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        if preview_cancelled(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        let offset = self.reader.seek(position)?;
+        if preview_cancelled(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        Ok(offset)
+    }
+}
+
+fn open_validated_zip<R: Read + Seek>(
+    mut reader: R,
+    source_len: u64,
+    max_entries: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<ZipArchive<CancelableSeekReader<R>>, ReaderPreviewError> {
+    validate_zip_container(&mut reader, source_len, max_entries, cancel_cb)?;
+    let zip = ZipArchive::new(CancelableSeekReader::new(reader, cancel_cb)).map_err(|_| {
+        if preview_cancelled(cancel_cb) {
+            ReaderPreviewError::Cancelled
+        } else {
+            ReaderPreviewError::Malformed
+        }
+    })?;
+    // The ZIP crate can reject one EOCD candidate and fall back to an earlier one. Recheck its
+    // authoritative result so that fallback selection cannot escape the declared-entry budget.
+    if zip.len() as u64 > max_entries {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    // Validate the directory selected by the ZIP crate, including fallback to an earlier EOCD.
+    const MAX_ZIP_DIRECTORY_TAIL_BYTES: u64 =
+        MAX_ZIP_CENTRAL_DIRECTORY_BYTES + ZIP_EOCD_MAX_TAIL_BYTES + 76;
+    let authoritative_tail = source_len
+        .checked_sub(zip.central_directory_start())
+        .ok_or(ReaderPreviewError::Malformed)?;
+    if authoritative_tail > MAX_ZIP_DIRECTORY_TAIL_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    Ok(zip)
+}
+
 pub fn is_archive(ext: &str, kind: &str, magic: &[u8]) -> bool {
     if ZIP_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
         return true;
@@ -13699,16 +14143,117 @@ pub fn render_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
     if is_package_path(&lower) {
         return render_package(path, cancel_cb);
     }
-    if TAR_GZ_EXTS.iter().any(|e| lower.ends_with(e)) {
-        return render_tar_gz_archive(path, cancel_cb);
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return String::new(),
+    };
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return String::new(),
+    };
+    let modified_unix = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0);
+    render_archive_reader_with_root(
+        file,
+        path,
+        path,
+        metadata.len(),
+        modified_unix,
+        cancel_cb,
+    )
+    .unwrap_or_default()
+}
+
+pub fn render_archive_reader<R: Read + Seek>(
+    reader: R,
+    logical_name: &str,
+    source_len: u64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    render_archive_reader_with_root(
+        reader,
+        logical_name,
+        "",
+        source_len,
+        modified_unix,
+        cancel_cb,
+    )
+}
+
+fn render_archive_reader_with_root<R: Read + Seek>(
+    mut reader: R,
+    logical_name: &str,
+    root_path: &str,
+    source_len: u64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if source_len > MAX_ARCHIVE_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
     }
-    if TAR_EXTS.iter().any(|e| lower.ends_with(e)) {
-        return render_tar_archive(path, cancel_cb);
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
     }
-    if GZ_EXTS.iter().any(|e| lower.ends_with(e)) && !lower.ends_with(".tar.gz") {
-        return render_gzip_member(path);
+    let lower = logical_name.to_ascii_lowercase();
+    if is_package_path(&lower) {
+        return Err(ReaderPreviewError::Malformed);
     }
-    render_zip_archive(path, cancel_cb)
+
+    let json = if TAR_GZ_EXTS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+    {
+        prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
+        render_tar_entries(
+            logical_name,
+            root_path,
+            "archive",
+            GzDecoder::new(reader),
+            cancel_cb,
+        )
+    } else if TAR_EXTS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+    {
+        prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
+        render_tar_entries(logical_name, root_path, "archive", reader, cancel_cb)
+    } else if GZ_EXTS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+        && !lower.ends_with(".tar.gz")
+    {
+        prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
+        render_gzip_member_reader(
+            &mut reader,
+            logical_name,
+            root_path,
+            source_len,
+            modified_unix,
+            cancel_cb,
+        )?
+    } else {
+        let mut zip = open_validated_zip(
+            reader,
+            source_len,
+            MAX_ARCHIVE_ZIP_ENTRIES,
+            cancel_cb,
+        )?;
+        render_zip_archive_from_zip(&mut zip, logical_name, root_path, cancel_cb)?
+    };
+
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    if json.is_empty() {
+        Err(ReaderPreviewError::Malformed)
+    } else {
+        Ok(json)
+    }
 }
 
 pub fn extract_archive_entry_to_temp(
@@ -13719,92 +14264,169 @@ pub fn extract_archive_entry_to_temp(
     if preview_cancelled(cancel_cb) {
         return None;
     }
-    let lower = archive_path.to_ascii_lowercase();
-    if TAR_EXTS.iter().any(|e| lower.ends_with(e))
-        || TAR_GZ_EXTS.iter().any(|e| lower.ends_with(e))
-        || (GZ_EXTS.iter().any(|e| lower.ends_with(e)) && !lower.ends_with(".tar.gz"))
+    let file = fs::File::open(archive_path).ok()?;
+    let source_len = file.metadata().ok()?.len();
+    extract_archive_entry_to_temp_reader(
+        file,
+        source_len,
+        archive_path,
+        entry_path,
+        cancel_cb,
+    )
+    .ok()
+}
+
+pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
+    reader: R,
+    source_len: u64,
+    logical_name: &str,
+    entry_path: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if source_len > MAX_ARCHIVE_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let lower = logical_name.to_ascii_lowercase();
+    if TAR_EXTS.iter().any(|extension| lower.ends_with(extension))
+        || TAR_GZ_EXTS
+            .iter()
+            .any(|extension| lower.ends_with(extension))
+        || (GZ_EXTS.iter().any(|extension| lower.ends_with(extension))
+            && !lower.ends_with(".tar.gz"))
     {
-        return None;
+        return Err(ReaderPreviewError::Malformed);
     }
 
-    let normalized = normalize_archive_entry_path(entry_path)?;
-    let file = fs::File::open(archive_path).ok()?;
-    if preview_cancelled(cancel_cb) {
-        return None;
-    }
-    let mut zip = ZipArchive::new(file).ok()?;
-    let mut found = false;
+    let normalized =
+        normalize_archive_entry_path(entry_path).ok_or(ReaderPreviewError::Malformed)?;
+    let mut zip = open_validated_zip(
+        reader,
+        source_len,
+        MAX_ARCHIVE_ZIP_ENTRIES,
+        cancel_cb,
+    )?;
+    let mut found_index = None;
     for index in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let entry = match zip.by_index_raw(index) {
             Ok(entry) => entry,
             Err(_) => continue,
         };
         if normalize_archive_entry_path(entry.name()).as_deref() == Some(normalized.as_str()) {
             if entry.is_dir() || entry.encrypted() {
-                return None;
+                return Err(ReaderPreviewError::Malformed);
             }
-            found = true;
+            found_index = Some(index);
             break;
         }
     }
-    if !found {
-        return None;
-    }
-    let mut entry = zip.by_name(&normalized).ok()?;
+
+    let mut entry = zip
+        .by_index(found_index.ok_or(ReaderPreviewError::Malformed)?)
+        .map_err(|_| {
+            if preview_cancelled(cancel_cb) {
+                ReaderPreviewError::Cancelled
+            } else {
+                ReaderPreviewError::Malformed
+            }
+        })?;
     if entry.is_dir()
+        || entry.encrypted()
         || !archive_entry_within_extract_budget(entry.size(), entry.compressed_size())
     {
-        return None;
+        return Err(ReaderPreviewError::LimitExceeded);
     }
 
     let started = Instant::now();
     let mut bytes = Vec::with_capacity((entry.size() as usize).min(1024 * 1024));
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        if preview_cancelled(cancel_cb) || started.elapsed() > ARCHIVE_EXTRACT_DEADLINE {
-            return None;
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
         }
-        let read = entry.read(&mut buffer).ok()?;
+        if started.elapsed() > ARCHIVE_EXTRACT_DEADLINE {
+            return Err(ReaderPreviewError::LimitExceeded);
+        }
+        let read = match entry.read(&mut buffer) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReaderPreviewError::Malformed),
+        };
         if read == 0 {
             break;
         }
-        if bytes.len().checked_add(read)? > MAX_ARCHIVE_EXTRACT_BYTES as usize {
-            return None;
+        if bytes
+            .len()
+            .checked_add(read)
+            .is_none_or(|length| length > MAX_ARCHIVE_EXTRACT_BYTES as usize)
+        {
+            return Err(ReaderPreviewError::LimitExceeded);
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
+    drop(entry);
     if preview_cancelled(cancel_cb) {
-        return None;
+        return Err(ReaderPreviewError::Cancelled);
     }
-    let root = create_archive_extract_root()?;
+
+    let root = create_archive_extract_root().ok_or(ReaderPreviewError::Io)?;
     let target = root.join(archive_extract_output_name(&normalized));
-    let mut output = match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&target)
-    {
-        Ok(output) => output,
-        Err(_) => {
-            let _ = fs::remove_dir_all(&root);
-            return None;
+    let result = (|| {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|_| ReaderPreviewError::Io)?;
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
         }
+        output
+            .write_all(&bytes)
+            .map_err(|_| ReaderPreviewError::Io)?;
+        drop(output);
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        target
+            .to_str()
+            .map(str::to_string)
+            .ok_or(ReaderPreviewError::Io)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&root);
+    }
+    result
+}
+
+pub(crate) fn discard_archive_extract_path(path: &str) {
+    let target = Path::new(path);
+    let Some(file_name) = target.file_name().and_then(|name| name.to_str()) else {
+        return;
     };
-    if preview_cancelled(cancel_cb) {
-        drop(output);
-        let _ = fs::remove_dir_all(&root);
-        return None;
+    if !file_name.starts_with("entry-") {
+        return;
     }
-    if output.write_all(&bytes).is_err() {
-        drop(output);
-        let _ = fs::remove_dir_all(&root);
-        return None;
+    let Some(root) = target.parent() else {
+        return;
+    };
+    let Some(root_name) = root.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let random_suffix = root_name.strip_prefix("extract-").unwrap_or("");
+    if random_suffix.len() != 32
+        || !random_suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || root.parent() != Some(archive_extract_base_path().as_path())
+    {
+        return;
     }
-    drop(output);
-    if preview_cancelled(cancel_cb) {
-        let _ = fs::remove_dir_all(&root);
-        return None;
-    }
-    target.to_str().map(|s| s.to_string())
+    let _ = fs::remove_dir_all(root);
 }
 
 fn archive_entry_within_extract_budget(size: u64, compressed_size: u64) -> bool {
@@ -15413,6 +16035,7 @@ pub fn render_torrent_reader<R: Read>(
             listing_kind: "torrent".to_string(),
             summary,
             is_partial: partial,
+            can_preview_entries: false,
             encrypted_file_count: 0,
             items,
         }),
@@ -15518,17 +16141,13 @@ fn bytes_to_lossy(bytes: &[u8]) -> String {
         .to_string()
 }
 
-fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return String::new(),
-    };
-    let mut zip = match ZipArchive::new(file) {
-        Ok(z) => z,
-        Err(_) => return String::new(),
-    };
-
-    let filename = Path::new(path)
+fn render_zip_archive_from_zip<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    logical_name: &str,
+    root_path: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -15544,7 +16163,7 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
 
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) {
-            return String::new();
+            return Err(ReaderPreviewError::Cancelled);
         }
         let entry = match zip.by_index_raw(i) {
             Ok(e) => e,
@@ -15622,9 +16241,9 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         partial = true;
     }
 
-    archive_listing_json(
+    Ok(archive_listing_json(
         filename,
-        path,
+        root_path,
         "archive",
         entries,
         file_count,
@@ -15632,23 +16251,8 @@ fn render_zip_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         compressed,
         partial,
         encrypted_file_count,
-    )
-}
-
-fn render_tar_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return String::new(),
-    };
-    render_tar_entries(path, "archive", file, cancel_cb)
-}
-
-fn render_tar_gz_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return String::new(),
-    };
-    render_tar_entries(path, "archive", GzDecoder::new(file), cancel_cb)
+        true,
+    ))
 }
 
 struct TarScanReader<R> {
@@ -15689,12 +16293,13 @@ impl<R: Read> Read for TarScanReader<R> {
 }
 
 fn render_tar_entries<R: Read>(
-    path: &str,
+    logical_name: &str,
+    root_path: &str,
     kind: &str,
     reader: R,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> String {
-    let filename = Path::new(path)
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -15793,7 +16398,7 @@ fn render_tar_entries<R: Read>(
 
     archive_listing_json(
         filename,
-        path,
+        root_path,
         kind,
         entries,
         file_count,
@@ -15801,11 +16406,19 @@ fn render_tar_entries<R: Read>(
         0,
         partial,
         0,
+        false,
     )
 }
 
-fn render_gzip_member(path: &str) -> String {
-    let filename = Path::new(path)
+fn render_gzip_member_reader<R: Read + Seek>(
+    reader: &mut R,
+    logical_name: &str,
+    root_path: &str,
+    source_len: u64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -15814,14 +16427,20 @@ fn render_gzip_member(path: &str) -> String {
         .or_else(|| filename.strip_suffix(".GZ"))
         .filter(|s| !s.is_empty())
         .unwrap_or(filename);
-    let compressed = fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
-    let uncompressed = gzip_uncompressed_size(path).unwrap_or(0);
-    let modified = fs::metadata(path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    if source_len < 4 {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    reader
+        .seek(SeekFrom::End(-4))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    let mut trailer = [0u8; 4];
+    read_exact_cancelable(reader, &mut trailer, cancel_cb)?;
+    let compressed =
+        i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?;
+    let uncompressed = u32::from_le_bytes(trailer) as i64;
     let mut entries = BTreeMap::new();
     entries.insert(
         member_name.to_string(),
@@ -15831,13 +16450,13 @@ fn render_gzip_member(path: &str) -> String {
             false,
             uncompressed,
             compressed,
-            modified,
+            modified_unix,
             false,
         ),
     );
-    archive_listing_json(
+    Ok(archive_listing_json(
         filename,
-        path,
+        root_path,
         "archive",
         entries,
         1,
@@ -15845,18 +16464,8 @@ fn render_gzip_member(path: &str) -> String {
         compressed,
         false,
         0,
-    )
-}
-
-fn gzip_uncompressed_size(path: &str) -> Option<i64> {
-    let mut file = fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() < 4 {
-        return None;
-    }
-    file.seek(SeekFrom::End(-4)).ok()?;
-    let mut buf = [0u8; 4];
-    file.read_exact(&mut buf).ok()?;
-    Some(u32::from_le_bytes(buf) as i64)
+        false,
+    ))
 }
 
 fn archive_listing_json(
@@ -15869,6 +16478,7 @@ fn archive_listing_json(
     compressed: i64,
     partial: bool,
     encrypted_file_count: usize,
+    can_preview_entries: bool,
 ) -> String {
     let folder_count = entries
         .values()
@@ -15940,6 +16550,7 @@ fn archive_listing_json(
             listing_kind: "archive".to_string(),
             summary,
             is_partial: partial,
+            can_preview_entries,
             encrypted_file_count,
             items,
         }),
@@ -16274,6 +16885,7 @@ pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
             listing_kind: "folder".to_string(),
             summary,
             is_partial: partial,
+            can_preview_entries: true,
             encrypted_file_count: 0,
             items,
         }),
@@ -16419,6 +17031,236 @@ mod tests {
         assert!(!archive_entry_within_extract_budget(1, 0));
     }
 
+    fn test_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .expect("start ZIP entry");
+            writer.write_all(bytes).expect("write ZIP entry");
+        }
+        writer.finish().expect("finish ZIP").into_inner()
+    }
+
+    #[test]
+    fn archive_reader_supports_tar_tgz_and_gzip_without_a_path() {
+        let payload = b"reader archive";
+        let mut tar_builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_path("folder/item.txt").expect("set TAR path");
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar_builder
+            .append(&header, payload.as_slice())
+            .expect("append TAR entry");
+        let tar_bytes = tar_builder.into_inner().expect("finish TAR");
+        let tar_json = render_archive_reader(
+            Cursor::new(tar_bytes.clone()),
+            r"C:\missing\logical.tar",
+            tar_bytes.len() as u64,
+            0,
+            None,
+        )
+        .expect("TAR reader preview");
+        assert!(tar_json.contains("\"rootPath\":\"\""));
+        assert!(tar_json.contains("\"canPreviewEntries\":false"));
+        assert!(tar_json.contains("folder/item.txt"));
+
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&tar_bytes).expect("compress TAR");
+        let tgz_bytes = gzip.finish().expect("finish TGZ");
+        let tgz_json = render_archive_reader(
+            Cursor::new(tgz_bytes.clone()),
+            "logical.tgz",
+            tgz_bytes.len() as u64,
+            0,
+            None,
+        )
+        .expect("TGZ reader preview");
+        assert!(tgz_json.contains("\"canPreviewEntries\":false"));
+        assert!(tgz_json.contains("folder/item.txt"));
+
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(payload).expect("compress GZIP member");
+        let gzip_bytes = gzip.finish().expect("finish GZIP");
+        let gzip_json = render_archive_reader(
+            Cursor::new(gzip_bytes.clone()),
+            "logical.txt.gz",
+            gzip_bytes.len() as u64,
+            123,
+            None,
+        )
+        .expect("GZIP reader preview");
+        let gzip_json: serde_json::Value =
+            serde_json::from_str(&gzip_json).expect("GZIP listing JSON");
+        assert_eq!(gzip_json["listing"]["rootPath"], "");
+        assert_eq!(gzip_json["listing"]["canPreviewEntries"], false);
+        assert_eq!(gzip_json["listing"]["items"][0]["path"], "logical.txt");
+        assert_eq!(
+            gzip_json["listing"]["items"][0]["size"],
+            payload.len() as u64
+        );
+    }
+
+    #[test]
+    fn archive_zip_reader_retains_partial_listing_below_hard_entry_cap() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..=MAX_ARCHIVE_SCAN_ENTRIES {
+            writer
+                .start_file(
+                    format!("entry-{index:05}.txt"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .expect("start bounded ZIP entry");
+        }
+        let bytes = writer.finish().expect("finish large ZIP").into_inner();
+        let json = render_archive_reader(
+            Cursor::new(bytes.clone()),
+            "many.zip",
+            bytes.len() as u64,
+            0,
+            None,
+        )
+        .expect("partial archive listing");
+        let json: serde_json::Value = serde_json::from_str(&json).expect("archive JSON");
+        assert_eq!(json["listing"]["isPartial"], true);
+        assert!(json["listing"]["items"].as_array().unwrap().len() <= MAX_ARCHIVE_ENTRIES);
+    }
+
+    fn synthetic_zip64_end(entries: u64, central_size: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"PK\x06\x06");
+        bytes.extend_from_slice(&44u64.to_le_bytes());
+        bytes.extend_from_slice(&45u16.to_le_bytes());
+        bytes.extend_from_slice(&45u16.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&entries.to_le_bytes());
+        bytes.extend_from_slice(&entries.to_le_bytes());
+        bytes.extend_from_slice(&central_size.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x06\x07");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(b"PK\x05\x06");
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn zip_preflight_rejects_hard_entry_and_central_directory_caps() {
+        let too_many = synthetic_zip64_end(MAX_ARCHIVE_ZIP_ENTRIES + 1, 0);
+        assert_eq!(
+            validate_zip_container(
+                &mut Cursor::new(too_many.clone()),
+                too_many.len() as u64,
+                MAX_ARCHIVE_ZIP_ENTRIES,
+                None,
+            )
+            .err(),
+            Some(ReaderPreviewError::LimitExceeded)
+        );
+
+        let central_too_large =
+            synthetic_zip64_end(0, MAX_ZIP_CENTRAL_DIRECTORY_BYTES + 1);
+        assert_eq!(
+            validate_zip_container(
+                &mut Cursor::new(central_too_large.clone()),
+                central_too_large.len() as u64,
+                MAX_ARCHIVE_ZIP_ENTRIES,
+                None,
+            )
+            .err(),
+            Some(ReaderPreviewError::LimitExceeded)
+        );
+    }
+
+    #[test]
+    fn zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("entry.txt", zip::write::SimpleFileOptions::default())
+            .expect("start ZIP entry");
+        writer.write_all(b"bounded").expect("write ZIP entry");
+        let mut bytes = writer.finish().expect("finish ZIP").into_inner();
+        bytes.resize(
+            bytes.len()
+                + MAX_ZIP_CENTRAL_DIRECTORY_BYTES as usize
+                + ZIP_EOCD_MAX_TAIL_BYTES as usize
+                + 1024,
+            0,
+        );
+        // The EOCD fields are structurally valid, but its one-byte central directory cannot contain
+        // the declared entry. The ZIP reader must reject it and may fall back to the real EOCD.
+        let fake_central_offset = bytes.len() as u32;
+        bytes.push(0);
+        bytes.extend_from_slice(b"PK\x05\x06");
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&fake_central_offset.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+
+        let result = open_validated_zip(
+            Cursor::new(bytes.clone()),
+            bytes.len() as u64,
+            MAX_ARCHIVE_ZIP_ENTRIES,
+            None,
+        );
+        assert!(matches!(result, Err(ReaderPreviewError::LimitExceeded)));
+    }
+
+    static ZIP_OPEN_CANCEL_CHECKS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn cancel_during_zip_open() -> bool {
+        ZIP_OPEN_CANCEL_CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 4
+    }
+
+    #[test]
+    fn zip_archive_open_honors_cancellation_after_preflight() {
+        let bytes = test_zip_bytes(&[("entry.txt", b"content")]);
+        ZIP_OPEN_CANCEL_CHECKS.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            open_validated_zip(
+                Cursor::new(bytes.clone()),
+                bytes.len() as u64,
+                MAX_ARCHIVE_ZIP_ENTRIES,
+                Some(cancel_during_zip_open),
+            ),
+            Err(ReaderPreviewError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn ebook_reads_share_an_aggregate_decompression_budget() {
+        let mut context = EbookContext {
+            remaining_decompressed_bytes: 4,
+            cancel_cb: None,
+        };
+        let mut first = Cursor::new(vec![1, 2, 3]);
+        let mut second = Cursor::new(vec![4, 5]);
+
+        assert_eq!(
+            read_ebook_limited_to_end(&mut context, &mut first, 3).expect("first ebook entry"),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            read_ebook_limited_to_end(&mut context, &mut second, 2).err(),
+            Some(ReaderPreviewError::LimitExceeded)
+        );
+    }
+
     #[test]
     fn encrypted_zip_entries_are_reported_and_not_extracted() {
         let path = std::env::temp_dir().join(format!(
@@ -16433,7 +17275,7 @@ mod tests {
         writer.write_all(b"secret").expect("write encrypted entry");
         writer.finish().expect("finish encrypted zip");
 
-        let json = render_zip_archive(path.to_str().unwrap(), None);
+        let json = render_archive(path.to_str().unwrap(), None);
         let extracted = extract_archive_entry_to_temp(path.to_str().unwrap(), "secret.txt", None);
         let _ = fs::remove_file(path);
 
@@ -16765,6 +17607,26 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.ends_with(".png"));
         assert!(first.starts_with("entry-666f6c6465722f613a623f2e706e67"));
+    }
+
+    #[test]
+    fn archive_extract_discard_only_removes_generated_roots() {
+        let generated_root = create_archive_extract_root().expect("generated extract root");
+        let generated_target = generated_root.join("entry-test");
+        fs::write(&generated_target, b"temporary").expect("write generated extraction");
+        discard_archive_extract_path(generated_target.to_str().unwrap());
+        assert!(!generated_root.exists());
+
+        let foreign_root = std::env::temp_dir().join(format!(
+            "quicklook-next-foreign-root-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&foreign_root).expect("create foreign root");
+        let foreign_target = foreign_root.join("entry-test");
+        fs::write(&foreign_target, b"keep").expect("write foreign extraction");
+        discard_archive_extract_path(foreign_target.to_str().unwrap());
+        assert!(foreign_target.exists());
+        let _ = fs::remove_dir_all(foreign_root);
     }
 
     #[test]

@@ -164,7 +164,7 @@ internal sealed class ListingPreviewPresenter
             return;
         }
 
-        if (!row.IsFolder && _currentListing is not null)
+        if (!row.IsFolder && _currentListing?.CanPreviewEntries == true)
         {
             await _previewItem(_currentListing, row);
             return;

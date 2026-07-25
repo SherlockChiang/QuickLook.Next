@@ -7,8 +7,19 @@ public static class NativeAbi
     public const ulong HandleExecutable = 1UL << 1;
     public const ulong HandleTorrent = 1UL << 2;
     public const ulong HandleSqliteSnapshot = 1UL << 3;
+    public const ulong HandleArchive = 1UL << 4;
+    // Bit 5 is reserved for the Office HANDLE preview slice.
+    public const ulong HandleOffice = 1UL << 5;
+    public const ulong HandleEbook = 1UL << 6;
+    public const ulong HandleArchiveEntry = 1UL << 7;
     public const ulong ParserHandleInputs =
-        HandleText | HandleExecutable | HandleTorrent | HandleSqliteSnapshot;
+        HandleText
+        | HandleExecutable
+        | HandleTorrent
+        | HandleSqliteSnapshot
+        | HandleArchive
+        | HandleEbook
+        | HandleArchiveEntry;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
     public const long MaxParserHandleInputBytes = 256L * 1024 * 1024;
     public const long MaxSqliteWalBytes = 64L * 1024 * 1024;

@@ -140,12 +140,20 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Native_capabilities_reject_missing_features()
     {
         Assert.Equal(1UL << 3, NativeAbi.HandleSqliteSnapshot);
+        Assert.Equal(1UL << 4, NativeAbi.HandleArchive);
+        Assert.Equal(1UL << 5, NativeAbi.HandleOffice);
+        Assert.Equal(1UL << 6, NativeAbi.HandleEbook);
+        Assert.Equal(1UL << 7, NativeAbi.HandleArchiveEntry);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
                 | NativeAbi.HandleTorrent
-                | NativeAbi.HandleSqliteSnapshot,
+                | NativeAbi.HandleSqliteSnapshot
+                | NativeAbi.HandleArchive
+                | NativeAbi.HandleEbook
+                | NativeAbi.HandleArchiveEntry,
             NativeAbi.ParserHandleInputs);
+        Assert.Equal(0UL, NativeAbi.ParserHandleInputs & NativeAbi.HandleOffice);
         NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(
             NativeAbi.ParserHandleInputs | (1UL << 63),
@@ -185,12 +193,13 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Preview_listing_json_preserves_encrypted_archive_metadata()
     {
         const string json = """
-            {"kind":"archive","title":"secure.zip","listing":{"rootName":"secure.zip","rootPath":"","listingKind":"archive","summary":"1 file","isPartial":false,"encryptedFileCount":1,"items":[{"name":"secret.txt","path":"secret.txt","parentPath":"","isFolder":false,"size":6,"packedSize":6,"modifiedUnix":0,"type":"TXT File","isEncrypted":true}]}}
+            {"kind":"archive","title":"secure.zip","listing":{"rootName":"secure.zip","rootPath":"","listingKind":"archive","summary":"1 file","isPartial":false,"canPreviewEntries":false,"encryptedFileCount":1,"items":[{"name":"secret.txt","path":"secret.txt","parentPath":"","isFolder":false,"size":6,"packedSize":6,"modifiedUnix":0,"type":"TXT File","isEncrypted":true}]}}
             """;
 
         Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
         Assert.NotNull(ready?.Listing);
         Assert.Equal(1, ready.Listing.EncryptedFileCount);
+        Assert.False(ready.Listing.CanPreviewEntries);
         Assert.True(Assert.Single(ready.Listing.Items).IsEncrypted);
     }
 
@@ -559,6 +568,23 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Contains("\"type\":\"archive.entry.extracted\"", json);
         Assert.DoesNotContain("tempPath", json, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(message, Assert.IsType<ArchiveEntryExtracted>(ProtocolJson.Deserialize(json)));
+    }
+
+    [Fact]
+    public void ProtocolJson_round_trips_parent_bound_archive_extract_message()
+    {
+        var message = new ArchiveEntryExtract(
+            "3".PadLeft(32, '3'),
+            "",
+            "folder/report.pdf")
+        {
+            ParentPreviewRequestId = "2".PadLeft(32, '2'),
+        };
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"archive.entry.extract\"", json);
+        Assert.Contains("\"parentPreviewRequestId\"", json);
+        Assert.Equal(message, Assert.IsType<ArchiveEntryExtract>(ProtocolJson.Deserialize(json)));
     }
 
     [Fact]

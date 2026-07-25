@@ -45,6 +45,7 @@ var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var previewInputs = new ConcurrentDictionary<string, (string Path, FileStream Anchor)>();
+var retainedPreviewSources = new ConcurrentDictionary<string, RetainedPreviewSource>();
 bool authenticated = false;
 string? activePreviewRequestId = null;
 
@@ -92,6 +93,7 @@ while (true)
             {
                 Cancel(activePreviewRequestId);
                 DeletePreviewInput(activePreviewRequestId);
+                DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var cts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, cts))
@@ -168,6 +170,7 @@ while (true)
             {
                 Cancel(activePreviewRequestId);
                 DeletePreviewInput(activePreviewRequestId);
+                DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var handleCts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, handleCts))
@@ -180,7 +183,8 @@ while (true)
             activePreviewRequestId = open.RequestId;
             _ = Task.Run(async () =>
             {
-                using var ownedSourceHandle = sourceHandle;
+                var ownedSourceHandle = sourceHandle;
+                bool sourceRetained = false;
                 bool published = false;
                 try
                 {
@@ -207,6 +211,36 @@ while (true)
                             await channel.SendAsync(new PreviewError(open.RequestId, handleError ?? "Native handle parser returned no preview."));
                         else
                         {
+                            if (kind is "archive" or "ebook")
+                            {
+                                string logicalName = Path.GetFileName(open.LogicalPath);
+                                RetainedPreviewFollowUps followUps =
+                                    string.Equals(
+                                        handleReady?.Listing?.ListingKind,
+                                        "archive",
+                                        StringComparison.OrdinalIgnoreCase)
+                                    && handleReady?.Listing?.CanPreviewEntries == true
+                                        ? RetainedPreviewFollowUps.ArchiveEntry
+                                        : RetainedPreviewFollowUps.None;
+                                if (followUps != RetainedPreviewFollowUps.None)
+                                {
+                                    var retainedSource = new RetainedPreviewSource(
+                                        ownedSourceHandle,
+                                        open.SourceLength,
+                                        logicalName,
+                                        kind,
+                                        followUps);
+                                    if (!retainedPreviewSources.TryAdd(open.RequestId, retainedSource))
+                                    {
+                                        await channel.SendAsync(new PreviewError(
+                                            open.RequestId,
+                                            "Could not retain preview source."));
+                                        return;
+                                    }
+                                    sourceRetained = true;
+                                    handleCts.Token.ThrowIfCancellationRequested();
+                                }
+                            }
                             await channel.SendAsync(handleReady!);
                             published = true;
                         }
@@ -246,7 +280,13 @@ while (true)
                 finally
                 {
                     if (requests.TryRemove(open.RequestId, out var current)) current.Dispose();
-                    if (!published) DeletePreviewInput(open.RequestId);
+                    if (!published)
+                    {
+                        DeletePreviewInput(open.RequestId);
+                        DeleteRetainedPreviewSource(open.RequestId);
+                    }
+                    if (!sourceRetained)
+                        ownedSourceHandle.Dispose();
                 }
             });
             break;
@@ -291,6 +331,7 @@ while (true)
             {
                 Cancel(activePreviewRequestId);
                 DeletePreviewInput(activePreviewRequestId);
+                DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var sqliteCts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, sqliteCts))
@@ -356,13 +397,35 @@ while (true)
         case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
             DeletePreviewInput(close.RequestId);
+            DeleteRetainedPreviewSource(close.RequestId);
             break;
 
         case ArchiveEntryExtract extract when IsValidRequestId(extract.RequestId)
-                                              && !string.IsNullOrWhiteSpace(extract.ArchivePath)
                                               && !string.IsNullOrWhiteSpace(extract.EntryPath):
+            RetainedPreviewSourceLease? retainedArchiveLease = null;
+            if (extract.ParentPreviewRequestId is { } parentRequestId)
+            {
+                if (!IsValidRequestId(parentRequestId)
+                    || string.Equals(parentRequestId, extract.RequestId, StringComparison.Ordinal)
+                    || !retainedPreviewSources.TryGetValue(parentRequestId, out RetainedPreviewSource? retainedArchiveSource)
+                    || !retainedArchiveSource.TryAcquire(
+                        RetainedPreviewFollowUps.ArchiveEntry,
+                        out retainedArchiveLease))
+                {
+                    await channel.SendAsync(new PreviewError(
+                        extract.RequestId,
+                        "Parent archive preview source is unavailable."));
+                    break;
+                }
+            }
+            else if (string.IsNullOrWhiteSpace(extract.ArchivePath))
+            {
+                await channel.SendAsync(new PreviewError(extract.RequestId, "Archive path is unavailable."));
+                break;
+            }
             if (archiveEntries.ContainsKey(extract.RequestId))
             {
+                retainedArchiveLease?.Dispose();
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Archive handoff has not been released."));
                 break;
             }
@@ -371,6 +434,7 @@ while (true)
             var archiveHandoffGate = new SemaphoreSlim(1, 1);
             if (!requests.TryAdd(extract.RequestId, extractCts))
             {
+                retainedArchiveLease?.Dispose();
                 extractCts.Dispose();
                 archiveHandoffGate.Dispose();
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Duplicate request ID."));
@@ -378,6 +442,7 @@ while (true)
             }
             if (!archiveHandoffGates.TryAdd(extract.RequestId, archiveHandoffGate))
             {
+                retainedArchiveLease?.Dispose();
                 requests.TryRemove(extract.RequestId, out _);
                 extractCts.Dispose();
                 archiveHandoffGate.Dispose();
@@ -385,9 +450,34 @@ while (true)
             }
             _ = Task.Run(async () =>
             {
+                string? pendingArchiveEntryPath = null;
+                bool handoffDelivered = false;
                 try
                 {
-                    string? path = ParserNativePreview.TryExtractArchiveEntry(extract.ArchivePath, extract.EntryPath, extractCts.Token);
+                    string? path;
+                    if (retainedArchiveLease is not null)
+                    {
+                        var handleResult = ParserNativePreview.TryExtractArchiveEntryHandle(
+                            retainedArchiveLease.Handle,
+                            retainedArchiveLease.Length,
+                            retainedArchiveLease.LogicalName,
+                            extract.EntryPath,
+                            extractCts.Token);
+                        if (handleResult.Status != NativeAbi.StatusOk)
+                        {
+                            DiagLog.Write(
+                                "ParserHost",
+                                $"native archive entry HANDLE extraction failed request={extract.RequestId} status={handleResult.Status}");
+                        }
+                        path = handleResult.Path;
+                    }
+                    else
+                    {
+                        path = ParserNativePreview.TryExtractArchiveEntry(
+                            extract.ArchivePath,
+                            extract.EntryPath,
+                            extractCts.Token);
+                    }
                     if (!string.IsNullOrWhiteSpace(path)
                         && (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId)))
                     {
@@ -399,11 +489,13 @@ while (true)
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
                     else
                     {
+                        pendingArchiveEntryPath = path;
                         await archiveHandoffGate.WaitAsync();
                         try
                         {
                             var transferred = WindowsHandleTransfer.OpenReadOnlyFile(path);
                             archiveEntries[extract.RequestId] = (path, transferred.Handle);
+                            pendingArchiveEntryPath = null;
                             if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
                             {
                                 if (archiveEntries.TryRemove(extract.RequestId, out var closedEntry))
@@ -418,6 +510,7 @@ while (true)
                                 transferred.Handle.DangerousGetHandle().ToInt64(),
                                 transferred.Length,
                                 extract.EntryPath));
+                            handoffDelivered = true;
                         }
                         finally
                         {
@@ -433,6 +526,15 @@ while (true)
                 }
                 finally
                 {
+                    retainedArchiveLease?.Dispose();
+                    if (!handoffDelivered
+                        && archiveEntries.TryRemove(extract.RequestId, out var failedEntry))
+                    {
+                        failedEntry.Handle.Dispose();
+                        DeleteArchiveEntry(failedEntry.Path);
+                    }
+                    if (pendingArchiveEntryPath is not null)
+                        DeleteArchiveEntry(pendingArchiveEntryPath);
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
                     closedArchiveEntries.TryRemove(extract.RequestId, out _);
@@ -600,6 +702,8 @@ foreach (var raster in heroRasters.Values)
 }
 foreach (string requestId in previewInputs.Keys)
     DeletePreviewInput(requestId);
+foreach (string requestId in retainedPreviewSources.Keys)
+    DeleteRetainedPreviewSource(requestId);
 
 void Cancel(string requestId)
 {
@@ -762,6 +866,12 @@ void DeletePreviewInput(string requestId)
     if (!previewInputs.TryRemove(requestId, out var input)) return;
     input.Anchor.Dispose();
     DeletePreviewInputPath(input.Path);
+}
+
+void DeleteRetainedPreviewSource(string requestId)
+{
+    if (retainedPreviewSources.TryRemove(requestId, out var source))
+        source.Dispose();
 }
 
 static void DeletePreviewInputPath(string path)

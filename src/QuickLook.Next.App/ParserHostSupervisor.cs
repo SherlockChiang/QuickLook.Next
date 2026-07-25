@@ -360,7 +360,11 @@ internal sealed class ParserHostSupervisor
         }
     }
 
-    public async Task<ArchiveEntryHandoff?> ExtractArchiveEntryAsync(string archivePath, string entryPath, CancellationToken cancellationToken)
+    public async Task<ArchiveEntryHandoff?> ExtractArchiveEntryAsync(
+        string archivePath,
+        string entryPath,
+        string? parentPreviewRequestId,
+        CancellationToken cancellationToken)
     {
         if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
@@ -368,7 +372,10 @@ internal sealed class ParserHostSupervisor
         ArchiveEntryHandoff? handoff = null;
         try
         {
-            await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath), cancellationToken);
+            await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath)
+            {
+                ParentPreviewRequestId = parentPreviewRequestId,
+            }, cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
             if (response is ArchiveEntryExtracted extracted)
                 handoff = CreateArchiveEntryHandoff(extracted);

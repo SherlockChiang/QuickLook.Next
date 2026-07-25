@@ -15,19 +15,28 @@ request that is already in progress.
 - Local ParserHost and RasterHost previews normally enter through `PreviewOpenHandle`. Database
   previews use the dedicated `PreviewOpenSqliteHandles` message so an SQLite main file and its
   optional WAL/SHM companions have explicit, independently owned slots.
-- ParserHost text previews (plain text, Markdown, CSV, and TSV), executable metadata, and torrent
-  listings pass the received file handle directly to the Rust ABI. They do not create a
-  `parser-input` anchor or reopen the logical path.
+- ParserHost text previews (plain text, Markdown, CSV, and TSV), executable metadata, torrent
+  listings, archive listings, and ebook previews pass the received file handle directly to the
+  Rust ABI. They do not create a `parser-input` anchor or reopen the logical path.
+- A normal ebook preview is stateless and releases its adopted input after the bounded call. A
+  successfully published local archive listing instead retains its source handle under the parent
+  preview request ID, because an item click may need to extract an entry from that exact file
+  object. This also applies when an EPUB with no usable OPF is presented as an archive listing from
+   its already-open ZIP reader. Only ZIP-compatible listings advertise entry preview; TAR/TGZ/GZip
+   listings remain browse-only. The retained owner is released on `PreviewClose`, failure,
+   replacement, or host disconnect.
 - ParserHost database previews also pass their received handles directly to Rust without creating a
   `parser-input` anchor. The App is the only component allowed to derive and open `main-wal` and
   `main-shm`; neither ParserHost nor Rust resolves companion paths from `LogicalPath`.
-- Other ParserHost formats and RasterHost currently copy the exact duplicated file object into a
-  bounded host-owned anchor before invoking path-only native, WinRT PDF, system codec,
-  shell-thumbnail, or animation providers. Replacing the original path after handoff cannot change
-  the rendered bytes.
-- Archive entry extraction returns a ParserHost-owned read-only handle. The App copies that exact
-  object into a locked App anchor, then the normal pinned ParserHost/RasterHost handoff preserves the
-  bytes through probing and rendering.
+- Office, package, certificate, and remaining ParserHost formats, plus RasterHost, currently copy the
+  exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
+  WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
+  after handoff cannot change the rendered bytes. Office has not yet migrated to a HANDLE reader.
+- Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
+  that ID to the retained archive source handle before considering the legacy path fallback, and the
+  Rust archive-entry HANDLE ABI reopens the same file object. The extracted object is returned as a
+  ParserHost-owned read-only handle. The App copies that exact object into a locked App anchor, then
+  the normal pinned ParserHost/RasterHost handoff preserves the bytes through probing and rendering.
 - Cloud fail-closed compatibility inputs remain path-based and recycle the host when canceled while
   opening.
 - The App currently pins local files with a non-write/non-delete-sharing handle before calling the
@@ -87,7 +96,10 @@ The host must:
    handles it opened read-only.
 3. Derive length from the handle and compare it with the bounded probe metadata.
 4. Never recover or trust a source path from the logical filename.
-5. Dispose the handle on success, error, cancellation, timeout, disconnect, and stale request rejection.
+5. Dispose stateless preview handles on success, error, cancellation, timeout, disconnect, and stale
+   request rejection. A published interactive archive listing is the deliberate exception: retain
+   its owning source handle by request ID until `PreviewClose`, replacement, failure, or disconnect,
+   and never expose that handle or a host-local source path to the App.
 6. Recycle the host if a multi-handle duplication or control-channel send fails after any remote
    handle has been created. Process teardown is the reliable rollback for a partially transferred
    SQLite snapshot.
@@ -99,12 +111,28 @@ file object.
 
 ## Native ABI 2 HANDLE contract
 
-ABI 2 introduces `ql_capabilities` with independent `HANDLE_TEXT`, `HANDLE_EXECUTABLE`,
-`HANDLE_TORRENT`, and `HANDLE_SQLITE_SNAPSHOT` flags. Their stable bit assignments are 0 through 3,
-respectively. The corresponding entry points share one validated/reopened HANDLE adapter.
+ABI 2 introduces `ql_capabilities` with independent HANDLE feature flags. Their stable assignments
+are:
+
+```text
+bit 0  HANDLE_TEXT
+bit 1  HANDLE_EXECUTABLE
+bit 2  HANDLE_TORRENT
+bit 3  HANDLE_SQLITE_SNAPSHOT
+bit 4  HANDLE_ARCHIVE
+bit 5  HANDLE_OFFICE (reserved; not advertised as migrated)
+bit 6  HANDLE_EBOOK
+bit 7  HANDLE_ARCHIVE_ENTRY
+```
+
+The current required ParserHost capability set excludes the reserved Office bit. The corresponding
+implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
+`ql_preview_executable_handle`, `ql_preview_torrent_handle`, `ql_preview_sqlite_handles`,
+`ql_preview_archive_handle`, `ql_preview_ebook_handle`, and `ql_extract_archive_entry_handle`.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
-the existing bounded bencode parser runs.
+the existing bounded bencode parser runs. Archive and ebook routes use bounded, cancellable
+`Read + Seek` pipelines.
 
 The contract is:
 
@@ -141,6 +169,47 @@ Stable ABI 2 HANDLE statuses are:
 These statuses apply only to ABI 2 HANDLE entry points. Existing path entry points retain their
 legacy, per-function return conventions until each one is migrated.
 
+## Archive HANDLE and retained-source contract
+
+`ql_preview_archive_handle` accepts the selected archive object, its exact length, and a logical
+basename. The logical name selects ZIP/TAR/GZip routing and supplies UI labels only. It is never
+opened. Local HANDLE archive inputs are capped at 256 MiB; ZIP central-directory work is capped at
+32 MiB; ZIP preflight rejects more than 100,000 declared entries; metadata scans stop at 10,000
+entries; and at most 5,000 listing items are represented.
+Archive-entry extraction keeps the existing 64 MiB compressed and uncompressed limits, expansion
+ratio limit of 1,000, four-second deadline, cancellation checks, and bounded temp-root retention.
+
+After a valid direct HANDLE archive listing is published, ParserHost retains the owning source
+handle under the preview request ID. This includes the reader-based archive fallback for an EPUB
+without a usable OPF. `ArchiveEntryExtract.ParentPreviewRequestId` is optional for protocol
+compatibility; a click in a direct HANDLE listing, identified by its empty `RootPath`, sends it.
+Anchored compatibility listings remain parentless and path-based. ParserHost validates a supplied
+parent and calls `ql_extract_archive_entry_handle`; only an absent parent ID may use the legacy
+`ArchivePath` fallback. A supplied but missing, closed, or wrong-kind parent fails closed instead of
+falling back to a path. `PreviewClose`, failed publication, source replacement, and pipe teardown
+dispose the retained owner and reject new child leases. An extraction that already acquired a lease
+uses its own reopened read-only handle and may finish; releasing that lease closes the last reference.
+
+The extracted entry may still use a ParserHost-private bounded temp file before being published as a
+read-only handle. The App's downstream anchor is also still required while probing and raster
+compatibility routes remain path-based. Neither path is authority for reopening the parent archive.
+
+## Ebook HANDLE contract
+
+`ql_preview_ebook_handle` shares the path and HANDLE reader implementation. Local HANDLE ebook
+inputs are capped at 256 MiB. ZIP central-directory work is capped at 32 MiB, EPUBs are capped at
+8,192 ZIP entries and 16 MiB of cumulative decompressed content, container/OPF XML at 2 MiB, and
+each chapter at 768 KiB. At most ten chapters and 140 Ki characters are retained in the result.
+The OPF fallback scan and contents list remain bounded, and cancellation is checked during reader
+and decompression work.
+
+When an EPUB has no usable OPF, the ebook pipeline reuses the same validated, already-open ZIP reader
+to publish a bounded archive listing with an empty `RootPath`. It never calls the path-based
+`render_archive(logical_name)` fallback and never treats the logical name as path authority.
+ParserHost retains that parent source for entry clicks exactly as it does for a direct archive
+preview. FB2 and binary ebook metadata use the same reopened file object and the size/modified
+metadata obtained from that object.
+
 ## SQLite snapshot contract
 
 `ql_preview_sqlite_handles` receives the main handle plus optional WAL and SHM handles. It never
@@ -168,7 +237,8 @@ These rules follow SQLite's documented
 
 Remaining migration order:
 
-1. Archive, Office, and ebook readers that require `Read + Seek`.
+1. Office readers and Office hero extraction, with the reserved HANDLE bit enabled only after the
+   main layout and follow-up hero lifecycle both use the retained source object.
 2. Native still-image and animation decoders.
 3. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
 
@@ -177,13 +247,15 @@ broker rather than weakening every parser host.
 
 ## Archive entry lifecycle
 
-Archive extraction should no longer create a path that the App later previews. The App provides a
-bounded writable section or file handle for the output, or ParserHost creates a read-only output handle
-that the App pulls. The App then duplicates that exact object into the destination preview host using
+Local archive extraction no longer reopens `listing.RootPath`: it resolves the parent preview request
+to the retained archive source handle. ParserHost currently creates a bounded private output, opens it
+read-only, and lets the App pull that handle. The App then copies that exact object into its
+read-shared anchor and duplicates the pinned object into the destination preview host using
 `PreviewOpenHandle`. Extension routing uses the sanitized archive entry name only.
 
-This preserves a single file identity across extraction, probing, and rendering and removes the current
-same-user check/open race completely.
+This preserves the parent archive identity through extraction and the child identity through handoff.
+A future bounded writable section or caller-provided output handle can remove the remaining child
+temp/anchor copy after probing and raster providers no longer require a path.
 
 ## Sandbox sequence
 
