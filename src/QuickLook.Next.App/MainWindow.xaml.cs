@@ -759,6 +759,24 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            if (mayRequireHydration
+                && !PreviewFormatPolicy.UsesCloudParserHost(probe.Kind)
+                && !probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+                && !probe.Kind.Equals("pdf", StringComparison.OrdinalIgnoreCase)
+                && !MediaPreviewPresenter.IsMediaProbe(probe))
+            {
+                var deferred = CreateCloudMetadataPreview(
+                    $"cloud-deferred-{generation}",
+                    path,
+                    probe,
+                    UiStrings.CloudAvailabilityUnknownDeferred);
+                _previewSession.CommitPath(path);
+                _previewSession.SetRequestId(null);
+                StatusText.Text = ShowTextPreview(deferred);
+                RevealPreviewWindow(activate: false);
+                return;
+            }
+
             if (MediaPreviewPresenter.IsMediaProbe(probe))
             {
                 MarkPreviewPhase(generation, "route-selected", "route=media");

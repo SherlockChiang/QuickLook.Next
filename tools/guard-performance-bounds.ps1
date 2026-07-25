@@ -163,6 +163,8 @@ Require-Pattern $mainWindow 'HydrateCloudFileAsync\(path,\s*previewToken\)[\s\S]
     "Cloud placeholders must hydrate before normal preview routing."
 Require-Pattern $mainWindow 'FileOptions\.Asynchronous\s*\|\s*FileOptions\.SequentialScan[\s\S]*ReadAsync\(buffer,\s*timeout\.Token\)' `
     "Cloud hydration must stream with cancellation instead of buffering whole files or using Shell thumbnails."
+Require-Pattern $mainWindow 'mayRequireHydration[\s\S]*!PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)[\s\S]*!probe\.Kind\.Equals\("image"[\s\S]*CreateCloudMetadataPreview' `
+    "Unknown cloud availability must keep non-raster formats out of Shell thumbnail fallback."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
