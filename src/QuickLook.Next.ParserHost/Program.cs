@@ -152,7 +152,7 @@ while (true)
                 break;
             }
             if (!IsValidRequestId(open.RequestId)
-                || open.SourceLength is not (>= 0 and <= 256L * 1024 * 1024)
+                || open.SourceLength is not (>= 0 and <= NativeAbi.MaxParserHandleInputBytes)
                 || string.IsNullOrWhiteSpace(open.LogicalPath)
                 || !IsValidProbe(open.Probe)
                 || open.Probe.Size != open.SourceLength)
@@ -247,6 +247,108 @@ while (true)
                 {
                     if (requests.TryRemove(open.RequestId, out var current)) current.Dispose();
                     if (!published) DeletePreviewInput(open.RequestId);
+                }
+            });
+            break;
+
+        case PreviewOpenSqliteHandles open:
+            OwnedSqliteFileHandles sqliteHandles;
+            try
+            {
+                sqliteHandles = WindowsHandleTransfer.TakeLocalSqliteFileHandles(
+                    open.MainHandle,
+                    open.MainLength,
+                    open.WalHandle,
+                    open.WalLength,
+                    open.ShmHandle,
+                    open.ShmLength);
+            }
+            catch (Exception ex)
+            {
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid SQLite handle preview request");
+                break;
+            }
+            if (!IsValidRequestId(open.RequestId)
+                || open.MainLength is not (>= 0 and <= NativeAbi.MaxParserHandleInputBytes)
+                || open.WalLength is not (>= 0 and <= NativeAbi.MaxSqliteWalBytes)
+                || open.ShmLength is not (>= 0 and <= NativeAbi.MaxSqliteShmBytes)
+                || string.IsNullOrWhiteSpace(open.LogicalPath)
+                || !IsValidProbe(open.Probe)
+                || !open.Probe.Kind.Equals("database", StringComparison.OrdinalIgnoreCase)
+                || open.Probe.Size != open.MainLength)
+            {
+                sqliteHandles.Dispose();
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, "Invalid SQLite handle preview request."));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid SQLite handle preview request");
+                break;
+            }
+            if (activePreviewRequestId is not null)
+            {
+                Cancel(activePreviewRequestId);
+                DeletePreviewInput(activePreviewRequestId);
+            }
+            var sqliteCts = new CancellationTokenSource();
+            if (!requests.TryAdd(open.RequestId, sqliteCts))
+            {
+                sqliteHandles.Dispose();
+                sqliteCts.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
+            activePreviewRequestId = open.RequestId;
+            _ = Task.Run(async () =>
+            {
+                using var ownedHandles = sqliteHandles;
+                try
+                {
+                    var handleResult = ParserNativePreview.TryPreviewSqliteHandles(
+                        ownedHandles.Main,
+                        open.MainLength,
+                        ownedHandles.Wal,
+                        open.WalLength,
+                        ownedHandles.Shm,
+                        open.ShmLength,
+                        open.LogicalPath,
+                        sqliteCts.Token);
+                    sqliteCts.Token.ThrowIfCancellationRequested();
+                    if (handleResult.Status != NativeAbi.StatusOk || handleResult.Json is null)
+                    {
+                        string failure = ParserNativePreview.DescribeHandleFailure(handleResult.Status);
+                        DiagLog.Write(
+                            "ParserHost",
+                            $"native SQLite handle preview failed request={open.RequestId} status={handleResult.Status}");
+                        await channel.SendAsync(new PreviewError(open.RequestId, failure));
+                    }
+                    else if (!PreviewReadyJson.TryParse(
+                        open.RequestId,
+                        handleResult.Json,
+                        out PreviewReady? ready,
+                        out string? error))
+                    {
+                        await channel.SendAsync(new PreviewError(
+                            open.RequestId,
+                            error ?? "Native SQLite handle parser returned no preview."));
+                    }
+                    else
+                    {
+                        await channel.SendAsync(ready!);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("ParserHost", $"SQLite handle open failed request={open.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (requests.TryRemove(open.RequestId, out var current))
+                        current.Dispose();
                 }
             });
             break;

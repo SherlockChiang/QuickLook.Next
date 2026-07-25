@@ -247,6 +247,10 @@ if (Test-Path $protocolPath) {
     if ($protocolText -match 'ArchiveEntryExtracted\([^\)]*TempPath') {
         Add-Failure "Archive entry handoffs must not expose a temporary path"
     }
+    if ($protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewOpenSqliteHandles\),\s*"preview\.open\.sqlite-handles"\)' -or
+        $protocolText -notmatch 'record PreviewOpenSqliteHandles\([^;]*MainHandle,[^;]*MainLength,[^;]*WalHandle,[^;]*WalLength,[^;]*ShmHandle,[^;]*ShmLength,[^;]*LogicalPath,[^;]*FileProbe Probe\)\s*:\s*ControlMessage;') {
+        Add-Failure "SQLite snapshots must use a dedicated main/WAL/SHM handle IPC envelope"
+    }
 }
 
 $parserSupervisor = Join-Path $Root "src/QuickLook.Next.App/ParserHostSupervisor.cs"
@@ -257,6 +261,102 @@ if (Test-Path $parserSupervisor) {
     }
     if ($parserSupervisorText -notmatch '"--writable-root", writableRoot') {
         Add-Failure "ParserHost must receive a per-launch writable root"
+    }
+    if ($parserSupervisorText -notmatch 'BeginOpenSqliteHandles\(' -or
+        $parserSupervisorText -notmatch 'new PreviewOpenSqliteHandles\(') {
+        Add-Failure "ParserHostSupervisor must send SQLite snapshots through the dedicated handle message"
+    }
+    $singleHandleBegin = [regex]::Match(
+        $parserSupervisorText,
+        'public\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginOpenHandle\([\s\S]*?(?=\r?\n\s*private async Task SendOpenHandleAsync\()').Value
+    $sqliteHandleBegin = [regex]::Match(
+        $parserSupervisorText,
+        'public\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginOpenSqliteHandles\([\s\S]*?(?=\r?\n\s*private async Task SendOpenSqliteHandlesAsync\()').Value
+    if ($singleHandleBegin -notmatch 'Task sendTask\s*=\s*SendOpenHandleAsync\([\s\S]*RegisterHandleOpenSend\(requestId,\s*sendTask\);' -or
+        $sqliteHandleBegin -notmatch 'Task sendTask\s*=\s*SendOpenSqliteHandlesAsync\([\s\S]*RegisterHandleOpenSend\(requestId,\s*sendTask\);') {
+        Add-Failure "Every single- and multi-HANDLE open must register its exact send task before returning"
+    }
+    $closeCoreStart = $parserSupervisorText.IndexOf(
+        "private async Task CloseCoreAsync(",
+        [StringComparison]::Ordinal)
+    $closeCoreEnd = if ($closeCoreStart -ge 0) {
+        $parserSupervisorText.IndexOf(
+            "public async Task<ArchiveEntryHandoff?>",
+            $closeCoreStart,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $closeCoreText = if ($closeCoreStart -ge 0 -and $closeCoreEnd -gt $closeCoreStart) {
+        $parserSupervisorText.Substring($closeCoreStart, $closeCoreEnd - $closeCoreStart)
+    } else {
+        ""
+    }
+    $openSendLookup = $closeCoreText.IndexOf("_handleOpenSends.TryGetValue(", [StringComparison]::Ordinal)
+    $openSendAwait = if ($openSendLookup -ge 0) {
+        $closeCoreText.IndexOf("await ", $openSendLookup, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $previewCloseSend = $closeCoreText.IndexOf("new PreviewClose(", [StringComparison]::Ordinal)
+    if ($parserSupervisorText -notmatch '_handleOpenSends' -or
+        $parserSupervisorText -notmatch 'RegisterHandleOpenSend\(' -or
+        $openSendLookup -lt 0 -or
+        $openSendAwait -le $openSendLookup -or
+        $previewCloseSend -le $openSendAwait) {
+        Add-Failure "Preview close must wait for an in-flight HANDLE open send before sending PreviewClose"
+    }
+}
+
+$windowsHandleTransferPath = Join-Path $Root "src/QuickLook.Next.Core/WindowsHandleTransfer.cs"
+if (Test-Path $windowsHandleTransferPath) {
+    $windowsHandleTransferText = Get-Content -LiteralPath $windowsHandleTransferPath -Raw
+    if ($windowsHandleTransferText -notmatch 'OpenPinnedReadOnlyFile\([\s\S]*?CreateFile\(path,\s*GenericRead,\s*FileShareRead,' -or
+        $windowsHandleTransferText -notmatch 'TryOpenPinnedReadOnlyFile\([\s\S]*?CreateFile\(path,\s*GenericRead,\s*FileShareRead,' -or
+        $windowsHandleTransferText -notmatch 'if\s*\(error\s+is\s+2\s+or\s+3\)\s*\r?\n\s*return null;') {
+        Add-Failure "SQLite pins must use FILE_SHARE_READ only and treat only missing companions as absent"
+    }
+    if ($windowsHandleTransferText -notmatch 'TakeLocalSqliteFileHandles\(' -or
+        $windowsHandleTransferText -notmatch 'TakeLocalSqliteFileHandles\([\s\S]*Adopt\(mainValue\)[\s\S]*Adopt\(walValue\)[\s\S]*Adopt\(shmValue\)[\s\S]*if\s*\(duplicate\)[\s\S]*foreach\s*\(SafeFileHandle handle in adopted\.Values\)[\s\S]*handle\.Dispose\(\)' -or
+        $windowsHandleTransferText -notmatch 'class OwnedSqliteFileHandles[\s\S]*IDisposable') {
+        Add-Failure "SQLite main/WAL/SHM adoption must return one disposable ownership aggregate"
+    }
+    $sqliteAdoptHelper = [regex]::Match(
+        $windowsHandleTransferText,
+        'SafeFileHandle\?\s+Adopt\(long value\)[\s\S]*?(?=\r?\n\s*try\s*\{\s*\r?\n\s*// Adopt every distinct)').Value
+    $duplicateLookup = $sqliteAdoptHelper.IndexOf(
+        "adopted.TryGetValue(raw",
+        [StringComparison]::Ordinal)
+    $ownershipWrapper = $sqliteAdoptHelper.IndexOf(
+        "new SafeFileHandle(raw, ownsHandle: true)",
+        [StringComparison]::Ordinal)
+    $duplicateReturn = if ($duplicateLookup -ge 0) {
+        $sqliteAdoptHelper.IndexOf(
+            "return existing;",
+            $duplicateLookup,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    if ($duplicateLookup -lt 0 -or
+        $duplicateReturn -le $duplicateLookup -or
+        $duplicateReturn -ge $ownershipWrapper -or
+        $ownershipWrapper -le $duplicateLookup -or
+        $sqliteAdoptHelper -notmatch 'adopted\.Add\(raw,\s*handle\)') {
+        Add-Failure "SQLite duplicate raw HANDLE values must be detected before creating an ownership wrapper"
+    }
+}
+
+$sqliteCompanionOpenCallers = @(
+    Get-ChildItem -LiteralPath (Join-Path $Root "src") -Recurse -File -Filter "*.cs" |
+        Where-Object { -not (Test-IsGeneratedPath $_.FullName) } |
+        Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'TryOpenPinnedReadOnlyFile\(' }
+)
+foreach ($caller in $sqliteCompanionOpenCallers) {
+    $relativeCaller = Get-RelativePath $caller.FullName
+    if ($relativeCaller -ne "src/QuickLook.Next.Core/WindowsHandleTransfer.cs" -and
+        -not $relativeCaller.StartsWith("src/QuickLook.Next.App/", [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "Only the App may derive/open SQLite companion paths: $relativeCaller"
     }
 }
 
@@ -269,9 +369,55 @@ if (Test-Path $parserHostProgram) {
     if ($parserHostProgramText -notmatch 'QUICKLOOK_NEXT_ARCHIVE_ROOT') {
         Add-Failure "ParserHost archive extraction must use its per-launch writable root"
     }
+    $sqliteCaseMatch = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+PreviewOpenSqliteHandles\s+open:\s*[\s\S]*?(?=\r?\n\s*case\s+)')
+    $sqliteCaseText = if ($sqliteCaseMatch.Success) { $sqliteCaseMatch.Value } else { "" }
+    $sqliteTakeHandles = $sqliteCaseText.IndexOf(
+        "WindowsHandleTransfer.TakeLocalSqliteFileHandles(",
+        [StringComparison]::Ordinal)
+    $sqliteEnvelopeValidation = $sqliteCaseText.IndexOf(
+        "if (!IsValidRequestId(open.RequestId)",
+        [StringComparison]::Ordinal)
+    $sqliteTask = $sqliteCaseText.IndexOf("_ = Task.Run(async () =>", [StringComparison]::Ordinal)
+    $sqliteOwnedScope = $sqliteCaseText.IndexOf(
+        "using var ownedHandles = sqliteHandles;",
+        [StringComparison]::Ordinal)
+    $sqliteDuplicateStart = $sqliteCaseText.IndexOf(
+        "if (!requests.TryAdd(open.RequestId, sqliteCts))",
+        [StringComparison]::Ordinal)
+    $sqliteDuplicateText = if ($sqliteDuplicateStart -ge 0 -and $sqliteTask -gt $sqliteDuplicateStart) {
+        $sqliteCaseText.Substring($sqliteDuplicateStart, $sqliteTask - $sqliteDuplicateStart)
+    } else {
+        ""
+    }
+    if ($sqliteTakeHandles -lt 0 -or
+        $sqliteEnvelopeValidation -le $sqliteTakeHandles -or
+        $sqliteCaseText -notmatch 'sqliteHandles\.Dispose\(\)' -or
+        $sqliteDuplicateText -notmatch 'sqliteHandles\.Dispose\(\)' -or
+        $sqliteDuplicateText -notmatch 'sqliteCts\.Dispose\(\)' -or
+        $sqliteTask -le $sqliteEnvelopeValidation -or
+        $sqliteOwnedScope -le $sqliteTask -or
+        $sqliteCaseText -notmatch 'ParserNativePreview\.TryPreviewSqliteHandles\(') {
+        Add-Failure "ParserHost must adopt all SQLite HANDLE slots before validation and own them through native parsing"
+    }
+    if ($sqliteCaseText -match 'CreatePreviewInput\(' -or
+        $sqliteCaseText -match 'File\.(Open|OpenRead|ReadAll)' -or
+        $sqliteCaseText -match 'Directory\.' -or
+        $sqliteCaseText -match 'Path\.(Combine|GetFullPath)') {
+        Add-Failure "ParserHost SQLite HANDLE previews must not create an input anchor or resolve a companion path"
+    }
     $handleCaseStart = $parserHostProgramText.IndexOf("case PreviewOpenHandle open", [StringComparison]::Ordinal)
     $handleCaseEnd = if ($handleCaseStart -ge 0) {
-        $parserHostProgramText.IndexOf("case PreviewClose close", $handleCaseStart, [StringComparison]::Ordinal)
+        $sqliteCaseStart = $parserHostProgramText.IndexOf(
+            "case PreviewOpenSqliteHandles open",
+            $handleCaseStart,
+            [StringComparison]::Ordinal)
+        if ($sqliteCaseStart -gt $handleCaseStart) {
+            $sqliteCaseStart
+        } else {
+            $parserHostProgramText.IndexOf("case PreviewClose close", $handleCaseStart, [StringComparison]::Ordinal)
+        }
     } else {
         -1
     }
@@ -369,14 +515,20 @@ if (Test-Path $parserHostProgram) {
         $parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
         Add-Failure "ParserHost direct HANDLE routing must include text, executable, and torrent"
     }
+    if ($parserNativePreviewText -notmatch 'ql_preview_sqlite_handles\(' -or
+        $parserNativePreviewText -notmatch 'TryPreviewSqliteHandles\([\s\S]*ql_preview_sqlite_handles\(') {
+        Add-Failure "ParserHost SQLite snapshots must call the dedicated native HANDLE entry point"
+    }
 
     $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
     $nativeAbiText = Get-Content -LiteralPath $nativeAbiPath -Raw
     if ($nativeAbiText -notmatch 'HandleText\s*=\s*1UL\s*<<\s*0' -or
         $nativeAbiText -notmatch 'HandleExecutable\s*=\s*1UL\s*<<\s*1' -or
         $nativeAbiText -notmatch 'HandleTorrent\s*=\s*1UL\s*<<\s*2' -or
-        $nativeAbiText -notmatch 'ParserHandleInputs\s*=\s*HandleText\s*\|\s*HandleExecutable\s*\|\s*HandleTorrent') {
-        Add-Failure "Native ABI HANDLE capability bits must remain stable and require all three direct parsers"
+        $nativeAbiText -notmatch 'HandleSqliteSnapshot\s*=\s*1UL\s*<<\s*3' -or
+        $nativeAbiText -notmatch 'ParserHandleInputs\s*=\s*HandleText\s*\|\s*HandleExecutable\s*\|\s*HandleTorrent\s*\|\s*HandleSqliteSnapshot' -or
+        $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
+        Add-Failure "Native ABI HANDLE capability bits 0-3 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -399,7 +551,8 @@ if (Test-Path $parserHostProgram) {
     foreach ($entryPoint in @(
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
-        "ql_preview_torrent_handle"
+        "ql_preview_torrent_handle",
+        "ql_preview_sqlite_handles"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
@@ -418,6 +571,11 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
         }
     }
+    if ($nativeLibText -notmatch 'QL_FEATURE_HANDLE_SQLITE_SNAPSHOT:\s*u64\s*=\s*1\s*<<\s*3' -or
+        $nativeLibText -notmatch 'pub extern "C" fn ql_capabilities\(\)\s*->\s*u64\s*\{[^}]*QL_FEATURE_HANDLE_SQLITE_SNAPSHOT[^}]*\}' -or
+        $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
+        Add-Failure "Rust must advertise the stable SQLite snapshot capability and LIMIT_EXCEEDED status"
+    }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*logical_name') {
         Add-Failure "Native HANDLE logical names must be reduced to basenames and never opened as paths"
@@ -432,6 +590,13 @@ if (Test-Path $mainWindowPath) {
     }
     if ($mainWindowText -notmatch 'BeginPinnedRasterOpen\(path, probe, targetSize\.Width, targetSize\.Height\)') {
         Add-Failure "Local RasterHost previews must enter through a pinned source handle"
+    }
+    $pinnedParserOpen = [regex]::Match(
+        $mainWindowText,
+        'private\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginPinnedParserOpen\([\s\S]*?(?=\r?\n\s*private static bool IsSqliteMainDatabase\()').Value
+    if ($pinnedParserOpen -notmatch 'if\s*\(IsSqliteMainDatabase\(path,\s*verifiedProbe\)\)\s*\{\s*wal\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-wal"\s*\);\s*shm\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-shm"\s*\);\s*\}' -or
+        $pinnedParserOpen -notmatch 'return _parserSupervisor!\.BeginOpenSqliteHandles\(') {
+        Add-Failure "Only the App may derive pinned -wal/-shm companions and send the dedicated SQLite snapshot"
     }
 }
 

@@ -3519,7 +3519,9 @@ public sealed partial class MainWindow : Window
     private (string RequestId, Task<ControlMessage> Completion) BeginPinnedParserOpen(string path, FileProbe initialProbe)
     {
         var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
-        using (pinned.Handle)
+        (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length)? wal = null;
+        (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length)? shm = null;
+        try
         {
             FileProbe verifiedProbe = _native.ProbeFile(path) ?? BuildProbe(path);
             if (verifiedProbe.Size != pinned.Length
@@ -3529,9 +3531,38 @@ public sealed partial class MainWindow : Window
                 throw new InvalidDataException("Preview file changed while establishing the ParserHost boundary.");
             }
             _currentProbe = verifiedProbe;
+            if (verifiedProbe.Kind.Equals("database", StringComparison.OrdinalIgnoreCase))
+            {
+                if (IsSqliteMainDatabase(path, verifiedProbe))
+                {
+                    wal = WindowsHandleTransfer.TryOpenPinnedReadOnlyFile(path + "-wal");
+                    shm = WindowsHandleTransfer.TryOpenPinnedReadOnlyFile(path + "-shm");
+                }
+                return _parserSupervisor!.BeginOpenSqliteHandles(
+                    path,
+                    verifiedProbe,
+                    pinned.Handle,
+                    pinned.Length,
+                    wal?.Handle,
+                    wal?.Length ?? 0,
+                    shm?.Handle,
+                    shm?.Length ?? 0);
+            }
             return _parserSupervisor!.BeginOpenHandle(path, verifiedProbe, pinned.Handle, pinned.Length);
         }
+        finally
+        {
+            shm?.Handle.Dispose();
+            wal?.Handle.Dispose();
+            pinned.Handle.Dispose();
+        }
     }
+
+    private static bool IsSqliteMainDatabase(string path, FileProbe probe)
+        => !path.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
+            && !path.EndsWith("-shm", StringComparison.OrdinalIgnoreCase)
+            && probe.MagicPrefix is { } magic
+            && magic.AsSpan().StartsWith("SQLite format 3\0"u8);
 
     private (string RequestId, Task<ControlMessage> Completion) BeginPinnedRasterOpen(
         string path, FileProbe initialProbe, uint targetWidth, uint targetHeight)

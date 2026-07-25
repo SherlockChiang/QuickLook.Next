@@ -156,11 +156,15 @@ Require-Pattern $parserPolicy 'CloudParserHostKinds[\s\S]*"database"' `
 Require-Pattern $mainWindow 'IsParserHostPreview\(probe\)[\s\S]*!mayRequireHydration\s*\|\|\s*PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)' `
     "Cloud ParserHost routing must not be blocked by animated-image raster staging."
 $parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
-Require-Pattern $parserNativePreview 'infoKindBytes[\s\S]*ql_preview_database_cancelable\([\s\S]*probe\.Size,[\s\S]*probe\.ModifiedUnix[\s\S]*cancel' `
-    "ParserHost database previews must preserve pinned input metadata."
-$parserProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
-Require-Pattern $parserProgram 'EndsWith\("-wal"[\s\S]*"-wal"[\s\S]*EndsWith\("-shm"[\s\S]*"-shm"' `
-    "ParserHost anchors must preserve SQLite WAL and SHM identities."
+Require-Pattern $parserNativePreview 'TryPreviewSqliteHandles\([\s\S]*mainLength\s*>\s*NativeAbi\.MaxParserHandleInputBytes[\s\S]*walLength\s*>\s*NativeAbi\.MaxSqliteWalBytes[\s\S]*shmLength\s*>\s*NativeAbi\.MaxSqliteShmBytes[\s\S]*ql_preview_sqlite_handles\([\s\S]*checked\(\(ulong\)mainLength\)[\s\S]*checked\(\(ulong\)walLength\)[\s\S]*checked\(\(ulong\)shmLength\)[\s\S]*cancel' `
+    "ParserHost database previews must preserve bounded main/WAL/SHM HANDLE metadata."
+$nativeAbi = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
+Require-Pattern $nativeAbi 'MaxParserHandleInputBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024' `
+    "Database main HANDLE envelopes must retain their 256 MiB transfer limit."
+Require-Pattern $nativeAbi 'MaxSqliteWalBytes\s*=\s*64L\s*\*\s*1024\s*\*\s*1024' `
+    "SQLite WAL HANDLE envelopes must remain capped at 64 MiB."
+Require-Pattern $nativeAbi 'MaxSqliteShmBytes\s*=\s*4L\s*\*\s*1024\s*\*\s*1024' `
+    "SQLite SHM HANDLE envelopes must remain capped at 4 MiB."
 $cloudFileStatus = Join-Path $Root "src/QuickLook.Next.Core/CloudFileStatus.cs"
 Require-Pattern $cloudFileStatus 'Recall attributes, not cloud identity alone[\s\S]*return CloudFileAvailability\.Local' `
     "Hydrated cloud reparse files must remain eligible for normal image and animation routing."
@@ -185,6 +189,26 @@ $listingFilter = Join-Path $Root "src/QuickLook.Next.Core/ListingFilter.cs"
 Require-Pattern $listingFilter 'MaxItems\s*=\s*5000' `
     "Listing filtering must remain capped at 5000 items."
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+Require-Pattern $nativePreview 'MAX_INFO_HEADER_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024' `
+    "Database parsing must retain its 1 MiB main-file prefix."
+Require-Pattern $nativePreview 'MAX_DATABASE_HANDLE_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
+    "Native database HANDLE envelopes must remain capped at 256 MiB."
+Require-Pattern $nativePreview 'MAX_SQLITE_WAL_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+    "Native SQLite WAL reads must remain capped at 64 MiB."
+Require-Pattern $nativePreview 'MAX_SQLITE_SHM_BYTES:\s*u64\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
+    "Native SQLite SHM reads must remain capped at 4 MiB."
+Require-Pattern $nativePreview 'render_database_reader<R:\s*Read>[\s\S]*main_length\.min\(MAX_INFO_HEADER_BYTES\s+as\s+u64\)[\s\S]*read_exact_cancelable\(reader,\s*&mut bytes,\s*cancel_cb\)' `
+    "SQLite HANDLE previews must read only the cancellable 1 MiB main-file prefix."
+Require-Pattern $nativePreview 'inspect_sqlite_wal_snapshot\([\s\S]*wal_length\s*>\s*MAX_SQLITE_WAL_BYTES[\s\S]*while\s+remaining\s*>=\s*frame_size\s*\{[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut frame_header,\s*cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut page,\s*cancel_cb\)' `
+    "SQLite WAL scanning must enforce its cap and check cancellation for every frame read."
+Require-Pattern $nativePreview 'fn inspect_sqlite_wal_snapshot\([\s\S]*sqlite_wal_checksum\(&header\[\.\.24\][\s\S]*read_u32_be\(&header,\s*24\)\s*!=\s*Some\(checksum\.0\)[\s\S]*read_u32_be\(&header,\s*28\)\s*!=\s*Some\(checksum\.1\)' `
+    "SQLite WAL scanning must reject a stored header checksum mismatch."
+Require-Pattern $nativePreview 'fn inspect_sqlite_wal_snapshot\([\s\S]*frame_salt\s*!=\s*salt[\s\S]*sqlite_wal_checksum\(&frame_header\[\.\.8\][\s\S]*if\s+commit_pages\s*!=\s*0\s*\{[\s\S]*std::mem::take\(&mut pending_prefix_pages\)[\s\S]*committed_prefix_pages\.insert\(page_number,\s*page\)' `
+    "SQLite WAL overlays must validate checksums and linearly merge pending pages at each commit."
+Require-Pattern $nativePreview 'fn apply_sqlite_wal_snapshot\([\s\S]*committed_pages[\s\S]*database_prefix\.resize\(prefix_size,\s*0\)[\s\S]*for\s*\(page_number,\s*page\)\s+in\s+&snapshot\.committed_prefix_pages[\s\S]*if\s+end\s*<=\s*database_prefix\.len\(\)[\s\S]*copy_from_slice\(page\)[\s\S]*sqlite_database_page_size\(database_prefix\)\s*!=\s*Some\(page_size\)' `
+    "SQLite WAL application must bound historical page frames by the final committed database prefix."
+Require-Pattern $nativePreview 'inspect_sqlite_shm\([\s\S]*shm_length\s*>\s*MAX_SQLITE_SHM_BYTES[\s\S]*shm_length\.min\(4096\)[\s\S]*"SHM HANDLE: diagnostic only' `
+    "SQLite SHM must remain a bounded diagnostic input rather than snapshot authority."
 Require-Pattern $nativePreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Native text inputs must remain capped at 512 KiB."
 Require-Pattern $nativePreview 'fn read_text_preview_bytes<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_TEXT_BYTES\s*\+\s*1,\s*cancel_cb\)' `

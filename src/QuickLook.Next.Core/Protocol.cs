@@ -17,6 +17,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(ParserReady), "parser.ready")]
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
 [JsonDerivedType(typeof(PreviewOpenHandle), "preview.open.handle")]
+[JsonDerivedType(typeof(PreviewOpenSqliteHandles), "preview.open.sqlite-handles")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewImageWaveform), "preview.image.waveform")]
 [JsonDerivedType(typeof(PreviewSurfaceRelease), "preview.surface.release")]
@@ -61,6 +62,21 @@ public sealed record PreviewOpenHandle(
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
 }
+
+/// <summary>
+/// App → ParserHost: open one exact SQLite input plus optional WAL/SHM companions already
+/// duplicated into the host. An absent companion is represented only by the tuple (0, 0).
+/// </summary>
+public sealed record PreviewOpenSqliteHandles(
+    string RequestId,
+    long MainHandle,
+    long MainLength,
+    long WalHandle,
+    long WalLength,
+    long ShmHandle,
+    long ShmLength,
+    string LogicalPath,
+    FileProbe Probe) : ControlMessage;
 
 /// <summary>RasterHost → App: a host-local composition handle that the App must copy and release.</summary>
 public sealed record PreviewSurface(

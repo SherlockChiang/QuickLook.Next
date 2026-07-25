@@ -82,6 +82,21 @@ internal static class ParserNativePreview
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_sqlite_handles(
+        nint mainHandle,
+        ulong mainExpectedLength,
+        nint walHandle,
+        ulong walExpectedLength,
+        nint shmHandle,
+        ulong shmExpectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_ebook_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
@@ -285,6 +300,101 @@ internal static class ParserNativePreview
         return (NativeAbi.StatusBufferTooSmall, null);
     }
 
+    public static (int Status, string? Json) TryPreviewSqliteHandles(
+        SafeFileHandle mainHandle,
+        long mainLength,
+        SafeFileHandle? walHandle,
+        long walLength,
+        SafeFileHandle? shmHandle,
+        long shmLength,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        if (mainLength < 0
+            || walLength < 0
+            || shmLength < 0
+            || mainHandle.IsInvalid
+            || mainHandle.IsClosed
+            || walHandle is null && walLength != 0
+            || walHandle is not null && (walHandle.IsInvalid || walHandle.IsClosed)
+            || shmHandle is null && shmLength != 0
+            || shmHandle is not null && (shmHandle.IsInvalid || shmHandle.IsClosed))
+        {
+            return (NativeAbi.StatusInvalidArgument, null);
+        }
+        if (mainLength > NativeAbi.MaxParserHandleInputBytes
+            || walLength > NativeAbi.MaxSqliteWalBytes
+            || shmLength > NativeAbi.MaxSqliteShmBytes)
+        {
+            return (NativeAbi.StatusLimitExceeded, null);
+        }
+
+        string logicalName = Path.GetFileName(logicalPath);
+        if (string.IsNullOrEmpty(logicalName))
+            return (NativeAbi.StatusInvalidArgument, null);
+        byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
+        if (logicalNameBytes.Length > NativeAbi.MaxLogicalNameUtf8Bytes)
+            return (NativeAbi.StatusInvalidArgument, null);
+
+        NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
+        bool mainAddRef = false;
+        bool walAddRef = false;
+        bool shmAddRef = false;
+        try
+        {
+            mainHandle.DangerousAddRef(ref mainAddRef);
+            walHandle?.DangerousAddRef(ref walAddRef);
+            shmHandle?.DangerousAddRef(ref shmAddRef);
+            int capacity = 64 * 1024;
+            while (capacity <= MaxPreviewJsonBytes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+                try
+                {
+                    int status = ql_preview_sqlite_handles(
+                        mainHandle.DangerousGetHandle(),
+                        checked((ulong)mainLength),
+                        walHandle?.DangerousGetHandle() ?? 0,
+                        checked((ulong)walLength),
+                        shmHandle?.DangerousGetHandle() ?? 0,
+                        checked((ulong)shmLength),
+                        logicalNameBytes,
+                        (nuint)logicalNameBytes.Length,
+                        buffer,
+                        (nuint)capacity,
+                        out nuint required,
+                        cancel);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (status == NativeAbi.StatusOk && required > 0 && required <= (nuint)capacity)
+                        return (status, Encoding.UTF8.GetString(buffer, 0, checked((int)required)));
+                    if (status == NativeAbi.StatusOk)
+                        return (NativeAbi.StatusInternal, null);
+                    if (status != NativeAbi.StatusBufferTooSmall)
+                        return (status, null);
+                    if (required <= (nuint)capacity)
+                        return (NativeAbi.StatusInternal, null);
+                    if (required > (nuint)MaxPreviewJsonBytes)
+                        return (status, null);
+                    capacity = checked((int)required);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+        }
+        finally
+        {
+            if (shmAddRef) shmHandle!.DangerousRelease();
+            if (walAddRef) walHandle!.DangerousRelease();
+            if (mainAddRef) mainHandle.DangerousRelease();
+            GC.KeepAlive(cancel);
+        }
+
+        return (NativeAbi.StatusBufferTooSmall, null);
+    }
+
     public static bool UsesHandleInput(string kind)
         => kind.Equals("text", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
@@ -301,6 +411,7 @@ internal static class ParserNativePreview
             NativeAbi.StatusInvalidHandle => "Native handle parser rejected the input handle.",
             NativeAbi.StatusLengthMismatch => "Native handle parser detected an input length mismatch.",
             NativeAbi.StatusInternal => "Native handle parser failed internally.",
+            NativeAbi.StatusLimitExceeded => "Native handle parser input exceeded its safety limit.",
             _ => $"Native handle parser returned unknown status {status}.",
         };
 

@@ -23,15 +23,24 @@ left visible instead of hidden behind vague TODOs.
   `PreviewResult.Bgra` is marked obsolete and the hot path uses Rust/native JSON
   plus shared raster surfaces instead.
 - Native Reader and XML preview boundaries are hardened:
-  - ABI 2 text, executable, and torrent previews accept the authenticated ParserHost disk-file
-    handle directly, validate its exact length, and reopen it with an independent file position
-    before Rust reads it.
-  - Plain text, Markdown, CSV, TSV, executable metadata, and torrent listings no longer create
-    ParserHost input anchors or reopen the logical source path.
+  - ABI 2 text, executable, torrent, and SQLite snapshot previews accept authenticated ParserHost
+    disk-file handles directly, validate exact lengths, and reopen them with independent file
+    positions before Rust reads them.
+  - Plain text, Markdown, CSV, TSV, executable metadata, torrent listings, and database previews no
+    longer create ParserHost input anchors or reopen the logical source path.
   - Executable reads remain capped at a cancellable 4 MiB prefix. Torrent reads are exact and
     cancellable with a 16 MiB cap before the existing depth-64/node-100000 bencode limits.
-  - The new HANDLE ABI has stable status codes, exact output-size negotiation, panic containment,
-    capability detection, and direct invalid-handle/file-position tests.
+  - SQLite uses the dedicated `PreviewOpenSqliteHandles` IPC envelope and
+    `ql_preview_sqlite_handles` ABI entry point. The host adopts the main/WAL/SHM slots before
+    validation and never creates an input anchor. Only the App derives `-wal`/`-shm` sibling names.
+  - SQLite main-prefix parsing is capped at 1 MiB, WAL input at 64 MiB, and SHM input at 4 MiB. SHM
+    is diagnostic only. WAL overlay validates header/frame salts and rolling checksums, stops at the
+    first invalid frame, and applies only frames through the last valid commit marker.
+  - Local SQLite files and existing companions are pinned read-only with `FILE_SHARE_READ` only.
+    Sharing violations fail closed; only a missing optional companion is treated as absent.
+  - The HANDLE ABI keeps stable capability bits 0-3 and status codes through
+    `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
+    and direct invalid-handle/file-position tests.
   - UTF-8 text preview truncation backs up to a valid char boundary.
   - UTF-16 BOM text truncation avoids dangling half code units.
   - Office preview text truncation is char-boundary safe.
@@ -137,8 +146,8 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   CHM topic extraction, Outlook MSG property streams, and database schema
   browsing should only be added with bounded parsers and no WebView fallback.
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
-  input. SQLite is next but needs an explicit WAL/SHM companion-handle design, while
-  archive/Office/ebook and raster formats require broader adapters.
+  input. SQLite main/WAL/SHM snapshots now have an explicit multi-handle boundary; archive,
+  Office/ebook, and raster formats still require broader adapters.
 
 ## Why Legacy Plugin Source Remains
 

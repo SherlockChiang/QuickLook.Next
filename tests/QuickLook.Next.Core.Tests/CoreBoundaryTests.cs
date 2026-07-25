@@ -139,6 +139,13 @@ public sealed class CoreBoundaryTests : IDisposable
     [Fact]
     public void Native_capabilities_reject_missing_features()
     {
+        Assert.Equal(1UL << 3, NativeAbi.HandleSqliteSnapshot);
+        Assert.Equal(
+            NativeAbi.HandleText
+                | NativeAbi.HandleExecutable
+                | NativeAbi.HandleTorrent
+                | NativeAbi.HandleSqliteSnapshot,
+            NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(
             NativeAbi.ParserHandleInputs | (1UL << 63),
@@ -159,6 +166,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(-6, NativeAbi.StatusInvalidHandle);
         Assert.Equal(-7, NativeAbi.StatusLengthMismatch);
         Assert.Equal(-8, NativeAbi.StatusInternal);
+        Assert.Equal(-9, NativeAbi.StatusLimitExceeded);
     }
 
     [Theory]
@@ -581,6 +589,41 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_SQLite_handle_bundle_message()
+    {
+        var probe = new FileProbe("C:\\logical.db", ".db", "SQLite format 3\0"u8.ToArray())
+        {
+            Kind = "database",
+            Size = 4096,
+        };
+        var message = new PreviewOpenSqliteHandles(
+            "4".PadLeft(32, '4'),
+            1234,
+            4096,
+            2345,
+            8192,
+            0,
+            0,
+            probe.Path,
+            probe);
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"preview.open.sqlite-handles\"", json);
+        PreviewOpenSqliteHandles roundTrip =
+            Assert.IsType<PreviewOpenSqliteHandles>(ProtocolJson.Deserialize(json));
+        Assert.Equal(message.RequestId, roundTrip.RequestId);
+        Assert.Equal(message.MainHandle, roundTrip.MainHandle);
+        Assert.Equal(message.MainLength, roundTrip.MainLength);
+        Assert.Equal(message.WalHandle, roundTrip.WalHandle);
+        Assert.Equal(message.WalLength, roundTrip.WalLength);
+        Assert.Equal(message.ShmHandle, roundTrip.ShmHandle);
+        Assert.Equal(message.ShmLength, roundTrip.ShmLength);
+        Assert.Equal(message.LogicalPath, roundTrip.LogicalPath);
+        Assert.Equal(message.Probe.Kind, roundTrip.Probe.Kind);
+        Assert.Equal(message.Probe.MagicPrefix, roundTrip.Probe.MagicPrefix);
+    }
+
+    [Fact]
     public async Task Pending_request_times_out_and_rejects_late_result()
     {
         var pending = new PendingRequests();
@@ -678,6 +721,62 @@ public sealed class CoreBoundaryTests : IDisposable
                 source.Handle.DangerousGetHandle().ToInt64(),
                 source.Length + 1));
         }
+    }
+
+    [Fact]
+    public void SQLite_handle_bundle_adopts_all_handles_before_late_validation_failure()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string mainPath = Path.Combine(_tempRoot, "bundle-main.db");
+        string walPath = Path.Combine(_tempRoot, "bundle-main.db-wal");
+        File.WriteAllBytes(mainPath, [1, 2, 3]);
+        File.WriteAllBytes(walPath, [4, 5]);
+        var main = WindowsHandleTransfer.OpenPinnedReadOnlyFile(mainPath);
+        var wal = WindowsHandleTransfer.OpenPinnedReadOnlyFile(walPath);
+        long mainDuplicate = WindowsHandleTransfer.DuplicateFileToProcess(
+            main.Handle,
+            Process.GetCurrentProcess().SafeHandle);
+        long walDuplicate = WindowsHandleTransfer.DuplicateFileToProcess(
+            wal.Handle,
+            Process.GetCurrentProcess().SafeHandle);
+        main.Handle.Dispose();
+        wal.Handle.Dispose();
+
+        Assert.Throws<InvalidDataException>(
+            () => WindowsHandleTransfer.TakeLocalSqliteFileHandles(
+                mainDuplicate,
+                main.Length,
+                walDuplicate,
+                wal.Length + 1,
+                0,
+                0));
+
+        File.WriteAllText(mainPath, "main released");
+        File.WriteAllText(walPath, "wal released");
+    }
+
+    [Fact]
+    public void SQLite_handle_bundle_rejects_duplicate_raw_values_without_double_ownership()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "bundle-duplicate.db");
+        File.WriteAllBytes(path, [1]);
+        var source = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        long duplicate = WindowsHandleTransfer.DuplicateFileToProcess(
+            source.Handle,
+            Process.GetCurrentProcess().SafeHandle);
+        source.Handle.Dispose();
+
+        Assert.Throws<InvalidDataException>(
+            () => WindowsHandleTransfer.TakeLocalSqliteFileHandles(
+                duplicate,
+                source.Length,
+                duplicate,
+                source.Length,
+                0,
+                0));
+
+        File.WriteAllText(path, "released once");
     }
 
     [Fact]

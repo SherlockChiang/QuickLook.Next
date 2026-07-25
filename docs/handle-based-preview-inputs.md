@@ -12,10 +12,15 @@ request that is already in progress.
 - Animation frame packets and ParserHost hero rasters are returned as host-owned, read-only file
   handles. The App pulls each handle from the already authenticated host process and validates the
   object type and exact length before reading it.
-- Local ParserHost and RasterHost previews enter through `PreviewOpenHandle`.
+- Local ParserHost and RasterHost previews normally enter through `PreviewOpenHandle`. Database
+  previews use the dedicated `PreviewOpenSqliteHandles` message so an SQLite main file and its
+  optional WAL/SHM companions have explicit, independently owned slots.
 - ParserHost text previews (plain text, Markdown, CSV, and TSV), executable metadata, and torrent
   listings pass the received file handle directly to the Rust ABI. They do not create a
   `parser-input` anchor or reopen the logical path.
+- ParserHost database previews also pass their received handles directly to Rust without creating a
+  `parser-input` anchor. The App is the only component allowed to derive and open `main-wal` and
+  `main-shm`; neither ParserHost nor Rust resolves companion paths from `LogicalPath`.
 - Other ParserHost formats and RasterHost currently copy the exact duplicated file object into a
   bounded host-owned anchor before invoking path-only native, WinRT PDF, system codec,
   shell-thumbnail, or animation providers. Replacing the original path after handoff cannot change
@@ -33,7 +38,7 @@ request that is already in progress.
 
 ## Target protocol invariants
 
-The final boundary uses a handle-backed open message whose numeric handle is valid in the receiving
+The final boundary uses handle-backed open messages whose numeric handles are valid in the receiving
 host process:
 
 ```text
@@ -45,30 +50,58 @@ PreviewOpenHandle
   FileProbe
   TargetWidth
   TargetHeight
+
+PreviewOpenSqliteHandles
+  RequestId
+  MainHandle
+  MainLength
+  WalHandle
+  WalLength
+  ShmHandle
+  ShmLength
+  LogicalPath
+  FileProbe
 ```
 
 The App must:
 
-1. Open the source with `GENERIC_READ` and the minimum required sharing flags.
+1. Open the source with `GENERIC_READ` and the minimum required sharing flags. Local preview pins,
+   including SQLite main/WAL/SHM pins, use `FILE_SHARE_READ` only. An existing companion that cannot
+   be pinned is an error; only file-not-found/path-not-found means that optional companion is absent.
 2. Probe metadata from that same file object, not by reopening the path.
 3. Duplicate the read-only handle into the authenticated destination host.
 4. Send the host-local handle, bounded metadata, and a logical filename used for extension routing
    and UI. Any path-shaped compatibility field is untrusted metadata, never file authority.
 5. Dispose its source handle after duplication; the receiving host owns the duplicated object.
+6. For an actual SQLite main file, and only in the App, try the exact sibling names formed by
+   appending `-wal` and `-shm`. Do not derive companions when the selected input is itself a WAL/SHM
+   file. A missing optional slot is encoded only as `(handle, length) == (0, 0)`; a nonzero handle
+   with zero length is a present, empty file.
 
 The host must:
 
-1. Adopt the handle immediately into an owning `SafeFileHandle`.
+1. Adopt every transferred handle immediately into an owning `SafeFileHandle`, before validating
+   the request ID, probe, kind, lengths, cancellation state, or duplicate-request state. For
+   `PreviewOpenSqliteHandles`, adoption covers main, WAL, and SHM slots as one ownership transfer.
 2. Reject zero, invalid, non-disk, or structurally unexpected inputs. The App must only duplicate
    handles it opened read-only.
 3. Derive length from the handle and compare it with the bounded probe metadata.
 4. Never recover or trust a source path from the logical filename.
 5. Dispose the handle on success, error, cancellation, timeout, disconnect, and stale request rejection.
+6. Recycle the host if a multi-handle duplication or control-channel send fails after any remote
+   handle has been created. Process teardown is the reliable rollback for a partially transferred
+   SQLite snapshot.
+
+Step 2 above remains a future invariant for the initial App probe. The current App pins the source
+with a non-write/non-delete-sharing handle before running the path-based probe, which prevents
+replacement during probing, but the probe itself has not yet been converted to read from that same
+file object.
 
 ## Native ABI 2 HANDLE contract
 
-ABI 2 introduces `ql_capabilities` with independent `HANDLE_TEXT`, `HANDLE_EXECUTABLE`, and
-`HANDLE_TORRENT` flags. The corresponding entry points share one validated/reopened HANDLE adapter.
+ABI 2 introduces `ql_capabilities` with independent `HANDLE_TEXT`, `HANDLE_EXECUTABLE`,
+`HANDLE_TORRENT`, and `HANDLE_SQLITE_SNAPSHOT` flags. Their stable bit assignments are 0 through 3,
+respectively. The corresponding entry points share one validated/reopened HANDLE adapter.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
 the existing bounded bencode parser runs.
@@ -102,17 +135,42 @@ Stable ABI 2 HANDLE statuses are:
 -6  INVALID_HANDLE
 -7  LENGTH_MISMATCH
 -8  INTERNAL
+-9  LIMIT_EXCEEDED
 ```
 
 These statuses apply only to ABI 2 HANDLE entry points. Existing path entry points retain their
 legacy, per-function return conventions until each one is migrated.
 
+## SQLite snapshot contract
+
+`ql_preview_sqlite_handles` receives the main handle plus optional WAL and SHM handles. It never
+opens `logical_name` or uses it to locate companions. Each present handle is independently validated,
+length-checked, and reopened before Rust constructs an owning file object. Optional tuples have the
+same representation as the IPC message: only `(0, 0)` is absent.
+
+The SQLite reader has three separate budgets:
+
+- The main database preview prefix is at most 1 MiB.
+- A WAL input is read exactly and cancellably, with a 64 MiB hard limit.
+- An SHM input is limited to 4 MiB and is diagnostic only. SQLite's WAL-index is transient,
+  native-endian state and is never a correctness source for the preview snapshot.
+
+When a WAL is present, Rust validates the 32-byte WAL header, magic/checksum byte order, page size,
+salt values, frame boundaries, and the rolling checksum. It scans frames with cancellation checks,
+stops at the first incomplete or invalid frame, and overlays only frames through the last valid
+commit marker. Frames after that marker are uncommitted and do not affect the preview. A later valid
+frame for the same page replaces the earlier one. Malformed headers, incompatible page sizes, and
+over-limit inputs fail closed rather than falling back to path-based parsing.
+
+These rules follow SQLite's documented
+[database/WAL format](https://www2.sqlite.org/fileformat2.html) and
+[WAL-index format](https://sqlite.org/walformat.html).
+
 Remaining migration order:
 
-1. SQLite main files, followed by an explicit WAL/SHM companion-handle protocol.
-2. Archive, Office, and ebook readers that require `Read + Seek`.
-3. Native still-image and animation decoders.
-4. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
+1. Archive, Office, and ebook readers that require `Read + Seek`.
+2. Native still-image and animation decoders.
+3. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.

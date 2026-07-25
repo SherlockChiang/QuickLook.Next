@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.IO.Pipes;
@@ -184,7 +185,18 @@ public sealed class ParserHostIntegrationTests
                 Size = pinned.Length,
                 ModifiedUnix = 123,
             };
-            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    hostHandle,
+                    pinned.Length,
+                    0,
+                    0,
+                    0,
+                    0,
+                    path,
+                    probe),
+                timeout.Token);
             pinned.Handle.Dispose();
 
             PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
@@ -192,6 +204,9 @@ public sealed class ParserHostIntegrationTests
             Assert.Contains("Format: SQLite 3", ready.TextContent);
             Assert.Contains("Page size: 512 bytes", ready.TextContent);
             Assert.Null(ready.MediaPath);
+            Assert.False(Directory.Exists(
+                Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
+            await WaitUntilAsync(() => TryOverwriteFile(path, "released SQLite main handle"), timeout.Token);
         }
         finally
         {
@@ -207,10 +222,8 @@ public sealed class ParserHostIntegrationTests
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
         string path = Path.Combine(tempDirectory, "sample.db-wal");
-        byte[] wal = new byte[32 + 24 + 512];
-        new byte[] { 0x37, 0x7F, 0x06, 0x82 }.CopyTo(wal, 0);
-        new byte[] { 0, 0x2D, 0xE2, 0x18 }.CopyTo(wal, 4);
-        new byte[] { 0, 0, 2, 0 }.CopyTo(wal, 8);
+        byte[] page = CreateMinimalSqliteDatabase(userVersion: 7);
+        byte[] wal = CreateSqliteWal(page, committedPages: 1);
         File.WriteAllBytes(path, wal);
 
         string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
@@ -234,12 +247,188 @@ public sealed class ParserHostIntegrationTests
                 Kind = "database",
                 Size = pinned.Length,
             };
-            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    hostHandle,
+                    pinned.Length,
+                    0,
+                    0,
+                    0,
+                    0,
+                    path,
+                    probe),
+                timeout.Token);
             pinned.Handle.Dispose();
 
             PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
             Assert.Contains("Format: SQLite write-ahead log", ready.TextContent);
             Assert.Contains("Frames observed: 1", ready.TextContent);
+            Assert.False(Directory.Exists(
+                Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task SQLite_handle_bundle_applies_committed_WAL_without_using_logical_paths()
+    {
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string mainPath = Path.Combine(tempDirectory, "physical-main.bin");
+        string walPath = Path.Combine(tempDirectory, "physical-wal.bin");
+        string shmPath = Path.Combine(tempDirectory, "physical-shm.bin");
+        byte[] main = CreateMinimalSqliteDatabase(userVersion: 1);
+        byte[] committedPage = CreateMinimalSqliteDatabase(userVersion: 42);
+        byte[] wal = CreateSqliteWal(committedPage, committedPages: 1);
+        File.WriteAllBytes(mainPath, main);
+        File.WriteAllBytes(walPath, wal);
+        File.WriteAllBytes(shmPath, []);
+
+        string pipeName =
+            $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinnedMain = WindowsHandleTransfer.OpenPinnedReadOnlyFile(mainPath);
+            var pinnedWal = WindowsHandleTransfer.OpenPinnedReadOnlyFile(walPath);
+            var pinnedShm = WindowsHandleTransfer.OpenPinnedReadOnlyFile(shmPath);
+            long hostMain =
+                WindowsHandleTransfer.DuplicateFileToProcess(pinnedMain.Handle, host.SafeHandle);
+            long hostWal =
+                WindowsHandleTransfer.DuplicateFileToProcess(pinnedWal.Handle, host.SafeHandle);
+            long hostShm =
+                WindowsHandleTransfer.DuplicateFileToProcess(pinnedShm.Handle, host.SafeHandle);
+            string nonexistentLogicalPath = Path.Combine(
+                tempDirectory,
+                "does-not-exist",
+                "logical.db");
+            var probe = new FileProbe(nonexistentLogicalPath, ".db", main[..16])
+            {
+                Kind = "database",
+                Size = pinnedMain.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    hostMain,
+                    pinnedMain.Length,
+                    hostWal,
+                    pinnedWal.Length,
+                    hostShm,
+                    pinnedShm.Length,
+                    nonexistentLogicalPath,
+                    probe),
+                timeout.Token);
+            pinnedMain.Handle.Dispose();
+            pinnedWal.Handle.Dispose();
+            pinnedShm.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(
+                await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, ready.RequestId);
+            Assert.Equal("database", ready.Kind);
+            Assert.Contains("User version: 42", ready.TextContent);
+            Assert.DoesNotContain("User version: 1", ready.TextContent);
+            Assert.Contains("WAL", ready.TextContent, StringComparison.OrdinalIgnoreCase);
+            Assert.False(Directory.Exists(
+                Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
+            await WaitUntilAsync(
+                () => TryOverwriteFile(mainPath, "released main")
+                    && TryOverwriteFile(walPath, "released wal")
+                    && TryOverwriteFile(shmPath, "released shm"),
+                timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task SQLite_handle_bundle_rejects_invalid_optional_tuple_and_releases_main()
+    {
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string mainPath = Path.Combine(tempDirectory, "invalid-tuple.db");
+        byte[] main = CreateMinimalSqliteDatabase(userVersion: 3);
+        File.WriteAllBytes(mainPath, main);
+
+        string pipeName =
+            $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinnedMain = WindowsHandleTransfer.OpenPinnedReadOnlyFile(mainPath);
+            long hostMain =
+                WindowsHandleTransfer.DuplicateFileToProcess(pinnedMain.Handle, host.SafeHandle);
+            var probe = new FileProbe(mainPath, ".db", main[..16])
+            {
+                Kind = "database",
+                Size = pinnedMain.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    hostMain,
+                    pinnedMain.Length,
+                    0,
+                    1,
+                    0,
+                    0,
+                    mainPath,
+                    probe),
+                timeout.Token);
+            pinnedMain.Handle.Dispose();
+
+            PreviewError error = Assert.IsType<PreviewError>(
+                await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, error.RequestId);
+            Assert.Contains("handle", error.Message, StringComparison.OrdinalIgnoreCase);
+            await WaitUntilAsync(
+                () => TryOverwriteFile(mainPath, "released after invalid tuple"),
+                timeout.Token);
         }
         finally
         {
@@ -541,6 +730,164 @@ public sealed class ParserHostIntegrationTests
                 () => TryOverwriteFile(firstPath, "first released")
                       && TryOverwriteFile(secondPath, "second released"),
                 timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Duplicate_SQLite_handle_request_ID_releases_both_handle_bundles()
+    {
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string firstMainPath = Path.Combine(tempDirectory, "first.db");
+        string firstWalPath = firstMainPath + "-wal";
+        string firstShmPath = firstMainPath + "-shm";
+        string secondMainPath = Path.Combine(tempDirectory, "second.db");
+        string secondWalPath = secondMainPath + "-wal";
+        string secondShmPath = secondMainPath + "-shm";
+        byte[] firstMainBytes = CreateMinimalSqliteDatabase(userVersion: 1);
+        byte[] secondMainBytes = CreateMinimalSqliteDatabase(userVersion: 2);
+        byte[] firstWalBytes = CreateSqliteWal(
+            CreateMinimalSqliteDatabase(userVersion: 11),
+            committedPages: 1);
+        File.WriteAllBytes(firstMainPath, firstMainBytes);
+        File.WriteAllBytes(firstWalPath, firstWalBytes);
+        using (var paddedWal = new FileStream(
+            firstWalPath,
+            FileMode.Open,
+            FileAccess.Write,
+            FileShare.None))
+        {
+            paddedWal.SetLength(NativeAbi.MaxSqliteWalBytes);
+        }
+        File.WriteAllBytes(firstShmPath, []);
+        File.WriteAllBytes(secondMainPath, secondMainBytes);
+        File.WriteAllBytes(secondWalPath, []);
+        File.WriteAllBytes(secondShmPath, []);
+
+        string pipeName =
+            $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var firstMain = WindowsHandleTransfer.OpenPinnedReadOnlyFile(firstMainPath);
+            var firstWal = WindowsHandleTransfer.OpenPinnedReadOnlyFile(firstWalPath);
+            var firstShm = WindowsHandleTransfer.OpenPinnedReadOnlyFile(firstShmPath);
+            var secondMain = WindowsHandleTransfer.OpenPinnedReadOnlyFile(secondMainPath);
+            var secondWal = WindowsHandleTransfer.OpenPinnedReadOnlyFile(secondWalPath);
+            var secondShm = WindowsHandleTransfer.OpenPinnedReadOnlyFile(secondShmPath);
+            long firstRemoteMain =
+                WindowsHandleTransfer.DuplicateFileToProcess(firstMain.Handle, host.SafeHandle);
+            long firstRemoteWal =
+                WindowsHandleTransfer.DuplicateFileToProcess(firstWal.Handle, host.SafeHandle);
+            long firstRemoteShm =
+                WindowsHandleTransfer.DuplicateFileToProcess(firstShm.Handle, host.SafeHandle);
+            long secondRemoteMain =
+                WindowsHandleTransfer.DuplicateFileToProcess(secondMain.Handle, host.SafeHandle);
+            long secondRemoteWal =
+                WindowsHandleTransfer.DuplicateFileToProcess(secondWal.Handle, host.SafeHandle);
+            long secondRemoteShm =
+                WindowsHandleTransfer.DuplicateFileToProcess(secondShm.Handle, host.SafeHandle);
+            var firstProbe = new FileProbe(firstMainPath, ".db", firstMainBytes[..16])
+            {
+                Kind = "database",
+                Size = firstMain.Length,
+            };
+            var secondProbe = new FileProbe(secondMainPath, ".db", secondMainBytes[..16])
+            {
+                Kind = "database",
+                Size = secondMain.Length,
+            };
+
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    firstRemoteMain,
+                    firstMain.Length,
+                    firstRemoteWal,
+                    firstWal.Length,
+                    firstRemoteShm,
+                    firstShm.Length,
+                    firstMainPath,
+                    firstProbe),
+                timeout.Token);
+            await channel.SendAsync(
+                new PreviewOpenSqliteHandles(
+                    requestId,
+                    secondRemoteMain,
+                    secondMain.Length,
+                    secondRemoteWal,
+                    secondWal.Length,
+                    secondRemoteShm,
+                    secondShm.Length,
+                    secondMainPath,
+                    secondProbe),
+                timeout.Token);
+            firstMain.Handle.Dispose();
+            firstWal.Handle.Dispose();
+            firstShm.Handle.Dispose();
+            secondMain.Handle.Dispose();
+            secondWal.Handle.Dispose();
+            secondShm.Handle.Dispose();
+
+            PreviewError? duplicateError = null;
+            for (int responseCount = 0; responseCount < 2 && duplicateError is null; responseCount++)
+            {
+                ControlMessage response =
+                    Assert.IsAssignableFrom<ControlMessage>(
+                        await channel.ReceiveAsync(timeout.Token));
+                if (response is PreviewError error
+                    && error.Message.Contains("Duplicate request ID", StringComparison.Ordinal))
+                {
+                    duplicateError = error;
+                }
+                else
+                {
+                    Assert.Equal(
+                        requestId,
+                        Assert.IsType<PreviewReady>(response).RequestId);
+                }
+            }
+            Assert.NotNull(duplicateError);
+            Assert.Equal(requestId, duplicateError.RequestId);
+
+            string[] paths =
+            [
+                firstMainPath,
+                firstWalPath,
+                firstShmPath,
+                secondMainPath,
+                secondWalPath,
+                secondShmPath,
+            ];
+            await WaitUntilAsync(
+                () => paths.All(path => TryOverwriteFile(path, "released SQLite bundle")),
+                timeout.Token);
+            Assert.False(Directory.Exists(
+                Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
         }
         finally
@@ -1143,6 +1490,95 @@ public sealed class ParserHostIntegrationTests
         BitConverter.GetBytes(0x5000u).CopyTo(bytes, optional + 56);
         BitConverter.GetBytes((ushort)3).CopyTo(bytes, optional + 68);
         return bytes;
+    }
+
+    private static byte[] CreateMinimalSqliteDatabase(uint userVersion)
+    {
+        byte[] database = new byte[512];
+        "SQLite format 3\0"u8.CopyTo(database);
+        BinaryPrimitives.WriteUInt16BigEndian(database.AsSpan(16, 2), 512);
+        database[18] = 2;
+        database[19] = 2;
+        database[21] = 64;
+        database[22] = 32;
+        database[23] = 32;
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(24, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(28, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(40, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(44, 4), 4);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(56, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(60, 4), userVersion);
+        BinaryPrimitives.WriteUInt32BigEndian(database.AsSpan(92, 4), 1);
+        database[100] = 0x0D;
+        BinaryPrimitives.WriteUInt16BigEndian(database.AsSpan(105, 2), 512);
+        return database;
+    }
+
+    private static byte[] CreateSqliteWal(
+        byte[] page,
+        uint committedPages,
+        bool bigEndianChecksum = false)
+    {
+        Assert.Equal(512, page.Length);
+        byte[] wal = new byte[32 + 24 + page.Length];
+        uint magic = bigEndianChecksum ? 0x377F0683u : 0x377F0682u;
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(0, 4), magic);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(4, 4), 3_007_000);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(8, 4), (uint)page.Length);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(12, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(16, 4), 0x1122_3344);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(20, 4), 0x5566_7788);
+        (uint sum0, uint sum1) = SqliteWalChecksum(
+            wal.AsSpan(0, 24),
+            bigEndianChecksum,
+            0,
+            0);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(24, 4), sum0);
+        BinaryPrimitives.WriteUInt32BigEndian(wal.AsSpan(28, 4), sum1);
+
+        Span<byte> frame = wal.AsSpan(32);
+        BinaryPrimitives.WriteUInt32BigEndian(frame[..4], 1);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(4, 4), committedPages);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(8, 4), 0x1122_3344);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(12, 4), 0x5566_7788);
+        page.CopyTo(frame[24..]);
+        (sum0, sum1) = SqliteWalChecksum(
+            frame[..8],
+            bigEndianChecksum,
+            sum0,
+            sum1);
+        (sum0, sum1) = SqliteWalChecksum(
+            frame[24..],
+            bigEndianChecksum,
+            sum0,
+            sum1);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(16, 4), sum0);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.Slice(20, 4), sum1);
+        return wal;
+    }
+
+    private static (uint Sum0, uint Sum1) SqliteWalChecksum(
+        ReadOnlySpan<byte> bytes,
+        bool bigEndian,
+        uint sum0,
+        uint sum1)
+    {
+        Assert.Equal(0, bytes.Length % 8);
+        for (int offset = 0; offset < bytes.Length; offset += 8)
+        {
+            uint first = bigEndian
+                ? BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(offset, 4))
+                : BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(offset, 4));
+            uint second = bigEndian
+                ? BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(offset + 4, 4))
+                : BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(offset + 4, 4));
+            unchecked
+            {
+                sum0 += first + sum1;
+                sum1 += second + sum0;
+            }
+        }
+        return (sum0, sum1);
     }
 
     private static void WriteEntry(ZipArchive archive, string name, string contents)

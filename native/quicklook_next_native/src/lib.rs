@@ -74,6 +74,7 @@ const QL_NATIVE_ABI_VERSION: u32 = 2;
 const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
 const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
 const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
+const QL_FEATURE_HANDLE_SQLITE_SNAPSHOT: u64 = 1 << 3;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -84,6 +85,7 @@ const QL_ERROR_IO: i32 = -5;
 const QL_ERROR_INVALID_HANDLE: i32 = -6;
 const QL_ERROR_LENGTH_MISMATCH: i32 = -7;
 const QL_ERROR_INTERNAL: i32 = -8;
+const QL_ERROR_LIMIT_EXCEEDED: i32 = -9;
 
 #[no_mangle]
 pub extern "C" fn ql_abi_version() -> u32 {
@@ -92,7 +94,10 @@ pub extern "C" fn ql_abi_version() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn ql_capabilities() -> u64 {
-    QL_FEATURE_HANDLE_TEXT | QL_FEATURE_HANDLE_EXECUTABLE | QL_FEATURE_HANDLE_TORRENT
+    QL_FEATURE_HANDLE_TEXT
+        | QL_FEATURE_HANDLE_EXECUTABLE
+        | QL_FEATURE_HANDLE_TORRENT
+        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -2827,7 +2832,28 @@ fn reader_preview_status(error: preview::ReaderPreviewError) -> i32 {
         preview::ReaderPreviewError::Io => QL_ERROR_IO,
         preview::ReaderPreviewError::Malformed => QL_ERROR_MALFORMED,
         preview::ReaderPreviewError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
+        preview::ReaderPreviewError::LimitExceeded => QL_ERROR_LIMIT_EXCEEDED,
     }
+}
+
+fn reopen_optional_handle(
+    source_handle: isize,
+    expected_length: u64,
+) -> std::result::Result<Option<fs::File>, i32> {
+    if source_handle == 0 {
+        return if expected_length == 0 {
+            Ok(None)
+        } else {
+            Err(QL_ERROR_INVALID_ARGUMENT)
+        };
+    }
+    native_input::reopen_borrowed_disk_file(source_handle, expected_length)
+        .map(Some)
+        .map_err(|error| match error {
+            native_input::NativeInputError::InvalidHandle => QL_ERROR_INVALID_HANDLE,
+            native_input::NativeInputError::Io => QL_ERROR_IO,
+            native_input::NativeInputError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
+        })
 }
 
 /// Render text from a borrowed Windows file handle.
@@ -2944,6 +2970,76 @@ pub unsafe extern "C" fn ql_preview_torrent_handle(
             |file, logical_name, size, modified_unix| {
                 preview::render_torrent_reader(file, logical_name, size, modified_unix, cancel_cb)
                     .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
+/// Render a bounded SQLite snapshot from borrowed main, WAL, and SHM Windows file handles.
+///
+/// `wal_handle` and `shm_handle` are independently optional. Absence is represented only by a
+/// `(0, 0)` handle/length pair; a nonzero handle with a zero length represents a present empty
+/// companion. The WAL is the only source used to update the visible database snapshot. SHM data is
+/// bounded diagnostic input and is never trusted for database correctness.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle` and apply to every nonzero handle. The caller retains ownership of all
+/// handles. Rust reopens each one with an independent position and never resolves `logical_name` as
+/// a path.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_sqlite_handles(
+    main_handle: isize,
+    main_expected_length: u64,
+    wal_handle: isize,
+    wal_expected_length: u64,
+    shm_handle: isize,
+    shm_expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            main_handle,
+            main_expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |main, logical_name, _, modified_unix| {
+                if wal_handle == 0 && wal_expected_length != 0
+                    || shm_handle == 0 && shm_expected_length != 0
+                {
+                    return Err(QL_ERROR_INVALID_ARGUMENT);
+                }
+                if main_expected_length > preview::MAX_DATABASE_HANDLE_BYTES
+                    || wal_expected_length > preview::MAX_SQLITE_WAL_BYTES
+                    || shm_expected_length > preview::MAX_SQLITE_SHM_BYTES
+                {
+                    return Err(QL_ERROR_LIMIT_EXCEEDED);
+                }
+                let mut wal = reopen_optional_handle(wal_handle, wal_expected_length)?;
+                let mut shm = reopen_optional_handle(shm_handle, shm_expected_length)?;
+                let wal_reader = wal.as_mut().map(|file| file as &mut dyn Read);
+                let shm_reader = shm.as_mut().map(|file| file as &mut dyn Read);
+                preview::render_database_reader(
+                    main,
+                    main_expected_length,
+                    wal_reader,
+                    wal_expected_length,
+                    shm_reader,
+                    shm_expected_length,
+                    logical_name,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
             },
         )
     })
@@ -3232,8 +3328,10 @@ fn ffi_boundary(body: impl FnOnce() -> i32) -> i32 {
 #[test]
 fn native_abi_version_is_stable() {
     assert_eq!(ql_abi_version(), 2);
-    let required =
-        QL_FEATURE_HANDLE_TEXT | QL_FEATURE_HANDLE_EXECUTABLE | QL_FEATURE_HANDLE_TORRENT;
+    let required = QL_FEATURE_HANDLE_TEXT
+        | QL_FEATURE_HANDLE_EXECUTABLE
+        | QL_FEATURE_HANDLE_TORRENT
+        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -3325,6 +3423,39 @@ mod handle_v2_tests {
             ql_preview_torrent_handle(
                 source_handle,
                 expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_sqlite_handles(
+        main_handle: isize,
+        main_expected_length: u64,
+        wal_handle: isize,
+        wal_expected_length: u64,
+        shm_handle: isize,
+        shm_expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_sqlite_handles(
+                main_handle,
+                main_expected_length,
+                wal_handle,
+                wal_expected_length,
+                shm_handle,
+                shm_expected_length,
                 logical_name_utf8,
                 logical_name_len,
                 out_buf,
@@ -3671,6 +3802,189 @@ mod handle_v2_tests {
         assert_eq!(required, 0);
         drop(malformed_file);
         let _ = fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn sqlite_handle_preview_uses_optional_handles_without_moving_caller_positions() {
+        let mut database = vec![0u8; 512];
+        database[0..16].copy_from_slice(b"SQLite format 3\0");
+        database[16..18].copy_from_slice(&512u16.to_be_bytes());
+        database[18] = 2;
+        database[19] = 2;
+        database[21] = 64;
+        database[22] = 32;
+        database[23] = 32;
+        database[28..32].copy_from_slice(&1u32.to_be_bytes());
+        database[44..48].copy_from_slice(&4u32.to_be_bytes());
+        database[56..60].copy_from_slice(&1u32.to_be_bytes());
+        database[60..64].copy_from_slice(&17u32.to_be_bytes());
+        database[100] = 0x0D;
+        database[105..107].copy_from_slice(&512u16.to_be_bytes());
+
+        let (main_path, mut main) = create_input("bin", &database);
+        let (wal_path, mut wal) = create_input("bin", &[]);
+        let (shm_path, mut shm) = create_input("bin", &[0u8; 48]);
+        main.seek(SeekFrom::Start(9)).unwrap();
+        wal.seek(SeekFrom::Start(0)).unwrap();
+        shm.seek(SeekFrom::Start(13)).unwrap();
+        let positions = (
+            main.stream_position().unwrap(),
+            wal.stream_position().unwrap(),
+            shm.stream_position().unwrap(),
+        );
+        let logical_name = br"C:\missing\renamed.sqlite";
+        let mut required = usize::MAX;
+
+        let status = call_sqlite_handles(
+            main.as_raw_handle() as isize,
+            main.metadata().unwrap().len(),
+            wal.as_raw_handle() as isize,
+            0,
+            shm.as_raw_handle() as isize,
+            shm.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > 0);
+        assert_eq!(
+            positions,
+            (
+                main.stream_position().unwrap(),
+                wal.stream_position().unwrap(),
+                shm.stream_position().unwrap(),
+            )
+        );
+
+        let mut output = vec![0u8; required];
+        let status = call_sqlite_handles(
+            main.as_raw_handle() as isize,
+            main.metadata().unwrap().len(),
+            wal.as_raw_handle() as isize,
+            0,
+            shm.as_raw_handle() as isize,
+            shm.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        let json: serde_json::Value = serde_json::from_slice(&output[..required]).unwrap();
+        assert_eq!(json["kind"], "database");
+        assert!(json["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("renamed.sqlite"));
+        let text = json["text"].as_str().unwrap();
+        assert!(text.contains("User version: 17"));
+        assert!(text.contains("WAL HANDLE: empty"));
+        assert!(text.contains("SHM HANDLE: diagnostic only"));
+        assert_eq!(
+            positions,
+            (
+                main.stream_position().unwrap(),
+                wal.stream_position().unwrap(),
+                shm.stream_position().unwrap(),
+            )
+        );
+
+        drop(main);
+        drop(wal);
+        drop(shm);
+        let _ = fs::remove_file(main_path);
+        let _ = fs::remove_file(wal_path);
+        let _ = fs::remove_file(shm_path);
+    }
+
+    #[test]
+    fn sqlite_handle_preview_validates_optional_tuples_and_limits() {
+        let mut database = vec![0u8; 512];
+        database[0..16].copy_from_slice(b"SQLite format 3\0");
+        database[16..18].copy_from_slice(&512u16.to_be_bytes());
+        let (path, main) = create_input("sqlite", &database);
+        let (wal_path, wal) = create_input("wal", &[0x37]);
+        let logical_name = b"bounded.sqlite";
+        let mut required = usize::MAX;
+
+        let status = call_sqlite_handles(
+            main.as_raw_handle() as isize,
+            main.metadata().unwrap().len(),
+            0,
+            1,
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_ARGUMENT);
+        assert_eq!(required, 0);
+
+        let status = call_sqlite_handles(
+            main.as_raw_handle() as isize,
+            main.metadata().unwrap().len(),
+            main.as_raw_handle() as isize,
+            preview::MAX_SQLITE_WAL_BYTES + 1,
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_LIMIT_EXCEEDED);
+        assert_eq!(required, 0);
+
+        let status = call_sqlite_handles(
+            main.as_raw_handle() as isize,
+            main.metadata().unwrap().len(),
+            wal.as_raw_handle() as isize,
+            wal.metadata().unwrap().len() + 1,
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_LENGTH_MISMATCH);
+        assert_eq!(required, 0);
+
+        let status = call_sqlite_handles(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            Some(always_cancel),
+        );
+        assert_eq!(status, QL_ERROR_CANCELLED);
+        assert_eq!(required, 0);
+
+        drop(main);
+        drop(wal);
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(wal_path);
     }
 
     #[test]

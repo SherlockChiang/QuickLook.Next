@@ -18,6 +18,7 @@ internal sealed class ParserHostSupervisor
     private readonly string _hostExePath;
     private readonly PendingRequests _pending = new();
     private readonly ConcurrentDictionary<string, byte> _recycleOnCancel = new();
+    private readonly ConcurrentDictionary<string, Task> _handleOpenSends = new();
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private NamedPipeServerStream? _server;
     private PipeChannel? _channel;
@@ -51,6 +52,7 @@ internal sealed class ParserHostSupervisor
     {
         _stopping = false;
         int generation = ++_generation;
+        _handleOpenSends.Clear();
         DiagLog.Write("App", $"ParserHost starting gen={generation}; restart={generation > 1}");
         _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _channel?.Dispose();
@@ -157,35 +159,163 @@ internal sealed class ParserHostSupervisor
         TimeSpan? timeout = null)
     {
         if (_channel is null || _host is null) throw new InvalidOperationException("ParserHost not connected");
+        PipeChannel channel = _channel;
+        Process host = _host;
+        int generation = _generation;
         var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
         long hostHandle;
         try
         {
-            hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(sourceHandle, _host.SafeHandle);
+            hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(sourceHandle, host.SafeHandle);
         }
         catch
         {
             _pending.Cancel(requestId);
             throw;
         }
-        _ = SendOpenHandleAsync(requestId, hostHandle, sourceLength, logicalPath, probe);
+        Task sendTask = SendOpenHandleAsync(
+            channel, generation, requestId, hostHandle, sourceLength, logicalPath, probe);
+        RegisterHandleOpenSend(requestId, sendTask);
         return (requestId, completion);
     }
 
     private async Task SendOpenHandleAsync(
-        string requestId, long sourceHandle, long sourceLength, string logicalPath, FileProbe probe)
+        PipeChannel channel,
+        int generation,
+        string requestId,
+        long sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        FileProbe probe)
     {
         try
         {
-            await (_channel?.SendAsync(new PreviewOpenHandle(
-                requestId, sourceHandle, sourceLength, logicalPath, probe))
-                ?? Task.FromException(new InvalidOperationException("ParserHost not connected")));
+            await channel.SendAsync(new PreviewOpenHandle(
+                requestId, sourceHandle, sourceLength, logicalPath, probe));
         }
         catch (Exception ex)
         {
             _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
-            RecycleHost("handle preview request could not be delivered");
+            if (generation == _generation)
+                RecycleHost("handle preview request could not be delivered");
+        }
+    }
+
+    public (string RequestId, Task<ControlMessage> Completion) BeginOpenSqliteHandles(
+        string logicalPath,
+        FileProbe probe,
+        Microsoft.Win32.SafeHandles.SafeFileHandle mainHandle,
+        long mainLength,
+        Microsoft.Win32.SafeHandles.SafeFileHandle? walHandle,
+        long walLength,
+        Microsoft.Win32.SafeHandles.SafeFileHandle? shmHandle,
+        long shmLength,
+        TimeSpan? timeout = null)
+    {
+        if (_channel is null || _host is null) throw new InvalidOperationException("ParserHost not connected");
+        if (mainLength is < 0 or > NativeAbi.MaxParserHandleInputBytes)
+            throw new ArgumentOutOfRangeException(nameof(mainLength));
+        if (walLength is < 0 or > NativeAbi.MaxSqliteWalBytes
+            || walHandle is null && walLength != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(walLength));
+        }
+        if (shmLength is < 0 or > NativeAbi.MaxSqliteShmBytes
+            || shmHandle is null && shmLength != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(shmLength));
+        }
+
+        PipeChannel channel = _channel;
+        Process host = _host;
+        int generation = _generation;
+        var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
+        long remoteMain = 0;
+        long remoteWal = 0;
+        long remoteShm = 0;
+        int duplicatedCount = 0;
+        try
+        {
+            remoteMain = WindowsHandleTransfer.DuplicateFileToProcess(mainHandle, host.SafeHandle);
+            duplicatedCount++;
+            if (walHandle is not null)
+            {
+                remoteWal = WindowsHandleTransfer.DuplicateFileToProcess(walHandle, host.SafeHandle);
+                duplicatedCount++;
+            }
+            if (shmHandle is not null)
+            {
+                remoteShm = WindowsHandleTransfer.DuplicateFileToProcess(shmHandle, host.SafeHandle);
+                duplicatedCount++;
+            }
+        }
+        catch
+        {
+            _pending.Cancel(requestId);
+            if (duplicatedCount > 0 && generation == _generation)
+                RecycleHost("SQLite handle preview was only partially duplicated");
+            throw;
+        }
+
+        Task sendTask = SendOpenSqliteHandlesAsync(
+            channel,
+            generation,
+            new PreviewOpenSqliteHandles(
+                requestId,
+                remoteMain,
+                mainLength,
+                remoteWal,
+                walLength,
+                remoteShm,
+                shmLength,
+                logicalPath,
+                probe));
+        RegisterHandleOpenSend(requestId, sendTask);
+        return (requestId, completion);
+    }
+
+    private async Task SendOpenSqliteHandlesAsync(
+        PipeChannel channel,
+        int generation,
+        PreviewOpenSqliteHandles open)
+    {
+        try
+        {
+            await channel.SendAsync(open);
+        }
+        catch (Exception ex)
+        {
+            _pending.TryComplete(open.RequestId, new PreviewError(open.RequestId, ex.Message));
+            if (generation == _generation)
+                RecycleHost("SQLite handle preview request could not be delivered");
+        }
+    }
+
+    private void RegisterHandleOpenSend(string requestId, Task sendTask)
+    {
+        _handleOpenSends[requestId] = sendTask;
+        _ = TrackHandleOpenSendAsync(requestId, sendTask);
+    }
+
+    private async Task TrackHandleOpenSendAsync(string requestId, Task sendTask)
+    {
+        try
+        {
+            await sendTask;
+        }
+        catch
+        {
+            // Send methods convert delivery failures to terminal responses and recycle the host.
+        }
+        finally
+        {
+            if (_handleOpenSends.TryGetValue(requestId, out Task? current)
+                && ReferenceEquals(current, sendTask))
+            {
+                _handleOpenSends.TryRemove(requestId, out _);
+            }
         }
     }
 
@@ -208,14 +338,21 @@ internal sealed class ParserHostSupervisor
 
     private async Task CloseCoreAsync(string requestId, bool recycleHost)
     {
+        PipeChannel? channel = _channel;
+        int generation = _generation;
         try
         {
-            if (_channel is not null)
-                await _channel.SendAsync(new PreviewClose(requestId));
+            if (_handleOpenSends.TryGetValue(requestId, out Task? openSend))
+            {
+                try { await openSend; }
+                catch { }
+            }
+            if (channel is not null && generation == _generation)
+                await channel.SendAsync(new PreviewClose(requestId));
         }
         finally
         {
-            if (recycleHost)
+            if (recycleHost && generation == _generation)
             {
                 DiagLog.Write("App", $"recycling ParserHost after cloud preview cancellation: request={requestId}");
                 RecycleHost("cloud preview canceled while opening");
@@ -337,6 +474,7 @@ internal sealed class ParserHostSupervisor
                 return;
             _ready.TrySetException(ex);
             _recycleOnCancel.Clear();
+            _handleOpenSends.Clear();
             _pending.FailAll(ex);
         }
     }
@@ -358,6 +496,7 @@ internal sealed class ParserHostSupervisor
             try { exitCode = _host?.ExitCode; } catch { }
             DiagLog.Write("App", $"ParserHost exited gen={generation}; pid={_host?.Id}; exitCode={exitCode?.ToString() ?? "unknown"}; timeouts={Volatile.Read(ref _timeoutCount)}");
             _recycleOnCancel.Clear();
+            _handleOpenSends.Clear();
             _pending.FailAll(new InvalidOperationException("ParserHost exited"));
         }
         finally
@@ -372,6 +511,7 @@ internal sealed class ParserHostSupervisor
         try { _telemetryCts.Cancel(); } catch { }
         ++_generation;
         _recycleOnCancel.Clear();
+        _handleOpenSends.Clear();
         _pending.FailAll(new OperationCanceledException("ParserHost stopped"));
         _ready.TrySetCanceled();
         try { _channel?.Dispose(); } catch { }
@@ -430,6 +570,7 @@ internal sealed class ParserHostSupervisor
         DiagLog.Write("App", $"ParserHost recycle: reason={reason}; gen={_generation}");
         ++_generation;
         _recycleOnCancel.Clear();
+        _handleOpenSends.Clear();
         _pending.FailAll(new OperationCanceledException(reason));
         _ready.TrySetCanceled();
         try { _channel?.Dispose(); } catch { }

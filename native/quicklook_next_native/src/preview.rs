@@ -267,11 +267,15 @@ pub(crate) enum ReaderPreviewError {
     Io,
     Malformed,
     LengthMismatch,
+    LimitExceeded,
 }
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ANDROID_RESOURCE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_DATABASE_HANDLE_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_SQLITE_WAL_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_SQLITE_SHM_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
 const MAX_EBOOK_XML_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_EBOOK_CHAPTER_BYTES: u64 = 768 * 1024;
@@ -807,6 +811,44 @@ fn read_reader_exact_bounded_cancelable<R: Read>(
         return Err(ReaderPreviewError::LengthMismatch);
     }
     Ok(bytes)
+}
+
+fn read_exact_cancelable<R: Read + ?Sized>(
+    reader: &mut R,
+    bytes: &mut [u8],
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(), ReaderPreviewError> {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let end = offset.saturating_add(64 * 1024).min(bytes.len());
+        match reader.read(&mut bytes[offset..end]) {
+            Ok(0) => return Err(ReaderPreviewError::LengthMismatch),
+            Ok(read) => offset += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReaderPreviewError::Io),
+        }
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(())
+}
+
+fn drain_exact_cancelable<R: Read + ?Sized>(
+    reader: &mut R,
+    mut length: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(), ReaderPreviewError> {
+    let mut buffer = [0u8; 64 * 1024];
+    while length > 0 {
+        let read_len = length.min(buffer.len() as u64) as usize;
+        read_exact_cancelable(reader, &mut buffer[..read_len], cancel_cb)?;
+        length -= read_len as u64;
+    }
+    Ok(())
 }
 
 fn parse_jpeg_exif_metadata(path: &str) -> Option<ExifMetadata> {
@@ -5007,11 +5049,104 @@ pub fn render_database_info(
     if preview_cancelled(cancel_cb) {
         return String::new();
     }
-    let filename = file_name(path);
     let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
     if preview_cancelled(cancel_cb) {
         return String::new();
     }
+    render_database_bytes(path, size, modified_unix, &bytes, &[], cancel_cb)
+}
+
+pub fn render_database_reader<R: Read>(
+    reader: &mut R,
+    main_length: u64,
+    mut wal_reader: Option<&mut dyn Read>,
+    wal_length: u64,
+    mut shm_reader: Option<&mut dyn Read>,
+    shm_length: u64,
+    logical_name: &str,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if main_length > MAX_DATABASE_HANDLE_BYTES
+        || wal_length > MAX_SQLITE_WAL_BYTES
+        || shm_length > MAX_SQLITE_SHM_BYTES
+    {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if wal_reader.is_none() && wal_length != 0 || shm_reader.is_none() && shm_length != 0 {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+
+    let prefix_length = main_length.min(MAX_INFO_HEADER_BYTES as u64) as usize;
+    let mut bytes = vec![0u8; prefix_length];
+    read_exact_cancelable(reader, &mut bytes, cancel_cb)?;
+
+    let lower_name = logical_name.to_ascii_lowercase();
+    let is_sqlite_main = !lower_name.ends_with("-wal")
+        && !lower_name.ends_with("-shm")
+        && bytes.starts_with(b"SQLite format 3\0");
+    if (wal_reader.is_some() || shm_reader.is_some()) && !is_sqlite_main {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let companion_page_size = if wal_reader.is_some() || shm_reader.is_some() {
+        let page_size = sqlite_database_page_size(&bytes).ok_or(ReaderPreviewError::Malformed)?;
+        if main_length < page_size as u64 || main_length % page_size as u64 != 0 {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        Some(page_size)
+    } else {
+        None
+    };
+    let mut snapshot_notes = Vec::new();
+    if let Some(wal) = wal_reader.as_deref_mut() {
+        if wal_length == 0 {
+            snapshot_notes.push(
+                "WAL HANDLE: empty; the main database view is already checkpointed".to_string(),
+            );
+        } else {
+            let page_size = companion_page_size.ok_or(ReaderPreviewError::Malformed)?;
+            let snapshot = inspect_sqlite_wal_snapshot(wal, wal_length, page_size, cancel_cb)?;
+            apply_sqlite_wal_snapshot(&mut bytes, page_size, &snapshot)?;
+            snapshot_notes.push(snapshot.summary());
+        }
+    }
+    if let Some(shm) = shm_reader.as_deref_mut() {
+        snapshot_notes.push(inspect_sqlite_shm(shm, shm_length, cancel_cb)?);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+
+    let size = i64::try_from(main_length).map_err(|_| ReaderPreviewError::LengthMismatch)?;
+    let json = render_database_bytes(
+        logical_name,
+        size,
+        modified_unix,
+        &bytes,
+        &snapshot_notes,
+        cancel_cb,
+    );
+    if preview_cancelled(cancel_cb) {
+        Err(ReaderPreviewError::Cancelled)
+    } else if json.is_empty() {
+        Err(ReaderPreviewError::Malformed)
+    } else {
+        Ok(json)
+    }
+}
+
+fn render_database_bytes(
+    path: &str,
+    size: i64,
+    modified_unix: i64,
+    bytes: &[u8],
+    snapshot_notes: &[String],
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> String {
+    let filename = file_name(path);
     let mut text = base_info_text(filename, "database", size, modified_unix);
     let lower_path = path.to_ascii_lowercase();
     if lower_path.ends_with("-wal") {
@@ -5054,8 +5189,22 @@ pub fn render_database_info(
         }
         append_sqlite_header_details(&mut text, &bytes);
         text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+        for note in snapshot_notes {
+            text.push_str("\n");
+            text.push_str(note);
+        }
         append_sqlite_schema_summary(&mut text, &bytes, page_size as usize, cancel_cb);
-        if let Some(table) = build_sqlite_table_preview(&bytes, page_size as usize, cancel_cb) {
+        if let Some(mut table) = build_sqlite_table_preview(&bytes, page_size as usize, cancel_cb) {
+            if !snapshot_notes.is_empty() {
+                let snapshot_summary = snapshot_notes.join("; ");
+                match table.table.summary.as_mut() {
+                    Some(summary) => {
+                        summary.push_str(" | ");
+                        summary.push_str(&snapshot_summary);
+                    }
+                    None => table.table.summary = Some(snapshot_summary),
+                }
+            }
             return to_json(&PreviewReadyDto {
                 kind: "database".to_string(),
                 title: format!("{filename} - {}", table.name),
@@ -5073,7 +5222,259 @@ pub fn render_database_info(
     } else {
         text.push_str("\nFormat: database file");
     }
+    if !bytes.starts_with(b"SQLite format 3\0") {
+        for note in snapshot_notes {
+            text.push_str("\n");
+            text.push_str(note);
+        }
+    }
     generic_info_json(path, "database", size, modified_unix, Some(text))
+}
+
+fn sqlite_database_page_size(bytes: &[u8]) -> Option<usize> {
+    if !bytes.starts_with(b"SQLite format 3\0") {
+        return None;
+    }
+    match read_u16_be(bytes, 16)? {
+        1 => Some(65_536),
+        value if (512..=32_768).contains(&value) && value.is_power_of_two() => Some(value as usize),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct SqliteWalSnapshot {
+    valid_frames: u64,
+    last_commit_frame: u64,
+    committed_pages: u32,
+    stopped_frame: Option<u64>,
+    stopped_reason: Option<&'static str>,
+    trailing_bytes: u64,
+    unscanned_bytes: u64,
+    committed_prefix_pages: BTreeMap<u32, Vec<u8>>,
+}
+
+impl SqliteWalSnapshot {
+    fn summary(&self) -> String {
+        let mut summary = if self.last_commit_frame == 0 {
+            format!(
+                "WAL HANDLE: {} valid frames, no commit frame; main database view used",
+                self.valid_frames
+            )
+        } else {
+            format!(
+                "Snapshot: WAL HANDLE through commit frame {} ({} pages, {} valid frames)",
+                self.last_commit_frame, self.committed_pages, self.valid_frames
+            )
+        };
+        if let (Some(frame), Some(reason)) = (self.stopped_frame, self.stopped_reason) {
+            summary.push_str(&format!("; scan stopped at frame {frame}: {reason}"));
+        } else if self.trailing_bytes > 0 {
+            summary.push_str(&format!(
+                "; scan stopped before {} trailing partial bytes",
+                self.trailing_bytes
+            ));
+        } else {
+            summary.push_str("; full WAL validated");
+        }
+        if self.unscanned_bytes > 0 {
+            summary.push_str(&format!("; {} later bytes ignored", self.unscanned_bytes));
+        }
+        summary
+    }
+}
+
+fn inspect_sqlite_wal_snapshot(
+    reader: &mut dyn Read,
+    wal_length: u64,
+    database_page_size: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<SqliteWalSnapshot, ReaderPreviewError> {
+    if wal_length > MAX_SQLITE_WAL_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if wal_length < 32 {
+        drain_exact_cancelable(reader, wal_length, cancel_cb)?;
+        return Err(ReaderPreviewError::Malformed);
+    }
+
+    let mut header = [0u8; 32];
+    read_exact_cancelable(reader, &mut header, cancel_cb)?;
+    let checksum_big_endian = match read_u32_be(&header, 0) {
+        Some(0x377F_0682) => false,
+        Some(0x377F_0683) => true,
+        _ => return Err(ReaderPreviewError::Malformed),
+    };
+    if read_u32_be(&header, 4) != Some(3_007_000) {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let wal_page_size = read_u32_be(&header, 8)
+        .map(|value| value as usize)
+        .filter(|value| (512..=65_536).contains(value) && value.is_power_of_two())
+        .ok_or(ReaderPreviewError::Malformed)?;
+    if wal_page_size != database_page_size {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let mut checksum = sqlite_wal_checksum(&header[..24], checksum_big_endian, (0, 0));
+    if read_u32_be(&header, 24) != Some(checksum.0) || read_u32_be(&header, 28) != Some(checksum.1)
+    {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let salt = (
+        read_u32_be(&header, 16).ok_or(ReaderPreviewError::Malformed)?,
+        read_u32_be(&header, 20).ok_or(ReaderPreviewError::Malformed)?,
+    );
+
+    let frame_size = 24u64 + wal_page_size as u64;
+    let mut remaining = wal_length - 32;
+    let mut frame_number = 0u64;
+    let mut pending_prefix_pages = BTreeMap::<u32, Vec<u8>>::new();
+    let mut snapshot = SqliteWalSnapshot::default();
+    while remaining >= frame_size {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        frame_number += 1;
+        let mut frame_header = [0u8; 24];
+        let mut page = vec![0u8; wal_page_size];
+        read_exact_cancelable(reader, &mut frame_header, cancel_cb)?;
+        read_exact_cancelable(reader, &mut page, cancel_cb)?;
+        remaining -= frame_size;
+
+        let page_number = read_u32_be(&frame_header, 0).ok_or(ReaderPreviewError::Malformed)?;
+        let commit_pages = read_u32_be(&frame_header, 4).ok_or(ReaderPreviewError::Malformed)?;
+        let frame_salt = (
+            read_u32_be(&frame_header, 8).ok_or(ReaderPreviewError::Malformed)?,
+            read_u32_be(&frame_header, 12).ok_or(ReaderPreviewError::Malformed)?,
+        );
+        let stopped_reason = if page_number == 0 {
+            Some("invalid page number")
+        } else if frame_salt != salt {
+            Some("salt mismatch")
+        } else {
+            let mut next_checksum =
+                sqlite_wal_checksum(&frame_header[..8], checksum_big_endian, checksum);
+            next_checksum = sqlite_wal_checksum(&page, checksum_big_endian, next_checksum);
+            if read_u32_be(&frame_header, 16) != Some(next_checksum.0)
+                || read_u32_be(&frame_header, 20) != Some(next_checksum.1)
+            {
+                Some("checksum mismatch")
+            } else {
+                checksum = next_checksum;
+                None
+            }
+        };
+        if let Some(reason) = stopped_reason {
+            snapshot.stopped_frame = Some(frame_number);
+            snapshot.stopped_reason = Some(reason);
+            snapshot.unscanned_bytes = remaining;
+            drain_exact_cancelable(reader, remaining, cancel_cb)?;
+            remaining = 0;
+            break;
+        }
+
+        snapshot.valid_frames += 1;
+        let page_offset = (u64::from(page_number) - 1).saturating_mul(wal_page_size as u64);
+        if page_offset < MAX_INFO_HEADER_BYTES as u64 {
+            pending_prefix_pages.insert(page_number, page);
+        }
+        if commit_pages != 0 {
+            for (page_number, page) in std::mem::take(&mut pending_prefix_pages) {
+                snapshot.committed_prefix_pages.insert(page_number, page);
+            }
+            snapshot.last_commit_frame = frame_number;
+            snapshot.committed_pages = commit_pages;
+        }
+    }
+    if remaining > 0 {
+        snapshot.trailing_bytes = remaining;
+        drain_exact_cancelable(reader, remaining, cancel_cb)?;
+    }
+    if snapshot.stopped_frame.is_some() && snapshot.last_commit_frame == 0 {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    Ok(snapshot)
+}
+
+fn sqlite_wal_checksum(bytes: &[u8], big_endian: bool, mut checksum: (u32, u32)) -> (u32, u32) {
+    debug_assert_eq!(bytes.len() % 8, 0);
+    for pair in bytes.chunks_exact(8) {
+        let first = if big_endian {
+            u32::from_be_bytes(pair[0..4].try_into().unwrap())
+        } else {
+            u32::from_le_bytes(pair[0..4].try_into().unwrap())
+        };
+        let second = if big_endian {
+            u32::from_be_bytes(pair[4..8].try_into().unwrap())
+        } else {
+            u32::from_le_bytes(pair[4..8].try_into().unwrap())
+        };
+        checksum.0 = checksum.0.wrapping_add(first).wrapping_add(checksum.1);
+        checksum.1 = checksum.1.wrapping_add(second).wrapping_add(checksum.0);
+    }
+    checksum
+}
+
+fn apply_sqlite_wal_snapshot(
+    database_prefix: &mut Vec<u8>,
+    page_size: usize,
+    snapshot: &SqliteWalSnapshot,
+) -> Result<(), ReaderPreviewError> {
+    if snapshot.last_commit_frame == 0 {
+        return Ok(());
+    }
+    let logical_size = u64::from(snapshot.committed_pages)
+        .checked_mul(page_size as u64)
+        .ok_or(ReaderPreviewError::Malformed)?;
+    let prefix_size = logical_size.min(MAX_INFO_HEADER_BYTES as u64) as usize;
+    database_prefix.resize(prefix_size, 0);
+    for (page_number, page) in &snapshot.committed_prefix_pages {
+        let start = (u64::from(*page_number) - 1)
+            .checked_mul(page_size as u64)
+            .ok_or(ReaderPreviewError::Malformed)? as usize;
+        let end = start
+            .checked_add(page_size)
+            .ok_or(ReaderPreviewError::Malformed)?;
+        if end <= database_prefix.len() {
+            database_prefix[start..end].copy_from_slice(page);
+        }
+    }
+    if !database_prefix.starts_with(b"SQLite format 3\0")
+        || database_prefix.len() < 32
+        || sqlite_database_page_size(database_prefix) != Some(page_size)
+    {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    database_prefix[28..32].copy_from_slice(&snapshot.committed_pages.to_be_bytes());
+    Ok(())
+}
+
+fn inspect_sqlite_shm(
+    reader: &mut dyn Read,
+    shm_length: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if shm_length > MAX_SQLITE_SHM_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    let inspected = shm_length.min(4096) as usize;
+    let mut prefix = vec![0u8; inspected];
+    read_exact_cancelable(reader, &mut prefix, cancel_cb)?;
+    let mut summary = format!(
+        "SHM HANDLE: diagnostic only, {} bytes ({} inspected)",
+        format_bytes(shm_length as i64),
+        format_bytes(inspected as i64)
+    );
+    if prefix.len() >= 24 {
+        let version = u32::from_ne_bytes(prefix[0..4].try_into().unwrap());
+        let initialized = prefix[12] != 0;
+        let max_frame = u32::from_ne_bytes(prefix[16..20].try_into().unwrap());
+        let database_pages = u32::from_ne_bytes(prefix[20..24].try_into().unwrap());
+        summary.push_str(&format!(
+            "; WAL-index version {version}, initialized {initialized}, max frame {max_frame}, database pages {database_pages}"
+        ));
+    }
+    Ok(summary)
 }
 
 fn append_sqlite_wal_summary(text: &mut String, bytes: &[u8], size: i64) {
@@ -16322,6 +16723,13 @@ mod tests {
         true
     }
 
+    static WAL_CANCEL_CHECKS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn cancel_inside_wal_frame() -> bool {
+        WAL_CANCEL_CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 5
+    }
+
     #[test]
     fn tar_scan_reader_honors_cancellation() {
         let mut reader = TarScanReader::new(Cursor::new(vec![1]), Some(always_cancel));
@@ -17444,6 +17852,69 @@ mod tests {
         assert!(text.contains("SQLite version: 3045000"));
     }
 
+    fn sqlite_test_page(page_size: usize, user_version: u32, page_count: u32) -> Vec<u8> {
+        let mut page = vec![0u8; page_size];
+        page[0..16].copy_from_slice(b"SQLite format 3\0");
+        let encoded_page_size = if page_size == 65_536 {
+            1
+        } else {
+            page_size as u16
+        };
+        page[16..18].copy_from_slice(&encoded_page_size.to_be_bytes());
+        page[18] = 2;
+        page[19] = 2;
+        page[21] = 64;
+        page[22] = 32;
+        page[23] = 32;
+        page[28..32].copy_from_slice(&page_count.to_be_bytes());
+        page[44..48].copy_from_slice(&4u32.to_be_bytes());
+        page[56..60].copy_from_slice(&1u32.to_be_bytes());
+        page[60..64].copy_from_slice(&user_version.to_be_bytes());
+        page[96..100].copy_from_slice(&3_050_000u32.to_be_bytes());
+        page[100] = 0x0D;
+        page[105..107].copy_from_slice(&(page_size as u16).to_be_bytes());
+        page
+    }
+
+    fn sqlite_test_wal(
+        big_endian_checksum: bool,
+        page_size: usize,
+        frames: &[(u32, u32, Vec<u8>)],
+    ) -> Vec<u8> {
+        let salt = (0x1020_3040u32, 0x5060_7080u32);
+        let mut wal = vec![0u8; 32];
+        let magic = if big_endian_checksum {
+            0x377F_0683u32
+        } else {
+            0x377F_0682u32
+        };
+        wal[0..4].copy_from_slice(&magic.to_be_bytes());
+        wal[4..8].copy_from_slice(&3_007_000u32.to_be_bytes());
+        wal[8..12].copy_from_slice(&(page_size as u32).to_be_bytes());
+        wal[12..16].copy_from_slice(&7u32.to_be_bytes());
+        wal[16..20].copy_from_slice(&salt.0.to_be_bytes());
+        wal[20..24].copy_from_slice(&salt.1.to_be_bytes());
+        let mut checksum = sqlite_wal_checksum(&wal[..24], big_endian_checksum, (0, 0));
+        wal[24..28].copy_from_slice(&checksum.0.to_be_bytes());
+        wal[28..32].copy_from_slice(&checksum.1.to_be_bytes());
+
+        for (page_number, commit_pages, page) in frames {
+            assert_eq!(page.len(), page_size);
+            let mut frame_header = [0u8; 24];
+            frame_header[0..4].copy_from_slice(&page_number.to_be_bytes());
+            frame_header[4..8].copy_from_slice(&commit_pages.to_be_bytes());
+            frame_header[8..12].copy_from_slice(&salt.0.to_be_bytes());
+            frame_header[12..16].copy_from_slice(&salt.1.to_be_bytes());
+            checksum = sqlite_wal_checksum(&frame_header[..8], big_endian_checksum, checksum);
+            checksum = sqlite_wal_checksum(page, big_endian_checksum, checksum);
+            frame_header[16..20].copy_from_slice(&checksum.0.to_be_bytes());
+            frame_header[20..24].copy_from_slice(&checksum.1.to_be_bytes());
+            wal.extend_from_slice(&frame_header);
+            wal.extend_from_slice(page);
+        }
+        wal
+    }
+
     #[test]
     fn sqlite_wal_summary_reports_frames_and_partial_tail() {
         let mut bytes = vec![0u8; 32 + 2 * (24 + 512) + 1];
@@ -17459,6 +17930,291 @@ mod tests {
         assert!(text.contains("Page size: 512 bytes"));
         assert!(text.contains("Frames observed: 2 (trailing partial frame)"));
         assert!(text.contains("Checkpoint sequence: 7"));
+    }
+
+    #[test]
+    fn sqlite_wal_snapshot_applies_both_checksum_byte_orders() {
+        for big_endian_checksum in [false, true] {
+            let main = sqlite_test_page(512, 1, 1);
+            let committed = sqlite_test_page(512, 42, 1);
+            let wal = sqlite_test_wal(big_endian_checksum, 512, &[(1, 1, committed)]);
+            let mut reader = Cursor::new(wal.clone());
+
+            let snapshot = inspect_sqlite_wal_snapshot(&mut reader, wal.len() as u64, 512, None)
+                .expect("valid WAL snapshot");
+            let mut visible = main;
+            apply_sqlite_wal_snapshot(&mut visible, 512, &snapshot)
+                .expect("apply committed snapshot");
+
+            assert_eq!(read_u32_be(&visible, 60), Some(42));
+            assert_eq!(snapshot.valid_frames, 1);
+            assert_eq!(snapshot.last_commit_frame, 1);
+            assert_eq!(snapshot.committed_pages, 1);
+        }
+    }
+
+    #[test]
+    fn sqlite_wal_checksum_matches_known_header_vectors() {
+        let little_endian = sqlite_test_wal(false, 512, &[]);
+        assert_eq!(read_u32_be(&little_endian, 24), Some(0x1BFB_2323));
+        assert_eq!(read_u32_be(&little_endian, 28), Some(0x5B45_5B18));
+
+        let big_endian = sqlite_test_wal(true, 512, &[]);
+        assert_eq!(read_u32_be(&big_endian, 24), Some(0x2624_FB1E));
+        assert_eq!(read_u32_be(&big_endian, 28), Some(0x1D5E_455E));
+    }
+
+    #[test]
+    fn sqlite_wal_snapshot_ignores_uncommitted_and_bad_tail_frames() {
+        let main = sqlite_test_page(512, 1, 1);
+        let first_commit = sqlite_test_page(512, 11, 1);
+        let uncommitted = sqlite_test_page(512, 22, 1);
+        let wal = sqlite_test_wal(
+            false,
+            512,
+            &[(1, 1, first_commit.clone()), (1, 0, uncommitted)],
+        );
+        let mut reader = Cursor::new(wal.clone());
+        let snapshot =
+            inspect_sqlite_wal_snapshot(&mut reader, wal.len() as u64, 512, None).unwrap();
+        let mut visible = main.clone();
+        apply_sqlite_wal_snapshot(&mut visible, 512, &snapshot).unwrap();
+        assert_eq!(read_u32_be(&visible, 60), Some(11));
+        assert_eq!(snapshot.valid_frames, 2);
+        assert_eq!(snapshot.last_commit_frame, 1);
+
+        let mut bad_tail = sqlite_test_wal(
+            false,
+            512,
+            &[(1, 1, first_commit), (1, 0, sqlite_test_page(512, 33, 1))],
+        );
+        let second_checksum = 32 + (24 + 512) + 16;
+        bad_tail[second_checksum] ^= 0x80;
+        let mut reader = Cursor::new(bad_tail.clone());
+        let snapshot = inspect_sqlite_wal_snapshot(&mut reader, bad_tail.len() as u64, 512, None)
+            .expect("bad tail recovers prior commit");
+        let mut visible = main;
+        apply_sqlite_wal_snapshot(&mut visible, 512, &snapshot).unwrap();
+        assert_eq!(read_u32_be(&visible, 60), Some(11));
+        assert_eq!(snapshot.valid_frames, 1);
+        assert_eq!(snapshot.stopped_frame, Some(2));
+        assert_eq!(snapshot.stopped_reason, Some("checksum mismatch"));
+
+        let mut partial_tail = sqlite_test_wal(false, 512, &[(1, 1, sqlite_test_page(512, 44, 1))]);
+        partial_tail.extend_from_slice(&[1, 2, 3, 4, 5]);
+        let mut reader = Cursor::new(partial_tail.clone());
+        let snapshot =
+            inspect_sqlite_wal_snapshot(&mut reader, partial_tail.len() as u64, 512, None)
+                .expect("partial tail recovers prior commit");
+        assert_eq!(snapshot.trailing_bytes, 5);
+        assert_eq!(snapshot.last_commit_frame, 1);
+    }
+
+    #[test]
+    fn sqlite_wal_snapshot_rejects_bad_first_frame_and_page_size() {
+        let page = sqlite_test_page(512, 7, 1);
+        let mut bad_frame = sqlite_test_wal(false, 512, &[(1, 1, page)]);
+        bad_frame[32 + 8] ^= 1;
+        let mut reader = Cursor::new(bad_frame.clone());
+        assert_eq!(
+            inspect_sqlite_wal_snapshot(&mut reader, bad_frame.len() as u64, 512, None).err(),
+            Some(ReaderPreviewError::Malformed)
+        );
+
+        let mismatched = sqlite_test_wal(false, 1024, &[(1, 1, sqlite_test_page(1024, 8, 1))]);
+        let mut reader = Cursor::new(mismatched.clone());
+        assert_eq!(
+            inspect_sqlite_wal_snapshot(&mut reader, mismatched.len() as u64, 512, None).err(),
+            Some(ReaderPreviewError::Malformed)
+        );
+
+        let mut bad_header_checksum = sqlite_test_wal(false, 512, &[]);
+        bad_header_checksum[24] ^= 0x80;
+        let mut reader = Cursor::new(bad_header_checksum.clone());
+        assert_eq!(
+            inspect_sqlite_wal_snapshot(
+                &mut reader,
+                bad_header_checksum.len() as u64,
+                512,
+                None,
+            )
+            .err(),
+            Some(ReaderPreviewError::Malformed)
+        );
+
+        let mut wrong_version = sqlite_test_wal(false, 512, &[]);
+        wrong_version[4..8].copy_from_slice(&3_007_001u32.to_be_bytes());
+        let checksum = sqlite_wal_checksum(&wrong_version[..24], false, (0, 0));
+        wrong_version[24..28].copy_from_slice(&checksum.0.to_be_bytes());
+        wrong_version[28..32].copy_from_slice(&checksum.1.to_be_bytes());
+        let mut reader = Cursor::new(wrong_version.clone());
+        assert_eq!(
+            inspect_sqlite_wal_snapshot(&mut reader, wrong_version.len() as u64, 512, None).err(),
+            Some(ReaderPreviewError::Malformed)
+        );
+    }
+
+    #[test]
+    fn sqlite_wal_frame_scan_honors_cancellation() {
+        let wal = sqlite_test_wal(false, 512, &[(1, 1, sqlite_test_page(512, 8, 1))]);
+        WAL_CANCEL_CHECKS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut reader = Cursor::new(wal.clone());
+
+        assert_eq!(
+            inspect_sqlite_wal_snapshot(
+                &mut reader,
+                wal.len() as u64,
+                512,
+                Some(cancel_inside_wal_frame),
+            )
+            .err(),
+            Some(ReaderPreviewError::Cancelled)
+        );
+        assert!(reader.position() >= 32);
+        assert!(reader.position() < wal.len() as u64);
+    }
+
+    #[test]
+    fn sqlite_wal_snapshot_reuses_early_page_after_shrink_and_grow() {
+        let page_two = vec![0xA5; 512];
+        let shrink = sqlite_test_page(512, 2, 1);
+        let grow = sqlite_test_page(512, 3, 2);
+        let wal = sqlite_test_wal(true, 512, &[(2, 2, page_two), (1, 1, shrink), (1, 2, grow)]);
+        let mut reader = Cursor::new(wal.clone());
+
+        let snapshot =
+            inspect_sqlite_wal_snapshot(&mut reader, wal.len() as u64, 512, None).unwrap();
+        assert_eq!(snapshot.last_commit_frame, 3);
+        assert_eq!(snapshot.committed_pages, 2);
+        assert_eq!(
+            snapshot.committed_prefix_pages.get(&2),
+            Some(&vec![0xA5; 512])
+        );
+
+        let mut visible = sqlite_test_page(512, 1, 1);
+        apply_sqlite_wal_snapshot(&mut visible, 512, &snapshot).unwrap();
+        assert_eq!(visible.len(), 1024);
+        assert!(visible[512..].iter().all(|byte| *byte == 0xA5));
+    }
+
+    #[test]
+    fn sqlite_wal_snapshot_rejects_page_one_header_page_size_change() {
+        let mut changed_header = sqlite_test_page(512, 9, 1);
+        changed_header[16..18].copy_from_slice(&1024u16.to_be_bytes());
+        let wal = sqlite_test_wal(false, 512, &[(1, 1, changed_header)]);
+        let mut reader = Cursor::new(wal.clone());
+        let snapshot =
+            inspect_sqlite_wal_snapshot(&mut reader, wal.len() as u64, 512, None).unwrap();
+        let mut visible = sqlite_test_page(512, 1, 1);
+
+        assert_eq!(
+            apply_sqlite_wal_snapshot(&mut visible, 512, &snapshot),
+            Err(ReaderPreviewError::Malformed)
+        );
+    }
+
+    #[test]
+    fn database_reader_renders_committed_wal_and_bounded_shm_diagnostics() {
+        let main = sqlite_test_page(512, 1, 1);
+        let committed = sqlite_test_page(512, 99, 1);
+        let wal = sqlite_test_wal(false, 512, &[(1, 1, committed)]);
+        let mut main_reader = Cursor::new(main);
+        let mut wal_reader = Cursor::new(wal.clone());
+        let mut shm = vec![0u8; 48];
+        shm[0..4].copy_from_slice(&3_022_000u32.to_ne_bytes());
+        shm[12] = 1;
+        shm[16..20].copy_from_slice(&1u32.to_ne_bytes());
+        shm[20..24].copy_from_slice(&1u32.to_ne_bytes());
+        let mut shm_reader = Cursor::new(shm.clone());
+
+        let json = render_database_reader(
+            &mut main_reader,
+            512,
+            Some(&mut wal_reader),
+            wal.len() as u64,
+            Some(&mut shm_reader),
+            shm.len() as u64,
+            r"C:\does-not-exist\renamed.db",
+            0,
+            None,
+        )
+        .expect("database HANDLE preview");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let text = value["text"].as_str().unwrap();
+        assert_eq!(value["kind"], "database");
+        assert!(value["title"].as_str().unwrap().starts_with("renamed.db"));
+        assert!(text.contains("User version: 99"));
+        assert!(text.contains("Snapshot: WAL HANDLE through commit frame 1"));
+        assert!(text.contains("SHM HANDLE: diagnostic only"));
+    }
+
+    #[test]
+    fn database_reader_enforces_companion_limits_and_cancellation() {
+        let mut main = Cursor::new(sqlite_test_page(512, 1, 1));
+        let mut wal = Cursor::new(Vec::<u8>::new());
+        assert_eq!(
+            render_database_reader(
+                &mut main,
+                512,
+                Some(&mut wal),
+                MAX_SQLITE_WAL_BYTES + 1,
+                None,
+                0,
+                "bounded.db",
+                0,
+                None,
+            )
+            .err(),
+            Some(ReaderPreviewError::LimitExceeded)
+        );
+
+        let mut main = Cursor::new(sqlite_test_page(512, 1, 1));
+        assert_eq!(
+            render_database_reader(
+                &mut main,
+                512,
+                None,
+                0,
+                None,
+                0,
+                "cancelled.db",
+                0,
+                Some(always_cancel),
+            )
+            .err(),
+            Some(ReaderPreviewError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn database_reader_rejects_short_or_unaligned_main_with_wal() {
+        let wal = sqlite_test_wal(false, 512, &[(1, 1, sqlite_test_page(512, 2, 1))]);
+        for mut main in [
+            sqlite_test_page(512, 1, 1)[..100].to_vec(),
+            sqlite_test_page(512, 1, 1),
+        ] {
+            if main.len() == 512 {
+                main.push(0);
+            }
+            let main_length = main.len() as u64;
+            let mut main_reader = Cursor::new(main);
+            let mut wal_reader = Cursor::new(wal.clone());
+            assert_eq!(
+                render_database_reader(
+                    &mut main_reader,
+                    main_length,
+                    Some(&mut wal_reader),
+                    wal.len() as u64,
+                    None,
+                    0,
+                    "malformed.db",
+                    0,
+                    None,
+                )
+                .err(),
+                Some(ReaderPreviewError::Malformed)
+            );
+        }
     }
 
     #[test]

@@ -55,6 +55,25 @@ public static class WindowsHandleTransfer
         return (handle, length);
     }
 
+    public static (SafeFileHandle Handle, long Length)? TryOpenPinnedReadOnlyFile(string path)
+    {
+        SafeFileHandle handle = CreateFile(path, GenericRead, FileShareRead, 0, OpenExisting, 0, 0);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            if (error is 2 or 3)
+                return null;
+            throw new Win32Exception(error, "Could not pin the SQLite companion file.");
+        }
+        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length < 0)
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Could not validate the pinned SQLite companion file.");
+        }
+        return (handle, length);
+    }
+
     public static long DuplicateFileToProcess(SafeFileHandle source, SafeProcessHandle targetProcess)
     {
         if (!DuplicateHandle(GetCurrentProcess(), source, targetProcess, out nint duplicate, 0, false, DuplicateSameAccess))
@@ -90,13 +109,96 @@ public static class WindowsHandleTransfer
         if (raw == 0 || raw == -1)
             throw new InvalidDataException("Received an invalid local file handle.");
         var handle = new SafeFileHandle(raw, ownsHandle: true);
-        if (GetFileType(handle) != FileTypeDisk || !GetFileSizeEx(handle, out long length) || length != expectedLength)
+        if (!IsExpectedDiskFile(handle, expectedLength))
         {
             handle.Dispose();
             throw new InvalidDataException("Preview input was not the expected disk file.");
         }
         return handle;
     }
+
+    public static OwnedSqliteFileHandles TakeLocalSqliteFileHandles(
+        long mainValue,
+        long mainLength,
+        long walValue,
+        long walLength,
+        long shmValue,
+        long shmLength)
+    {
+        var adopted = new Dictionary<nint, SafeFileHandle>();
+        bool duplicate = false;
+        bool invalidRawValue = false;
+
+        SafeFileHandle? Adopt(long value)
+        {
+            if (value == 0)
+                return null;
+
+            nint raw;
+            try
+            {
+                raw = checked((nint)value);
+            }
+            catch (OverflowException)
+            {
+                invalidRawValue = true;
+                return null;
+            }
+            if (adopted.TryGetValue(raw, out SafeFileHandle? existing))
+            {
+                duplicate = true;
+                return existing;
+            }
+
+            var handle = new SafeFileHandle(raw, ownsHandle: true);
+            adopted.Add(raw, handle);
+            return handle;
+        }
+
+        try
+        {
+            // Adopt every distinct raw handle before validating any tuple. This guarantees that a
+            // malformed later companion cannot leave an earlier or later host-local handle open.
+            SafeFileHandle? main = Adopt(mainValue);
+            SafeFileHandle? wal = Adopt(walValue);
+            SafeFileHandle? shm = Adopt(shmValue);
+
+            if (invalidRawValue)
+                throw new InvalidDataException("SQLite input contained an invalid local handle value.");
+            if (duplicate)
+                throw new InvalidDataException("SQLite input handles must be distinct.");
+            if (main is null || !IsExpectedDiskFile(main, mainLength))
+                throw new InvalidDataException("SQLite main handle was not the expected disk file.");
+            if (wal is null
+                    ? walLength != 0
+                    : !IsExpectedDiskFile(wal, walLength))
+            {
+                throw new InvalidDataException("SQLite WAL handle was not the expected disk file.");
+            }
+            if (shm is null
+                    ? shmLength != 0
+                    : !IsExpectedDiskFile(shm, shmLength))
+            {
+                throw new InvalidDataException("SQLite SHM handle was not the expected disk file.");
+            }
+
+            return new OwnedSqliteFileHandles(main, wal, shm);
+        }
+        catch
+        {
+            foreach (SafeFileHandle handle in adopted.Values)
+                handle.Dispose();
+            throw;
+        }
+    }
+
+    private static bool IsExpectedDiskFile(SafeFileHandle handle, long expectedLength)
+        => expectedLength >= 0
+            && !handle.IsInvalid
+            && !handle.IsClosed
+            && GetFileType(handle) == FileTypeDisk
+            && GetFileSizeEx(handle, out long length)
+            && length == expectedLength;
 
     public static SafeFileHandle DuplicateFileFromProcess(SafeProcessHandle sourceProcess, long sourceHandle, long expectedLength)
     {
@@ -157,4 +259,25 @@ public static class WindowsHandleTransfer
     private static extern SafeFileHandle ReOpenFile(
         SafeFileHandle originalFile, uint desiredAccess, uint shareMode, uint flagsAndAttributes);
 
+}
+
+public sealed class OwnedSqliteFileHandles(
+    SafeFileHandle main,
+    SafeFileHandle? wal,
+    SafeFileHandle? shm) : IDisposable
+{
+    private int _disposed;
+
+    public SafeFileHandle Main { get; } = main;
+    public SafeFileHandle? Wal { get; } = wal;
+    public SafeFileHandle? Shm { get; } = shm;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        Shm?.Dispose();
+        Wal?.Dispose();
+        Main.Dispose();
+    }
 }

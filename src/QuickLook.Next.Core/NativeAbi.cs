@@ -6,8 +6,13 @@ public static class NativeAbi
     public const ulong HandleText = 1UL << 0;
     public const ulong HandleExecutable = 1UL << 1;
     public const ulong HandleTorrent = 1UL << 2;
-    public const ulong ParserHandleInputs = HandleText | HandleExecutable | HandleTorrent;
+    public const ulong HandleSqliteSnapshot = 1UL << 3;
+    public const ulong ParserHandleInputs =
+        HandleText | HandleExecutable | HandleTorrent | HandleSqliteSnapshot;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
+    public const long MaxParserHandleInputBytes = 256L * 1024 * 1024;
+    public const long MaxSqliteWalBytes = 64L * 1024 * 1024;
+    public const long MaxSqliteShmBytes = 4L * 1024 * 1024;
 
     // Stable status values for ABI 2 HANDLE entry points. Legacy path entry points retain their
     // existing per-function return conventions until they are migrated.
@@ -20,6 +25,7 @@ public static class NativeAbi
     public const int StatusInvalidHandle = -6;
     public const int StatusLengthMismatch = -7;
     public const int StatusInternal = -8;
+    public const int StatusLimitExceeded = -9;
 
     public static void EnsureCompatible(uint actual)
     {
