@@ -35,6 +35,12 @@ Require-Pattern $nativeLibrary 'MAX_IMAGE_RASTER_DIMENSION:\s*u32\s*=\s*2048' `
     "Static HANDLE image rasters must remain capped at 2048 pixels."
 Require-Pattern $nativeLibrary 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Static HANDLE image inputs must remain capped at 256 MiB."
+Require-Pattern $nativeLibrary 'MAX_SVG_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
+    "SVG HANDLE inputs must remain capped at 16 MiB."
+Require-Pattern $nativeLibrary 'MAX_SVG_MARKUP_TOKENS:\s*usize\s*=\s*100_000' `
+    "SVG HANDLE parsing must retain a markup complexity budget."
+Require-Pattern $nativeLibrary 'image_href_resolver\.resolve_data\s*=\s*Box::new\(\|_, _, _\| None\)[\s\S]*image_href_resolver\.resolve_string\s*=\s*Box::new\(\|_, _\| None\)' `
+    "SVG HANDLE rendering must not resolve external image resources."
 
 $imageWaveform = Join-Path $Root "src/QuickLook.Next.Core/ImageWaveformBuilder.cs"
 Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `

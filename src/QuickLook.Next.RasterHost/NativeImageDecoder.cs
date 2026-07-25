@@ -78,10 +78,24 @@ internal static class NativeImageDecoder
 
     public static bool UsesHandleInput(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
         => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
-            && Path.GetExtension(logicalPath).Equals(".ico", StringComparison.OrdinalIgnoreCase)
-            && probe.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase)
             && string.Equals(probe.Path, logicalPath, StringComparison.OrdinalIgnoreCase)
-            && probe.MagicPrefix is [0, 0, 1, 0, ..];
+            && ((Path.GetExtension(logicalPath).Equals(".ico", StringComparison.OrdinalIgnoreCase)
+                    && probe.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase)
+                    && probe.MagicPrefix is [0, 0, 1, 0, ..])
+                || (Path.GetExtension(logicalPath).Equals(".svg", StringComparison.OrdinalIgnoreCase)
+                    && probe.Extension.Equals(".svg", StringComparison.OrdinalIgnoreCase)
+                    && IsSvgMagic(probe.MagicPrefix)));
+
+    private static bool IsSvgMagic(byte[] magicPrefix)
+    {
+        ReadOnlySpan<byte> prefix = magicPrefix;
+        if (prefix.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }))
+            prefix = prefix[3..];
+        while (!prefix.IsEmpty && prefix[0] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+            prefix = prefix[1..];
+        return prefix.StartsWith("<svg"u8)
+            || (prefix.StartsWith("<?xml"u8) && prefix.IndexOf("<svg"u8) >= 0);
+    }
 
     public static async Task<NativeDecodedImage?> TryDecodeHandleAsync(
         SafeFileHandle sourceHandle,

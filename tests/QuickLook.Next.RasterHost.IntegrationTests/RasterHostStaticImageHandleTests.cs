@@ -91,8 +91,9 @@ public sealed class RasterHostStaticImageHandleTests
                 host.Id.ToString(),
                 "input-" + requestId);
             Assert.False(Directory.Exists(inputDirectory));
-            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+            Assert.False(TryOverwriteFile(physicalPath));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
         }
         finally
         {

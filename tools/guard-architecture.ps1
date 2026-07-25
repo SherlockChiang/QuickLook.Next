@@ -749,8 +749,11 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'TryDecodeHandleAsync\(' -or
         $rasterHostText -notmatch 'ql_decode_image_handle\(' -or
         $rasterHostText -notmatch 'EnsureCapabilities\(ql_capabilities\(\), NativeAbi\.RasterHandleInputs\)' -or
-        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.ico"') {
-        Add-Failure "RasterHost ICO previews must use the capability-checked native HANDLE decoder"
+        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.ico"' -or
+        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.svg"' -or
+        $rasterHostText -notmatch 'RetainedRasterSource' -or
+        $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.StaticImage') {
+        Add-Failure "RasterHost ICO and SVG previews must use retained leases and the capability-checked native HANDLE decoder"
     }
 }
 

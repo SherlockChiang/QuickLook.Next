@@ -48,6 +48,7 @@ var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 string inputBaseRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
 string inputRoot = Path.Combine(inputBaseRoot, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 var previewInputs = new ConcurrentDictionary<string, (string Path, SafeFileHandle Anchor)>();
+var retainedRasterSources = new ConcurrentDictionary<string, RetainedRasterSource>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 bool authenticated = false;
@@ -238,6 +239,7 @@ while (true)
                     }
                 }
                 DeletePreviewInput(close.RequestId);
+                DeleteRetainedRasterSource(close.RequestId);
                 break;
 
             default:
@@ -265,6 +267,8 @@ foreach (PdfPreviewSession session in pdfSessions.Values)
 pdfSessions.Clear();
 foreach (string requestId in previewInputs.Keys)
     DeletePreviewInput(requestId);
+foreach (string requestId in retainedRasterSources.Keys)
+    DeleteRetainedRasterSource(requestId);
 CleanupPreviewInputs(inputRoot);
 foreach (var packet in animationPackets.Values)
 {
@@ -276,7 +280,10 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
 {
     string? previousRequestId = activeRequestId;
     if (previousRequestId is not null && !string.Equals(previousRequestId, open.RequestId, StringComparison.Ordinal))
+    {
         CancelAnimationsForParent(previousRequestId);
+        DeleteRetainedRasterSource(previousRequestId);
+    }
     activeRequestId = open.RequestId;
     activeOpen = sourceHandle is null ? open : null;
     string[] existing;
@@ -294,19 +301,47 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         {
             if (sourceHandle is not null)
             {
-                using (sourceHandle)
+                try
                 {
                     if (NativeImageDecoder.UsesHandleInput(open.Path, open.Probe))
                     {
+                        var retainedSource = new RetainedRasterSource(
+                            sourceHandle,
+                            sourceLength,
+                            Path.GetFileName(open.Path),
+                            RetainedRasterOperations.StaticImage);
+                        if (!retainedRasterSources.TryAdd(open.RequestId, retainedSource))
+                        {
+                            retainedSource.Dispose();
+                            await channel.SendAsync(new PreviewError(open.RequestId, "Could not retain raster input."));
+                            return;
+                        }
+                        sourceHandle = null;
                         cts.Token.ThrowIfCancellationRequested();
                         if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
                             return;
                         activeOpen = open;
-                        await HandleNativeImageOpenAsync(
-                            open,
-                            sourceHandle,
-                            sourceLength,
-                            cts.Token);
+                        if (!retainedSource.TryAcquire(
+                                RetainedRasterOperations.StaticImage,
+                                out RetainedRasterSourceLease? lease)
+                            || lease is null)
+                        {
+                            DeleteRetainedRasterSource(open.RequestId);
+                            await surfacePublishGate.WaitAsync(cts.Token);
+                            try
+                            {
+                                if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                                    await channel.SendAsync(new PreviewError(open.RequestId, "Could not lease raster input."));
+                            }
+                            finally
+                            {
+                                surfacePublishGate.Release();
+                            }
+                            return;
+                        }
+                        using (lease)
+                            if (!await HandleNativeImageOpenAsync(open, lease, cts.Token))
+                                DeleteRetainedRasterSource(open.RequestId);
                         return;
                     }
                     var input = await CreatePreviewInputAsync(
@@ -319,6 +354,10 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                         return;
                     }
                     open = open with { Path = input.Value.Path };
+                }
+                finally
+                {
+                    sourceHandle?.Dispose();
                 }
                 cts.Token.ThrowIfCancellationRequested();
                 if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
@@ -333,6 +372,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         }
         catch (Exception ex)
         {
+            DeleteRetainedRasterSource(open.RequestId);
             DiagLog.Write("RasterHost", "open task ERROR: " + ex);
             try
             {
@@ -345,7 +385,10 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         finally
         {
             if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+            {
                 DeletePreviewInput(open.RequestId);
+                DeleteRetainedRasterSource(open.RequestId);
+            }
             lock (openCtsLock)
             {
                 if (openCts.TryGetValue(open.RequestId, out var current) && ReferenceEquals(current, cts))
@@ -356,16 +399,15 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     });
 }
 
-async Task HandleNativeImageOpenAsync(
+async Task<bool> HandleNativeImageOpenAsync(
     RasterOpen open,
-    SafeFileHandle sourceHandle,
-    long sourceLength,
+    RetainedRasterSourceLease source,
     CancellationToken cancellationToken)
 {
     NativeDecodedImage? image = await NativeImageDecoder.TryDecodeHandleAsync(
-        sourceHandle,
-        sourceLength,
-        open.Path,
+        source.Handle,
+        source.Length,
+        source.LogicalName,
         imageDecodeTimeout,
         cancellationToken,
         open.TargetWidth,
@@ -374,7 +416,7 @@ async Task HandleNativeImageOpenAsync(
     if (image is null)
     {
         await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
-        return;
+        return false;
     }
 
     await surfacePublishGate.WaitAsync(cancellationToken);
@@ -382,7 +424,7 @@ async Task HandleNativeImageOpenAsync(
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-            return;
+            return false;
         SurfaceTransfer imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
         await channel.SendAsync(new PreviewSurface(
             open.RequestId,
@@ -412,8 +454,19 @@ async Task HandleNativeImageOpenAsync(
     ImageWaveform waveform = await Task.Run(
         () => ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height),
         cancellationToken);
-    if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+    await surfacePublishGate.WaitAsync(cancellationToken);
+    try
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+            return false;
         await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
+        return true;
+    }
+    finally
+    {
+        surfacePublishGate.Release();
+    }
 }
 
 void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
@@ -946,6 +999,12 @@ void DeletePreviewInput(string requestId)
     if (!previewInputs.TryRemove(requestId, out var input)) return;
     input.Anchor.Dispose();
     DeletePreviewInputPath(input.Path);
+}
+
+void DeleteRetainedRasterSource(string requestId)
+{
+    if (retainedRasterSources.TryRemove(requestId, out var source))
+        source.Dispose();
 }
 
 static void DeletePreviewInputPath(string path)

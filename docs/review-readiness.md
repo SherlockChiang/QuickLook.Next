@@ -168,9 +168,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
   input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
   boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
-  RasterHost ICO previews now decode directly from the duplicated HANDLE without an input anchor.
-  System-codec images, GIF animation follow-up, SVG, PDF, and Shell fallback still require broader
-  adapters and retain their compatibility anchors.
+  RasterHost ICO and SVG previews now decode from independent leases on a retained HANDLE source
+  without an input anchor. System-codec images, GIF animation follow-up, PDF, and Shell fallback still
+  require broader adapters and retain their compatibility anchors.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial probe and the extracted
   archive child's downstream App/RasterHost compatibility anchor are still path-based and remain

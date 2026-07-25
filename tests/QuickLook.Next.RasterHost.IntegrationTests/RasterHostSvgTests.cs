@@ -24,11 +24,12 @@ public sealed class RasterHostSvgTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
-        string path = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.svg");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.svg");
 
         try
         {
-            await File.WriteAllTextAsync(path,
+            await File.WriteAllTextAsync(physicalPath,
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"200\"><rect width=\"400\" height=\"200\" fill=\"#2463eb\"/></svg>",
                 timeout.Token);
             await pipe.WaitForConnectionAsync(timeout.Token);
@@ -37,32 +38,19 @@ public sealed class RasterHostSvgTests
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
             string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
-            var probe = new FileProbe(path, ".svg", "<svg"u8.ToArray())
+            var probe = new FileProbe(logicalPath, ".svg", "<svg"u8.ToArray())
             {
                 Kind = "image",
-                Size = new FileInfo(path).Length,
+                Size = new FileInfo(physicalPath).Length,
             };
-            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedInput.Handle, host.SafeHandle);
             pinnedInput.Handle.Dispose();
-            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinnedInput.Length, path, probe)
+            await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinnedInput.Length, logicalPath, probe)
             {
                 TargetWidth = 100,
                 TargetHeight = 100,
             }, timeout.Token);
-
-            while (true)
-            {
-                try
-                {
-                    await File.WriteAllTextAsync(path, "not the requested svg", timeout.Token);
-                    break;
-                }
-                catch (IOException)
-                {
-                    await Task.Delay(10, timeout.Token);
-                }
-            }
 
             PreviewSurface? surface = null;
             PreviewReady? ready = null;
@@ -86,12 +74,10 @@ public sealed class RasterHostSvgTests
                 waveform = message as PreviewImageWaveform ?? waveform;
             }
 
-            string anchoredPath = Path.Combine(
-                Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId, "source.svg");
-            await using (var anchored = new FileStream(
-                anchoredPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true))
-            using (var reader = new StreamReader(anchored))
-                Assert.StartsWith("<svg", await reader.ReadToEndAsync(timeout.Token));
+            string inputDirectory = Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId);
+            Assert.False(Directory.Exists(inputDirectory));
+            Assert.False(TryOverwriteFile(physicalPath));
             Assert.Equal((100u, 50u), (surface.Width, surface.Height));
             Assert.Equal(requestId, waveform.RequestId);
             Assert.Equal((192, 96), (waveform.Waveform.Width, waveform.Waveform.Height));
@@ -100,13 +86,33 @@ public sealed class RasterHostSvgTests
             Assert.Equal("image", ready.Kind);
             Assert.Equal((100d, 50d), (ready.PreferredWidth, ready.PreferredHeight));
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
         }
         finally
         {
             try { pipe.Dispose(); } catch { }
             try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
             catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(path); } catch { }
+            try { File.Delete(physicalPath); } catch { }
         }
+    }
+
+    private static bool TryOverwriteFile(string path)
+    {
+        try
+        {
+            File.WriteAllText(path, "released");
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+            await Task.Delay(20, cancellationToken);
     }
 }

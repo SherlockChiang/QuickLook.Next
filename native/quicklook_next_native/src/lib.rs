@@ -937,18 +937,45 @@ pub unsafe extern "C" fn ql_decode_image_handle(
         let extension = Path::new(&logical_name)
             .extension()
             .and_then(|extension| extension.to_str())
-            .unwrap_or("");
-        if !extension.eq_ignore_ascii_case("ico") {
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if extension != "ico" && extension != "svg" {
             return QL_ERROR_INVALID_ARGUMENT;
         }
-        let decoded = decode_image_bgra_reader(
-            &mut file,
-            &logical_name,
-            target_width,
-            target_height,
-            cancel_cb,
-            Some(ImageFormat::Ico),
-        );
+        let decoded = if extension == "svg" {
+            if expected_length > MAX_SVG_INPUT_BYTES {
+                return QL_ERROR_LIMIT_EXCEEDED;
+            }
+            let mut data = Vec::with_capacity(expected_length as usize);
+            let mut chunk = [0u8; 64 * 1024];
+            loop {
+                if cancel_requested(cancel_cb) {
+                    return QL_ERROR_CANCELLED;
+                }
+                let read = match file.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(_) => return QL_ERROR_IO,
+                };
+                if data.len().saturating_add(read) > expected_length as usize {
+                    return QL_ERROR_LENGTH_MISMATCH;
+                }
+                data.extend_from_slice(&chunk[..read]);
+            }
+            if data.len() as u64 != expected_length {
+                return QL_ERROR_LENGTH_MISMATCH;
+            }
+            decode_svg_bgra_bytes(&data, target_width, target_height, cancel_cb)
+        } else {
+            decode_image_bgra_reader(
+                &mut file,
+                &logical_name,
+                target_width,
+                target_height,
+                cancel_cb,
+                Some(ImageFormat::Ico),
+            )
+        };
         let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
             match decoded {
                 Some(decoded) => decoded,
@@ -1291,20 +1318,46 @@ fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, can
     Some((width, height, decoded))
 }
 
+const MAX_SVG_INPUT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SVG_MARKUP_TOKENS: usize = 100_000;
+
 fn decode_svg_bgra(
     path: &str,
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
 ) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
-    const MAX_SVG_INPUT_BYTES: u64 = 16 * 1024 * 1024;
-
     if fs::metadata(path).ok()?.len() > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
         return None;
     }
 
     let decode_start = Instant::now();
     let data = fs::read(path).ok()?;
+    decode_svg_bgra_bytes_timed(&data, target_width, target_height, cancel_cb, decode_start)
+}
+
+fn decode_svg_bgra_bytes(
+    data: &[u8],
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+    if data.len() as u64 > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
+        return None;
+    }
+    decode_svg_bgra_bytes_timed(data, target_width, target_height, cancel_cb, Instant::now())
+}
+
+fn decode_svg_bgra_bytes_timed(
+    data: &[u8],
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    decode_start: Instant,
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+    if !svg_markup_budget_ok(data, cancel_cb) {
+        return None;
+    }
     let mut options = resvg::usvg::Options::default();
     options.image_href_resolver.resolve_data = Box::new(|_, _, _| None);
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
@@ -1315,7 +1368,7 @@ fn decode_svg_bgra(
             Arc::new(database)
         })
         .clone();
-    let tree = resvg::usvg::Tree::from_data(&data, &options).ok()?;
+    let tree = resvg::usvg::Tree::from_data(data, &options).ok()?;
     let original = tree.size();
     let original_width = original.width().ceil() as u32;
     let original_height = original.height().ceil() as u32;
@@ -1350,6 +1403,22 @@ fn decode_svg_bgra(
     }
     let convert_ms = elapsed_ms_u32(convert_start);
     Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+}
+
+fn svg_markup_budget_ok(data: &[u8], cancel_cb: Option<CancelCallback>) -> bool {
+    let mut tokens = 0usize;
+    for (index, byte) in data.iter().enumerate() {
+        if index % 65_536 == 0 && cancel_requested(cancel_cb) {
+            return false;
+        }
+        if *byte == b'<' {
+            tokens += 1;
+            if tokens > MAX_SVG_MARKUP_TOKENS {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
@@ -4629,6 +4698,59 @@ mod handle_v2_tests {
             QL_ERROR_MALFORMED
         );
         assert_eq!(required, 0);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn static_image_handle_decodes_svg_without_path_or_external_resources() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+            <image href="missing.png" width="40" height="20"/>
+            <rect width="20" height="20" fill="#2463eb"/>
+        </svg>"##;
+        let (path, mut file) = create_input("bin", svg);
+        file.seek(SeekFrom::Start(9)).expect("position SVG handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"missing-logical.svg";
+        let mut required = 0usize;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 20);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 10);
+        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 40);
+        assert_eq!(u32::from_le_bytes(packet[12..16].try_into().unwrap()), 20);
+        assert_eq!(file.stream_position().unwrap(), position);
+        assert!(packet[28..].chunks_exact(4).any(|pixel| pixel[3] != 0));
+
         drop(file);
         let _ = fs::remove_file(path);
     }
