@@ -22,7 +22,16 @@ left visible instead of hidden behind vague TODOs.
 - Legacy contracts are explicitly documented as reference/plugin contracts.
   `PreviewResult.Bgra` is marked obsolete and the hot path uses Rust/native JSON
   plus shared raster surfaces instead.
-- Native text and XML preview boundaries are hardened:
+- Native Reader and XML preview boundaries are hardened:
+  - ABI 2 text, executable, and torrent previews accept the authenticated ParserHost disk-file
+    handle directly, validate its exact length, and reopen it with an independent file position
+    before Rust reads it.
+  - Plain text, Markdown, CSV, TSV, executable metadata, and torrent listings no longer create
+    ParserHost input anchors or reopen the logical source path.
+  - Executable reads remain capped at a cancellable 4 MiB prefix. Torrent reads are exact and
+    cancellable with a 16 MiB cap before the existing depth-64/node-100000 bencode limits.
+  - The new HANDLE ABI has stable status codes, exact output-size negotiation, panic containment,
+    capability detection, and direct invalid-handle/file-position tests.
   - UTF-8 text preview truncation backs up to a valid char boundary.
   - UTF-16 BOM text truncation avoids dangling half code units.
   - Office preview text truncation is char-boundary safe.
@@ -64,12 +73,18 @@ left visible instead of hidden behind vague TODOs.
 Run these from the repository root:
 
 ```powershell
-cargo test --manifest-path native\quicklook_next_native\Cargo.toml
-cargo build --release --manifest-path native\quicklook_next_native\Cargo.toml
-powershell -ExecutionPolicy Bypass -File tools\smoke-native.ps1
-powershell -ExecutionPolicy Bypass -File tools\smoke-exif-map.ps1
+cargo test --locked --manifest-path native\quicklook_next_native\Cargo.toml
+cargo build --release --locked --manifest-path native\quicklook_next_native\Cargo.toml
+dotnet test tests\QuickLook.Next.Core.Tests\QuickLook.Next.Core.Tests.csproj -c Release
+dotnet test tests\QuickLook.Next.ParserHost.IntegrationTests\QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release
+pwsh -NoProfile -File tools\smoke-native.ps1
+pwsh -NoProfile -File tools\smoke-exif-map.ps1
 dotnet build QuickLook.Next.slnx -c Release
-powershell -ExecutionPolicy Bypass -File tools\guard-architecture.ps1 -SkipDist
+pwsh -NoProfile -File tools\guard-performance-bounds.ps1
+pwsh -NoProfile -File tools\guard-format-registry.ps1
+pwsh -NoProfile -File tools\guard-stale-callbacks.ps1
+pwsh -NoProfile -File tools\guard-architecture.ps1 -SkipDist
+git diff --check
 ```
 
 Useful targeted checks:
@@ -121,6 +136,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - Deep professional parsers remain intentionally staged: full MediaInfo tracks,
   CHM topic extraction, Outlook MSG property streams, and database schema
   browsing should only be added with bounded parsers and no WebView fallback.
+- Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
+  input. SQLite is next but needs an explicit WAL/SHM companion-handle design, while
+  archive/Office/ebook and raster formats require broader adapters.
 
 ## Why Legacy Plugin Source Remains
 

@@ -269,6 +269,159 @@ if (Test-Path $parserHostProgram) {
     if ($parserHostProgramText -notmatch 'QUICKLOOK_NEXT_ARCHIVE_ROOT') {
         Add-Failure "ParserHost archive extraction must use its per-launch writable root"
     }
+    $handleCaseStart = $parserHostProgramText.IndexOf("case PreviewOpenHandle open", [StringComparison]::Ordinal)
+    $handleCaseEnd = if ($handleCaseStart -ge 0) {
+        $parserHostProgramText.IndexOf("case PreviewClose close", $handleCaseStart, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $handleCaseText = if ($handleCaseStart -ge 0 -and $handleCaseEnd -gt $handleCaseStart) {
+        $parserHostProgramText.Substring($handleCaseStart, $handleCaseEnd - $handleCaseStart)
+    } else {
+        ""
+    }
+    $takeHandle = $handleCaseText.IndexOf(
+        "sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength)",
+        [StringComparison]::Ordinal)
+    $envelopeValidation = $handleCaseText.IndexOf(
+        "if (!IsValidRequestId(open.RequestId)",
+        [StringComparison]::Ordinal)
+    $probeLengthMismatch = $handleCaseText.IndexOf(
+        "open.Probe.Size != open.SourceLength",
+        [StringComparison]::Ordinal)
+    $invalidHandleDispose = if ($envelopeValidation -ge 0) {
+        $handleCaseText.IndexOf("sourceHandle.Dispose();", $envelopeValidation, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $invalidHandleBreak = if ($invalidHandleDispose -ge 0) {
+        $handleCaseText.IndexOf("break;", $invalidHandleDispose, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $activePreviewCancellation = $handleCaseText.IndexOf(
+        "if (activePreviewRequestId is not null)",
+        [StringComparison]::Ordinal)
+    $requestRegistration = $handleCaseText.IndexOf(
+        "if (!requests.TryAdd(open.RequestId, handleCts))",
+        [StringComparison]::Ordinal)
+    $duplicateHandleDispose = if ($requestRegistration -ge 0) {
+        $handleCaseText.IndexOf("sourceHandle.Dispose();", $requestRegistration, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $duplicateHandleBreak = if ($duplicateHandleDispose -ge 0) {
+        $handleCaseText.IndexOf("break;", $duplicateHandleDispose, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $handleTask = $handleCaseText.IndexOf("_ = Task.Run(async () =>", [StringComparison]::Ordinal)
+    $ownedHandleScope = $handleCaseText.IndexOf(
+        "using var ownedSourceHandle = sourceHandle;",
+        [StringComparison]::Ordinal)
+    if ($takeHandle -lt 0 -or
+        $envelopeValidation -le $takeHandle -or
+        $probeLengthMismatch -le $envelopeValidation -or
+        $invalidHandleDispose -le $probeLengthMismatch -or
+        $invalidHandleBreak -le $invalidHandleDispose -or
+        $activePreviewCancellation -le $invalidHandleBreak -or
+        $requestRegistration -le $activePreviewCancellation -or
+        $duplicateHandleDispose -le $requestRegistration -or
+        $duplicateHandleBreak -le $duplicateHandleDispose -or
+        $handleTask -le $duplicateHandleBreak -or
+        $ownedHandleScope -le $handleTask) {
+        Add-Failure "ParserHost must adopt each transferred HANDLE before validation and dispose every early-return path"
+    }
+    $directHandleBranch = $handleCaseText.IndexOf(
+        "if (ParserNativePreview.UsesHandleInput(kind))",
+        [StringComparison]::Ordinal)
+    $handlePreview = $handleCaseText.IndexOf("ParserNativePreview.TryPreviewHandle(", [StringComparison]::Ordinal)
+    $directHandleReturn = if ($handlePreview -ge 0) {
+        $handleCaseText.IndexOf("return;", $handlePreview, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $anchorCreation = $handleCaseText.IndexOf("var input = CreatePreviewInput(", [StringComparison]::Ordinal)
+    $directHandleBranchEndsBeforeAnchor = $handleCaseText -match 'if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)\s*\{[\s\S]*ParserNativePreview\.TryPreviewHandle\([\s\S]*\r?\n\s*return;\s*\r?\n\s*\}\s*\r?\n\s*var input = CreatePreviewInput\('
+    if ($directHandleBranch -lt 0 -or $handlePreview -le $directHandleBranch -or $directHandleReturn -le $handlePreview -or $anchorCreation -le $directHandleReturn -or -not $directHandleBranchEndsBeforeAnchor) {
+        Add-Failure "ParserHost text, executable, and torrent previews must use the native HANDLE ABI before any input anchor is created"
+    }
+    if ($handleCaseText -notmatch 'ParserNativePreview\.TryPreviewHandle\(\s*kind,\s*ownedSourceHandle,' -or
+        $handleCaseText -notmatch 'CreatePreviewInput\([^;]*ownedSourceHandle,') {
+        Add-Failure "ParserHost must pass only the adopted owning HANDLE to native and anchored preview paths"
+    }
+
+    $parserNativePreviewPath = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
+    $parserNativePreviewText = Get-Content -LiteralPath $parserNativePreviewPath -Raw
+    $handleMappings = @{
+        text = "ql_preview_text_handle"
+        executable = "ql_preview_executable_handle"
+        torrent = "ql_preview_torrent_handle"
+    }
+    foreach ($mapping in $handleMappings.GetEnumerator()) {
+        $kind = [Regex]::Escape($mapping.Key)
+        $entryPoint = [Regex]::Escape($mapping.Value)
+        if ($parserNativePreviewText -notmatch "`"$kind`"\s*=>\s*$entryPoint") {
+            Add-Failure "ParserHost HANDLE routing for '$($mapping.Key)' must call $($mapping.Value)"
+        }
+    }
+    if ($parserNativePreviewText -notmatch 'UsesHandleInput[\s\S]*"text"[\s\S]*"executable"[\s\S]*"torrent"' -or
+        $parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
+        Add-Failure "ParserHost direct HANDLE routing must include text, executable, and torrent"
+    }
+
+    $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
+    $nativeAbiText = Get-Content -LiteralPath $nativeAbiPath -Raw
+    if ($nativeAbiText -notmatch 'HandleText\s*=\s*1UL\s*<<\s*0' -or
+        $nativeAbiText -notmatch 'HandleExecutable\s*=\s*1UL\s*<<\s*1' -or
+        $nativeAbiText -notmatch 'HandleTorrent\s*=\s*1UL\s*<<\s*2' -or
+        $nativeAbiText -notmatch 'ParserHandleInputs\s*=\s*HandleText\s*\|\s*HandleExecutable\s*\|\s*HandleTorrent') {
+        Add-Failure "Native ABI HANDLE capability bits must remain stable and require all three direct parsers"
+    }
+
+    $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
+    $nativeInputText = Get-Content -LiteralPath $nativeInputPath -Raw
+    $fileTypeValidation = $nativeInputText.IndexOf("GetFileType(source)", [StringComparison]::Ordinal)
+    $fileSizeValidation = $nativeInputText.IndexOf("GetFileSizeEx(source", [StringComparison]::Ordinal)
+    $reopenFile = $nativeInputText.IndexOf("ReOpenFile(", [StringComparison]::Ordinal)
+    $ownReopenedFile = $nativeInputText.IndexOf("fs::File::from_raw_handle(", [StringComparison]::Ordinal)
+    if ($nativeInputText -match 'BorrowedHandle::' -or
+        $nativeInputText -match 'use\s+std::os::windows::io::\{[^}]*BorrowedHandle' -or
+        $fileTypeValidation -lt 0 -or
+        $fileSizeValidation -le $fileTypeValidation -or
+        $reopenFile -le $fileSizeValidation -or
+        $ownReopenedFile -le $reopenFile) {
+        Add-Failure "Rust HANDLE input must validate with Win32, ReOpenFile, then own only the reopened handle"
+    }
+
+    $nativeLibPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+    $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
+    foreach ($entryPoint in @(
+        "ql_preview_text_handle",
+        "ql_preview_executable_handle",
+        "ql_preview_torrent_handle"
+    )) {
+        $signature = "pub unsafe extern `"C`" fn $entryPoint("
+        $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
+        $entryEnd = if ($entryStart -ge 0) {
+            $nativeLibText.IndexOf("#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+        } else {
+            -1
+        }
+        $entryBody = if ($entryStart -ge 0 -and $entryEnd -gt $entryStart) {
+            $nativeLibText.Substring($entryStart, $entryEnd - $entryStart)
+        } else {
+            ""
+        }
+        if ($entryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $entryBody -notmatch 'preview_handle_v2\(') {
+            Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
+        }
+    }
+    if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
+        $nativeLibText -match 'fs::File::open\(\s*logical_name') {
+        Add-Failure "Native HANDLE logical names must be reduced to basenames and never opened as paths"
+    }
 }
 
 $mainWindowPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"

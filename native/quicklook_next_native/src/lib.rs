@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::mem::size_of;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{AnimationDecoder, ImageDecoder, ImageReader};
 
+mod native_input;
 mod preview;
 
 use windows::core::*;
@@ -67,11 +69,30 @@ thread_local! {
 // A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
-const QL_NATIVE_ABI_VERSION: u32 = 1;
+const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
+const QL_NATIVE_ABI_VERSION: u32 = 2;
+const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
+const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
+const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
+
+const QL_OK: i32 = 0;
+const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
+const QL_ERROR_BUFFER_TOO_SMALL: i32 = -2;
+const QL_ERROR_CANCELLED: i32 = -3;
+const QL_ERROR_MALFORMED: i32 = -4;
+const QL_ERROR_IO: i32 = -5;
+const QL_ERROR_INVALID_HANDLE: i32 = -6;
+const QL_ERROR_LENGTH_MISMATCH: i32 = -7;
+const QL_ERROR_INTERNAL: i32 = -8;
 
 #[no_mangle]
 pub extern "C" fn ql_abi_version() -> u32 {
     QL_NATIVE_ABI_VERSION
+}
+
+#[no_mangle]
+pub extern "C" fn ql_capabilities() -> u64 {
+    QL_FEATURE_HANDLE_TEXT | QL_FEATURE_HANDLE_EXECUTABLE | QL_FEATURE_HANDLE_TORRENT
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -100,6 +121,18 @@ fn utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
     }
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
     std::str::from_utf8(bytes).ok()
+}
+
+/// Copy a bounded UTF-8 FFI argument into Rust-owned storage.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes for the duration of this call.
+unsafe fn owned_utf8_arg(ptr: *const u8, len: usize, max_len: usize) -> Option<String> {
+    if ptr.is_null() || len > max_len {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
 fn optional_utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
@@ -2714,6 +2747,208 @@ pub extern "C" fn ql_preview_database_cancelable(
     write_json_out(&json, out_buf, out_cap)
 }
 
+/// Shared implementation for ABI 2 HANDLE preview entry points.
+///
+/// # Safety
+/// The pointer and handle requirements are the same as the exported HANDLE entry points. The caller
+/// must contain this function in `ffi_boundary`.
+unsafe fn preview_handle_v2(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+    renderer: impl FnOnce(&mut fs::File, &str, i64, i64) -> std::result::Result<String, i32>,
+) -> i32 {
+    if out_required.is_null() {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    unsafe { *out_required = 0 };
+    if out_buf.is_null() && out_cap != 0 {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    if cancel_requested(cancel_cb) {
+        return QL_ERROR_CANCELLED;
+    }
+    let logical_name = match unsafe {
+        owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES)
+    } {
+        Some(value) => value,
+        None => return QL_ERROR_INVALID_ARGUMENT,
+    };
+    let logical_name = match std::path::Path::new(&logical_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+    {
+        Some(value) if !value.is_empty() && value != "." && value != ".." => value,
+        _ => return QL_ERROR_INVALID_ARGUMENT,
+    };
+
+    let mut file = match native_input::reopen_borrowed_disk_file(source_handle, expected_length) {
+        Ok(file) => file,
+        Err(native_input::NativeInputError::InvalidHandle) => return QL_ERROR_INVALID_HANDLE,
+        Err(native_input::NativeInputError::Io) => return QL_ERROR_IO,
+        Err(native_input::NativeInputError::LengthMismatch) => {
+            return QL_ERROR_LENGTH_MISMATCH;
+        }
+    };
+    let size = match i64::try_from(expected_length) {
+        Ok(size) => size,
+        Err(_) => return QL_ERROR_LENGTH_MISMATCH,
+    };
+    let modified_unix = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0);
+
+    let rendered = renderer(&mut file, logical_name, size, modified_unix);
+    if cancel_requested(cancel_cb) {
+        return QL_ERROR_CANCELLED;
+    }
+    let json = match rendered {
+        Ok(json) => json,
+        Err(status) => return status,
+    };
+    if json.is_empty() {
+        return QL_ERROR_INTERNAL;
+    }
+    unsafe { write_v2_out(json.as_bytes(), out_buf, out_cap, out_required) }
+}
+
+fn reader_preview_status(error: preview::ReaderPreviewError) -> i32 {
+    match error {
+        preview::ReaderPreviewError::Cancelled => QL_ERROR_CANCELLED,
+        preview::ReaderPreviewError::Io => QL_ERROR_IO,
+        preview::ReaderPreviewError::Malformed => QL_ERROR_MALFORMED,
+        preview::ReaderPreviewError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
+    }
+}
+
+/// Render text from a borrowed Windows file handle.
+///
+/// # Safety
+/// `logical_name_utf8` must be readable for `logical_name_len` bytes. `out_required` must point to
+/// writable `usize` storage. When `out_buf` is non-null it must be writable for `out_cap` bytes and
+/// must not alias Rust-owned output storage. A non-invalid source handle must remain open and stable
+/// for the complete call. The caller retains ownership; Rust reopens the file with an independent
+/// position and never resolves `logical_name` as a path.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_text_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, _| {
+                let json = preview::render_text_reader(file, logical_name, cancel_cb);
+                if json.is_empty() {
+                    Err(if cancel_requested(cancel_cb) {
+                        QL_ERROR_CANCELLED
+                    } else {
+                        QL_ERROR_IO
+                    })
+                } else {
+                    Ok(json)
+                }
+            },
+        )
+    })
+}
+
+/// Render executable metadata from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_executable_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, size, modified_unix| {
+                preview::render_executable_reader(
+                    file,
+                    logical_name,
+                    size,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
+/// Render torrent metadata from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_torrent_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, size, modified_unix| {
+                preview::render_torrent_reader(file, logical_name, size, modified_unix, cancel_cb)
+                    .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn ql_preview_executable_cancelable(
     path_utf8: *const u8,
@@ -2967,7 +3202,479 @@ fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {
     }
     needed as i32
 }
-    #[test]
-    fn native_abi_version_is_stable() {
-        assert_eq!(ql_abi_version(), 1);
+
+/// # Safety
+/// `out_required` must be writable and, when output is copied, `out_buf` must be writable for
+/// `out_cap` bytes and must not overlap `bytes`.
+unsafe fn write_v2_out(
+    bytes: &[u8],
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+) -> i32 {
+    unsafe { *out_required = bytes.len() };
+    if bytes.len() > out_cap {
+        return QL_ERROR_BUFFER_TOO_SMALL;
     }
+    if !bytes.is_empty() {
+        if out_buf.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len()) };
+    }
+    QL_OK
+}
+
+fn ffi_boundary(body: impl FnOnce() -> i32) -> i32 {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or(QL_ERROR_INTERNAL)
+}
+
+#[test]
+fn native_abi_version_is_stable() {
+    assert_eq!(ql_abi_version(), 2);
+    let required =
+        QL_FEATURE_HANDLE_TEXT | QL_FEATURE_HANDLE_EXECUTABLE | QL_FEATURE_HANDLE_TORRENT;
+    assert_eq!(ql_capabilities() & required, required);
+}
+
+#[cfg(test)]
+mod handle_v2_tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom};
+    use std::os::windows::io::AsRawHandle;
+    use std::path::PathBuf;
+
+    fn create_input(extension: &str, bytes: &[u8]) -> (PathBuf, fs::File) {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-handle-v2-{}-{}.{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ));
+        fs::write(&path, bytes).expect("write handle input");
+        let file = fs::File::open(&path).expect("open handle input");
+        (path, file)
+    }
+
+    extern "C" fn always_cancel() -> bool {
+        true
+    }
+
+    fn call_text_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_text_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_executable_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_executable_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_torrent_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_torrent_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    type SafeHandleCall =
+        fn(isize, u64, *const u8, usize, *mut u8, usize, *mut usize, Option<CancelCallback>) -> i32;
+
+    fn preview_json_with(
+        call: SafeHandleCall,
+        file: &fs::File,
+        logical_name: &str,
+    ) -> serde_json::Value {
+        let logical_name = logical_name.as_bytes();
+        let mut required = 0usize;
+        let status = call(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > 0);
+
+        let mut output = vec![0u8; required];
+        let status = call(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        serde_json::from_slice(&output[..required]).expect("handle preview JSON")
+    }
+
+    fn preview_json(file: &fs::File, logical_name: &str) -> serde_json::Value {
+        preview_json_with(call_text_handle, file, logical_name)
+    }
+
+    #[test]
+    fn text_handle_preview_obeys_buffer_contract_without_moving_caller_position() {
+        let (path, mut file) = create_input("md", b"# Handle preview\n\nRust input");
+        file.seek(SeekFrom::Start(5))
+            .expect("position caller handle");
+        let original_position = file.stream_position().expect("read caller position");
+        let logical_name = b"README.md";
+        let expected_length = file.metadata().unwrap().len();
+
+        let mut required = usize::MAX;
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > 8);
+        assert_eq!(file.stream_position().unwrap(), original_position);
+
+        let mut small = [0u8; 8];
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            small.as_mut_ptr(),
+            small.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > small.len());
+        assert_eq!(file.stream_position().unwrap(), original_position);
+
+        let exact_length = required;
+        let mut exact = vec![0u8; exact_length];
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            exact.as_mut_ptr(),
+            exact.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        assert_eq!(required, exact_length);
+        let json: serde_json::Value =
+            serde_json::from_slice(&exact).expect("exact handle preview JSON");
+        assert_eq!(json["kind"], "markdown");
+        assert_eq!(json["title"], "README.md");
+        let rendered = json.to_string();
+        assert!(rendered.contains("Handle preview"));
+        assert!(rendered.contains("Rust input"));
+        assert_eq!(file.stream_position().unwrap(), original_position);
+
+        let mut oversized = vec![0u8; exact_length + 32];
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            oversized.as_mut_ptr(),
+            oversized.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        assert_eq!(required, exact_length);
+        assert_eq!(file.stream_position().unwrap(), original_position);
+
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            oversized.as_mut_ptr(),
+            oversized.len(),
+            std::ptr::null_mut(),
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_ARGUMENT);
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            expected_length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            1,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_ARGUMENT);
+        assert_eq!(
+            file.stream_position().expect("caller position after FFI"),
+            original_position
+        );
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn text_handle_preview_rejects_invalid_non_disk_and_wrong_length_handles() {
+        let logical_name = b"sample.txt";
+        let mut output = [0u8; 128];
+        let mut required = usize::MAX;
+        let status = call_text_handle(
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            Some(always_cancel),
+        );
+        assert_eq!(status, QL_ERROR_CANCELLED);
+        assert_eq!(required, 0);
+
+        let status = call_text_handle(
+            0,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_HANDLE);
+        assert_eq!(required, 0);
+
+        let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
+        let status = call_text_handle(
+            thread.0 as isize,
+            0,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_HANDLE);
+
+        let (path, file) = create_input("txt", b"length check");
+        let status = call_text_handle(
+            file.as_raw_handle() as isize,
+            file.metadata().unwrap().len() + 1,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_LENGTH_MISMATCH);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn text_handle_preview_uses_only_a_bounded_logical_filename() {
+        let (markdown_path, markdown_file) =
+            create_input("txt", b"# Logical name controls format\n");
+        let markdown = preview_json(&markdown_file, r"C:\missing\README.md");
+        assert_eq!(markdown["kind"], "markdown");
+        assert_eq!(markdown["title"], "README.md");
+
+        let (csv_path, csv_file) = create_input("txt", "名称,值\nRust,安全\n".as_bytes());
+        let csv = preview_json(&csv_file, "资料.csv");
+        assert_eq!(csv["kind"], "table");
+        assert!(csv["title"].as_str().unwrap().starts_with("资料.csv"));
+
+        let (tsv_path, tsv_file) = create_input("txt", b"name\tvalue\nRust\thandle\n");
+        let tsv = preview_json(&tsv_file, "data.tsv");
+        assert_eq!(tsv["kind"], "table");
+        assert!(tsv["title"].as_str().unwrap().starts_with("data.tsv"));
+
+        let mut required = usize::MAX;
+        let mut output = [0u8; 128];
+        let overlong_name = vec![b'a'; MAX_LOGICAL_NAME_BYTES + 1];
+        let status = call_text_handle(
+            markdown_file.as_raw_handle() as isize,
+            markdown_file.metadata().unwrap().len(),
+            overlong_name.as_ptr(),
+            overlong_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_ARGUMENT);
+        assert_eq!(required, 0);
+        let status = call_text_handle(
+            markdown_file.as_raw_handle() as isize,
+            markdown_file.metadata().unwrap().len(),
+            std::ptr::null(),
+            0,
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_INVALID_ARGUMENT);
+
+        drop(markdown_file);
+        drop(csv_file);
+        drop(tsv_file);
+        let _ = fs::remove_file(markdown_path);
+        let _ = fs::remove_file(csv_path);
+        let _ = fs::remove_file(tsv_path);
+    }
+
+    #[test]
+    fn executable_handle_preview_reads_from_zero_without_moving_caller_position() {
+        let mut bytes = vec![0u8; 512];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84usize;
+        bytes[coff..coff + 2].copy_from_slice(&0x8664u16.to_le_bytes());
+        bytes[coff + 4..coff + 8].copy_from_slice(&0x6543_2100u32.to_le_bytes());
+        bytes[coff + 16..coff + 18].copy_from_slice(&0x70u16.to_le_bytes());
+        bytes[coff + 18..coff + 20].copy_from_slice(&0x0022u16.to_le_bytes());
+        let optional = coff + 20;
+        bytes[optional..optional + 2].copy_from_slice(&0x20Bu16.to_le_bytes());
+        bytes[optional + 16..optional + 20].copy_from_slice(&0x1234u32.to_le_bytes());
+        bytes[optional + 24..optional + 32].copy_from_slice(&0x1400_0000u64.to_le_bytes());
+        bytes[optional + 32..optional + 36].copy_from_slice(&0x1000u32.to_le_bytes());
+        bytes[optional + 36..optional + 40].copy_from_slice(&0x200u32.to_le_bytes());
+        bytes[optional + 56..optional + 60].copy_from_slice(&0x5000u32.to_le_bytes());
+        bytes[optional + 68..optional + 70].copy_from_slice(&3u16.to_le_bytes());
+
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(19))
+            .expect("position executable handle");
+        let position = file.stream_position().unwrap();
+        let json = preview_json_with(
+            call_executable_handle,
+            &file,
+            r"C:\missing\logical-demo.exe",
+        );
+        assert_eq!(json["kind"], "executable");
+        assert_eq!(json["title"], "logical-demo.exe - x64");
+        assert!(json["text"].as_str().unwrap().contains("Machine: x64"));
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn torrent_handle_preview_is_bounded_and_reports_malformed_input() {
+        let torrent = b"d8:announce16:https://tracker/4:infod6:lengthi123e4:name10:sample.binee";
+        let (path, mut file) = create_input("bin", torrent);
+        file.seek(SeekFrom::Start(7))
+            .expect("position torrent handle");
+        let position = file.stream_position().unwrap();
+        let json = preview_json_with(call_torrent_handle, &file, r"C:\missing\logical.torrent");
+        assert_eq!(json["kind"], "torrent");
+        assert_eq!(json["title"], "sample.bin - 1 files");
+        assert!(json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Tracker: https://tracker/"));
+        assert_eq!(file.stream_position().unwrap(), position);
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let (malformed_path, malformed_file) = create_input("bin", b"not-bencode");
+        let logical_name = b"broken.torrent";
+        let mut required = usize::MAX;
+        let status = call_torrent_handle(
+            malformed_file.as_raw_handle() as isize,
+            malformed_file.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+            None,
+        );
+        assert_eq!(status, QL_ERROR_MALFORMED);
+        assert_eq!(required, 0);
+        drop(malformed_file);
+        let _ = fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn ffi_boundary_contains_panics() {
+        assert_eq!(ffi_boundary(|| panic!("test panic")), QL_ERROR_INTERNAL);
+    }
+}

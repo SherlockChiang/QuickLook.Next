@@ -260,6 +260,14 @@ const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BENCODE_DEPTH: usize = 64;
 const MAX_BENCODE_NODES: usize = 100_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReaderPreviewError {
+    Cancelled,
+    Io,
+    Malformed,
+    LengthMismatch,
+}
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ANDROID_RESOURCE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
@@ -733,11 +741,72 @@ fn file_size_modified(path: &str) -> (i64, i64) {
 }
 
 fn read_file_prefix(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
-    let file = fs::File::open(path).ok()?;
-    let mut reader = file.take(max_bytes as u64);
+    let mut file = fs::File::open(path).ok()?;
+    read_reader_prefix(&mut file, max_bytes)
+}
+
+fn read_reader_prefix<R: Read>(reader: &mut R, max_bytes: usize) -> Option<Vec<u8>> {
+    let mut reader = reader.take(max_bytes as u64);
     let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
     reader.read_to_end(&mut bytes).ok()?;
     Some(bytes)
+}
+
+fn read_reader_prefix_cancelable<R: Read>(
+    reader: &mut R,
+    max_bytes: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<Vec<u8>, ReaderPreviewError> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    let mut chunk = [0u8; 64 * 1024];
+    while bytes.len() < max_bytes {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let remaining = (max_bytes - bytes.len()).min(chunk.len());
+        match reader.read(&mut chunk[..remaining]) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReaderPreviewError::Io),
+        }
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(bytes)
+}
+
+fn read_reader_exact_bounded_cancelable<R: Read>(
+    reader: &mut R,
+    expected_bytes: u64,
+    max_bytes: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<Vec<u8>, ReaderPreviewError> {
+    let mut bytes = Vec::with_capacity(expected_bytes.min(64 * 1024) as usize);
+    let mut chunk = [0u8; 64 * 1024];
+    let read_limit = expected_bytes
+        .saturating_add(1)
+        .min(max_bytes.saturating_add(1));
+    while (bytes.len() as u64) < read_limit {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let remaining = (read_limit - bytes.len() as u64).min(chunk.len() as u64) as usize;
+        match reader.read(&mut chunk[..remaining]) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(ReaderPreviewError::Io),
+        }
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    if bytes.len() as u64 != expected_bytes {
+        return Err(ReaderPreviewError::LengthMismatch);
+    }
+    Ok(bytes)
 }
 
 fn parse_jpeg_exif_metadata(path: &str) -> Option<ExifMetadata> {
@@ -1116,9 +1185,11 @@ fn exif_value_bytes(tiff: &[u8], entry: usize, endian: u8) -> Option<&[u8]> {
     tiff.get(offset..offset.checked_add(len)?)
 }
 
-fn read_text_preview_bytes(path: &str) -> Option<(Vec<u8>, bool)> {
-    let mut bytes = read_file_prefix(path, MAX_TEXT_BYTES + 1)?;
-
+fn read_text_preview_bytes<R: Read>(
+    reader: &mut R,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(Vec<u8>, bool)> {
+    let mut bytes = read_reader_prefix_cancelable(reader, MAX_TEXT_BYTES + 1, cancel_cb).ok()?;
     let truncated = bytes.len() > MAX_TEXT_BYTES;
     if truncated {
         bytes.truncate(MAX_TEXT_BYTES);
@@ -1260,13 +1331,29 @@ fn known_text_filenames() -> &'static [(&'static str, &'static str, &'static str
 /// Produce JSON for a text preview: `{"kind":"text","title":"...","format":"...","language":"...","text":"..."}`.
 /// Returns empty string on failure.
 pub fn render_text(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let ext = Path::new(path)
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
+    };
+    render_text_reader(&mut file, path, cancel_cb)
+}
+
+pub fn render_text_reader<R: Read>(
+    reader: &mut R,
+    logical_name: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> String {
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    let ext = Path::new(logical_name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| format!(".{}", e.to_ascii_lowercase()))
         .unwrap_or_default();
-    let filename = Path::new(path)
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -1282,11 +1369,13 @@ pub fn render_text(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> St
         .map(|(_, f, l)| (*f, *l))
         .unwrap_or(("plain", "text"));
 
-    let (bytes, truncated) = match read_text_preview_bytes(path) {
+    let (bytes, truncated) = match read_text_preview_bytes(reader, cancel_cb) {
         Some(result) => result,
         None => return String::new(),
     };
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
 
     // BOM-aware Unicode first, then strict UTF-8 and Windows-1252 for legacy configuration files.
     let text = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
@@ -1302,7 +1391,9 @@ pub fn render_text(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> St
     };
 
     let mut text = text.into_owned();
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     if format == "markdown" {
         return render_markdown_json(filename, &text, truncated, cancel_cb);
     }
@@ -10722,22 +10813,41 @@ fn format_duration(seconds: f64) -> String {
 // ── Executable preview ──────────────────────────────────────────────────────
 
 pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    let filename = Path::new(path)
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    let (size, modified_unix) = file_size_modified(path);
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
+    };
+    render_executable_reader(&mut file, path, size, modified_unix, cancel_cb).unwrap_or_default()
+}
+
+pub fn render_executable_reader<R: Read>(
+    reader: &mut R,
+    logical_name: &str,
+    size: i64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    let (size, modified_unix) = file_size_modified(path);
-    let bytes = match read_file_prefix(path, MAX_EXECUTABLE_HEADER_BYTES) {
-        Some(b) => b,
-        None => return String::new(),
-    };
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    let bytes = read_reader_prefix_cancelable(reader, MAX_EXECUTABLE_HEADER_BYTES, cancel_cb)?;
 
     let Some(pe) = parse_pe_headers(&bytes, cancel_cb) else {
-        return render_info(path, "executable", size, modified_unix);
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        return Ok(render_info(logical_name, "executable", size, modified_unix));
     };
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
 
     let mut text = String::new();
     text.push_str(&format!("Name: {filename}\n"));
@@ -10901,7 +11011,7 @@ pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>)
     text.push_str(&format!("File size: {}\n", format_bytes(size)));
     text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
 
-    to_json(&PreviewReadyDto {
+    Ok(to_json(&PreviewReadyDto {
         kind: "executable".to_string(),
         title: format!("{filename} - {}", pe.machine),
         format: Some("plain".to_string()),
@@ -10911,7 +11021,7 @@ pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>)
         listing: None,
         table: None,
         markdown: None,
-    })
+    }))
 }
 
 struct PeSummary {
@@ -14714,27 +14824,46 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
 // ── Torrent preview ─────────────────────────────────────────────────────────
 
 pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
     let (size, modified_unix) = file_size_modified(path);
     if size < 0 || size as u64 > MAX_TORRENT_BYTES {
         return render_info(path, "torrent", size, modified_unix);
     }
-
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return String::new(),
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
     };
-    if preview_cancelled(cancel_cb) { return String::new(); }
+    render_torrent_reader(&mut file, path, size, modified_unix, cancel_cb).unwrap_or_default()
+}
+
+pub fn render_torrent_reader<R: Read>(
+    reader: &mut R,
+    logical_name: &str,
+    size: i64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    if size < 0 || size as u64 > MAX_TORRENT_BYTES {
+        return Ok(render_info(logical_name, "torrent", size, modified_unix));
+    }
+
+    let bytes =
+        read_reader_exact_bounded_cancelable(reader, size as u64, MAX_TORRENT_BYTES, cancel_cb)?;
     let root = match parse_bencode(&bytes, cancel_cb) {
         Some((value, _)) => value,
-        None => return String::new(),
+        None if preview_cancelled(cancel_cb) => return Err(ReaderPreviewError::Cancelled),
+        None => return Err(ReaderPreviewError::Malformed),
     };
     let dict = match root {
         BValue::Dict(d) => d,
-        _ => return String::new(),
+        _ => return Err(ReaderPreviewError::Malformed),
     };
 
-    let filename = Path::new(path)
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -14744,7 +14873,7 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
     let comment = dict_get_string(&dict, b"comment").unwrap_or_default();
     let info = match dict.get(b"info".as_slice()) {
         Some(BValue::Dict(d)) => d,
-        _ => return String::new(),
+        _ => return Err(ReaderPreviewError::Malformed),
     };
 
     let name = dict_get_string(info, b"name").unwrap_or_else(|| filename.to_string());
@@ -14761,7 +14890,9 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
 
     if let Some(BValue::List(files)) = info.get(b"files".as_slice()) {
         for file in files {
-            if preview_cancelled(cancel_cb) { return String::new(); }
+            if preview_cancelled(cancel_cb) {
+                return Err(ReaderPreviewError::Cancelled);
+            }
             let BValue::Dict(file_dict) = file else {
                 continue;
             };
@@ -14781,8 +14912,8 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
                 continue;
             }
             let full_name = path_parts.join("/");
-            total_size += size;
-            file_count += 1;
+            total_size = total_size.saturating_add(size);
+            file_count = file_count.saturating_add(1);
             if entries.len() >= MAX_ARCHIVE_ENTRIES {
                 partial = true;
                 continue;
@@ -14835,7 +14966,9 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
 
     let mut items = Vec::with_capacity(entries.len());
     for (path, (name, parent, is_folder, size, packed, modified, is_encrypted)) in &entries {
-        if preview_cancelled(cancel_cb) { return String::new(); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         items.push(PreviewListingItemDto {
             name: name.clone(),
             path: path.clone(),
@@ -14863,8 +14996,10 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         summary.push_str(&format!(" - {announce}"));
     }
 
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    to_json(&PreviewReadyDto {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(to_json(&PreviewReadyDto {
         kind: "torrent".to_string(),
         title: format!("{name} - {} files", format_number(file_count as i64)),
         format: Some("plain".to_string()),
@@ -14882,11 +15017,16 @@ pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         }),
         table: None,
         markdown: None,
-    })
+    }))
 }
 
-fn parse_bencode(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) -> Option<(BValue, usize)> {
-    if preview_cancelled(cancel_cb) { return None; }
+fn parse_bencode(
+    bytes: &[u8],
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<(BValue, usize)> {
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let mut remaining_nodes = MAX_BENCODE_NODES;
     parse_bencode_at(bytes, 0, 0, &mut remaining_nodes, cancel_cb)
 }
@@ -15823,6 +15963,33 @@ mod tests {
         bytes.extend(std::iter::repeat_n(b'e', MAX_BENCODE_DEPTH + 2));
 
         assert!(parse_bencode(&bytes, None).is_none());
+    }
+
+    #[test]
+    fn bounded_exact_reader_reports_length_mismatch_and_cancellation() {
+        let mut exact = Cursor::new(b"data".to_vec());
+        assert_eq!(
+            read_reader_exact_bounded_cancelable(&mut exact, 4, 8, None),
+            Ok(b"data".to_vec())
+        );
+
+        let mut short = Cursor::new(b"abc".to_vec());
+        assert_eq!(
+            read_reader_exact_bounded_cancelable(&mut short, 4, 8, None),
+            Err(ReaderPreviewError::LengthMismatch)
+        );
+
+        let mut long = Cursor::new(b"abcde".to_vec());
+        assert_eq!(
+            read_reader_exact_bounded_cancelable(&mut long, 4, 8, None),
+            Err(ReaderPreviewError::LengthMismatch)
+        );
+
+        let mut cancelled = Cursor::new(b"data".to_vec());
+        assert_eq!(
+            read_reader_exact_bounded_cancelable(&mut cancelled, 4, 8, Some(always_cancel)),
+            Err(ReaderPreviewError::Cancelled)
+        );
     }
 
     #[test]

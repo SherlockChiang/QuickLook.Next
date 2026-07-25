@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -18,13 +19,29 @@ internal static class ParserNativePreview
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
+    private delegate int NativeHandlePreviewCall(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern uint ql_abi_version();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong ql_capabilities();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
-    public static void EnsureCompatible() => NativeAbi.EnsureCompatible(ql_abi_version());
+    public static void EnsureCompatible()
+    {
+        NativeAbi.EnsureCompatible(ql_abi_version());
+        NativeAbi.EnsureCapabilities(ql_capabilities(), NativeAbi.ParserHandleInputs);
+    }
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
@@ -33,6 +50,36 @@ internal static class ParserNativePreview
     private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_text_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_text_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_executable_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_torrent_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -162,6 +209,100 @@ internal static class ParserNativePreview
 
         return null;
     }
+
+    public static (int Status, string? Json) TryPreviewHandle(
+        string kind,
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        NativeHandlePreviewCall? handleCall = kind.ToLowerInvariant() switch
+        {
+            "text" => ql_preview_text_handle,
+            "executable" => ql_preview_executable_handle,
+            "torrent" => ql_preview_torrent_handle,
+            _ => null,
+        };
+        if (handleCall is null
+            || sourceLength < 0
+            || sourceHandle.IsInvalid
+            || sourceHandle.IsClosed)
+            return (NativeAbi.StatusInvalidArgument, null);
+
+        string logicalName = Path.GetFileName(logicalPath);
+        if (string.IsNullOrEmpty(logicalName))
+            return (NativeAbi.StatusInvalidArgument, null);
+        byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
+        if (logicalNameBytes.Length > NativeAbi.MaxLogicalNameUtf8Bytes)
+            return (NativeAbi.StatusInvalidArgument, null);
+        NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
+        bool addRef = false;
+        try
+        {
+            sourceHandle.DangerousAddRef(ref addRef);
+            int capacity = 64 * 1024;
+            while (capacity <= MaxPreviewJsonBytes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+                try
+                {
+                    int status = handleCall(
+                        sourceHandle.DangerousGetHandle(),
+                        checked((ulong)sourceLength),
+                        logicalNameBytes,
+                        (nuint)logicalNameBytes.Length,
+                        buffer,
+                        (nuint)capacity,
+                        out nuint required,
+                        cancel);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (status == NativeAbi.StatusOk && required > 0 && required <= (nuint)capacity)
+                        return (status, Encoding.UTF8.GetString(buffer, 0, checked((int)required)));
+                    if (status == NativeAbi.StatusOk)
+                        return (NativeAbi.StatusInternal, null);
+                    if (status != NativeAbi.StatusBufferTooSmall)
+                        return (status, null);
+                    if (required <= (nuint)capacity)
+                        return (NativeAbi.StatusInternal, null);
+                    if (required > (nuint)MaxPreviewJsonBytes)
+                        return (status, null);
+                    capacity = checked((int)required);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+        }
+        finally
+        {
+            if (addRef) sourceHandle.DangerousRelease();
+            GC.KeepAlive(cancel);
+        }
+
+        return (NativeAbi.StatusBufferTooSmall, null);
+    }
+
+    public static bool UsesHandleInput(string kind)
+        => kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("executable", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("torrent", StringComparison.OrdinalIgnoreCase);
+
+    public static string DescribeHandleFailure(int status)
+        => status switch
+        {
+            NativeAbi.StatusInvalidArgument => "Native handle parser rejected its arguments.",
+            NativeAbi.StatusBufferTooSmall => "Native handle parser output exceeded the host limit.",
+            NativeAbi.StatusCancelled => "Native handle parser was cancelled.",
+            NativeAbi.StatusMalformed => "Native handle parser rejected malformed content.",
+            NativeAbi.StatusIo => "Native handle parser could not read the input.",
+            NativeAbi.StatusInvalidHandle => "Native handle parser rejected the input handle.",
+            NativeAbi.StatusLengthMismatch => "Native handle parser detected an input length mismatch.",
+            NativeAbi.StatusInternal => "Native handle parser failed internally.",
+            _ => $"Native handle parser returned unknown status {status}.",
+        };
 
     public static string? TryExtractArchiveEntry(string archivePath, string entryPath, CancellationToken cancellationToken)
     {

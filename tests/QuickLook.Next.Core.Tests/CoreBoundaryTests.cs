@@ -136,6 +136,31 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => NativeAbi.EnsureCompatible(NativeAbi.Version + 1));
     }
 
+    [Fact]
+    public void Native_capabilities_reject_missing_features()
+    {
+        NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
+        NativeAbi.EnsureCapabilities(
+            NativeAbi.ParserHandleInputs | (1UL << 63),
+            NativeAbi.ParserHandleInputs);
+        Assert.Throws<InvalidOperationException>(
+            () => NativeAbi.EnsureCapabilities(NativeAbi.HandleText, NativeAbi.ParserHandleInputs));
+    }
+
+    [Fact]
+    public void Native_v2_handle_status_values_are_stable()
+    {
+        Assert.Equal(0, NativeAbi.StatusOk);
+        Assert.Equal(-1, NativeAbi.StatusInvalidArgument);
+        Assert.Equal(-2, NativeAbi.StatusBufferTooSmall);
+        Assert.Equal(-3, NativeAbi.StatusCancelled);
+        Assert.Equal(-4, NativeAbi.StatusMalformed);
+        Assert.Equal(-5, NativeAbi.StatusIo);
+        Assert.Equal(-6, NativeAbi.StatusInvalidHandle);
+        Assert.Equal(-7, NativeAbi.StatusLengthMismatch);
+        Assert.Equal(-8, NativeAbi.StatusInternal);
+    }
+
     [Theory]
     [InlineData("file.vhdx", "disk-image")]
     [InlineData("font.woff2", "font")]

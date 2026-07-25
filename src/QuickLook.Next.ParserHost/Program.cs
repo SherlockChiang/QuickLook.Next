@@ -137,10 +137,33 @@ while (true)
             });
             break;
 
-        case PreviewOpenHandle open when IsValidRequestId(open.RequestId)
-                                           && open.SourceLength is >= 0 and <= 256L * 1024 * 1024
-                                           && !string.IsNullOrWhiteSpace(open.LogicalPath)
-                                           && IsValidProbe(open.Probe):
+        case PreviewOpenHandle open:
+            Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle;
+            try
+            {
+                sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength);
+            }
+            catch (Exception ex)
+            {
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid handle preview request");
+                break;
+            }
+            if (!IsValidRequestId(open.RequestId)
+                || open.SourceLength is not (>= 0 and <= 256L * 1024 * 1024)
+                || string.IsNullOrWhiteSpace(open.LogicalPath)
+                || !IsValidProbe(open.Probe)
+                || open.Probe.Size != open.SourceLength)
+            {
+                sourceHandle.Dispose();
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, "Invalid handle preview request."));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid handle preview request");
+                break;
+            }
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
@@ -149,6 +172,7 @@ while (true)
             var handleCts = new CancellationTokenSource();
             if (!requests.TryAdd(open.RequestId, handleCts))
             {
+                sourceHandle.Dispose();
                 handleCts.Dispose();
                 await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
                 break;
@@ -156,11 +180,39 @@ while (true)
             activePreviewRequestId = open.RequestId;
             _ = Task.Run(async () =>
             {
+                using var ownedSourceHandle = sourceHandle;
                 bool published = false;
                 try
                 {
-                    using var sourceHandle = WindowsHandleTransfer.TakeLocalFileHandle(open.SourceHandle, open.SourceLength);
-                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, sourceHandle, open.SourceLength, inputRoot);
+                    string kind = open.Probe.Kind.ToLowerInvariant();
+                    if (!PreviewFormatPolicy.UsesParserHost(kind))
+                    {
+                        await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
+                        return;
+                    }
+                    if (ParserNativePreview.UsesHandleInput(kind))
+                    {
+                        var handleResult = ParserNativePreview.TryPreviewHandle(
+                            kind, ownedSourceHandle, open.SourceLength, open.LogicalPath, handleCts.Token);
+                        handleCts.Token.ThrowIfCancellationRequested();
+                        if (handleResult.Status != NativeAbi.StatusOk || handleResult.Json is null)
+                        {
+                            string failure = ParserNativePreview.DescribeHandleFailure(handleResult.Status);
+                            DiagLog.Write(
+                                "ParserHost",
+                                $"native handle preview failed request={open.RequestId} status={handleResult.Status}");
+                            await channel.SendAsync(new PreviewError(open.RequestId, failure));
+                        }
+                        else if (!PreviewReadyJson.TryParse(open.RequestId, handleResult.Json, out PreviewReady? handleReady, out string? handleError))
+                            await channel.SendAsync(new PreviewError(open.RequestId, handleError ?? "Native handle parser returned no preview."));
+                        else
+                        {
+                            await channel.SendAsync(handleReady!);
+                            published = true;
+                        }
+                        return;
+                    }
+                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, ownedSourceHandle, open.SourceLength, inputRoot);
                     if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
                     {
                         input?.Anchor.Dispose();
@@ -169,12 +221,6 @@ while (true)
                         return;
                     }
                     handleCts.Token.ThrowIfCancellationRequested();
-                    string kind = open.Probe.Kind.ToLowerInvariant();
-                    if (!PreviewFormatPolicy.UsesParserHost(kind))
-                    {
-                        await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
-                        return;
-                    }
                     if (kind == "certificate")
                     {
                         await channel.SendAsync(CertificatePreview.Create(open.RequestId, input.Value.Path, open.SourceLength));

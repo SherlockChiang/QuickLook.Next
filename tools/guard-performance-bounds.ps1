@@ -185,6 +185,26 @@ $listingFilter = Join-Path $Root "src/QuickLook.Next.Core/ListingFilter.cs"
 Require-Pattern $listingFilter 'MaxItems\s*=\s*5000' `
     "Listing filtering must remain capped at 5000 items."
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+Require-Pattern $nativePreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*1024' `
+    "Native text inputs must remain capped at 512 KiB."
+Require-Pattern $nativePreview 'fn read_text_preview_bytes<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_TEXT_BYTES\s*\+\s*1,\s*cancel_cb\)' `
+    "Path and HANDLE text previews must share the bounded, cancellable Reader pipeline."
+Require-Pattern $nativePreview 'fn read_reader_prefix_cancelable<R:\s*Read>[\s\S]*Vec::with_capacity\(max_bytes\.min\(64\s*\*\s*1024\)\)' `
+    "Small Reader previews must not preallocate their complete input budget."
+Require-Pattern $nativePreview 'MAX_EXECUTABLE_HEADER_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
+    "Executable HANDLE previews must retain their 4 MiB header-read cap."
+Require-Pattern $nativePreview 'render_executable_reader<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_EXECUTABLE_HEADER_BYTES,\s*cancel_cb\)' `
+    "Path and HANDLE executable previews must share the bounded, cancellable Reader pipeline."
+Require-Pattern $nativePreview 'MAX_TORRENT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
+    "Torrent HANDLE previews must retain their 16 MiB input cap."
+Require-Pattern $nativePreview 'render_torrent_reader<R:\s*Read>[\s\S]*read_reader_exact_bounded_cancelable\(reader,\s*size\s+as\s+u64,\s*MAX_TORRENT_BYTES,\s*cancel_cb\)' `
+    "Path and HANDLE torrent previews must enforce bounded exact-length reads."
+Require-Pattern $nativePreview 'let read_limit\s*=\s*expected_bytes[\s\S]*?\.saturating_add\(1\)[\s\S]*?\.min\(max_bytes\.saturating_add\(1\)\)' `
+    "Exact-length Reader previews must stop after the expected length plus one byte."
+Require-Pattern $nativePreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
+    "Torrent bencode parsing must retain its depth limit of 64."
+Require-Pattern $nativePreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
+    "Torrent bencode parsing must retain its 100000-node budget."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `

@@ -272,38 +272,326 @@ public sealed class ParserHostIntegrationTests
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
             string requestId = Guid.NewGuid().ToString("n");
-            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            var pinned = WindowsHandleTransfer.OpenReadOnlyFile(path);
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
             var probe = new FileProbe(path, ".txt", "original"u8.ToArray())
             {
                 Kind = "text",
                 Size = pinned.Length,
             };
+            string renamedOriginal = Path.Combine(tempDirectory, "renamed-original.txt");
+            File.Move(path, renamedOriginal);
+            File.WriteAllText(path, "replacement content");
             await channel.SendAsync(new PreviewOpenHandle(requestId, hostHandle, pinned.Length, path, probe), timeout.Token);
             pinned.Handle.Dispose();
-
-            while (true)
-            {
-                try
-                {
-                    File.WriteAllText(path, "replacement content");
-                    break;
-                }
-                catch (IOException)
-                {
-                    await Task.Delay(25, timeout.Token);
-                }
-            }
 
             PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
             Assert.Contains(original, ready.TextContent);
             Assert.DoesNotContain("replacement content", ready.TextContent);
 
-            string anchorPath = Path.Combine(
-                GetWritableRoot(host), "parser-input", "input-" + requestId, "source.txt");
-            Assert.True(File.Exists(anchorPath));
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + requestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            await WaitUntilAsync(
+                () => TryOverwriteFile(renamedOriginal, "released handle"),
+                timeout.Token);
             await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(anchorPath), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("README.md", "# HANDLE Markdown\n\nRust owns parsing.", "markdown", null)]
+    [InlineData("资料.csv", "name,value\nRust,handle", "table", ",")]
+    [InlineData("data.tsv", "name\tvalue\nRust\thandle", "table", "\t")]
+    [InlineData("large.txt", "__LARGE_TEXT__", "text", null)]
+    public async Task Handle_open_previews_text_formats_without_an_anchor(
+        string fileName,
+        string content,
+        string expectedKind,
+        string? expectedDelimiter)
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        const string tailMarker = "HANDLE-RETRY-TAIL";
+        if (content == "__LARGE_TEXT__")
+            content = new string('x', 96 * 1024) + tailMarker;
+        string sourcePath = Path.Combine(tempDirectory, "physical-source.bin");
+        string logicalPath = Path.Combine(tempDirectory, fileName);
+        await File.WriteAllTextAsync(sourcePath, content);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, Path.GetExtension(logicalPath), [])
+            {
+                Kind = "text",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, ready.RequestId);
+            Assert.Equal(expectedKind, ready.Kind);
+            if (expectedKind == "markdown")
+            {
+                Assert.Equal(fileName, ready.Title);
+                Assert.NotEmpty(Assert.IsType<PreviewMarkdown>(ready.Markdown).Blocks);
+            }
+            else if (expectedKind == "table")
+            {
+                Assert.StartsWith(fileName, ready.Title, StringComparison.Ordinal);
+                PreviewTable table = Assert.IsType<PreviewTable>(ready.Table);
+                Assert.Equal(expectedDelimiter, table.Delimiter);
+                Assert.Equal(["name", "value"], table.Headers);
+                Assert.Contains(table.Rows, row => row.Cells.SequenceEqual(["Rust", "handle"]));
+            }
+            else
+                Assert.EndsWith(tailMarker, Assert.IsType<string>(ready.TextContent), StringComparison.Ordinal);
+
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + requestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            await WaitUntilAsync(
+                () => TryOverwriteFile(sourcePath, "released handle"),
+                timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("executable", "logical-demo.exe", false)]
+    [InlineData("torrent", "logical-demo.torrent", false)]
+    [InlineData("torrent", "broken.torrent", true)]
+    public async Task Handle_open_previews_binary_formats_without_an_anchor(
+        string kind,
+        string logicalName,
+        bool malformed)
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-source.bin");
+        string logicalPath = Path.Combine(tempDirectory, logicalName);
+        byte[] content = malformed
+            ? "not-bencode"u8.ToArray()
+            : kind == "executable"
+            ? CreateMinimalPe()
+            : "d8:announce16:https://tracker/4:infod6:lengthi123e4:name10:sample.binee"u8.ToArray();
+        await File.WriteAllBytesAsync(sourcePath, content);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, Path.GetExtension(logicalPath), content[..Math.Min(16, content.Length)])
+            {
+                Kind = kind,
+                Size = pinned.Length,
+            };
+            Assert.False(File.Exists(logicalPath));
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            ControlMessage? response = await channel.ReceiveAsync(timeout.Token);
+            if (malformed)
+            {
+                PreviewError error = Assert.IsType<PreviewError>(response);
+                Assert.Equal(requestId, error.RequestId);
+                Assert.Contains("malformed", error.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                PreviewReady ready = Assert.IsType<PreviewReady>(response);
+                Assert.Equal(requestId, ready.RequestId);
+                Assert.Equal(kind, ready.Kind);
+                if (kind == "executable")
+                {
+                    Assert.Equal("logical-demo.exe - x64", ready.Title);
+                    Assert.Contains("Machine: x64", ready.TextContent);
+                }
+                else
+                {
+                    Assert.Equal("sample.bin - 1 files", ready.Title);
+                    PreviewListing listing = Assert.IsType<PreviewListing>(ready.Listing);
+                    Assert.Equal("torrent", listing.ListingKind);
+                    Assert.Contains("https://tracker/", listing.Summary);
+                    Assert.Contains(listing.Items, item => item.Name == "sample.bin");
+                }
+            }
+
+            string anchorDirectory = Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + requestId);
+            Assert.False(Directory.Exists(anchorDirectory));
+            await WaitUntilAsync(
+                () => TryOverwriteFile(sourcePath, "released handle"),
+                timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Duplicate_handle_request_ID_releases_every_transferred_handle()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string firstPath = Path.Combine(tempDirectory, "first.txt");
+        string secondPath = Path.Combine(tempDirectory, "second.txt");
+        await File.WriteAllTextAsync(firstPath, new string('x', 512 * 1024));
+        await File.WriteAllTextAsync(secondPath, "duplicate");
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var first = WindowsHandleTransfer.OpenPinnedReadOnlyFile(firstPath);
+            var second = WindowsHandleTransfer.OpenPinnedReadOnlyFile(secondPath);
+            long firstHostHandle = WindowsHandleTransfer.DuplicateFileToProcess(first.Handle, host.SafeHandle);
+            long secondHostHandle = WindowsHandleTransfer.DuplicateFileToProcess(second.Handle, host.SafeHandle);
+            var firstProbe = new FileProbe(firstPath, ".txt", [])
+            {
+                Kind = "text",
+                Size = first.Length,
+            };
+            var secondProbe = new FileProbe(secondPath, ".txt", [])
+            {
+                Kind = "text",
+                Size = second.Length,
+            };
+
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, firstHostHandle, first.Length, firstPath, firstProbe),
+                timeout.Token);
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, secondHostHandle, second.Length, secondPath, secondProbe),
+                timeout.Token);
+            first.Handle.Dispose();
+            second.Handle.Dispose();
+
+            PreviewError? duplicateError = null;
+            for (int responseCount = 0; responseCount < 2 && duplicateError is null; responseCount++)
+            {
+                ControlMessage? response = await channel.ReceiveAsync(timeout.Token);
+                if (response is PreviewError error)
+                    duplicateError = error;
+                else
+                    Assert.IsType<PreviewReady>(response);
+            }
+            Assert.NotNull(duplicateError);
+            Assert.Equal(requestId, duplicateError.RequestId);
+            Assert.Contains("Duplicate request ID", duplicateError.Message, StringComparison.Ordinal);
+
+            await WaitUntilAsync(
+                () => TryOverwriteFile(firstPath, "first released")
+                      && TryOverwriteFile(secondPath, "second released"),
+                timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Invalid_handle_envelope_releases_the_transferred_handle()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "invalid-envelope.txt");
+        await File.WriteAllTextAsync(sourcePath, "owned before validation");
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var mismatchedProbe = new FileProbe(sourcePath, ".txt", [])
+            {
+                Kind = "text",
+                Size = pinned.Length + 1,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, sourcePath, mismatchedProbe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewError error = Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, error.RequestId);
+            Assert.Contains("Invalid handle preview request", error.Message, StringComparison.Ordinal);
+            await WaitUntilAsync(
+                () => TryOverwriteFile(sourcePath, "released after rejection"),
+                timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
         }
         finally
         {
@@ -816,6 +1104,45 @@ public sealed class ParserHostIntegrationTests
     {
         while (!condition())
             await Task.Delay(25, cancellationToken);
+    }
+
+    private static bool TryOverwriteFile(string path, string contents)
+    {
+        try
+        {
+            File.WriteAllText(path, contents);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static byte[] CreateMinimalPe()
+    {
+        byte[] bytes = new byte[512];
+        "MZ"u8.CopyTo(bytes);
+        BitConverter.GetBytes(0x80u).CopyTo(bytes, 0x3C);
+        "PE\0\0"u8.CopyTo(bytes.AsSpan(0x80));
+        const int coff = 0x84;
+        BitConverter.GetBytes((ushort)0x8664).CopyTo(bytes, coff);
+        BitConverter.GetBytes(0x6543_2100u).CopyTo(bytes, coff + 4);
+        BitConverter.GetBytes((ushort)0x70).CopyTo(bytes, coff + 16);
+        BitConverter.GetBytes((ushort)0x0022).CopyTo(bytes, coff + 18);
+        int optional = coff + 20;
+        BitConverter.GetBytes((ushort)0x20B).CopyTo(bytes, optional);
+        BitConverter.GetBytes(0x1234u).CopyTo(bytes, optional + 16);
+        BitConverter.GetBytes(0x1400_0000UL).CopyTo(bytes, optional + 24);
+        BitConverter.GetBytes(0x1000u).CopyTo(bytes, optional + 32);
+        BitConverter.GetBytes(0x200u).CopyTo(bytes, optional + 36);
+        BitConverter.GetBytes(0x5000u).CopyTo(bytes, optional + 56);
+        BitConverter.GetBytes((ushort)3).CopyTo(bytes, optional + 68);
+        return bytes;
     }
 
     private static void WriteEntry(ZipArchive archive, string name, string contents)

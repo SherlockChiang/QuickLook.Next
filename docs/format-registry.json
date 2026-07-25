@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "nativeAbiVersion": 1,
+  "nativeAbiVersion": 2,
   "probeKinds": [
     "archive", "audio", "binary", "certificate", "chm", "database", "disk-image",
     "dump", "ebook", "elf", "executable", "folder", "font", "image", "mail",
