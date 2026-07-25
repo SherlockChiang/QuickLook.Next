@@ -31,6 +31,10 @@ Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_BYTES:\s*usize\s*=\s*64\s*\*\
     "Animated frame packets must remain capped at 64 MiB."
 Require-Pattern $nativeLibrary 'PngDecoder::new[\s\S]*is_apng\(\)[\s\S]*\.apng\(\)' `
     "APNG playback must use the bounded native animation pipeline."
+Require-Pattern $nativeLibrary 'MAX_IMAGE_RASTER_DIMENSION:\s*u32\s*=\s*2048' `
+    "Static HANDLE image rasters must remain capped at 2048 pixels."
+Require-Pattern $nativeLibrary 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
+    "Static HANDLE image inputs must remain capped at 256 MiB."
 
 $imageWaveform = Join-Path $Root "src/QuickLook.Next.Core/ImageWaveformBuilder.cs"
 Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `

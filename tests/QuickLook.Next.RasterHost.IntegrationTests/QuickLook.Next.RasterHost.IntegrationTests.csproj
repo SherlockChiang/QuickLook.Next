@@ -20,6 +20,9 @@
     <None Include="..\..\testdata\image-corpus\external\gif-disposal-background.gif"
           Link="Fixtures\animated.gif"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\QuickLook.Next.App\Assets\QuickLookNext.ico"
+          Link="Fixtures\static.ico"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="StageRasterHost" AfterTargets="Build">
     <ItemGroup>

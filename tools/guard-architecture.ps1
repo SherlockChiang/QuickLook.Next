@@ -743,7 +743,14 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'source\.CopyToAsync\(writableAnchor, cancellationToken\)' -or
         $rasterHostText -notmatch 'ReopenTransitionalReadOnlyFile\(' -or
         $rasterHostText -notmatch 'ReopenReadOnlyFile\(') {
-        Add-Failure "RasterHost handle inputs must be anchored before path-only raster providers run"
+        Add-Failure "RasterHost compatibility inputs must be anchored before path-only raster providers run"
+    }
+    if ($rasterHostText -notmatch 'UsesHandleInput\(open\.Path, open\.Probe\)' -or
+        $rasterHostText -notmatch 'TryDecodeHandleAsync\(' -or
+        $rasterHostText -notmatch 'ql_decode_image_handle\(' -or
+        $rasterHostText -notmatch 'EnsureCapabilities\(ql_capabilities\(\), NativeAbi\.RasterHandleInputs\)' -or
+        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.ico"') {
+        Add-Failure "RasterHost ICO previews must use the capability-checked native HANDLE decoder"
     }
 }
 

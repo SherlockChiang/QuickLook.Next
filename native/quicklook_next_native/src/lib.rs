@@ -9,15 +9,16 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::mem::size_of;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use image::{AnimationDecoder, ImageDecoder, ImageReader};
+use image::{AnimationDecoder, ImageDecoder, ImageFormat, ImageReader};
 
 mod native_input;
 mod preview;
@@ -80,6 +81,7 @@ const QL_FEATURE_HANDLE_ARCHIVE: u64 = 1 << 4;
 const QL_FEATURE_HANDLE_OFFICE: u64 = 1 << 5;
 const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
+const QL_FEATURE_HANDLE_STATIC_IMAGE: u64 = 1 << 8;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -107,6 +109,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_OFFICE
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
+        | QL_FEATURE_HANDLE_STATIC_IMAGE
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -892,6 +895,84 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
     total as i32
 }
 
+/// Decode a native-safe static image from a borrowed Windows file handle.
+/// Output layout matches `ql_decode_image_sized_cancelable`.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_image_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if expected_length > 256 * 1024 * 1024 {
+            return QL_ERROR_LIMIT_EXCEEDED;
+        }
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let extension = Path::new(&logical_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("");
+        if !extension.eq_ignore_ascii_case("ico") {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        let decoded = decode_image_bgra_reader(
+            &mut file,
+            &logical_name,
+            target_width,
+            target_height,
+            cancel_cb,
+            Some(ImageFormat::Ico),
+        );
+        let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
+            match decoded {
+                Some(decoded) => decoded,
+                None => {
+                    return if cancel_requested(cancel_cb) {
+                        QL_ERROR_CANCELLED
+                    } else {
+                        QL_ERROR_MALFORMED
+                    }
+                }
+            };
+        let mut packet = Vec::with_capacity(28 + bgra.len());
+        packet.extend_from_slice(&width.to_le_bytes());
+        packet.extend_from_slice(&height.to_le_bytes());
+        packet.extend_from_slice(&original_width.to_le_bytes());
+        packet.extend_from_slice(&original_height.to_le_bytes());
+        packet.extend_from_slice(&decode_ms.to_le_bytes());
+        packet.extend_from_slice(&resize_ms.to_le_bytes());
+        packet.extend_from_slice(&convert_ms.to_le_bytes());
+        packet.extend_from_slice(&bgra);
+        write_v2_out(&packet, out_buf, out_cap, out_required)
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn ql_decode_gif_frames_sized(
     path_utf8: *const u8,
@@ -1010,15 +1091,42 @@ fn decode_image_bgra(
         return decode_svg_bgra(path, target_width, target_height, cancel_cb);
     }
 
-    let jpeg_metadata = jpeg_metadata(path).ok()?;
+    let file = fs::File::open(path).ok()?;
+    decode_image_bgra_reader(file, path, target_width, target_height, cancel_cb, None)
+}
+
+fn decode_image_bgra_reader<R: Read + Seek>(
+    mut reader: R,
+    logical_name: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    required_format: Option<ImageFormat>,
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    let ext = Path::new(logical_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let jpeg_metadata = if matches!(ext.as_str(), "jpg" | "jpeg" | "jpe") {
+        let metadata = jpeg_metadata_from_reader(&mut reader).ok()?;
+        reader.seek(SeekFrom::Start(0)).ok()?;
+        metadata
+    } else {
+        JpegMetadata::default()
+    };
+    let guessed = ImageReader::new(BufReader::new(&mut reader))
+        .with_guessed_format()
+        .ok()?;
+    if required_format.is_some_and(|required| guessed.format() != Some(required)) {
+        return None;
+    }
     let (original_width, original_height) = match jpeg_metadata.dimensions {
         Some(dimensions) => dimensions,
-        None => ImageReader::open(path)
-            .ok()?
-            .with_guessed_format()
-            .ok()?
-            .into_dimensions()
-            .ok()?,
+        None => guessed.into_dimensions().ok()?,
     };
     if should_skip_native_image_decode(original_width, original_height) {
         return None;
@@ -1028,8 +1136,8 @@ fn decode_image_bgra(
     }
 
     let decode_start = Instant::now();
-    let mut image = ImageReader::open(path)
-        .ok()?
+    reader.seek(SeekFrom::Start(0)).ok()?;
+    let mut image = ImageReader::new(BufReader::new(reader))
         .with_guessed_format()
         .ok()?
         .decode()
@@ -1359,15 +1467,6 @@ struct JpegMetadata {
     dimensions: Option<(u32, u32)>,
     orientation: Option<u16>,
     icc_profile: Option<Vec<u8>>,
-}
-
-fn jpeg_metadata(path: &str) -> std::result::Result<JpegMetadata, ()> {
-    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ext != "jpg" && ext != "jpeg" && ext != "jpe" {
-        return Ok(JpegMetadata::default());
-    }
-    let file = std::fs::File::open(path).map_err(|_| ())?;
-    jpeg_metadata_from_reader(BufReader::new(file))
 }
 
 #[cfg(test)]
@@ -3628,6 +3727,7 @@ fn native_abi_version_is_stable() {
         | QL_FEATURE_HANDLE_OFFICE
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
+    let required = required | QL_FEATURE_HANDLE_STATIC_IMAGE;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -3793,6 +3893,35 @@ mod handle_v2_tests {
                 expected_length,
                 logical_name_utf8,
                 logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_image_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        target_width: u32,
+        target_height: u32,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_decode_image_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                target_width,
+                target_height,
                 out_buf,
                 out_cap,
                 out_required,
@@ -4395,6 +4524,111 @@ mod handle_v2_tests {
         assert!(u32::from_le_bytes(packet[4..8].try_into().unwrap()) > 0);
         assert_eq!(file.stream_position().unwrap(), position);
 
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn static_image_handle_decodes_ico_without_moving_caller_position() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            16,
+            8,
+            image::Rgba([30, 120, 220, 255]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::Ico)
+        .expect("encode ICO");
+        let (path, mut file) = create_input("bin", &encoded.into_inner());
+        file.seek(SeekFrom::Start(7)).expect("position image handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"logical.ico";
+        let mut required = 0usize;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                8,
+                8,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                8,
+                8,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 8);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 16);
+        assert_eq!(u32::from_le_bytes(packet[12..16].try_into().unwrap()), 8);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let wrong_name = b"logical.png";
+        required = usize::MAX;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                wrong_name.as_ptr(),
+                wrong_name.len(),
+                8,
+                8,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            2,
+            2,
+            image::Rgba([10, 20, 30, 255]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode PNG");
+        let (path, file) = create_input("bin", &png.into_inner());
+        required = usize::MAX;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                8,
+                8,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_MALFORMED
+        );
+        assert_eq!(required, 0);
         drop(file);
         let _ = fs::remove_file(path);
     }

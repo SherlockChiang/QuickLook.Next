@@ -28,7 +28,11 @@ request that is already in progress.
 - ParserHost database previews also pass their received handles directly to Rust without creating a
   `parser-input` anchor. The App is the only component allowed to derive and open `main-wal` and
   `main-shm`; neither ParserHost nor Rust resolves companion paths from `LogicalPath`.
-- Package, certificate, and remaining ParserHost formats, plus RasterHost, currently copy the
+- RasterHost ICO previews pass the received file handle directly to `ql_decode_image_handle` and do
+  not create a `raster-inputs` anchor. Rust reopens the file object with an independent pointer,
+  validates the logical basename as `.ico`, and returns a bounded premultiplied BGRA packet. Decode
+  failure is terminal for that request and cannot fall back through the logical path.
+- Package, certificate, and remaining ParserHost formats, plus remaining RasterHost formats, copy the
   exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
   WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
   after handoff cannot change the rendered bytes.
@@ -244,7 +248,8 @@ a supplied parent ID never falls back to that path.
 
 Remaining migration order:
 
-1. Native still-image and animation decoders.
+1. Remaining native still-image and animation decoders. ICO now uses the direct HANDLE ABI; GIF keeps
+   its anchor until animation follow-up also consumes the retained file object.
 2. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped

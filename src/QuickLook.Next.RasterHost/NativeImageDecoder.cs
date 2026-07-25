@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.RasterHost;
@@ -37,11 +38,17 @@ internal static class NativeImageDecoder
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern uint ql_abi_version();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong ql_capabilities();
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
 
-    public static void EnsureCompatible() => NativeAbi.EnsureCompatible(ql_abi_version());
+    public static void EnsureCompatible()
+    {
+        NativeAbi.EnsureCompatible(ql_abi_version());
+        NativeAbi.EnsureCapabilities(ql_capabilities(), NativeAbi.RasterHandleInputs);
+    }
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
@@ -55,6 +62,127 @@ internal static class NativeImageDecoder
         byte[] outBuf,
         nuint outCap,
         IntPtr cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_image_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        uint targetWidth,
+        uint targetHeight,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        IntPtr cancelCb);
+
+    public static bool UsesHandleInput(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
+        => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+            && Path.GetExtension(logicalPath).Equals(".ico", StringComparison.OrdinalIgnoreCase)
+            && probe.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(probe.Path, logicalPath, StringComparison.OrdinalIgnoreCase)
+            && probe.MagicPrefix is [0, 0, 1, 0, ..];
+
+    public static async Task<NativeDecodedImage?> TryDecodeHandleAsync(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        uint targetWidth,
+        uint targetHeight)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(timeout);
+        await DecodeGate.WaitAsync(timeoutCts.Token);
+        try
+        {
+            return await Task.Run(
+                () => TryDecodeHandle(
+                    sourceHandle,
+                    sourceLength,
+                    logicalPath,
+                    timeoutCts.Token,
+                    targetWidth,
+                    targetHeight),
+                CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally
+        {
+            DecodeGate.Release();
+        }
+    }
+
+    private static NativeDecodedImage? TryDecodeHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        CancellationToken cancellationToken,
+        uint targetWidth,
+        uint targetHeight)
+    {
+        if (sourceLength is < 0 or > MaxInputImageBytes
+            || sourceHandle.IsInvalid
+            || sourceHandle.IsClosed)
+            return null;
+        string logicalName = Path.GetFileName(logicalPath);
+        byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
+        if (logicalNameBytes.Length is 0 or > NativeAbi.MaxLogicalNameUtf8Bytes)
+            return null;
+
+        bool addRef = false;
+        int capacity = 8 * 1024 * 1024;
+        try
+        {
+            sourceHandle.DangerousAddRef(ref addRef);
+            while (capacity <= MaxDecodedImageBytes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+                try
+                {
+                    _decodeCancellationToken = cancellationToken;
+                    int status = ql_decode_image_handle(
+                        sourceHandle.DangerousGetHandle(),
+                        checked((ulong)sourceLength),
+                        logicalNameBytes,
+                        (nuint)logicalNameBytes.Length,
+                        targetWidth,
+                        targetHeight,
+                        buffer,
+                        (nuint)capacity,
+                        out nuint required,
+                        DecodeCancelCallbackPtr);
+                    if (status == NativeAbi.StatusOk
+                        && required <= (nuint)capacity)
+                        return ParseDecodedImage(buffer, checked((int)required));
+                    if (status != NativeAbi.StatusBufferTooSmall
+                        || required <= (nuint)capacity
+                        || required > (nuint)MaxDecodedImageBytes)
+                        return null;
+                    capacity = checked((int)required);
+                }
+                finally
+                {
+                    _decodeCancellationToken = CancellationToken.None;
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (addRef) sourceHandle.DangerousRelease();
+        }
+        return null;
+    }
 
     public static async Task<NativeDecodedImage?> TryDecodeAsync(
         string path,
@@ -174,25 +302,7 @@ internal static class NativeImageDecoder
                     _decodeCancellationToken = CancellationToken.None;
                     if (n > HeaderBytes)
                     {
-                        int width = checked((int)BitConverter.ToUInt32(buffer, 0));
-                        int height = checked((int)BitConverter.ToUInt32(buffer, 4));
-                        int originalWidth = checked((int)BitConverter.ToUInt32(buffer, 8));
-                        int originalHeight = checked((int)BitConverter.ToUInt32(buffer, 12));
-                        int decodeMs = checked((int)BitConverter.ToUInt32(buffer, 16));
-                        int resizeMs = checked((int)BitConverter.ToUInt32(buffer, 20));
-                        int convertMs = checked((int)BitConverter.ToUInt32(buffer, 24));
-                        int pixelBytes = n - HeaderBytes;
-                        if (width <= 0 || height <= 0 || pixelBytes != width * height * 4)
-                            return null;
-
-                        var bgra = new byte[pixelBytes];
-                        Buffer.BlockCopy(buffer, HeaderBytes, bgra, 0, pixelBytes);
-                        return new NativeDecodedImage(bgra, width, height, originalWidth, originalHeight)
-                        {
-                            DecodeMilliseconds = decodeMs,
-                            ResizeMilliseconds = resizeMs,
-                            ConvertMilliseconds = convertMs,
-                        };
+                        return ParseDecodedImage(buffer, n);
                     }
 
                     if (n < 0)
@@ -223,6 +333,34 @@ internal static class NativeImageDecoder
 
     private static bool IsDecodeCanceled()
         => _decodeCancellationToken.IsCancellationRequested;
+
+    private static NativeDecodedImage? ParseDecodedImage(byte[] buffer, int length)
+    {
+        if (length <= HeaderBytes)
+            return null;
+        int width = checked((int)BitConverter.ToUInt32(buffer, 0));
+        int height = checked((int)BitConverter.ToUInt32(buffer, 4));
+        int originalWidth = checked((int)BitConverter.ToUInt32(buffer, 8));
+        int originalHeight = checked((int)BitConverter.ToUInt32(buffer, 12));
+        int decodeMs = checked((int)BitConverter.ToUInt32(buffer, 16));
+        int resizeMs = checked((int)BitConverter.ToUInt32(buffer, 20));
+        int convertMs = checked((int)BitConverter.ToUInt32(buffer, 24));
+        int pixelBytes = length - HeaderBytes;
+        if (width is <= 0 or > MaxPreviewRasterDimension
+            || height is <= 0 or > MaxPreviewRasterDimension
+            || originalWidth <= 0
+            || originalHeight <= 0
+            || pixelBytes != (long)width * height * 4)
+            return null;
+        var bgra = new byte[pixelBytes];
+        Buffer.BlockCopy(buffer, HeaderBytes, bgra, 0, pixelBytes);
+        return new NativeDecodedImage(bgra, width, height, originalWidth, originalHeight)
+        {
+            DecodeMilliseconds = decodeMs,
+            ResizeMilliseconds = resizeMs,
+            ConvertMilliseconds = convertMs,
+        };
+    }
 
     private static bool IsTooLarge(string path)
     {

@@ -132,6 +132,7 @@ while (true)
                     || open.SourceLength is not (>= 0 and <= 256L * 1024 * 1024)
                     || string.IsNullOrWhiteSpace(open.LogicalPath)
                     || !IsValidProbe(open.Probe)
+                    || !string.Equals(open.Probe.Path, open.LogicalPath, StringComparison.OrdinalIgnoreCase)
                     || open.SourceLength != open.Probe.Size
                     || !IsValidTargetSize(open.TargetWidth, open.TargetHeight))
                 {
@@ -220,10 +221,21 @@ while (true)
                 }
                 if (isActiveRequest)
                 {
-                    activeRequestId = null;
-                    activeOpen = null;
-                    CancelAnimationsForParent(close.RequestId);
-                    producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
+                    await surfacePublishGate.WaitAsync();
+                    try
+                    {
+                        if (string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal))
+                        {
+                            activeRequestId = null;
+                            activeOpen = null;
+                            CancelAnimationsForParent(close.RequestId);
+                            producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
+                        }
+                    }
+                    finally
+                    {
+                        surfacePublishGate.Release();
+                    }
                 }
                 DeletePreviewInput(close.RequestId);
                 break;
@@ -284,6 +296,19 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             {
                 using (sourceHandle)
                 {
+                    if (NativeImageDecoder.UsesHandleInput(open.Path, open.Probe))
+                    {
+                        cts.Token.ThrowIfCancellationRequested();
+                        if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                            return;
+                        activeOpen = open;
+                        await HandleNativeImageOpenAsync(
+                            open,
+                            sourceHandle,
+                            sourceLength,
+                            cts.Token);
+                        return;
+                    }
                     var input = await CreatePreviewInputAsync(
                         open.RequestId, open.Path, sourceHandle, sourceLength, inputRoot, cts.Token);
                     if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
@@ -329,6 +354,66 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             cts.Dispose();
         }
     });
+}
+
+async Task HandleNativeImageOpenAsync(
+    RasterOpen open,
+    SafeFileHandle sourceHandle,
+    long sourceLength,
+    CancellationToken cancellationToken)
+{
+    NativeDecodedImage? image = await NativeImageDecoder.TryDecodeHandleAsync(
+        sourceHandle,
+        sourceLength,
+        open.Path,
+        imageDecodeTimeout,
+        cancellationToken,
+        open.TargetWidth,
+        open.TargetHeight);
+    cancellationToken.ThrowIfCancellationRequested();
+    if (image is null)
+    {
+        await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
+        return;
+    }
+
+    await surfacePublishGate.WaitAsync(cancellationToken);
+    try
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+            return;
+        SurfaceTransfer imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+        await channel.SendAsync(new PreviewSurface(
+            open.RequestId,
+            imageHandle.HostHandle,
+            (uint)image.Width,
+            (uint)image.Height,
+            96.0,
+            "B8G8R8A8_UNORM")
+        {
+            TransferId = imageHandle.TransferId,
+        });
+        string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
+            ? Path.GetFileName(open.Probe.Path)
+            : $"{Path.GetFileName(open.Probe.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
+        await channel.SendAsync(new PreviewReady(
+            open.RequestId,
+            "image",
+            title,
+            image.Width,
+            image.Height));
+    }
+    finally
+    {
+        surfacePublishGate.Release();
+    }
+
+    ImageWaveform waveform = await Task.Run(
+        () => ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height),
+        cancellationToken);
+    if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+        await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
 }
 
 void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
