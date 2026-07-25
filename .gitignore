@@ -5,6 +5,8 @@ target/
 .vs/
 .vscode/
 .idea/
+.npm-cache/
+node_modules/
 
 *.user
 *.suo

@@ -1,123 +1,121 @@
 # QuickLook Next
 
-[简体中文](README_CN.md)
+[Project website](https://sherlockchiang.github.io/QuickLook.Next/) · [简体中文](README_CN.md)
 
-Preview files in Windows Explorer with a single press of the Space bar.
+**Select a file in Windows Explorer. Press Space. See it instantly.**
 
-QuickLook Next is a fast, native Windows file previewer built with WinUI 3, Rust, and GPU-composited surfaces. It keeps complex parsers and raster decoders in restricted helper processes so a damaged or unusually large file cannot easily take down the main app.
+[![Latest release](https://img.shields.io/github/v/release/SherlockChiang/QuickLook.Next?display_name=tag&sort=semver)](https://github.com/SherlockChiang/QuickLook.Next/releases/latest)
+![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
+![Architecture](https://img.shields.io/badge/architecture-x64-555555)
 
-> QuickLook Next is under active development. The current release is a portable, unsigned Windows build intended for early users and testers.
+![QuickLook Next previewing its own app artwork](docs/images/quicklook-next-hero.png)
 
-## Highlights
+QuickLook Next is a fast, native file previewer for Windows Explorer. Its WinUI 3 interface, Rust-powered parsing, GPU-composited image surfaces, and isolated helper processes keep previews responsive without sacrificing safety.
 
-- Press **Space** in File Explorer to open or close a preview.
-- Use **arrow keys** to move between Explorer selections while the preview is open.
-- Preview images, animated GIF/WebP, PDF, text and source files, Markdown, CSV, folders, archives, Office documents, media, fonts, packages, certificates, executables, SQLite databases, ebooks, mail, and other common formats.
-- View image metadata and EXIF details, zoom images, browse neighboring images, and open the original file or its location.
-- Play supported local audio and video without launching another app.
-- Keep archive, Office, ebook, executable, and raster work outside the UI process.
-- Avoid silently downloading online-only cloud files. Cloud placeholders use metadata-only previews unless content access is explicitly safe.
-- Follow Windows accessibility settings, including high contrast and reduced motion.
+[Explore the immersive project website →](https://sherlockchiang.github.io/QuickLook.Next/)
 
-## Download
+## Get Started
 
-Download the latest `QuickLook.Next-Installer-*-win-x64.zip` from [GitHub Releases](https://github.com/SherlockChiang/QuickLook.Next/releases).
+1. Download `QuickLook.Next-Installer-*-win-x64.zip` from the [latest release](https://github.com/SherlockChiang/QuickLook.Next/releases/latest).
+2. Extract the ZIP and run `Install.cmd` (`Install-ZH-CN.cmd` provides Chinese instructions).
+3. Approve the administrator prompt, finish installation, and launch **QuickLook Next** from Start.
+4. Select a file in Windows Explorer and press **Space**.
 
-1. Extract the Installer ZIP.
-2. Double-click `Install.cmd`, approve the UAC prompt, and follow the instructions. The package includes a signed MSIX and its project development certificate.
-3. Start QuickLook Next from the Start menu, select a file in File Explorer, and press **Space**.
+The installer contains a signed MSIX and its project development certificate. Windows needs administrator approval to trust this certificate for sideloading. This is development signing rather than commercial Authenticode trust, so Windows may still warn about the installer script.
 
-The development certificate is installed into the local computer's **Trusted People** store, which requires administrator approval for sideloaded MSIX packages. QuickLook Next can be removed later from **Windows Settings > Apps**. Microsoft Store distribution will remove this certificate-installation step in a later test release.
+## Why QuickLook Next?
 
-### Windows Warning
+- **One-key previews:** open or close the preview with `Space`, then follow Explorer selections with the arrow keys.
+- **Rich image viewing:** zoom and pan, inspect EXIF and color details, view waveforms, and browse neighboring images in a filmstrip.
+- **Useful document views:** read PDF, Markdown, source code, virtualized CSV tables, and approximate Office layouts.
+- **Structured data:** browse bounded SQLite table data in switchable sheets with sticky headers and honest partial-data labels.
+- **Broad format coverage:** preview archives, media, fonts, certificates, executables, ebooks, mail, folders, and more.
+- **Safer parsing:** complex parsers and raster decoders run in restricted, cancellable helper processes.
+- **Clear cloud behavior:** online-only files show a download state before previewing; unsupported content is not disguised as a large file icon.
+- **Windows-aware UI:** high contrast, reduced motion, keyboard navigation, and multi-monitor DPI behavior are respected.
 
-Current builds are not Authenticode-signed. Windows SmartScreen may show an "unrecognized app" warning. Verify the downloaded ZIP against the accompanying `.sha256` file before running it:
-
-```powershell
-Get-FileHash .\QuickLook.Next-Installer-0.2.2-win-x64.zip -Algorithm SHA256
-```
-
-Compare the displayed hash with the first value in `QuickLook.Next-Installer-0.2.2-win-x64.zip.sha256` from the same release. Only continue if they match and the file came from this repository's Releases page.
-
-## Using QuickLook Next
+## Shortcuts
 
 | Action | Shortcut |
 | --- | --- |
 | Open or close preview | `Space` |
 | Close preview | `Esc` |
-| Preview previous or next Explorer item | Arrow keys |
+| Follow the previous or next Explorer item | Arrow keys |
 | Zoom image | Mouse wheel or `+` / `-` |
 | Reset image view | `Home` or `Ctrl+0` |
-| Navigate neighboring images | `Left` / `Right` while the image window is focused |
+| Browse neighboring images | `Left` / `Right` while the image preview is focused |
 
-Clicking the preview does not prevent Space from closing it. When focus is inside a text field, button, list item, toggle, or slider, Space keeps the standard Windows control behavior.
-
-The tray menu provides startup and exit controls. Closing a preview hides the window but leaves QuickLook Next available in the tray.
+Space keeps its normal behavior when focus is inside a text field, button, list item, toggle, or slider. Closing a preview hides the window; QuickLook Next remains available from the system tray.
 
 ## Supported Content
 
-Support depends partly on codecs installed in Windows, but the built-in paths cover the most common cases:
+| Category | Preview experience |
+| --- | --- |
+| Images | JPEG, PNG, APNG, GIF, WebP, BMP, and TIFF; system-codec fallback for formats such as HEIC and AVIF |
+| PDF and Office | Virtualized PDF pages and approximate DOCX, XLSX, and PPTX previews |
+| Text and data | Plain text, source code, configuration files, Markdown, CSV, TSV, and SQLite table sheets |
+| Archives and packages | Bounded listings, metadata summaries, package icons, and safe nested-entry previews for supported containers |
+| Audio and video | Formats supported by Windows Media Foundation, with lightweight container and codec metadata |
+| Specialist formats | Fonts, certificates, PE/EXE/DLL, ELF, minidumps, Torrent, mail, ebooks, CHM, and disk-image metadata |
+| Folders | Bounded directory listings with safe, prioritized thumbnail loading |
 
-- **Images:** JPEG, PNG, GIF, WebP, BMP, TIFF; system-codec fallback for formats such as HEIC and AVIF.
-- **Documents:** PDF, DOCX, XLSX, PPTX, EPUB, FB2, Markdown, plain text, source code, configuration files, and CSV.
-- **Archives and packages:** ZIP and other supported archives, application/package metadata, archive browsing, and nested entry previews.
-- **Media:** common local audio/video formats supported by Windows Media Foundation, with lightweight container metadata.
-- **Developer and specialist files:** PE/EXE/DLL, ELF, minidump, certificates, fonts, SQLite, Torrent, mail, and CHM metadata.
-- **Folders:** bounded directory listings with safe thumbnail scheduling.
-
-Office previews are intentionally approximate and do not run Microsoft Office, macros, formula recalculation, embedded scripts, or a browser engine. Exact fidelity varies with document complexity.
+Some formats depend on optional Windows codecs. Office previews do not run Microsoft Office, macros, formula recalculation, embedded scripts, or a browser engine, so exact layout fidelity varies with document complexity.
 
 ## Cloud Files
 
-QuickLook Next treats online-only OneDrive and other cloud placeholders conservatively:
+QuickLook Next distinguishes already-downloaded cloud files from online-only placeholders:
 
-- Opening a preview does not automatically hydrate an online-only file.
-- Metadata-only information is shown when content availability is uncertain.
-- Decorative thumbnails, sidecars, and media playback do not trigger hidden secondary reads.
-- Local files and already-hydrated cloud files receive the full preview experience.
+- Hydrated OneDrive and other cloud files receive the same full preview as local files.
+- Online-only files first show a visible download state.
+- After hydration, QuickLook Next probes the real content and opens the correct preview.
+- Downloads are cancellable and time out instead of leaving a hidden background read running.
+- If availability cannot be verified safely, non-image formats stay in a metadata view instead of falling back to a Shell icon.
 
-An explicit download experience and progress UI are planned for a later release.
+## Verify a Download
+
+Each release includes a SHA-256 file next to the Installer ZIP:
+
+```powershell
+$zip = Get-Item .\QuickLook.Next-Installer-*-win-x64.zip
+Get-FileHash $zip.FullName -Algorithm SHA256
+Get-Content "$($zip.FullName).sha256"
+```
+
+Continue only when the hashes match and both files came from this repository's Releases page.
 
 ## Requirements
 
 - Windows 10 version 1809 or later, or Windows 11.
 - x64 processor.
-- File Explorer. Other file managers are not currently integrated with the global Space shortcut.
+- Windows File Explorer for global Space-key integration.
 - A GPU and driver supported by the Windows composition stack.
 
-The portable release includes the Windows App SDK runtime components required by the app. Some image and media formats still require optional codecs from Windows or the Microsoft Store.
+The package includes the required Windows App SDK runtime components. Optional image and media formats may still require codecs from Windows or the Microsoft Store.
 
 ## Troubleshooting
 
 ### Space does nothing
 
-- Confirm `QuickLook.Next.App.exe` is running and its tray icon is present.
-- Make sure File Explorer is the foreground window and a file is selected.
-- Space is intentionally not intercepted while renaming a file or typing in an Explorer text field.
-- Exit any older QuickLook Next instance from the tray before starting a newly extracted build.
+- Confirm QuickLook Next is running and its tray icon is present.
+- Bring Windows Explorer to the foreground and select a file.
+- Finish renaming files or typing in an Explorer text field; QuickLook Next intentionally leaves Space alone there.
+- Exit older QuickLook or QuickLook Next instances that may also be listening for Space.
 
-### A format shows metadata instead of full content
+### A preview shows metadata or a partial result
 
-- The file may be an online-only cloud placeholder.
-- Windows may not have the required system codec.
-- The parser may have reached a safety limit or timeout. Reopen the file to retry.
+- The file may still be downloading from cloud storage.
+- Windows may not have the optional codec required by the format.
+- A parser may have reached a documented size, row, page, or time limit.
+- SQLite previews sample bounded rows and mark incomplete sheets as partial.
 
 ### Report a problem
 
-Open a [GitHub issue](https://github.com/SherlockChiang/QuickLook.Next/issues) with:
+[Open an issue](https://github.com/SherlockChiang/QuickLook.Next/issues) with your Windows and QuickLook Next versions, file type and approximate size, expected and actual behavior, reproduction steps, and relevant logs. Do not upload private sample files.
 
-- Windows version and QuickLook Next version.
-- File type and approximate size. Do not upload private files.
-- What you expected and what happened.
-- Reproduction steps and relevant logs, if available.
+<details>
+<summary><strong>Build from source</strong></summary>
 
-## Building From Source
-
-Prerequisites:
-
-- Windows x64 with Visual Studio Build Tools and the Desktop C++/MSVC toolchain.
-- .NET SDK version specified by [`global.json`](global.json).
-- Stable Rust MSVC toolchain.
+You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected by [`global.json`](global.json), and the Rust MSVC toolchain selected by [`rust-toolchain.toml`](native/quicklook_next_native/rust-toolchain.toml).
 
 ```powershell
 dotnet restore QuickLook.Next.slnx --locked-mode
@@ -125,35 +123,31 @@ cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
 cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
 dotnet build QuickLook.Next.slnx -c Release --no-restore
 dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
-.\tools\pack-msix.ps1 -CreateDevelopmentCertificate
-# Or set an explicit four-part MSIX identity version:
-.\tools\pack-msix.ps1 -Version 1.4.0.0 -CreateDevelopmentCertificate
 ```
 
-The Installer ZIP, signed MSIX, certificate, and checksum are written to `artifacts/`. Architecture and image-corpus guards run as part of packaging. Development certificates are for testing only; Store releases will use the Partner Center identity.
+`tools/release.ps1` is the authoritative local restore, test, build, signing, and packaging entry point. Release artifacts are written to `artifacts/`.
 
-## Release Workflow
+</details>
 
-Pull requests run CI. Ordinary pushes to `main` do not repeat that build remotely. After a locally tested group of commits is ready, push one commit whose subject starts with `release:` to run the shared stable packaging workflow and publish a signed GitHub Release. Beta releases remain manually dispatched and use the same Release build, test, signing, SBOM, and artifact-validation path.
+<details>
+<summary><strong>Architecture and releases</strong></summary>
 
-Stable tags are the source of truth for published versions. `VERSION` is the minimum version floor; the workflow advances the patch component beyond the latest stable tag automatically. Release notes include user-visible `feat`, `fix`, and `perf` commits since the previous stable tag. Other commit types can opt in with a `Release-Note: ...` footer or opt out with `Release-Note: skip`.
-
-Use `Release-Note-ZH: ...` for an audited Chinese summary. A stable release with no visible change is rejected unless the release commit contains `Release-Allow-Empty: true`. Published assets include `release-metadata.json`, `update.json`, and `build-manifest.json` for recovery, update checks, and build auditing. Stable and beta signing credentials are isolated in their matching GitHub Environments.
-
-## Architecture
-
-- `QuickLook.Next.App`: WinUI 3 shell, preview presenters, input, and process supervision.
-- `quicklook_next_native`: Rust file probing, Explorer integration, native parsers, thumbnails, and image decoding.
+- `QuickLook.Next.App`: WinUI 3 shell, presenters, input, and process supervision.
+- `quicklook_next_native`: Rust probing, Explorer integration, parsers, thumbnails, and image decoding.
 - `QuickLook.Next.ParserHost`: isolated structured parsing for archives, Office files, ebooks, executables, and related formats.
-- `QuickLook.Next.RasterHost`: isolated image/PDF/system-codec rendering and shared GPU surfaces.
-- App/host IPC uses authenticated, current-user-only named pipes with request generation and cancellation guards.
+- `QuickLook.Next.RasterHost`: isolated image, PDF, and system-codec rendering through shared GPU surfaces.
+- App/host IPC uses authenticated current-user-only named pipes with cancellation and stale-result guards.
 
-See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries, verification details, and known remaining work.
+Pull requests run CI. A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
+
+See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries and verification details.
+
+</details>
 
 ## Security
 
-Please avoid filing public issues for undisclosed security vulnerabilities. Until a private security policy is published, contact the repository owner through their GitHub profile with a minimal description and no sensitive sample files.
+Do not file a public issue for an undisclosed vulnerability. Until a private security policy is available, contact the repository owner through their GitHub profile with a minimal description and no sensitive sample files.
 
 ## License
 
-A project license has not yet been published. Source availability does not grant redistribution or modification rights beyond those provided by applicable law. A formal license is planned before a stable release.
+A project license has not yet been published. Source availability does not grant redistribution or modification rights beyond applicable law.
