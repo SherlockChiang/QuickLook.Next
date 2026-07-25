@@ -359,12 +359,12 @@ public sealed partial class MainWindow : Window
         RootGrid.ActualThemeChanged += (s, e) =>
         {
             UpdateTitleBarColors();
-            ApplyImagePreviewBackgrounds();
+            ApplyImageLetterboxBackgrounds();
             ApplyWindowIcon();
             RefreshTrayIcon();
         };
         UpdateTitleBarColors();
-        ApplyImagePreviewBackgrounds();
+        ApplyImageLetterboxBackgrounds();
         _listingPresenter.UpdateSortHeaders();
     }
 
@@ -1659,9 +1659,11 @@ public sealed partial class MainWindow : Window
         _animatedImagePresenter?.ScheduleLayoutUpdate();
     }
 
-    private void ApplyImagePreviewBackgrounds()
+    private void ApplyImageLetterboxBackgrounds()
     {
-        var background = new SolidColorBrush(Microsoft.UI.Colors.Black);
+        Brush background = PrefersReducedTransparency
+            ? (Brush)RootGrid.Resources["PreviewHeroSurfaceBrush"]
+            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         PreviewRoot.Background = background;
         AnimatedImagePreviewRoot.Background = background;
     }
@@ -3336,6 +3338,7 @@ public sealed partial class MainWindow : Window
     private void ApplyAccessibilityVisuals()
     {
         TrySetBackdrop();
+        ApplyImageLetterboxBackgrounds();
         UpdateTitleBarColors();
         _tablePresenter?.RefreshPalette();
         _officePresenter?.RefreshPalette();

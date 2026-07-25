@@ -94,6 +94,19 @@ Require-Pattern $officePresenter 'PageSlot\?\s+pageToMaterialize\s*=\s*null' `
 Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
     "Office virtual-page updates must remain dispatcher-queued."
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
+$mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
+Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="PreviewRoot"[^>]*Background="Transparent"[^>]*/>' `
+    "Static image letterboxing must expose the window backdrop."
+Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="AnimatedImagePreviewRoot"[^>]*Background="Transparent"[^>]*>' `
+    "Animated image letterboxing must expose the window backdrop."
+Require-Pattern $mainWindow 'ApplyImageLetterboxBackgrounds\(\)[\s\S]*PrefersReducedTransparency[\s\S]*RootGrid\.Resources\["PreviewHeroSurfaceBrush"\][\s\S]*Microsoft\.UI\.Colors\.Transparent[\s\S]*PreviewRoot\.Background\s*=\s*background[\s\S]*AnimatedImagePreviewRoot\.Background\s*=\s*background' `
+    "Image letterboxing must use the window backdrop with an accessible reduced-transparency fallback."
+Require-Pattern $mainWindow 'RootGrid\.ActualThemeChanged\s*\+=[\s\S]*?ApplyImageLetterboxBackgrounds\(\)[\s\S]*?UpdateTitleBarColors\(\);\s*\r?\n\s*ApplyImageLetterboxBackgrounds\(\)' `
+    "Image letterboxing must initialize and refresh when the XAML theme changes."
+Require-Pattern $mainWindow 'ApplyAccessibilityVisuals\(\)[\s\S]*?TrySetBackdrop\(\);\s*\r?\n\s*ApplyImageLetterboxBackgrounds\(\)' `
+    "Image letterboxing must refresh when transparency or high-contrast settings change."
+Require-Pattern $mainWindow '(?s)^(?!.*PreviewRoot\.Background\s*=\s*new\s+SolidColorBrush\([^)]*(?:Colors\.)?Black)(?!.*AnimatedImagePreviewRoot\.Background\s*=\s*new\s+SolidColorBrush\([^)]*(?:Colors\.)?Black).*$' `
+    "Image preview roots must not restore an opaque black letterbox at runtime."
 Require-Pattern $mainWindow 'Task\.WhenAll\([\s\S]*PrewarmHostAsync\("ParserHost"[\s\S]*PrewarmHostAsync\("RasterHost"' `
     "ParserHost and RasterHost idle prewarming must run concurrently."
 Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
