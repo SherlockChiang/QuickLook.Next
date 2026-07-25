@@ -282,6 +282,7 @@
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>Checking {0} availability safely...</value></data>
   <data name="CloudUnknownDeferred" xml:space="preserve"><value>Preview is deferred because this cloud file type cannot be identified without downloading its contents.</value></data>
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>Preview is deferred because file availability could not be verified without reading its contents.</value></data>
+  <data name="CloudDownloadDeferred" xml:space="preserve"><value>The cloud file could not be downloaded within the preview timeout. Try again after it is available locally.</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>Media playback is deferred until the cloud provider makes this file available locally.</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>Media playback is deferred because file availability could not be verified safely.</value></data>
   <data name="CloudMetadataPreviewFormat" xml:space="preserve"><value>Name: {0}&#xA;Kind: {1}&#xA;Size: {2}&#xA;Modified: {3}&#xA;Status: {4}</value></data>

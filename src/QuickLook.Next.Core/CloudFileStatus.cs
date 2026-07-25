@@ -35,9 +35,9 @@ public static class CloudFileStatus
                 return CloudFileAvailability.Local;
             if (!TryGetReparseTag(path, out uint reparseTag))
                 return CloudFileAvailability.Unknown;
-            return IsCloudReparseTag(reparseTag)
-                ? CloudFileAvailability.RequiresHydration
-                : CloudFileAvailability.Local;
+            // A Cloud Files reparse point can remain after its content is fully hydrated.
+            // Recall attributes, not cloud identity alone, indicate that opening may download data.
+            return CloudFileAvailability.Local;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

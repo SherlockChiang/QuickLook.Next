@@ -361,6 +361,10 @@ public sealed class CoreBoundaryTests : IDisposable
         => Assert.False(CloudFileStatus.IsCloudReparseTag(reparseTag));
 
     [Fact]
+    public void Hydrated_cloud_reparse_file_is_treated_as_local()
+        => Assert.False(CloudFileStatus.MayRequireHydration(FileAttributes.Archive | FileAttributes.ReparsePoint));
+
+    [Fact]
     public void Cloud_file_status_fails_closed_when_path_cannot_be_inspected()
     {
         string missingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("n"), "missing.dat");

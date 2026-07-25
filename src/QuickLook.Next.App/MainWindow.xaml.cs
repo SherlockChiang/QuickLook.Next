@@ -700,13 +700,29 @@ public sealed partial class MainWindow : Window
             archiveHandoffTransferred = archiveHandoff is not null;
             CloudFileAvailability availability = await availabilityTask;
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            bool mayRequireHydration = availability != CloudFileAvailability.Local;
-            _currentPreviewWasCloudPlaceholder = mayRequireHydration;
             if (availability == CloudFileAvailability.RequiresHydration)
             {
                 StatusText.Text = UiStrings.Format(UiStrings.DownloadingCloudFileFormat, System.IO.Path.GetFileName(path));
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
+                bool hydrated = await HydrateCloudFileAsync(path, previewToken);
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+                if (!hydrated)
+                {
+                    FileProbe deferredProbe = FallbackFileProbe.CreateMetadataOnlyProbe(path);
+                    var deferred = CreateCloudMetadataPreview(
+                        $"cloud-deferred-{generation}",
+                        path,
+                        deferredProbe,
+                        UiStrings.CloudDownloadDeferred);
+                    _previewSession.CommitPath(path);
+                    _previewSession.SetRequestId(null);
+                    StatusText.Text = ShowTextPreview(deferred);
+                    RevealPreviewWindow(activate: false);
+                    return;
+                }
+                availability = CloudFileAvailability.Local;
+                DiagLog.Write("App", $"cloud hydration completed gen={generation}; path={path}");
             }
             else if (availability == CloudFileAvailability.Unknown)
             {
@@ -714,6 +730,8 @@ public sealed partial class MainWindow : Window
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"file availability unknown; using isolated preview gen={generation}; path={path}");
             }
+            bool mayRequireHydration = availability != CloudFileAvailability.Local;
+            _currentPreviewWasCloudPlaceholder = mayRequireHydration;
             DiagLog.Write("App", $"preview probe begin gen={generation}");
             FileProbe probe = await Task.Run(
                 () => mayRequireHydration
@@ -1376,6 +1394,36 @@ public sealed partial class MainWindow : Window
             TextFormat = "plain",
             TextLanguage = "text",
         };
+    }
+
+    private static async Task<bool> HydrateCloudFileAsync(string path, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(CloudPreviewTimeout);
+        try
+        {
+            await using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            byte[] buffer = new byte[64 * 1024];
+            while (await stream.ReadAsync(buffer, timeout.Token) > 0)
+            {
+            }
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            DiagLog.Write("App", "cloud hydration failed: " + ex.Message);
+            return false;
+        }
     }
 
     private static bool ProbeMatchesPath(FileProbe? probe, string? path)

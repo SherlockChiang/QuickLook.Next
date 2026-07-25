@@ -43,6 +43,7 @@ internal static class UiStrings
     public static string CheckingFileAvailabilityFormat => Get(nameof(CheckingFileAvailabilityFormat), "Checking {0} availability safely...");
     public static string CloudUnknownDeferred => Get(nameof(CloudUnknownDeferred), "Preview is deferred because this cloud file type cannot be identified without downloading its contents.");
     public static string CloudAvailabilityUnknownDeferred => Get(nameof(CloudAvailabilityUnknownDeferred), "Preview is deferred because file availability could not be verified without reading its contents.");
+    public static string CloudDownloadDeferred => Get(nameof(CloudDownloadDeferred), "The cloud file could not be downloaded within the preview timeout. Try again after it is available locally.");
     public static string CloudMediaDeferred => Get(nameof(CloudMediaDeferred), "Media playback is deferred until the cloud provider makes this file available locally.");
     public static string CloudMediaAvailabilityUnknownDeferred => Get(nameof(CloudMediaAvailabilityUnknownDeferred), "Media playback is deferred because file availability could not be verified safely.");
     public static string CloudMetadataPreviewFormat => Get(nameof(CloudMetadataPreviewFormat), "Name: {0}\nKind: {1}\nSize: {2}\nModified: {3}\nStatus: {4}");

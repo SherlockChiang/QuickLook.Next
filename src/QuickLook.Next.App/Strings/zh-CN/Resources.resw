@@ -172,6 +172,7 @@
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>正在安全检查 {0} 的可用性...</value></data>
   <data name="CloudUnknownDeferred" xml:space="preserve"><value>无法在不下载内容的情况下识别此云文件类型，因此已推迟预览。</value></data>
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>无法在不读取内容的情况下验证文件可用性，因此已推迟预览。</value></data>
+  <data name="CloudDownloadDeferred" xml:space="preserve"><value>未能在预览等待时间内下载云端文件。请在文件本地可用后重试。</value></data>
   <data name="CloudMediaDeferred" xml:space="preserve"><value>云服务提供商在本地提供此文件后才能播放媒体。</value></data>
   <data name="CloudMediaAvailabilityUnknownDeferred" xml:space="preserve"><value>无法安全验证文件可用性，因此已推迟媒体播放。</value></data>
   <data name="CloudMetadataPreviewFormat" xml:space="preserve"><value>名称：{0}&#xA;类型：{1}&#xA;大小：{2}&#xA;修改时间：{3}&#xA;状态：{4}</value></data>

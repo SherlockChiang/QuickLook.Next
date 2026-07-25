@@ -156,6 +156,13 @@ Require-Pattern $parserNativePreview 'infoKindBytes[\s\S]*ql_preview_database_ca
 $parserProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
 Require-Pattern $parserProgram 'EndsWith\("-wal"[\s\S]*"-wal"[\s\S]*EndsWith\("-shm"[\s\S]*"-shm"' `
     "ParserHost anchors must preserve SQLite WAL and SHM identities."
+$cloudFileStatus = Join-Path $Root "src/QuickLook.Next.Core/CloudFileStatus.cs"
+Require-Pattern $cloudFileStatus 'Recall attributes, not cloud identity alone[\s\S]*return CloudFileAvailability\.Local' `
+    "Hydrated cloud reparse files must remain eligible for normal image and animation routing."
+Require-Pattern $mainWindow 'HydrateCloudFileAsync\(path,\s*previewToken\)[\s\S]*availability\s*=\s*CloudFileAvailability\.Local' `
+    "Cloud placeholders must hydrate before normal preview routing."
+Require-Pattern $mainWindow 'FileOptions\.Asynchronous\s*\|\s*FileOptions\.SequentialScan[\s\S]*ReadAsync\(buffer,\s*timeout\.Token\)' `
+    "Cloud hydration must stream with cancellation instead of buffering whole files or using Shell thumbnails."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
