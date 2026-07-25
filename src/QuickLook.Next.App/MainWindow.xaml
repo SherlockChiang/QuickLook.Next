@@ -147,14 +147,14 @@
             <Border x:Name="PreviewRoot"
                     x:Uid="PreviewRoot"
                     Margin="14,0,14,14"
-                    Background="Transparent"
+                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
                     AutomationProperties.Name="Image preview surface"
                     AutomationProperties.HelpText="Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan." />
             <Border x:Name="AnimatedImagePreviewRoot"
                     x:Uid="AnimatedImagePreviewRoot"
                     Visibility="Collapsed"
                     Margin="14,0,14,14"
-                    Background="Transparent"
+                    Background="{ThemeResource PreviewHeroSurfaceBrush}"
                     AutomationProperties.Name="Animated image preview"
                     AutomationProperties.HelpText="Use the mouse wheel to zoom, drag to pan, or hold Shift and press an arrow key to pan.">
                 <Grid>

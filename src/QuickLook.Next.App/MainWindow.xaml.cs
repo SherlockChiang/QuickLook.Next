@@ -1661,9 +1661,23 @@ public sealed partial class MainWindow : Window
 
     private void ApplyImageLetterboxBackgrounds()
     {
-        Brush background = PrefersReducedTransparency
-            ? (Brush)RootGrid.Resources["PreviewHeroSurfaceBrush"]
-            : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        Brush? background = null;
+        try
+        {
+            string themeKey = IsHighContrast
+                ? "HighContrast"
+                : RootGrid.ActualTheme == ElementTheme.Light ? "Light" : "Dark";
+            if (RootGrid.Resources.ThemeDictionaries[themeKey] is ResourceDictionary themeResources)
+            {
+                string brushKey = PrefersReducedTransparency ? "PreviewSurfaceBrush" : "PreviewHeroSurfaceBrush";
+                background = themeResources[brushKey] as Brush;
+            }
+        }
+        catch { }
+
+        background ??= new SolidColorBrush(PrefersReducedTransparency
+            ? RootGrid.ActualTheme == ElementTheme.Light ? Microsoft.UI.Colors.White : Microsoft.UI.ColorHelper.FromArgb(255, 31, 31, 31)
+            : Microsoft.UI.Colors.Transparent);
         PreviewRoot.Background = background;
         AnimatedImagePreviewRoot.Background = background;
     }

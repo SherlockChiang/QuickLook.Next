@@ -151,7 +151,7 @@ internal sealed class TrayIconManager
         if (msg == WM_TRAYICON)
         {
             if (lParam == WM_LBUTTONDBLCLK)
-                _showPreview();
+                _showSettings();
             else if (lParam == WM_RBUTTONUP)
                 ShowTrayMenu();
             return nint.Zero;

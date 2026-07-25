@@ -34,6 +34,7 @@ foreach ($size in $sizes) {
 
             $hasColor = $false
             $transparentPixels = 0
+            $opaquePixels = 0
             $minimumOpaqueChannel = 255
             $maximumOpaqueChannel = 0
             for ($y = 0; $y -lt $size; $y++) {
@@ -46,6 +47,7 @@ foreach ($size in $sizes) {
                         $hasColor = $true
                     }
                     if ($pixel.A -eq 255) {
+                        $opaquePixels++
                         $minimumOpaqueChannel = [Math]::Min($minimumOpaqueChannel, [Math]::Min($pixel.R, [Math]::Min($pixel.G, $pixel.B)))
                         $maximumOpaqueChannel = [Math]::Max($maximumOpaqueChannel, [Math]::Max($pixel.R, [Math]::Max($pixel.G, $pixel.B)))
                     }
@@ -56,6 +58,9 @@ foreach ($size in $sizes) {
             }
             if ($variant.Kind -eq "color" -and -not $hasColor) {
                 throw "Neutral taskbar icon must use the color app mark: $path"
+            }
+            if ($variant.Kind -eq "color" -and $opaquePixels -lt [Math]::Ceiling($size * $size * 0.40)) {
+                throw "Neutral taskbar icon must keep a filled color mark that obscures the Windows accent state: $path"
             }
             if ($variant.Kind -ne "color" -and $hasColor) {
                 throw "Theme-specific taskbar icons must remain monochrome: $path"
@@ -90,6 +95,14 @@ if ($mainWindow -notmatch 'new\s+TrayIconManager\([\s\S]{0,200}ResolveTrayIconPa
     throw "The notification-area icon must retain transparent high-contrast theme variants."
 }
 
+$trayManagerPath = Join-Path $Root "src\QuickLook.Next.App\TrayIconManager.cs"
+$trayManager = Get-Content -LiteralPath $trayManagerPath -Raw
+if ($trayManager -notmatch 'lParam\s*==\s*WM_LBUTTONDBLCLK\)\s*\r?\n\s*_showSettings\(\)' -or
+    $trayManager -match 'lParam\s*==\s*WM_LBUTTONDBLCLK\)\s*\r?\n\s*_showPreview\(\)' -or
+    $trayManager -match 'lParam\s*==\s*WM_LBUTTON(?:DOWN|UP)\)') {
+    throw "Double-clicking the notification-area icon must open Settings instead of an empty preview window."
+}
+
 foreach ($iconName in @("QuickLookNext.ico", "QuickLookNextLight.ico", "QuickLookNextDark.ico")) {
     $iconPath = Join-Path $assets $iconName
     foreach ($size in @(16, 20, 24, 32, 40, 48, 64, 128, 256)) {
@@ -98,6 +111,7 @@ foreach ($iconName in @("QuickLookNext.ico", "QuickLookNextLight.ico", "QuickLoo
             $bitmap = $icon.ToBitmap()
             try {
                 $transparentPixels = 0
+                $opaquePixels = 0
                 $hasColor = $false
                 $minimumOpaqueChannel = 255
                 $maximumOpaqueChannel = 0
@@ -111,6 +125,7 @@ foreach ($iconName in @("QuickLookNext.ico", "QuickLookNextLight.ico", "QuickLoo
                             $hasColor = $true
                         }
                         if ($pixel.A -eq 255) {
+                            $opaquePixels++
                             $minimumOpaqueChannel = [Math]::Min($minimumOpaqueChannel, [Math]::Min($pixel.R, [Math]::Min($pixel.G, $pixel.B)))
                             $maximumOpaqueChannel = [Math]::Max($maximumOpaqueChannel, [Math]::Max($pixel.R, [Math]::Max($pixel.G, $pixel.B)))
                         }
@@ -121,6 +136,9 @@ foreach ($iconName in @("QuickLookNext.ico", "QuickLookNextLight.ico", "QuickLoo
                 }
                 if ($iconName -eq "QuickLookNext.ico" -and -not $hasColor) {
                     throw "Window ICO must retain the color app mark: $iconName ($size px)"
+                }
+                if ($iconName -eq "QuickLookNext.ico" -and $opaquePixels -lt [Math]::Ceiling($bitmap.Width * $bitmap.Height * 0.40)) {
+                    throw "Window ICO must keep a filled color mark that obscures the Windows accent state: $iconName ($size px)"
                 }
                 if ($iconName -eq "QuickLookNextDark.ico" -and ($hasColor -or $minimumOpaqueChannel -lt 240)) {
                     throw "Dark-theme tray ICO must use high-contrast light ink: $iconName ($size px)"

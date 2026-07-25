@@ -95,11 +95,11 @@ Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
     "Office virtual-page updates must remain dispatcher-queued."
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 $mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
-Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="PreviewRoot"[^>]*Background="Transparent"[^>]*/>' `
-    "Static image letterboxing must expose the window backdrop."
-Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="AnimatedImagePreviewRoot"[^>]*Background="Transparent"[^>]*>' `
-    "Animated image letterboxing must expose the window backdrop."
-Require-Pattern $mainWindow 'ApplyImageLetterboxBackgrounds\(\)[\s\S]*PrefersReducedTransparency[\s\S]*RootGrid\.Resources\["PreviewHeroSurfaceBrush"\][\s\S]*Microsoft\.UI\.Colors\.Transparent[\s\S]*PreviewRoot\.Background\s*=\s*background[\s\S]*AnimatedImagePreviewRoot\.Background\s*=\s*background' `
+Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="PreviewRoot"[^>]*Background="\{ThemeResource PreviewHeroSurfaceBrush\}"[^>]*/>' `
+    "Static image letterboxing must use the window glass surface."
+Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="AnimatedImagePreviewRoot"[^>]*Background="\{ThemeResource PreviewHeroSurfaceBrush\}"[^>]*>' `
+    "Animated image letterboxing must use the window glass surface."
+Require-Pattern $mainWindow 'ApplyImageLetterboxBackgrounds\(\)[\s\S]*RootGrid\.Resources\.ThemeDictionaries\[themeKey\][\s\S]*PrefersReducedTransparency\s*\?\s*"PreviewSurfaceBrush"\s*:\s*"PreviewHeroSurfaceBrush"[\s\S]*background\s*\?\?=[\s\S]*Microsoft\.UI\.Colors\.Transparent[\s\S]*PreviewRoot\.Background\s*=\s*background[\s\S]*AnimatedImagePreviewRoot\.Background\s*=\s*background' `
     "Image letterboxing must use the window backdrop with an accessible reduced-transparency fallback."
 Require-Pattern $mainWindow 'RootGrid\.ActualThemeChanged\s*\+=[\s\S]*?ApplyImageLetterboxBackgrounds\(\)[\s\S]*?UpdateTitleBarColors\(\);\s*\r?\n\s*ApplyImageLetterboxBackgrounds\(\)' `
     "Image letterboxing must initialize and refresh when the XAML theme changes."

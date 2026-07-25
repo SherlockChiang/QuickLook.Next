@@ -95,7 +95,8 @@ function Draw-QuickLookAppIcon {
         35.0)
 
     $outline = New-RoundedRectPath ($s * 0.11) ($s * 0.11) ($s * 0.78) ($s * 0.78) ($s * 0.17)
-    $outlinePen = [System.Drawing.Pen]::new($gradient, [Math]::Max(1.5, $s * 0.070))
+    $g.FillPath($gradient, $outline)
+    $outlinePen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(220, 255, 255, 255), [Math]::Max(1.0, $s * 0.035))
     $outlinePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $outlinePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
     $outlinePen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
@@ -109,9 +110,10 @@ function Draw-QuickLookAppIcon {
         [System.Drawing.PointF]::new($s * 0.75, $s * 0.40),
         [System.Drawing.PointF]::new($s * 0.56, $s * 0.40)
     )
-    $g.FillPolygon($gradient, $bolt)
+    $boltBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+    $g.FillPolygon($boltBrush, $bolt)
 
-    foreach ($item in @($gradient, $outline, $outlinePen, $g)) {
+    foreach ($item in @($gradient, $outline, $outlinePen, $boltBrush, $g)) {
         if ($item -is [System.IDisposable]) { $item.Dispose() }
     }
 
