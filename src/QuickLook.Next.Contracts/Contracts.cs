@@ -194,9 +194,11 @@ public sealed record PreviewTable(string Format)
     public int TotalRows { get; init; }
     public int TotalColumns { get; init; }
     public bool IsPartial { get; init; }
+    public PreviewTableSheet[] Sheets { get; init; } = [];
 }
 
 public sealed record PreviewTableRow(string[] Cells);
+public sealed record PreviewTableSheet(string Name, PreviewTable Table);
 
 public sealed record PreviewMarkdown
 {

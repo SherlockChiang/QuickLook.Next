@@ -379,18 +379,24 @@
 
         </Grid>
     </Border>
-            <ScrollViewer x:Name="TableScrollViewer"
-                          x:Uid="TableScrollViewer"
-                          Visibility="Collapsed"
-                          Margin="14,0,14,14"
-                          Padding="20"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Auto"
-                          Background="{ThemeResource PreviewSurfaceBrush}"
-                          BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
-                          BorderThickness="1"
-                          CornerRadius="8"
-                          AutomationProperties.Name="Delimited table preview">
+            <Grid x:Name="TablePreviewContainer"
+                  Visibility="Collapsed"
+                  Margin="14,0,14,14"
+                  RowSpacing="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <ScrollViewer x:Name="TableScrollViewer"
+                              x:Uid="TableScrollViewer"
+                              Padding="20"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Auto"
+                              Background="{ThemeResource PreviewSurfaceBrush}"
+                              BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                              BorderThickness="1"
+                              CornerRadius="8"
+                              AutomationProperties.Name="Table preview">
                 <StackPanel Spacing="14">
                     <Grid ColumnSpacing="14">
                         <Grid.ColumnDefinitions>
@@ -433,7 +439,19 @@
                                 AutomationProperties.Name="Delimited table cells" />
                     </Border>
                 </StackPanel>
-            </ScrollViewer>
+                </ScrollViewer>
+                <ScrollViewer x:Name="TableSheetTabsScroller"
+                              Grid.Row="1"
+                              Visibility="Collapsed"
+                              HorizontalScrollMode="Enabled"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollMode="Disabled"
+                              VerticalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="TableSheetTabsPanel"
+                                Orientation="Horizontal"
+                                Spacing="4" />
+                </ScrollViewer>
+            </Grid>
             <ScrollViewer x:Name="OfficeScrollViewer"
                           x:Uid="OfficeScrollViewer"
                           Visibility="Collapsed"

@@ -1,6 +1,7 @@
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Automation;
 using QuickLook.Next.Contracts;
@@ -22,6 +23,8 @@ internal sealed class TablePreviewPresenter
     private readonly TextBlock _titleText;
     private readonly TextBlock _summaryText;
     private readonly Canvas _canvas;
+    private readonly ScrollViewer _sheetTabsScroller;
+    private readonly StackPanel _sheetTabsPanel;
     private readonly Func<ElementTheme> _getTheme;
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private PreviewTable? _table;
@@ -33,6 +36,7 @@ internal sealed class TablePreviewPresenter
     private int _lastRenderedColumn = -1;
     private readonly List<Border> _columnHeaders = [];
     private readonly List<Border> _rowHeaders = [];
+    private PreviewTableSheet[] _sheets = [];
     private Border? _corner;
 
     public TablePreviewPresenter(
@@ -40,6 +44,8 @@ internal sealed class TablePreviewPresenter
         TextBlock titleText,
         TextBlock summaryText,
         Canvas canvas,
+        ScrollViewer sheetTabsScroller,
+        StackPanel sheetTabsPanel,
         Func<ElementTheme> getTheme,
         Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast)
     {
@@ -47,6 +53,8 @@ internal sealed class TablePreviewPresenter
         _titleText = titleText;
         _summaryText = summaryText;
         _canvas = canvas;
+        _sheetTabsScroller = sheetTabsScroller;
+        _sheetTabsPanel = sheetTabsPanel;
         _getTheme = getTheme;
         _getHighContrast = getHighContrast;
         _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
@@ -55,11 +63,24 @@ internal sealed class TablePreviewPresenter
 
     public TablePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
-        PreviewTable table = TablePresentationPolicy.Bound(ready.Table!);
         _titleText.Text = ready.Title;
+        _sheets = ready.Table!.Sheets.Take(8).ToArray();
+        BuildSheetTabs();
+        PreviewTable table = _sheets.Length > 0 ? _sheets[0].Table : ready.Table;
+        ApplyTable(table);
+
+        double tableWidth = RowHeaderWidth + _widths.Sum();
+        double tableHeight = HeaderHeight + _table!.Rows.Length * RowHeight;
+        double widthTarget = Math.Clamp(Math.Min(tableWidth + 72, maxContent.Width), 560, maxContent.Width);
+        double heightTarget = Math.Clamp(Math.Min(tableHeight + 132, maxContent.Height), 320, maxContent.Height);
+        return new TablePreviewResult($"{ready.Kind}: {ready.Title}", widthTarget, heightTarget);
+    }
+
+    private void ApplyTable(PreviewTable source)
+    {
+        PreviewTable table = TablePresentationPolicy.Bound(source);
         _summaryText.Text = BuildSummary(table);
         _scrollViewer.ChangeView(0, 0, null, true);
-
         int columnCount = Math.Clamp(table.Headers.Length, 1, 64);
         _table = table;
         _widths = EstimateColumnWidths(table, columnCount);
@@ -71,14 +92,53 @@ internal sealed class TablePreviewPresenter
         _canvas.Height = tableHeight;
         ResetRenderedRange();
         RenderViewport();
-        double widthTarget = Math.Clamp(Math.Min(tableWidth + 72, maxContent.Width), 560, maxContent.Width);
-        double heightTarget = Math.Clamp(Math.Min(tableHeight + 132, maxContent.Height), 320, maxContent.Height);
-        return new TablePreviewResult($"{ready.Kind}: {ready.Title}", widthTarget, heightTarget);
+    }
+
+    private void BuildSheetTabs()
+    {
+        _sheetTabsPanel.Children.Clear();
+        _sheetTabsScroller.Visibility = _sheets.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
+        for (int index = 0; index < _sheets.Length; index++)
+        {
+            int sheetIndex = index;
+            var button = new ToggleButton
+            {
+                Content = _sheets[index].Name,
+                Padding = new Thickness(16, 7, 16, 7),
+                CornerRadius = new CornerRadius(5),
+                Tag = index,
+            };
+            AutomationProperties.SetName(button, $"Sheet {_sheets[index].Name}");
+            button.Click += (_, _) => SelectSheet(sheetIndex);
+            _sheetTabsPanel.Children.Add(button);
+        }
+        if (_sheets.Length > 0)
+            _titleText.Text = _sheets[0].Name;
+        UpdateSheetTabSelection(0);
+    }
+
+    private void SelectSheet(int index)
+    {
+        if ((uint)index >= (uint)_sheets.Length)
+            return;
+        ApplyTable(_sheets[index].Table);
+        _titleText.Text = _sheets[index].Name;
+        UpdateSheetTabSelection(index);
+    }
+
+    private void UpdateSheetTabSelection(int selectedIndex)
+    {
+        for (int index = 0; index < _sheetTabsPanel.Children.Count; index++)
+        {
+            if (_sheetTabsPanel.Children[index] is ToggleButton button)
+                button.IsChecked = index == selectedIndex;
+        }
     }
 
     public void Clear()
     {
         _table = null;
+        _sheets = [];
         _widths = [];
         _palette = null;
         ResetRenderedRange();
@@ -87,6 +147,8 @@ internal sealed class TablePreviewPresenter
         _canvas.Height = 0;
         _titleText.Text = "";
         _summaryText.Text = "";
+        _sheetTabsPanel.Children.Clear();
+        _sheetTabsScroller.Visibility = Visibility.Collapsed;
     }
 
     public void RefreshPalette()

@@ -161,6 +161,19 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.True(Assert.Single(ready.Listing.Items).IsEncrypted);
     }
 
+    [Fact]
+    public void Preview_table_json_preserves_SQLite_sheets()
+    {
+        const string json = """
+            {"kind":"database","title":"sample.db - users","table":{"format":"sqlite","summary":"SQLite 3","delimiter":"","headers":["id"],"rows":[{"cells":["1"]}],"totalRows":1,"totalColumns":1,"isPartial":false,"sheets":[{"name":"users","table":{"format":"sqlite","delimiter":"","headers":["id"],"rows":[{"cells":["1"]}],"totalRows":1,"totalColumns":1,"isPartial":false}},{"name":"orders","table":{"format":"sqlite","delimiter":"","headers":["id","total"],"rows":[{"cells":["2","9.5"]}],"totalRows":1,"totalColumns":2,"isPartial":false}}]}}
+            """;
+
+        Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
+        Assert.Equal(["users", "orders"], ready!.Table!.Sheets.Select(sheet => sheet.Name));
+        Assert.Equal(["id", "total"], ready.Table.Sheets[1].Table.Headers);
+        Assert.Equal("9.5", ready.Table.Sheets[1].Table.Rows[0].Cells[1]);
+    }
+
     [Theory]
     [InlineData(".AVIF", "avif", true)]
     [InlineData(".heif", "heic", true)]

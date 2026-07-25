@@ -210,7 +210,7 @@ public sealed partial class MainWindow : Window
             PdfScrollViewer,
             PdfPagerBar,
             TextPreviewContainer,
-            TableScrollViewer,
+            TablePreviewContainer,
             OfficeScrollViewer,
             MediaPreviewElement,
             ListingPanel,
@@ -235,6 +235,8 @@ public sealed partial class MainWindow : Window
             TableTitleText,
             TableSummaryText,
             TableGrid,
+            TableSheetTabsScroller,
+            TableSheetTabsPanel,
             () => RootGrid.ActualTheme,
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
         _officePresenter = new OfficePreviewPresenter(

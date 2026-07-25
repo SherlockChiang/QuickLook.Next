@@ -210,6 +210,10 @@ Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_COLUMNS:\s*usize\s*=\s*32' `
     "SQLite table previews must retain their 32-column sample budget."
 Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_CELL_CHARS:\s*usize\s*=\s*256' `
     "SQLite table previews must retain their 256-character cell budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_SHEETS:\s*usize\s*=\s*8' `
+    "SQLite previews must retain their eight-sheet budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
+    "SQLite sheets must share a 512 KiB retained-character budget."
 Require-Pattern $nativePreview 'append_sqlite_wal_summary[\s\S]*Frames observed' `
     "SQLite WAL files must remain metadata previews instead of generic file icons."
 Require-Pattern $nativePreview 'text_encoding\s*=\s*read_u32_be\(bytes,\s*56\)[\s\S]*decode_sqlite_utf16' `
@@ -269,8 +273,10 @@ Require-Pattern $tablePresenter 'else\s*\r?\n\s*RenderViewport\(\)' `
     "Delimited tables must not rebuild cells during intermediate scroll events."
 Require-Pattern $tablePresenter 'MaxViewportCells\s*=\s*1024' `
     "Delimited table viewport rendering must retain its 1024-cell budget."
-Require-Pattern $tablePresenter 'TablePresentationPolicy\.Bound\(ready\.Table!\)' `
-    "Delimited tables must defensively bound host-provided presentation models."
+Require-Pattern $tablePresenter 'private void ApplyTable\(PreviewTable source\)[\s\S]*TablePresentationPolicy\.Bound\(source\)' `
+    "Every delimited-table and SQLite-sheet model must be defensively bounded before rendering."
+Require-Pattern $tablePresenter 'ready\.Table!\.Sheets\.Take\(8\)' `
+    "SQLite sheet tabs must remain capped at eight models."
 
 if ($failures.Count -gt 0) {
     Write-Host ""

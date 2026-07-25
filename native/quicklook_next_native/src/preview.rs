@@ -165,7 +165,7 @@ struct PreviewListingItemDto {
     is_encrypted: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PreviewTableDto {
     format: String,
@@ -177,9 +177,18 @@ struct PreviewTableDto {
     total_rows: usize,
     total_columns: usize,
     is_partial: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sheets: Vec<PreviewTableSheetDto>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PreviewTableSheetDto {
+    name: String,
+    table: PreviewTableDto,
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PreviewTableRowDto {
     cells: Vec<String>,
@@ -1809,6 +1818,7 @@ fn render_delimited_table_json(
             total_rows,
             total_columns: display_total_columns,
             is_partial,
+            sheets: Vec::new(),
         }),
         markdown: None,
     })
@@ -5609,6 +5619,8 @@ const MAX_SQLITE_TABLE_ROW_PAGES: usize = 128;
 const MAX_SQLITE_SAMPLE_ROWS: usize = 100;
 const MAX_SQLITE_SAMPLE_COLUMNS: usize = 32;
 const MAX_SQLITE_SAMPLE_CELL_CHARS: usize = 256;
+const MAX_SQLITE_SAMPLE_SHEETS: usize = 8;
+const MAX_SQLITE_SAMPLE_RETAINED_CHARS: usize = 512 * 1024;
 
 struct SqliteTablePreview {
     name: String,
@@ -5621,11 +5633,43 @@ fn build_sqlite_table_preview(
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<SqliteTablePreview> {
     let schema = parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS, cancel_cb);
-    let row = schema.rows.iter().find(|row| {
+    let business_tables = schema.rows.iter().filter(|row| {
         row.typ.eq_ignore_ascii_case("table")
             && row.root_page > 0
             && !row.name.to_ascii_lowercase().starts_with("sqlite_")
-    })?;
+    });
+    let mut retained_chars = 0usize;
+    let mut sheets = Vec::new();
+    for row in business_tables.take(MAX_SQLITE_SAMPLE_SHEETS) {
+        if preview_cancelled(cancel_cb) {
+            return None;
+        }
+        if let Some(table) = build_sqlite_sheet_table(
+            bytes,
+            page_size,
+            row,
+            &schema,
+            &mut retained_chars,
+            cancel_cb,
+        ) {
+            sheets.push(PreviewTableSheetDto { name: row.name.clone(), table });
+        }
+    }
+    let first = sheets.first()?;
+    let first_name = first.name.clone();
+    let mut first_table = first.table.clone();
+    first_table.sheets = sheets;
+    Some(SqliteTablePreview { name: first_name, table: first_table })
+}
+
+fn build_sqlite_sheet_table(
+    bytes: &[u8],
+    page_size: usize,
+    row: &SqliteSchemaRow,
+    schema: &SqliteSchemaSummary,
+    retained_chars: &mut usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<PreviewTableDto> {
     let headers = parse_sqlite_table_column_names(&row.sql, MAX_SQLITE_SAMPLE_COLUMNS);
     if headers.is_empty() {
         return None;
@@ -5636,6 +5680,7 @@ fn build_sqlite_table_preview(
         row.root_page,
         headers.len(),
         read_u32_be(bytes, 56).unwrap_or(1),
+        retained_chars,
         cancel_cb,
     )?;
     let observed = count_sqlite_table_rows(
@@ -5653,28 +5698,25 @@ fn build_sqlite_table_preview(
         || sample.partial
         || observed.as_ref().is_some_and(|count| count.partial)
         || total_rows > sample.rows.len();
-    let summary = format!(
-        "SQLite 3 | Table: {} | Page size: {} bytes | Encoding: {} | Schema objects: {}{} | Showing {} of {} observed rows",
-        row.name,
-        page_size,
-        sqlite_encoding_name(read_u32_be(bytes, 56).unwrap_or(0)),
-        schema.rows.len(),
-        if schema.partial { "+" } else { "" },
-        sample.rows.len(),
-        total_rows
-    );
-    Some(SqliteTablePreview {
-        name: row.name.clone(),
-        table: PreviewTableDto {
-            format: "sqlite".to_string(),
-            summary: Some(summary),
-            delimiter: String::new(),
-            headers,
-            rows: sample.rows,
-            total_rows,
-            total_columns: sample.total_columns,
-            is_partial,
-        },
+    Some(PreviewTableDto {
+        format: "sqlite".to_string(),
+        summary: Some(format!(
+            "SQLite 3 | Table: {} | Page size: {} bytes | Encoding: {} | Schema objects: {}{} | Showing {} of {} observed rows",
+            row.name,
+            page_size,
+            sqlite_encoding_name(read_u32_be(bytes, 56).unwrap_or(0)),
+            schema.rows.len(),
+            if schema.partial { "+" } else { "" },
+            sample.rows.len(),
+            total_rows
+        )),
+        delimiter: String::new(),
+        headers,
+        rows: sample.rows,
+        total_rows,
+        total_columns: sample.total_columns,
+        is_partial,
+        sheets: Vec::new(),
     })
 }
 
@@ -5690,6 +5732,7 @@ fn sample_sqlite_table_rows(
     root_page: i64,
     column_count: usize,
     text_encoding: u32,
+    retained_chars: &mut usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<SqliteTableSample> {
     if root_page <= 0 || column_count == 0 {
@@ -5738,6 +5781,12 @@ fn sample_sqlite_table_rows(
                         column_count,
                         text_encoding,
                     ) {
+                        let row_chars = cells.iter().map(|cell| cell.chars().count()).sum::<usize>();
+                        if *retained_chars > MAX_SQLITE_SAMPLE_RETAINED_CHARS.saturating_sub(row_chars) {
+                            partial = true;
+                            break;
+                        }
+                        *retained_chars += row_chars;
                         total_columns = total_columns.max(record_columns);
                         rows.push(PreviewTableRowDto { cells });
                     } else {
