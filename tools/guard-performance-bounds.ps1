@@ -98,6 +98,11 @@ Require-Pattern $mainWindow 'PreviewContentHost\.AddHandler\([\s\S]*PointerWheel
     "Preview wheel routing must receive events already handled by nested scroll viewers."
 Require-Pattern $mainWindow 'IsPointInside\(e\.GetCurrentPoint\(ImageFilmstrip\)\.Position,\s*ImageFilmstrip\)' `
     "Mouse wheel input over the image filmstrip must use geometric hit testing."
+Require-Pattern $mainWindow 'MinRasterChromeContentWidth\s*=\s*760' `
+    "Small image windows must remain wide enough for the info rail and complete zoom toolbar."
+if (([regex]::Matches((Get-Content -LiteralPath $mainWindow -Raw), 'Math\.Max\(result\.Width,\s*MinRasterChromeContentWidth\)')).Count -lt 3) {
+    $failures.Add("Static and animated image windows must all retain the minimum raster chrome width.")
+}
 $mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
 $mainWindowXamlText = Get-Content -LiteralPath $mainWindowXaml -Raw
 foreach ($removedControl in @("TextFindPanel", "TextSearchButton", "TextWordWrapButton", "TextLineNumbersButton")) {

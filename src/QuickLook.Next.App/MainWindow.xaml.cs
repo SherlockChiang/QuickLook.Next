@@ -37,6 +37,7 @@ public sealed partial class MainWindow : Window
     private const double RasterInfoRailWidth = 246;
     private const double RasterToolbarHeight = 162;
     private const double CompactRasterChromeWidth = 720;
+    private const double MinRasterChromeContentWidth = 760;
     private const double RasterContentMargin = 14;
     private const int SwitchDebounceMs = 30;
     private const int ImageSidecarLoadDelayMs = 180;
@@ -1676,7 +1677,7 @@ public sealed partial class MainWindow : Window
         UpdatePreviewChrome(ready, showRasterTools: true);
         _panelController.ShowRaster();
         RasterPreviewResult result = _rasterPresenter!.Render(ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         DispatcherQueue.TryEnqueue(() =>
         {
             if (_previewSession.IsCurrentRequest(ready.RequestId))
@@ -1702,7 +1703,7 @@ public sealed partial class MainWindow : Window
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         UpdateImageAnimationPlaybackButton();
-        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         ScheduleImageSidecarLoads(ready);
         return result.Status;
     }
@@ -1719,7 +1720,7 @@ public sealed partial class MainWindow : Window
 
         AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
         UpdateImageAnimationPlaybackButton();
-        ResizeWindowForContent(result.Width, result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+        ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
         if (scheduleSidecars)
             ScheduleImageSidecarLoads(ready);
         return result.Status;
