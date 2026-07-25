@@ -77,7 +77,6 @@ const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
 const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
 const QL_FEATURE_HANDLE_SQLITE_SNAPSHOT: u64 = 1 << 3;
 const QL_FEATURE_HANDLE_ARCHIVE: u64 = 1 << 4;
-#[allow(dead_code)] // Reserved for the Office main/hero HANDLE slice; intentionally not advertised yet.
 const QL_FEATURE_HANDLE_OFFICE: u64 = 1 << 5;
 const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
@@ -105,6 +104,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_TORRENT
         | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
         | QL_FEATURE_HANDLE_ARCHIVE
+        | QL_FEATURE_HANDLE_OFFICE
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
 }
@@ -3048,6 +3048,101 @@ pub unsafe extern "C" fn ql_preview_archive_handle(
     })
 }
 
+/// Render an Office preview from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_office_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, modified_unix| {
+                preview::render_office_reader(
+                    file,
+                    logical_name,
+                    expected_length,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
+/// Extract a useful embedded Office image from a borrowed Windows file handle.
+/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_office_image_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let (width, height, bgra) = match preview::extract_office_image_bgra_reader(
+            &mut file,
+            expected_length,
+            &logical_name,
+            cancel_cb,
+        ) {
+            Ok(image) => image,
+            Err(error) => return reader_preview_status(error),
+        };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        let mut packet = Vec::with_capacity(8 + bgra.len());
+        packet.extend_from_slice(&width.to_le_bytes());
+        packet.extend_from_slice(&height.to_le_bytes());
+        packet.extend_from_slice(&bgra);
+        write_v2_out(&packet, out_buf, out_cap, out_required)
+    })
+}
+
 /// Render an ebook from a borrowed Windows file handle.
 ///
 /// # Safety
@@ -3530,10 +3625,10 @@ fn native_abi_version_is_stable() {
         | QL_FEATURE_HANDLE_TORRENT
         | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
         | QL_FEATURE_HANDLE_ARCHIVE
+        | QL_FEATURE_HANDLE_OFFICE
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
     assert_eq!(ql_capabilities() & required, required);
-    assert_eq!(ql_capabilities() & QL_FEATURE_HANDLE_OFFICE, 0);
 }
 
 #[cfg(test)]
@@ -3646,6 +3741,54 @@ mod handle_v2_tests {
     ) -> i32 {
         unsafe {
             ql_preview_archive_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_office_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_office_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_office_image_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_extract_office_image_handle(
                 source_handle,
                 expected_length,
                 logical_name_utf8,
@@ -4181,6 +4324,76 @@ mod handle_v2_tests {
             QL_ERROR_LENGTH_MISMATCH
         );
         assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn office_handle_preview_and_hero_use_same_pinned_file_without_moving_position() {
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            8,
+            8,
+            image::Rgba([20, 80, 160, 255]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode Office image");
+        let png = png.into_inner();
+        let bytes = zip_bytes(&[
+            (
+                "word/document.xml",
+                br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Office HANDLE marker</w:t></w:r></w:p></w:body></w:document>"#,
+            ),
+            ("word/media/image1.png", &png),
+        ]);
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(13)).expect("position Office handle");
+        let position = file.stream_position().unwrap();
+
+        let json = preview_json_with(
+            call_office_handle,
+            &file,
+            r"C:\missing\logical.docx",
+        );
+        assert_eq!(json["kind"], "office");
+        assert!(json["text"].as_str().unwrap().contains("Office HANDLE marker"));
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let logical_name = b"logical.docx";
+        let mut required = 0usize;
+        assert_eq!(
+            call_office_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > 8);
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_office_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(required, packet.len());
+        assert!(u32::from_le_bytes(packet[..4].try_into().unwrap()) > 0);
+        assert!(u32::from_le_bytes(packet[4..8].try_into().unwrap()) > 0);
+        assert_eq!(file.stream_position().unwrap(), position);
 
         drop(file);
         let _ = fs::remove_file(path);

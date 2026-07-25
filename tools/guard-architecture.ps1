@@ -537,6 +537,7 @@ if (Test-Path $parserHostProgram) {
         executable = "ql_preview_executable_handle"
         torrent = "ql_preview_torrent_handle"
         archive = "ql_preview_archive_handle"
+        office = "ql_preview_office_handle"
         ebook = "ql_preview_ebook_handle"
     }
     foreach ($mapping in $handleMappings.GetEnumerator()) {
@@ -549,7 +550,7 @@ if (Test-Path $parserHostProgram) {
     $usesHandleInput = [regex]::Match(
         $parserNativePreviewText,
         'UsesHandleInput\s*\(string kind\)[\s\S]*?(?=\r?\n\s*public\s+static|\r?\n\s*private\s+static)').Value
-    foreach ($kind in @("text", "executable", "torrent", "archive", "ebook")) {
+    foreach ($kind in @("text", "executable", "torrent", "archive", "office", "ebook")) {
         if ($usesHandleInput -notmatch ('"' + [Regex]::Escape($kind) + '"')) {
             Add-Failure "ParserHost direct HANDLE routing must include '$kind'"
         }
@@ -564,6 +565,17 @@ if (Test-Path $parserHostProgram) {
     if ($parserNativePreviewText -notmatch 'ql_extract_archive_entry_handle\(' -or
         $parserNativePreviewText -notmatch 'TryExtractArchiveEntryHandle\([\s\S]*ql_extract_archive_entry_handle\(') {
         Add-Failure "ParserHost archive entry extraction must call the dedicated native HANDLE entry point"
+    }
+    if ($parserNativePreviewText -notmatch 'ql_extract_office_image_handle\(' -or
+        $parserNativePreviewText -notmatch 'TryExtractOfficeHeroRasterHandle\([\s\S]*ql_extract_office_image_handle\(') {
+        Add-Failure "ParserHost Office hero extraction must call the dedicated native HANDLE entry point"
+    }
+    $heroExtractCase = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+HeroRasterExtract\s+extract[\s\S]*?(?=\r?\n\s*case\s+HeroRasterExtractClose)').Value
+    if ($heroExtractCase -notmatch 'extract\.Kind\.Equals\("office"[\s\S]*if\s*\(extract\.ParentPreviewRequestId\s+is\s+\{\s*\}\s+officeParentRequestId\)[\s\S]*retainedOfficeSource\.TryAcquire\(\s*RetainedPreviewFollowUps\.OfficeHero,[\s\S]*out officeHeroLease' -or
+        $heroExtractCase -notmatch 'if\s*\(officeHeroLease\s+is\s+not\s+null\)[\s\S]*TryExtractOfficeHeroRasterHandle\(') {
+        Add-Failure "Parent-bound Office hero extraction must fail closed and use an independent HANDLE lease"
     }
 
     $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
@@ -584,11 +596,11 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
         $parserHandleInputs -notmatch '\bHandleSqliteSnapshot\b' -or
         $parserHandleInputs -notmatch '\bHandleArchive\b' -or
+        $parserHandleInputs -notmatch '\bHandleOffice\b' -or
         $parserHandleInputs -notmatch '\bHandleEbook\b' -or
         $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
-        $parserHandleInputs -match '\bHandleOffice\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-7, reserved Office exclusion, and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-7 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -614,6 +626,7 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_torrent_handle",
         "ql_preview_sqlite_handles",
         "ql_preview_archive_handle",
+        "ql_preview_office_handle",
         "ql_preview_ebook_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
@@ -660,11 +673,11 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_EBOOK:\s*u64\s*=\s*1\s*<<\s*6' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY:\s*u64\s*=\s*1\s*<<\s*7' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY\b' -or
-        $capabilitiesBody -match '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise archive/ebook/archive-entry bits, reserve Office bit 5, and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise archive/Office/ebook/archive-entry bits and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {

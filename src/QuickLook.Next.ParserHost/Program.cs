@@ -211,15 +211,17 @@ while (true)
                             await channel.SendAsync(new PreviewError(open.RequestId, handleError ?? "Native handle parser returned no preview."));
                         else
                         {
-                            if (kind is "archive" or "ebook")
+                            if (kind is "archive" or "ebook" or "office")
                             {
                                 string logicalName = Path.GetFileName(open.LogicalPath);
                                 RetainedPreviewFollowUps followUps =
-                                    string.Equals(
-                                        handleReady?.Listing?.ListingKind,
-                                        "archive",
-                                        StringComparison.OrdinalIgnoreCase)
-                                    && handleReady?.Listing?.CanPreviewEntries == true
+                                    kind == "office"
+                                        ? RetainedPreviewFollowUps.OfficeHero
+                                        : string.Equals(
+                                            handleReady?.Listing?.ListingKind,
+                                            "archive",
+                                            StringComparison.OrdinalIgnoreCase)
+                                        && handleReady?.Listing?.CanPreviewEntries == true
                                         ? RetainedPreviewFollowUps.ArchiveEntry
                                         : RetainedPreviewFollowUps.None;
                                 if (followUps != RetainedPreviewFollowUps.None)
@@ -569,8 +571,36 @@ while (true)
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Invalid hero raster request."));
                 break;
             }
+            RetainedPreviewSourceLease? officeHeroLease = null;
+            if (extract.Kind.Equals("office", StringComparison.OrdinalIgnoreCase))
+            {
+                if (extract.ParentPreviewRequestId is { } officeParentRequestId)
+                {
+                    if (!IsValidRequestId(officeParentRequestId)
+                        || !retainedPreviewSources.TryGetValue(
+                            officeParentRequestId,
+                            out RetainedPreviewSource? retainedOfficeSource)
+                        || !retainedOfficeSource.TryAcquire(
+                            RetainedPreviewFollowUps.OfficeHero,
+                            out officeHeroLease))
+                    {
+                        await channel.SendAsync(new PreviewError(
+                            extract.RequestId,
+                            "Parent Office preview source is unavailable."));
+                        break;
+                    }
+                }
+                else if (string.IsNullOrWhiteSpace(extract.Path))
+                {
+                    await channel.SendAsync(new PreviewError(
+                        extract.RequestId,
+                        "Office preview path is unavailable."));
+                    break;
+                }
+            }
             if (heroRasters.ContainsKey(extract.RequestId))
             {
+                officeHeroLease?.Dispose();
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster handoff has not been released."));
                 break;
             }
@@ -578,6 +608,7 @@ while (true)
             var heroHandoffGate = new SemaphoreSlim(1, 1);
             if (!requests.TryAdd(extract.RequestId, heroCts))
             {
+                officeHeroLease?.Dispose();
                 heroCts.Dispose();
                 heroHandoffGate.Dispose();
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Duplicate request ID."));
@@ -585,6 +616,7 @@ while (true)
             }
             if (!heroHandoffGates.TryAdd(extract.RequestId, heroHandoffGate))
             {
+                officeHeroLease?.Dispose();
                 requests.TryRemove(extract.RequestId, out _);
                 heroCts.Dispose();
                 heroHandoffGate.Dispose();
@@ -593,24 +625,47 @@ while (true)
             _ = Task.Run(async () =>
             {
                 string? tempPath = null;
+                bool handoffDelivered = false;
                 try
                 {
-                    string heroPath;
-                    if (extract.ParentPreviewRequestId is { } parentRequestId)
+                    byte[]? raster;
+                    if (officeHeroLease is not null)
                     {
-                        if (!IsValidRequestId(parentRequestId)
-                            || !previewInputs.TryGetValue(parentRequestId, out var parentInput))
+                        var handleResult = ParserNativePreview.TryExtractOfficeHeroRasterHandle(
+                            officeHeroLease.Handle,
+                            officeHeroLease.Length,
+                            officeHeroLease.LogicalName,
+                            heroCts.Token);
+                        if (handleResult.Status != NativeAbi.StatusOk)
                         {
-                            await channel.SendAsync(new PreviewError(extract.RequestId, "Parent preview input is unavailable."));
-                            return;
+                            DiagLog.Write(
+                                "ParserHost",
+                                $"native Office hero HANDLE extraction failed request={extract.RequestId} status={handleResult.Status}");
                         }
-                        heroPath = parentInput.Path;
+                        raster = handleResult.Raster;
                     }
                     else
                     {
-                        heroPath = extract.Path;
+                        string heroPath;
+                        if (extract.ParentPreviewRequestId is { } parentRequestId)
+                        {
+                            if (!IsValidRequestId(parentRequestId)
+                                || !previewInputs.TryGetValue(parentRequestId, out var parentInput))
+                            {
+                                await channel.SendAsync(new PreviewError(extract.RequestId, "Parent preview input is unavailable."));
+                                return;
+                            }
+                            heroPath = parentInput.Path;
+                        }
+                        else
+                        {
+                            heroPath = extract.Path;
+                        }
+                        raster = ParserNativePreview.TryExtractHeroRaster(
+                            extract.Kind,
+                            heroPath,
+                            heroCts.Token);
                     }
-                    byte[]? raster = ParserNativePreview.TryExtractHeroRaster(extract.Kind, heroPath, heroCts.Token);
                     heroCts.Token.ThrowIfCancellationRequested();
                     if (raster is null || !ParserNativePreview.IsValidRaster(raster, raster.Length))
                     {
@@ -641,6 +696,7 @@ while (true)
                         heroRasters[extract.RequestId] = (tempPath, transferred.Handle);
                         await channel.SendAsync(new HeroRasterExtracted(
                             extract.RequestId, transferred.Handle.DangerousGetHandle().ToInt64(), transferred.Length, width, height));
+                        handoffDelivered = true;
                         tempPath = null; // retained until the App acknowledges consumption.
                     }
                     finally
@@ -656,6 +712,13 @@ while (true)
                 }
                 finally
                 {
+                    officeHeroLease?.Dispose();
+                    if (!handoffDelivered
+                        && heroRasters.TryRemove(extract.RequestId, out var failedRaster))
+                    {
+                        failedRaster.Handle.Dispose();
+                        DeleteHeroRaster(failedRaster.Path);
+                    }
                     if (tempPath is not null) DeleteHeroRaster(tempPath);
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();

@@ -233,6 +233,8 @@ Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\
     "Archive HANDLE inputs must remain capped at 256 MiB."
 Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Ebook HANDLE inputs must remain capped at 256 MiB."
+Require-Pattern $nativePreview 'MAX_OFFICE_INPUT_BYTES:\s*u64\s*=\s*128\s*\*\s*1024\s*\*\s*1024' `
+    "Office HANDLE inputs must remain capped at 128 MiB."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
@@ -279,6 +281,10 @@ Require-Pattern $nativePreview 'render_archive_reader_with_root<R:\s*Read\s*\+\s
     "Archive path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativePreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
     "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
+Require-Pattern $nativePreview 'render_office_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
+    "Office path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
+Require-Pattern $nativePreview 'extract_office_image_bgra_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
+    "Office hero extraction must share the bounded, cancellable HANDLE ZIP pipeline."
 Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
     "Archive entry HANDLE extraction must validate the source and enforce cancellation, deadline, and output bounds."
 Require-Pattern $nativePreview 'struct\s+EbookContext[\s\S]*remaining_decompressed_bytes[\s\S]*MAX_EBOOK_DECOMPRESSED_BYTES[\s\S]*fn\s+read_ebook_limited_to_end<R:\s*Read>[\s\S]*context\.check_cancelled\(\)[\s\S]*context\.consume\(' `

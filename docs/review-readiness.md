@@ -57,8 +57,8 @@ left visible instead of hidden behind vague TODOs.
      unusable OPF data reuses that same validated ZIP reader to publish a bounded archive listing with no root
     path; it never reopens the logical name through the path-based archive renderer.
   - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
-    snapshot (3), archive (4), reserved Office (5), ebook (6), and archive entry (7). The Office bit
-    is not advertised as migrated. Implemented HANDLE exports retain status codes through
+     snapshot (3), archive (4), Office (5), ebook (6), and archive entry (7). Implemented HANDLE
+     exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
     and direct invalid-handle/file-position tests.
   - UTF-8 text preview truncation backs up to a valid char boundary.
@@ -167,8 +167,8 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   browsing should only be added with bounded parsers and no WebView fallback.
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
   input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
-  boundaries. Office main/layout and follow-up hero extraction must migrate together before the
-  reserved Office capability is advertised; raster formats still require broader adapters.
+  boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
+  raster formats still require broader adapters.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial probe and the extracted
   archive child's downstream App/RasterHost compatibility anchor are still path-based and remain

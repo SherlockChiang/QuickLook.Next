@@ -150,10 +150,10 @@ public sealed class CoreBoundaryTests : IDisposable
                 | NativeAbi.HandleTorrent
                 | NativeAbi.HandleSqliteSnapshot
                 | NativeAbi.HandleArchive
+                | NativeAbi.HandleOffice
                 | NativeAbi.HandleEbook
                 | NativeAbi.HandleArchiveEntry,
             NativeAbi.ParserHandleInputs);
-        Assert.Equal(0UL, NativeAbi.ParserHandleInputs & NativeAbi.HandleOffice);
         NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(
             NativeAbi.ParserHandleInputs | (1UL << 63),

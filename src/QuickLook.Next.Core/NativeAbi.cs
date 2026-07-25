@@ -18,6 +18,7 @@ public static class NativeAbi
         | HandleTorrent
         | HandleSqliteSnapshot
         | HandleArchive
+        | HandleOffice
         | HandleEbook
         | HandleArchiveEntry;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;

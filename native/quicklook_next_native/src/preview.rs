@@ -2265,40 +2265,94 @@ pub fn render_office(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> 
     {
         return String::new();
     }
-    let ext = Path::new(path)
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return String::new(),
+    };
+    let metadata = match file.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return String::new(),
+    };
+    render_office_reader(
+        file,
+        path,
+        metadata.len(),
+        metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or(0),
+        cancel_cb,
+    )
+    .unwrap_or_default()
+}
+
+pub fn render_office_reader<R: Read + Seek>(
+    reader: R,
+    logical_name: &str,
+    source_len: u64,
+    modified_unix: i64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if source_len > MAX_OFFICE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let ext = Path::new(logical_name)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    if !matches!(ext.as_str(), "docx" | "docm" | "xlsx" | "xlsm" | "pptx" | "pptm" | "odt" | "ods" | "odp") {
+        return Ok(render_info(
+            logical_name,
+            "office",
+            i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?,
+            modified_unix,
+        ));
+    }
+
+    let mut zip = open_validated_zip(
+        reader,
+        source_len,
+        MAX_OFFICE_ZIP_ENTRIES as u64,
+        cancel_cb,
+    )?;
     let mut context = OfficeContext::new(cancel_cb);
-    match ext.as_str() {
-        "docx" | "docm" => render_docx(path, &mut context).unwrap_or_default(),
-        "xlsx" | "xlsm" => render_xlsx(path, &mut context).unwrap_or_default(),
-        "pptx" | "pptm" => render_pptx(path, &mut context).unwrap_or_default(),
-        "odt" | "ods" | "odp" => render_odf(path, &mut context).unwrap_or_default(),
-        _ => {
-            let meta = fs::metadata(path).ok();
-            let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-            let modified = meta
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            render_info(path, "office", size, modified)
-        }
+    let rendered = match ext.as_str() {
+        "docx" | "docm" => render_docx(logical_name, &mut zip, &mut context),
+        "xlsx" | "xlsm" => render_xlsx(logical_name, &mut zip, &mut context),
+        "pptx" | "pptm" => render_pptx(logical_name, &mut zip, &mut context),
+        "odt" | "ods" | "odp" => render_odf(logical_name, &mut zip, &mut context),
+        _ => unreachable!(),
+    };
+    match rendered {
+        Ok(json) if !json.is_empty() => Ok(json),
+        Ok(_) => Err(ReaderPreviewError::Malformed),
+        Err(error) => Err(office_reader_error(error)),
     }
 }
 
-fn render_docx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
+fn office_reader_error(error: OfficeReadError) -> ReaderPreviewError {
+    match error {
+        OfficeReadError::Cancelled => ReaderPreviewError::Cancelled,
+        OfficeReadError::BudgetExhausted => ReaderPreviewError::LimitExceeded,
+    }
+}
+
+fn render_docx<R: Read + Seek>(
+    path: &str,
+    zip: &mut ZipArchive<R>,
+    context: &mut OfficeContext,
+) -> OfficeResult<String> {
     let filename = file_name(path);
-    let mut zip = match open_office_zip(path) {
-        Some(zip) => zip,
-        None => return Ok(String::new()),
-    };
-    let media_entries = office_media_entries(context, &mut zip, &["word/media/"])?;
-    let header_footer_entries = docx_header_footer_entries(context, &mut zip)?;
-    let xml = match read_office_zip_text(context, &mut zip, "word/document.xml", 16 * 1024 * 1024)?
+    let media_entries = office_media_entries(context, zip, &["word/media/"])?;
+    let header_footer_entries = docx_header_footer_entries(context, zip)?;
+    let xml = match read_office_zip_text(context, zip, "word/document.xml", 16 * 1024 * 1024)?
     {
         Some(xml) => xml,
         None => {
@@ -2310,9 +2364,9 @@ fn render_docx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
         }
     };
     let header_footer_text =
-        extract_docx_header_footer_text(context, &mut zip, &header_footer_entries)?;
+        extract_docx_header_footer_text(context, zip, &header_footer_entries)?;
     let body = extract_wordprocessing_text(context, &xml)?;
-    let layout = build_docx_layout(context, &mut zip, &body, &media_entries)?;
+    let layout = build_docx_layout(context, zip, &body, &media_entries)?;
     let mut text = format!("Name: {filename}\nKind: Word document\n");
     append_office_media_summary(&mut text, &media_entries);
     if !header_footer_text.is_empty() {
@@ -2333,17 +2387,13 @@ fn render_docx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     ))
 }
 
-fn render_pptx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_pptx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
-    let mut zip = match open_office_zip(path) {
-        Some(zip) => zip,
-        None => return Ok(String::new()),
-    };
-    let media_entries = office_media_entries(context, &mut zip, &["ppt/media/"])?;
+    let media_entries = office_media_entries(context, zip, &["ppt/media/"])?;
     let mut slides = Vec::new();
     for slide_idx in 1..=MAX_OFFICE_SLIDES {
         let name = format!("ppt/slides/slide{slide_idx}.xml");
-        let Some(xml) = read_office_zip_text(context, &mut zip, &name, 8 * 1024 * 1024)? else {
+        let Some(xml) = read_office_zip_text(context, zip, &name, 8 * 1024 * 1024)? else {
             if slide_idx == 1 {
                 continue;
             }
@@ -2364,7 +2414,7 @@ fn render_pptx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     append_office_media_summary(&mut text, &media_entries);
     text.push('\n');
     text.push_str(&truncate_preview_text(&body));
-    let layout = build_pptx_layout(context, &mut zip)?;
+    let layout = build_pptx_layout(context, zip)?;
     Ok(office_preview_json_with_layout(
         path,
         "PowerPoint presentation",
@@ -2375,15 +2425,11 @@ fn render_pptx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     ))
 }
 
-fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_xlsx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
-    let mut zip = match open_office_zip(path) {
-        Some(zip) => zip,
-        None => return Ok(String::new()),
-    };
-    let media_entries = office_media_entries(context, &mut zip, &["xl/media/"])?;
+    let media_entries = office_media_entries(context, zip, &["xl/media/"])?;
     let shared_strings =
-        read_office_zip_text(context, &mut zip, "xl/sharedStrings.xml", 16 * 1024 * 1024)?
+        read_office_zip_text(context, zip, "xl/sharedStrings.xml", 16 * 1024 * 1024)?
             .map(|xml| parse_shared_strings(context, &xml))
             .transpose()?
             .unwrap_or_default();
@@ -2391,7 +2437,7 @@ fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     let mut sections = Vec::new();
     for sheet_idx in 1..=MAX_OFFICE_SHEETS {
         let name = format!("xl/worksheets/sheet{sheet_idx}.xml");
-        let Some(xml) = read_office_zip_text(context, &mut zip, &name, 16 * 1024 * 1024)? else {
+        let Some(xml) = read_office_zip_text(context, zip, &name, 16 * 1024 * 1024)? else {
             if sheet_idx == 1 {
                 continue;
             }
@@ -2416,7 +2462,7 @@ fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     append_office_media_summary(&mut text, &media_entries);
     text.push('\n');
     text.push_str(&truncate_preview_text(&body));
-    let layout = build_xlsx_layout(context, &mut zip, &shared_strings)?;
+    let layout = build_xlsx_layout(context, zip, &shared_strings)?;
     Ok(office_preview_json_with_layout(
         path,
         "Excel workbook",
@@ -2427,13 +2473,9 @@ fn render_xlsx(path: &str, context: &mut OfficeContext) -> OfficeResult<String> 
     ))
 }
 
-fn render_odf(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_odf<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
     let filename = file_name(path);
-    let mut zip = match open_office_zip(path) {
-        Some(zip) => zip,
-        None => return Ok(String::new()),
-    };
-    let xml = match read_office_zip_text(context, &mut zip, "content.xml", 16 * 1024 * 1024)? {
+    let xml = match read_office_zip_text(context, zip, "content.xml", 16 * 1024 * 1024)? {
         Some(xml) => xml,
         None => {
             return Ok(office_error_json(
@@ -2452,16 +2494,6 @@ fn render_odf(path: &str, context: &mut OfficeContext) -> OfficeResult<String> {
             truncate_preview_text(&body)
         ),
     ))
-}
-
-fn open_zip(path: &str) -> Option<ZipArchive<fs::File>> {
-    let file = fs::File::open(path).ok()?;
-    ZipArchive::new(file).ok()
-}
-
-fn open_office_zip(path: &str) -> Option<ZipArchive<fs::File>> {
-    let zip = open_zip(path)?;
-    (zip.len() <= MAX_OFFICE_ZIP_ENTRIES).then_some(zip)
 }
 
 fn read_zip_text<R: Read + Seek>(
@@ -2543,9 +2575,9 @@ fn append_office_media_summary(out: &mut String, entries: &[String]) {
     out.push_str(&format!("Image files: {names}\n"));
 }
 
-fn build_pptx_layout(
+fn build_pptx_layout<R: Read + Seek>(
     context: &mut OfficeContext,
-    zip: &mut ZipArchive<fs::File>,
+    zip: &mut ZipArchive<R>,
 ) -> OfficeResult<Option<OfficeLayoutDto>> {
     let presentation_xml =
         read_office_zip_text(context, zip, "ppt/presentation.xml", 4 * 1024 * 1024)?;
@@ -2607,9 +2639,9 @@ fn build_pptx_layout(
     }))
 }
 
-fn build_xlsx_layout(
+fn build_xlsx_layout<R: Read + Seek>(
     context: &mut OfficeContext,
-    zip: &mut ZipArchive<fs::File>,
+    zip: &mut ZipArchive<R>,
     shared_strings: &[String],
 ) -> OfficeResult<Option<OfficeLayoutDto>> {
     let mut pages = Vec::new();
@@ -2680,9 +2712,9 @@ fn build_xlsx_layout(
     }))
 }
 
-fn build_docx_layout(
+fn build_docx_layout<R: Read + Seek>(
     context: &mut OfficeContext,
-    zip: &mut ZipArchive<fs::File>,
+    zip: &mut ZipArchive<R>,
     body: &str,
     media_entries: &[String],
 ) -> OfficeResult<Option<OfficeLayoutDto>> {
@@ -14877,15 +14909,36 @@ pub fn extract_office_image_bgra(
 ) -> Option<(u32, u32, Vec<u8>)> {
     if preview_cancelled(cancel_cb) { return None; }
     let file = fs::File::open(path).ok()?;
-    let mut zip = ZipArchive::new(file).ok()?;
-    let roots = office_media_roots_for_path(path);
+    let source_len = file.metadata().ok()?.len();
+    extract_office_image_bgra_reader(file, source_len, path, cancel_cb).ok()
+}
+
+pub fn extract_office_image_bgra_reader<R: Read + Seek>(
+    reader: R,
+    source_len: u64,
+    logical_name: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(u32, u32, Vec<u8>), ReaderPreviewError> {
+    if source_len > MAX_OFFICE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let mut zip = open_validated_zip(
+        reader,
+        source_len,
+        MAX_OFFICE_ZIP_ENTRIES as u64,
+        cancel_cb,
+    )?;
+    let roots = office_media_roots_for_path(logical_name);
     if roots.is_empty() {
-        return None;
+        return Err(ReaderPreviewError::Malformed);
     }
 
     let mut candidates = Vec::new();
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -14908,7 +14961,7 @@ pub fn extract_office_image_bgra(
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     let mut context = OfficeContext::new(cancel_cb);
     for (path_score, name) in candidates.into_iter().take(24) {
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let bytes = match read_office_zip_bytes(
             &mut context,
             &mut zip,
@@ -14917,14 +14970,13 @@ pub fn extract_office_image_bgra(
         ) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
-            Err(OfficeReadError::BudgetExhausted) => break,
-            Err(OfficeReadError::Cancelled) => break,
+            Err(error) => return Err(office_reader_error(error)),
         };
         let image = match image::load_from_memory(&bytes) {
             Ok(img) => img,
             Err(_) => continue,
         };
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let (original_width, original_height) = image.dimensions();
         if original_width < 8 || original_height < 8 {
             continue;
@@ -14941,6 +14993,7 @@ pub fn extract_office_image_bgra(
     }
 
     best.map(|(_, width, height, bgra)| (width, height, bgra))
+        .ok_or(ReaderPreviewError::Malformed)
 }
 
 fn office_media_roots_for_path(path: &str) -> &'static [&'static str] {

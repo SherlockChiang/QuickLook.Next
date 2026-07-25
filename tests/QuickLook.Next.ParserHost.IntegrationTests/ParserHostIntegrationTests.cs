@@ -1420,9 +1420,12 @@ public sealed class ParserHostIntegrationTests
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
-        string docxPath = Path.Combine(tempDirectory, "hero.docx");
-        using (var archive = ZipFile.Open(docxPath, ZipArchiveMode.Create))
+        string sourcePath = Path.Combine(tempDirectory, "physical-office.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.docx");
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
         {
+            WriteEntry(archive, "word/document.xml",
+                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Office HANDLE hero marker</w:t></w:r></w:p></w:body></w:document>");
             byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8DwHx9mGBkKAMLXf4EvceABAAAAAElFTkSuQmCC");
             using Stream stream = archive.CreateEntry("word/media/image1.png").Open();
             stream.Write(png);
@@ -1442,9 +1445,41 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
+            string previewRequestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".docx", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "office",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(previewRequestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Contains("Office HANDLE hero marker", ready.TextContent);
+            Assert.False(Directory.Exists(Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + previewRequestId)));
+            Assert.False(TryOverwriteFile(sourcePath, "replacement"));
+
+            string missingParentId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new HeroRasterExtract(missingParentId, sourcePath, "office")
+            {
+                ParentPreviewRequestId = Guid.NewGuid().ToString("n"),
+            }, timeout.Token);
+            PreviewError parentError = Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Contains("parent", parentError.Message, StringComparison.OrdinalIgnoreCase);
+
             string requestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new HeroRasterExtract(requestId, docxPath, "office"), timeout.Token);
-            HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
+            await channel.SendAsync(new HeroRasterExtract(requestId, "", "office")
+            {
+                ParentPreviewRequestId = previewRequestId,
+            }, timeout.Token);
+            ControlMessage? heroResponse = await channel.ReceiveAsync(timeout.Token);
+            PreviewError? heroError = heroResponse as PreviewError;
+            Assert.Null(heroError);
+            HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(heroResponse);
             handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(8, extracted.Width);
@@ -1461,6 +1496,8 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
             Assert.True(heroStream.CanRead);
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
         finally
         {
@@ -1568,8 +1605,25 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new ArchiveEntryExtract(archiveId, zipPath, entryName), timeout.Token);
             ArchiveEntryExtracted archive = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
             archiveHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, archive.FileHandle, archive.FileLength);
+            string officePreviewId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(docxPath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var officeProbe = new FileProbe(docxPath, ".docx", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "office",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(officePreviewId, hostHandle, pinned.Length, docxPath, officeProbe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+            Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+
             string rasterId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new HeroRasterExtract(rasterId, docxPath, "office"), timeout.Token);
+            await channel.SendAsync(new HeroRasterExtract(rasterId, "", "office")
+            {
+                ParentPreviewRequestId = officePreviewId,
+            }, timeout.Token);
             HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
             rasterHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, raster.FileHandle, raster.PacketLength);
             rasterPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + rasterId, "hero.bgra");

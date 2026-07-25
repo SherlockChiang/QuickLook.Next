@@ -1950,12 +1950,19 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
+        string? parentPreviewRequestId = _previewSession.CurrentRequestId;
         bool cloudOrigin = _currentPreviewWasCloudPlaceholder;
         Task.Run(async () =>
         {
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                 return null;
-            return await LoadPreviewHeroRasterAsync(ready, path, cloudOrigin, token);
+            return await LoadPreviewHeroRasterAsync(
+                ready,
+                path,
+                cloudOrigin,
+                parentPreviewRequestId,
+                generation,
+                token);
         }, token).ContinueWith(task =>
         {
             if (task.IsFaulted || task.IsCanceled || task.Result is null)
@@ -1991,6 +1998,8 @@ public sealed partial class MainWindow : Window
         PreviewReady ready,
         string path,
         bool cloudOrigin,
+        string? parentPreviewRequestId,
+        int generation,
         CancellationToken token)
     {
         if (cloudOrigin)
@@ -1999,16 +2008,22 @@ public sealed partial class MainWindow : Window
         if (IsPackagePreview(ready, path))
         {
             await EnsureParserHostStartedAsync();
+            if (!IsPreviewGenerationCurrent(generation, token)
+                || !string.Equals(_previewSession.CurrentRequestId, parentPreviewRequestId, StringComparison.Ordinal))
+                return null;
             NativeRasterImage? icon = await _parserSupervisor!.ExtractHeroRasterAsync(
-                path, "package", _previewSession.CurrentRequestId, token);
+                path, "package", parentPreviewRequestId, token);
             return icon ?? await _thumbnailScheduler.LoadAsync(path, 512, NativeThumbnailPriority.Foreground, cacheOnly: false, token);
         }
 
         if (IsOfficePreviewWithImages(ready))
         {
             await EnsureParserHostStartedAsync();
+            if (!IsPreviewGenerationCurrent(generation, token)
+                || !string.Equals(_previewSession.CurrentRequestId, parentPreviewRequestId, StringComparison.Ordinal))
+                return null;
             return await _parserSupervisor!.ExtractHeroRasterAsync(
-                path, "office", _previewSession.CurrentRequestId, token);
+                path, "office", parentPreviewRequestId, token);
         }
 
         if (IsExecutablePreview(ready, path))

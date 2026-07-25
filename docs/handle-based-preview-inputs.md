@@ -16,7 +16,7 @@ request that is already in progress.
   previews use the dedicated `PreviewOpenSqliteHandles` message so an SQLite main file and its
   optional WAL/SHM companions have explicit, independently owned slots.
 - ParserHost text previews (plain text, Markdown, CSV, and TSV), executable metadata, torrent
-  listings, archive listings, and ebook previews pass the received file handle directly to the
+  listings, archive listings, Office previews, and ebook previews pass the received file handle directly to the
   Rust ABI. They do not create a `parser-input` anchor or reopen the logical path.
 - A normal ebook preview is stateless and releases its adopted input after the bounded call. A
   successfully published local archive listing instead retains its source handle under the parent
@@ -28,10 +28,10 @@ request that is already in progress.
 - ParserHost database previews also pass their received handles directly to Rust without creating a
   `parser-input` anchor. The App is the only component allowed to derive and open `main-wal` and
   `main-shm`; neither ParserHost nor Rust resolves companion paths from `LogicalPath`.
-- Office, package, certificate, and remaining ParserHost formats, plus RasterHost, currently copy the
+- Package, certificate, and remaining ParserHost formats, plus RasterHost, currently copy the
   exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
   WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
-  after handoff cannot change the rendered bytes. Office has not yet migrated to a HANDLE reader.
+  after handoff cannot change the rendered bytes.
 - Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
   that ID to the retained archive source handle before considering the legacy path fallback, and the
   Rust archive-entry HANDLE ABI reopens the same file object. The extracted object is returned as a
@@ -120,15 +120,15 @@ bit 1  HANDLE_EXECUTABLE
 bit 2  HANDLE_TORRENT
 bit 3  HANDLE_SQLITE_SNAPSHOT
 bit 4  HANDLE_ARCHIVE
-bit 5  HANDLE_OFFICE (reserved; not advertised as migrated)
+bit 5  HANDLE_OFFICE
 bit 6  HANDLE_EBOOK
 bit 7  HANDLE_ARCHIVE_ENTRY
 ```
 
-The current required ParserHost capability set excludes the reserved Office bit. The corresponding
-implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
+The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
 `ql_preview_executable_handle`, `ql_preview_torrent_handle`, `ql_preview_sqlite_handles`,
-`ql_preview_archive_handle`, `ql_preview_ebook_handle`, and `ql_extract_archive_entry_handle`.
+`ql_preview_archive_handle`, `ql_preview_office_handle`, `ql_extract_office_image_handle`,
+`ql_preview_ebook_handle`, and `ql_extract_archive_entry_handle`.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
 the existing bounded bencode parser runs. Archive and ebook routes use bounded, cancellable
@@ -235,12 +235,17 @@ These rules follow SQLite's documented
 [database/WAL format](https://www2.sqlite.org/fileformat2.html) and
 [WAL-index format](https://sqlite.org/walformat.html).
 
+Office main previews and embedded-image hero extraction now retain the same parent source object.
+The main call uses `ql_preview_office_handle`; a published Office preview retains its owner until
+close/replacement/disconnect, and the hero follow-up acquires an independent read-only lease before
+calling `ql_extract_office_image_handle`. A supplied but missing or stale parent fails closed without reopening
+the App-supplied path. Parentless path extraction remains only for explicit legacy/cloud compatibility;
+a supplied parent ID never falls back to that path.
+
 Remaining migration order:
 
-1. Office readers and Office hero extraction, with the reserved HANDLE bit enabled only after the
-   main layout and follow-up hero lifecycle both use the retained source object.
-2. Native still-image and animation decoders.
-3. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
+1. Native still-image and animation decoders.
+2. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.

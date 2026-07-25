@@ -8,6 +8,7 @@ internal enum RetainedPreviewFollowUps
 {
     None = 0,
     ArchiveEntry = 1,
+    OfficeHero = 2,
 }
 
 internal sealed class RetainedPreviewSource(
@@ -37,7 +38,7 @@ internal sealed class RetainedPreviewSource(
                 || Handle.IsClosed
                 || Handle.IsInvalid
                 || (FollowUps & followUp) != followUp
-                || SourceKind is not ("archive" or "ebook"))
+                || !AllowsSourceKind(followUp))
             {
                 return false;
             }
@@ -54,6 +55,14 @@ internal sealed class RetainedPreviewSource(
             }
         }
     }
+
+    private bool AllowsSourceKind(RetainedPreviewFollowUps followUp)
+        => followUp switch
+        {
+            RetainedPreviewFollowUps.ArchiveEntry => SourceKind is "archive" or "ebook",
+            RetainedPreviewFollowUps.OfficeHero => SourceKind == "office",
+            _ => false,
+        };
 
     public void Dispose()
     {

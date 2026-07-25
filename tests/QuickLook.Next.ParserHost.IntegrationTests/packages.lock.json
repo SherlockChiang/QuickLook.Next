@@ -99,7 +99,14 @@
       "quicklook.next.core": {
         "type": "Project",
         "dependencies": {
-          "QuickLook.Next.Contracts": "[0.1.0, )"
+          "QuickLook.Next.Contracts": "[0.2.14, )"
+        }
+      },
+      "quicklook.next.parserhost": {
+        "type": "Project",
+        "dependencies": {
+          "QuickLook.Next.Contracts": "[0.2.14, )",
+          "QuickLook.Next.Core": "[0.2.14, )"
         }
       }
     },
