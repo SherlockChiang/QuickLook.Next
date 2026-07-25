@@ -31,6 +31,7 @@ body {
 }
 
 .hero-poster-frame {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
@@ -39,11 +40,20 @@ body {
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.1);
   border-radius: 1.5rem;
-  background: rgb(2 6 23 / 0.34);
+  background: rgb(7 16 39 / 0.4);
   box-shadow:
     0 30px 90px rgb(0 0 0 / 0.32),
     inset 0 1px 0 rgb(255 255 255 / 0.06);
   backdrop-filter: blur(10px);
+}
+
+.hero-poster-frame::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 34px 8px rgb(7 16 39 / 0.5);
+  content: "";
+  pointer-events: none;
 }
 
 .hero-poster {
@@ -52,6 +62,19 @@ body {
   object-fit: contain;
   object-position: center;
   filter: saturate(1.04) contrast(1.02);
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0%, black 2.5%, black 97.5%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, black 2.5%, black 97.5%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent 0%, black 2.5%, black 97.5%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, black 2.5%, black 97.5%, transparent 100%);
+  mask-composite: intersect;
+}
+
+.hero-info-dock {
+  position: relative;
+  z-index: 2;
 }
 
 .language-button {
