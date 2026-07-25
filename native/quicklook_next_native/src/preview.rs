@@ -169,6 +169,8 @@ struct PreviewListingItemDto {
 #[serde(rename_all = "camelCase")]
 struct PreviewTableDto {
     format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
     delimiter: String,
     headers: Vec<String>,
     rows: Vec<PreviewTableRowDto>,
@@ -1800,6 +1802,7 @@ fn render_delimited_table_json(
         listing: None,
         table: Some(PreviewTableDto {
             format: format.to_string(),
+            summary: None,
             delimiter: delimiter.to_string(),
             headers,
             rows,
@@ -4951,6 +4954,19 @@ pub fn render_database_info(
         append_sqlite_header_details(&mut text, &bytes);
         text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
         append_sqlite_schema_summary(&mut text, &bytes, page_size as usize, cancel_cb);
+        if let Some(table) = build_sqlite_table_preview(&bytes, page_size as usize, cancel_cb) {
+            return to_json(&PreviewReadyDto {
+                kind: "database".to_string(),
+                title: format!("{filename} - {}", table.name),
+                format: Some("sqlite".to_string()),
+                language: Some("sql".to_string()),
+                text: None,
+                office_layout: None,
+                listing: None,
+                table: Some(table.table),
+                markdown: None,
+            });
+        }
     } else if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         text.push_str("\nFormat: Microsoft Compound File database");
     } else {
@@ -5590,6 +5606,233 @@ const MAX_SQLITE_SCHEMA_OBJECTS: usize = 32;
 const MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP: usize = 8;
 const MAX_SQLITE_SCHEMA_PAGES: usize = 32;
 const MAX_SQLITE_TABLE_ROW_PAGES: usize = 128;
+const MAX_SQLITE_SAMPLE_ROWS: usize = 100;
+const MAX_SQLITE_SAMPLE_COLUMNS: usize = 32;
+const MAX_SQLITE_SAMPLE_CELL_CHARS: usize = 256;
+
+struct SqliteTablePreview {
+    name: String,
+    table: PreviewTableDto,
+}
+
+fn build_sqlite_table_preview(
+    bytes: &[u8],
+    page_size: usize,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<SqliteTablePreview> {
+    let schema = parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS, cancel_cb);
+    let row = schema.rows.iter().find(|row| {
+        row.typ.eq_ignore_ascii_case("table")
+            && row.root_page > 0
+            && !row.name.to_ascii_lowercase().starts_with("sqlite_")
+    })?;
+    let headers = parse_sqlite_table_column_names(&row.sql, MAX_SQLITE_SAMPLE_COLUMNS);
+    if headers.is_empty() {
+        return None;
+    }
+    let sample = sample_sqlite_table_rows(
+        bytes,
+        page_size,
+        row.root_page,
+        headers.len(),
+        read_u32_be(bytes, 56).unwrap_or(1),
+        cancel_cb,
+    )?;
+    let observed = count_sqlite_table_rows(
+        bytes,
+        page_size,
+        row.root_page,
+        MAX_SQLITE_TABLE_ROW_PAGES,
+        cancel_cb,
+    );
+    let total_rows = observed
+        .as_ref()
+        .map(|count| count.rows.min(i32::MAX as u64) as usize)
+        .unwrap_or(sample.rows.len());
+    let is_partial = schema.partial
+        || sample.partial
+        || observed.as_ref().is_some_and(|count| count.partial)
+        || total_rows > sample.rows.len();
+    let summary = format!(
+        "SQLite 3 | Table: {} | Page size: {} bytes | Encoding: {} | Schema objects: {}{} | Showing {} of {} observed rows",
+        row.name,
+        page_size,
+        sqlite_encoding_name(read_u32_be(bytes, 56).unwrap_or(0)),
+        schema.rows.len(),
+        if schema.partial { "+" } else { "" },
+        sample.rows.len(),
+        total_rows
+    );
+    Some(SqliteTablePreview {
+        name: row.name.clone(),
+        table: PreviewTableDto {
+            format: "sqlite".to_string(),
+            summary: Some(summary),
+            delimiter: String::new(),
+            headers,
+            rows: sample.rows,
+            total_rows,
+            total_columns: sample.total_columns,
+            is_partial,
+        },
+    })
+}
+
+struct SqliteTableSample {
+    rows: Vec<PreviewTableRowDto>,
+    total_columns: usize,
+    partial: bool,
+}
+
+fn sample_sqlite_table_rows(
+    bytes: &[u8],
+    page_size: usize,
+    root_page: i64,
+    column_count: usize,
+    text_encoding: u32,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Option<SqliteTableSample> {
+    if root_page <= 0 || column_count == 0 {
+        return None;
+    }
+    let mut stack = vec![root_page as u32];
+    let mut seen = BTreeSet::<u32>::new();
+    let mut rows = Vec::new();
+    let mut partial = false;
+    let mut total_columns = column_count;
+    while let Some(page_no) = stack.pop() {
+        if preview_cancelled(cancel_cb) {
+            return None;
+        }
+        if seen.len() >= MAX_SQLITE_TABLE_ROW_PAGES || rows.len() >= MAX_SQLITE_SAMPLE_ROWS {
+            partial = true;
+            break;
+        }
+        if !seen.insert(page_no) {
+            continue;
+        }
+        let Some(page) = sqlite_page(bytes, page_size, page_no) else {
+            partial = true;
+            continue;
+        };
+        let header = if page_no == 1 { 100 } else { 0 };
+        match page.get(header).copied().unwrap_or(0) {
+            0x05 => {
+                let children = sqlite_table_interior_children(page, header);
+                stack.extend(children.into_iter().rev());
+            }
+            0x0D => {
+                let declared = read_u16_be(page, header + 3).unwrap_or(0) as usize;
+                for index in 0..declared.min(512) {
+                    if rows.len() >= MAX_SQLITE_SAMPLE_ROWS {
+                        partial = true;
+                        break;
+                    }
+                    let Some(cell_offset) = read_u16_be(page, header + 8 + index * 2).map(usize::from) else {
+                        partial = true;
+                        break;
+                    };
+                    if let Some((cells, record_columns)) = parse_sqlite_table_leaf_cell(
+                        page,
+                        cell_offset,
+                        column_count,
+                        text_encoding,
+                    ) {
+                        total_columns = total_columns.max(record_columns);
+                        rows.push(PreviewTableRowDto { cells });
+                    } else {
+                        partial = true;
+                    }
+                }
+                partial |= declared > 512;
+            }
+            _ => return None,
+        }
+    }
+    Some(SqliteTableSample { rows, total_columns, partial })
+}
+
+fn parse_sqlite_table_leaf_cell(
+    page: &[u8],
+    offset: usize,
+    column_count: usize,
+    text_encoding: u32,
+) -> Option<(Vec<String>, usize)> {
+    let (payload_len, mut pos) = read_sqlite_varint(page, offset)?;
+    let (_rowid, next) = read_sqlite_varint(page, pos)?;
+    pos = next;
+    let end = pos.checked_add(payload_len as usize)?;
+    parse_sqlite_table_record(page.get(pos..end)?, column_count, text_encoding)
+}
+
+fn parse_sqlite_table_record(
+    payload: &[u8],
+    column_count: usize,
+    text_encoding: u32,
+) -> Option<(Vec<String>, usize)> {
+    let (header_len, mut pos) = read_sqlite_varint(payload, 0)?;
+    let header_len = header_len as usize;
+    if header_len == 0 || header_len > payload.len() {
+        return None;
+    }
+    let mut serials = Vec::new();
+    while pos < header_len {
+        let (serial, next) = read_sqlite_varint(payload, pos)?;
+        serials.push(serial);
+        pos = next;
+        if serials.len() > 1024 {
+            return None;
+        }
+    }
+    let total_columns = serials.len();
+    let mut value_pos = header_len;
+    let mut cells = Vec::with_capacity(column_count);
+    for serial in serials {
+        let value = sqlite_record_display_value(payload, &mut value_pos, serial, text_encoding)?;
+        if cells.len() < column_count {
+            cells.push(value);
+        }
+    }
+    cells.resize(column_count, String::new());
+    Some((cells, total_columns))
+}
+
+fn sqlite_record_display_value(
+    payload: &[u8],
+    pos: &mut usize,
+    serial: u64,
+    text_encoding: u32,
+) -> Option<String> {
+    match serial {
+        0 => Some("NULL".to_string()),
+        1..=6 | 8 | 9 => sqlite_record_integer(payload, pos, serial).map(|value| value.to_string()),
+        7 => {
+            let end = pos.checked_add(8)?;
+            let value = f64::from_bits(u64::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?));
+            *pos = end;
+            Some(value.to_string())
+        }
+        serial if serial >= 12 && serial % 2 == 0 => {
+            let len = ((serial - 12) / 2) as usize;
+            *pos = pos.checked_add(len)?;
+            (payload.len() >= *pos).then(|| format!("<BLOB {}>", format_bytes(len as i64)))
+        }
+        serial if serial >= 13 => {
+            let value = sqlite_record_text(payload, pos, serial, text_encoding)?;
+            Some(truncate_sqlite_cell(&value))
+        }
+        _ => None,
+    }
+}
+
+fn truncate_sqlite_cell(value: &str) -> String {
+    if value.chars().count() <= MAX_SQLITE_SAMPLE_CELL_CHARS {
+        return value.to_string();
+    }
+    let mut out = value.chars().take(MAX_SQLITE_SAMPLE_CELL_CHARS).collect::<String>();
+    out.push_str("...");
+    out
+}
 
 fn append_sqlite_schema_summary(
     text: &mut String,
@@ -5934,6 +6177,18 @@ fn parse_sqlite_table_columns(sql: &str, limit: usize) -> Vec<String> {
     sqlite_split_top_level_csv(body)
         .into_iter()
         .filter_map(sqlite_column_summary)
+        .take(limit)
+        .collect()
+}
+
+fn parse_sqlite_table_column_names(sql: &str, limit: usize) -> Vec<String> {
+    let Some(body) = sqlite_parenthesized_body(sql) else {
+        return Vec::new();
+    };
+    sqlite_split_top_level_csv(body)
+        .into_iter()
+        .filter(|definition| !sqlite_is_table_constraint(definition.trim()))
+        .filter_map(|definition| sqlite_take_identifier(definition.trim()).map(|(name, _)| name))
         .take(limit)
         .collect()
 }
@@ -17178,6 +17433,41 @@ mod tests {
                 "balance DECIMAL(10, 2)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn sqlite_table_record_formats_bounded_cells() {
+        let text = "x".repeat(MAX_SQLITE_SAMPLE_CELL_CHARS + 10);
+        let serial = 13 + text.len() as u64 * 2;
+        let mut header = vec![4, 1, 7];
+        if serial < 128 {
+            header.push(serial as u8);
+        } else {
+            header.push(((serial >> 7) as u8) | 0x80);
+            header.push((serial & 0x7F) as u8);
+            header[0] = 5;
+        }
+        let mut payload = header;
+        payload.push(42);
+        payload.extend_from_slice(&1.5f64.to_bits().to_be_bytes());
+        payload.extend_from_slice(text.as_bytes());
+
+        let (cells, columns) = parse_sqlite_table_record(&payload, 3, 1).expect("table record");
+
+        assert_eq!(columns, 3);
+        assert_eq!(cells[0], "42");
+        assert_eq!(cells[1], "1.5");
+        assert_eq!(cells[2].chars().count(), MAX_SQLITE_SAMPLE_CELL_CHARS + 3);
+    }
+
+    #[test]
+    fn sqlite_table_column_names_ignore_constraints() {
+        let names = parse_sqlite_table_column_names(
+            "CREATE TABLE users(id INTEGER, name TEXT, CONSTRAINT users_pk PRIMARY KEY(id))",
+            32,
+        );
+
+        assert_eq!(names, vec!["id".to_string(), "name".to_string()]);
     }
 
     #[test]

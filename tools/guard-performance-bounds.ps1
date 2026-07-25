@@ -195,6 +195,12 @@ Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_PAGES:\s*usize\s*=\s*32' `
     "SQLite schema traversal must retain its 32-page budget."
 Require-Pattern $nativePreview 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
     "SQLite row observations must retain their 128-page per-table budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_ROWS:\s*usize\s*=\s*100' `
+    "SQLite table previews must retain their 100-row sample budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_COLUMNS:\s*usize\s*=\s*32' `
+    "SQLite table previews must retain their 32-column sample budget."
+Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_CELL_CHARS:\s*usize\s*=\s*256' `
+    "SQLite table previews must retain their 256-character cell budget."
 Require-Pattern $nativePreview 'append_sqlite_wal_summary[\s\S]*Frames observed' `
     "SQLite WAL files must remain metadata previews instead of generic file icons."
 Require-Pattern $nativePreview 'text_encoding\s*=\s*read_u32_be\(bytes,\s*56\)[\s\S]*decode_sqlite_utf16' `

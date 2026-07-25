@@ -187,6 +187,7 @@ public sealed record ImageMetadata
 
 public sealed record PreviewTable(string Format)
 {
+    public string? Summary { get; init; }
     public string Delimiter { get; init; } = ",";
     public string[] Headers { get; init; } = [];
     public PreviewTableRow[] Rows { get; init; } = [];

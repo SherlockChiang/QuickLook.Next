@@ -106,6 +106,8 @@ internal sealed class TablePreviewPresenter
 
     private static string BuildSummary(PreviewTable table)
     {
+        if (!string.IsNullOrWhiteSpace(table.Summary))
+            return table.Summary;
         string summary = UiStrings.Format(UiStrings.TableDimensionsFormat, table.TotalRows, table.TotalColumns);
         if (table.IsPartial)
             summary += UiStrings.Format(UiStrings.TableShowingRowsFormat, table.Rows.Length);
