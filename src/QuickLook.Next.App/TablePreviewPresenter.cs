@@ -208,10 +208,12 @@ internal sealed class TablePreviewPresenter
             return;
 
         var canvasOrigin = _canvas.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point());
-        double left = Math.Max(0, -canvasOrigin.X);
-        double top = Math.Max(0, -canvasOrigin.Y);
-        double right = left + _scrollViewer.ViewportWidth;
-        double bottom = top + _scrollViewer.ViewportHeight;
+        double left = Math.Max(0, _scrollViewer.Padding.Left - canvasOrigin.X);
+        double top = Math.Max(0, _scrollViewer.Padding.Top - canvasOrigin.Y);
+        double viewportWidth = Math.Max(1, _scrollViewer.ViewportWidth - _scrollViewer.Padding.Left - _scrollViewer.Padding.Right);
+        double viewportHeight = Math.Max(1, _scrollViewer.ViewportHeight - _scrollViewer.Padding.Top - _scrollViewer.Padding.Bottom);
+        double right = left + viewportWidth;
+        double bottom = top + viewportHeight;
         if (right <= left || bottom <= top)
             return;
 
@@ -277,8 +279,8 @@ internal sealed class TablePreviewPresenter
         if (_table is null || _palette is null || _widths.Length == 0)
             return;
         var canvasOrigin = _canvas.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point());
-        double left = Math.Max(0, -canvasOrigin.X);
-        double top = Math.Max(0, -canvasOrigin.Y);
+        double left = Math.Max(0, _scrollViewer.Padding.Left - canvasOrigin.X);
+        double top = Math.Max(0, _scrollViewer.Padding.Top - canvasOrigin.Y);
         if (rebuildColumns)
         {
             int firstColumn = 0;
@@ -289,7 +291,7 @@ internal sealed class TablePreviewPresenter
                 firstColumn++;
             }
             int lastColumn = firstColumn;
-            double right = left + _scrollViewer.ViewportWidth;
+            double right = left + Math.Max(1, _scrollViewer.ViewportWidth - _scrollViewer.Padding.Left - _scrollViewer.Padding.Right);
             double columnRight = columnLeft;
             while (lastColumn < _widths.Length && columnRight < right)
                 columnRight += _widths[lastColumn++];

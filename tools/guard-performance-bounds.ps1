@@ -277,6 +277,12 @@ Require-Pattern $tablePresenter 'private void ApplyTable\(PreviewTable source\)[
     "Every delimited-table and SQLite-sheet model must be defensively bounded before rendering."
 Require-Pattern $tablePresenter 'ready\.Table!\.Sheets\.Take\(8\)' `
     "SQLite sheet tabs must remain capped at eight models."
+Require-Pattern $tablePresenter '_scrollViewer\.Padding\.Top\s*-\s*canvasOrigin\.Y' `
+    "Sticky table headers must account for the scroll viewport padding instead of being half-clipped."
+$mainWindowXamlText = Get-Content -LiteralPath $mainWindowXaml -Raw
+if ($mainWindowXamlText -notmatch 'x:Name="TableScrollViewer"[\s\S]*?HorizontalScrollBarVisibility="Visible"') {
+    $failures.Add("Table previews must keep the bottom horizontal scrollbar visible.")
+}
 
 if ($failures.Count -gt 0) {
     Write-Host ""
