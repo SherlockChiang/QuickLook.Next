@@ -244,11 +244,12 @@ Save-AppPng 150 (Join-Path $outputDir "Square150x150Logo.png")
 Save-AppPng 50  (Join-Path $outputDir "StoreLogo.png")
 Save-AppPng 44  (Join-Path $outputDir "Square44x44Logo.png")
 
-# Taskbar/app-list assets are transparent monochrome marks. Supplying both variants prevents Windows from
-# falling back to the plated color logo when the taskbar theme changes.
+# Taskbar/app-list assets remain unplated. The neutral asset keeps the color mark for fallback contexts,
+# while the explicit light/dark variants preserve contrast without asking Windows to synthesize a plate.
 foreach ($size in @(16, 20, 24, 30, 32, 36, 40, 44, 48, 60, 64, 72, 80, 96, 256)) {
+    Save-AppPng $size (Join-Path $outputDir "Square44x44Logo.targetsize-$($size).png")
     Save-Png $size "Dark" (Join-Path $outputDir "Square44x44Logo.targetsize-$($size)_altform-unplated.png")
     Save-Png $size "Light" (Join-Path $outputDir "Square44x44Logo.targetsize-$($size)_altform-lightunplated.png")
 }
 
-Write-Host "Generated theme-aware QuickLook Next icons in $outputDir"
+Write-Host "Generated QuickLook Next icons in $outputDir"

@@ -3463,7 +3463,7 @@ public sealed partial class MainWindow : Window
     {
         _trayIcon ??= new TrayIconManager(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
-            ResolveAppIconPath,
+            ResolveTrayIconPath,
             () => ShowPreviewWindow(activate: true),
             ShowSettingsWindow,
             ExitApp,
@@ -3653,13 +3653,13 @@ public sealed partial class MainWindow : Window
     }
 
     private string ResolveAppIconPath()
+        => System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
+
+    private string ResolveTrayIconPath()
     {
         string fileName = RootGrid.ActualTheme == ElementTheme.Light
             ? "QuickLookNextLight.ico"
             : "QuickLookNextDark.ico";
-        string themedPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", fileName);
-        return System.IO.File.Exists(themedPath)
-            ? themedPath
-            : System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "QuickLookNext.ico");
+        return System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", fileName);
     }
 }
