@@ -33,48 +33,55 @@ body {
 .hero-poster-frame {
   position: relative;
   display: flex;
+  width: min(62vw, 61rem);
   min-height: 0;
   flex: 1 1 auto;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 0.1);
-  border-radius: 1.5rem;
-  background: rgb(7 16 39 / 0.4);
-  box-shadow:
-    0 30px 90px rgb(0 0 0 / 0.32),
-    inset 0 1px 0 rgb(255 255 255 / 0.06);
-  backdrop-filter: blur(10px);
+  margin-inline: auto;
+  overflow: visible;
 }
 
-.hero-poster-frame::after {
+.hero-poster-frame::before {
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 0 34px 8px rgb(7 16 39 / 0.5);
+  z-index: -1;
+  inset: 8% 4%;
+  border-radius: 30%;
+  background: rgb(14 165 233 / 0.18);
+  filter: blur(86px);
   content: "";
   pointer-events: none;
 }
 
 .hero-poster {
   width: 100%;
-  height: 100%;
+  height: auto;
+  max-height: calc(100svh - 17rem);
   object-fit: contain;
   object-position: center;
-  filter: saturate(1.04) contrast(1.02);
+  filter: saturate(1.04) contrast(1.02) drop-shadow(0 28px 54px rgb(0 0 0 / 0.24));
   -webkit-mask-image:
-    linear-gradient(to right, transparent 0%, black 2.5%, black 97.5%, transparent 100%),
-    linear-gradient(to bottom, transparent 0%, black 2.5%, black 97.5%, transparent 100%);
+    linear-gradient(to right, transparent 0%, black 2%, black 98%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, black 4%, black 96%, transparent 100%);
   -webkit-mask-composite: source-in;
   mask-image:
-    linear-gradient(to right, transparent 0%, black 2.5%, black 97.5%, transparent 100%),
-    linear-gradient(to bottom, transparent 0%, black 2.5%, black 97.5%, transparent 100%);
+    linear-gradient(to right, transparent 0%, black 2%, black 98%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, black 4%, black 96%, transparent 100%);
   mask-composite: intersect;
 }
 
+.hero-shell {
+  padding-bottom: 9rem;
+}
+
 .hero-info-dock {
-  position: relative;
+  position: absolute;
   z-index: 2;
+  right: clamp(0.75rem, 2vw, 1.25rem);
+  bottom: 1rem;
+  left: clamp(0.75rem, 2vw, 1.25rem);
+  max-width: 80rem;
+  margin-inline: auto;
 }
 
 .language-button {
@@ -329,8 +336,20 @@ body {
   }
 
   .hero-poster-frame {
-    min-height: 13.5rem;
-    border-radius: 1.25rem;
+    width: min(94vw, 42rem);
+    min-height: 11rem;
+  }
+
+  .hero-poster {
+    max-height: calc(100svh - 22rem);
+  }
+
+  .hero-shell {
+    padding-bottom: 14.5rem;
+  }
+
+  .hero-info-dock {
+    bottom: 0.75rem;
   }
 }
 
