@@ -69,6 +69,8 @@ left visible instead of hidden behind vague TODOs.
   - Office hero and package icon raster candidates are rejected before full decode when either
     dimension exceeds 8,192 pixels or the source exceeds 16 million pixels. XHTML and FB2 output
     limits use incremental character accounting rather than rescanning the full output per XML event.
+  - Local certificate previews read at most 1 MiB directly from the transferred file object and use
+    the strict single-certificate DER/PEM loader without creating a ParserHost input anchor.
   - XML text extraction supports named entities and decimal/hex numeric
     character references.
 - Archive/package internal reads now have a hard read cap in addition to ZIP

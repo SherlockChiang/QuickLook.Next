@@ -48,6 +48,12 @@ Require-Pattern $nativeLibrary 'MAX_SVG_MARKUP_TOKENS:\s*usize\s*=\s*100_000' `
 Require-Pattern $nativeLibrary 'image_href_resolver\.resolve_data\s*=\s*Box::new\(\|_, _, _\| None\)[\s\S]*image_href_resolver\.resolve_string\s*=\s*Box::new\(\|_, _\| None\)' `
     "SVG HANDLE rendering must not resolve external image resources."
 
+$certificatePreview = Join-Path $Root "src/QuickLook.Next.Core/CertificatePreview.cs"
+Require-Pattern $certificatePreview 'MaxHandleInputBytes\s*=\s*1024\s*\*\s*1024' `
+    "Certificate HANDLE inputs must remain capped at 1 MiB."
+Require-Pattern $certificatePreview 'CreateFromHandleAsync\([\s\S]*RandomAccess\.ReadAsync\([\s\S]*X509CertificateLoader\.LoadCertificate\(bytes\)' `
+    "Certificate HANDLE previews must read bounded bytes from offset zero before parsing."
+
 $imageWaveform = Join-Path $Root "src/QuickLook.Next.Core/ImageWaveformBuilder.cs"
 Require-Pattern $imageWaveform 'ScopeWidth\s*=\s*192' `
     "Image waveforms must retain their fixed 192-column budget."

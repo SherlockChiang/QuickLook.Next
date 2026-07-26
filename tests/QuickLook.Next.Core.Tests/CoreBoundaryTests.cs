@@ -455,6 +455,16 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Empty(probe.MagicPrefix);
     }
 
+    [Fact]
+    public void Certificate_bundles_report_a_stable_unsupported_status()
+    {
+        PreviewReady ready = CertificatePreview.Create("certificate-test", "missing.p7b", 42);
+
+        Assert.Equal("certificate", ready.Kind);
+        Assert.Contains("Status: certificate bundles are not supported", ready.TextContent);
+        Assert.DoesNotContain("Error:", ready.TextContent);
+    }
+
     [Theory]
     [InlineData("app.config")]
     [InlineData("settings.cnf")]

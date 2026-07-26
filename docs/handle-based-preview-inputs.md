@@ -32,6 +32,11 @@ request that is already in progress.
   Package icon Hero extraction acquires an independent lease and calls the package icon HANDLE ABI.
   Supplied parent IDs fail closed when stale, closed, or of the wrong kind; only parentless
   compatibility requests may use the path export.
+- Local certificate previews read at most 1 MiB from offset zero of the transferred HANDLE with
+  `RandomAccess.ReadAsync`, then parse one DER/PEM certificate with the .NET span loader. They are
+  stateless and release the input after publication without creating a `parser-input` anchor.
+  PKCS#7 `.p7b`/`.p7c` bundles return a stable unsupported status; certificate parsing itself is
+  synchronous and is contained by the ParserHost timeout rather than cooperative cancellation.
 - RasterHost ICO, SVG, and GIF previews retain the received file object by parent request ID and acquire an
    independent read-only lease for `ql_decode_image_handle`; they do not create a `raster-inputs`
   anchor. Rust validates the logical basename and actual format, bounds SVG input to 16 MiB, disables
@@ -45,7 +50,7 @@ request that is already in progress.
   new leases while a decode that already acquired one remains valid. Animation output packets remain
   RasterHost-owned temporary files transferred to the App by read-only handle; their path does not
   provide input authority.
-- Certificate and remaining ParserHost formats, plus remaining RasterHost formats, copy the
+- Remaining ParserHost formats, plus remaining RasterHost formats, copy the
   exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
   WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
   after handoff cannot change the rendered bytes.

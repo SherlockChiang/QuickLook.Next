@@ -559,6 +559,10 @@ if (Test-Path $parserHostProgram) {
     if ($parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
         Add-Failure "ParserHost must require every advertised Parser HANDLE capability"
     }
+    if ($parserHostProgramText -notmatch 'if\s*\(kind\s*==\s*"certificate"\)[\s\S]*CertificatePreview\.CreateFromHandleAsync\([\s\S]*return;[\s\S]*if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)' -or
+        $parserHostProgramText -notmatch 'CertificatePreview\.CreateFromHandleAsync\([\s\S]*ownedSourceHandle') {
+        Add-Failure "ParserHost local certificate previews must parse the transferred handle before any input anchor"
+    }
     if ($parserNativePreviewText -notmatch 'ql_preview_sqlite_handles\(' -or
         $parserNativePreviewText -notmatch 'TryPreviewSqliteHandles\([\s\S]*ql_preview_sqlite_handles\(') {
         Add-Failure "ParserHost SQLite snapshots must call the dedicated native HANDLE entry point"

@@ -1036,6 +1036,89 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Certificate_handle_preview_reads_bounded_bytes_without_an_input_anchor()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-certificate.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.cer");
+        using (RSA rsa = RSA.Create(2048))
+        {
+            var request = new CertificateRequest("CN=QuickLook Handle Test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            using X509Certificate2 certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+            await File.WriteAllBytesAsync(sourcePath, certificate.Export(X509ContentType.Cert));
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".cer", [])
+            {
+                Kind = "certificate",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, ready.RequestId);
+            Assert.Contains("CN=QuickLook Handle Test", ready.TextContent);
+            Assert.Contains("Thumbprint:", ready.TextContent);
+            Assert.False(Directory.Exists(Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + requestId)));
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
+
+            string pemSourcePath = Path.Combine(tempDirectory, "physical-pem.bin");
+            string pemLogicalPath = Path.Combine(tempDirectory, "missing-logical.pem");
+            using (RSA rsa = RSA.Create(2048))
+            {
+                var request = new CertificateRequest("CN=QuickLook PEM Test", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                using X509Certificate2 certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+                await File.WriteAllTextAsync(pemSourcePath, certificate.ExportCertificatePem());
+            }
+            string pemRequestId = Guid.NewGuid().ToString("n");
+            var pemPinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(pemSourcePath);
+            long pemHostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pemPinned.Handle, host.SafeHandle);
+            await channel.SendAsync(new PreviewOpenHandle(
+                pemRequestId,
+                pemHostHandle,
+                pemPinned.Length,
+                pemLogicalPath,
+                new FileProbe(pemLogicalPath, ".pem", [])
+                {
+                    Kind = "certificate",
+                    Size = pemPinned.Length,
+                }), timeout.Token);
+            pemPinned.Handle.Dispose();
+            PreviewReady pemReady = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Contains("CN=QuickLook PEM Test", pemReady.TextContent);
+            Assert.False(Directory.Exists(Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + pemRequestId)));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Archive_handle_preview_uses_retained_parent_for_entry_extraction()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));

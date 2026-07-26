@@ -1,17 +1,99 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace QuickLook.Next.Core;
 
 public static class CertificatePreview
 {
+    public const long MaxHandleInputBytes = 1024 * 1024;
+
     public static PreviewReady Create(string requestId, string path, long size)
     {
         string fileName = Path.GetFileName(path);
+        if (IsCertificateBundle(fileName))
+            return CreateFailure(requestId, fileName, size, "certificate bundles are not supported");
         try
         {
             using X509Certificate2 cert = X509CertificateLoader.LoadCertificateFromFile(path);
+            return CreateReady(requestId, fileName, size, cert);
+        }
+        catch (CryptographicException)
+        {
+            return CreateFailure(requestId, fileName, size, "failed to parse certificate");
+        }
+        catch (IOException)
+        {
+            return CreateFailure(requestId, fileName, size, "could not read certificate");
+        }
+        catch (Exception)
+        {
+            return CreateFailure(requestId, fileName, size, "certificate preview failed");
+        }
+    }
+
+    public static async Task<PreviewReady> CreateFromHandleAsync(
+        string requestId,
+        string logicalPath,
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string fileName = Path.GetFileName(logicalPath);
+        if (IsCertificateBundle(fileName))
+            return CreateFailure(requestId, fileName, sourceLength, "certificate bundles are not supported");
+        if (sourceLength is < 0 or > MaxHandleInputBytes)
+            return CreateFailure(requestId, fileName, sourceLength, "certificate exceeds the 1 MiB safety limit");
+        if (sourceHandle.IsInvalid || sourceHandle.IsClosed)
+            return CreateFailure(requestId, fileName, sourceLength, "certificate handle is unavailable");
+
+        try
+        {
+            byte[] bytes = GC.AllocateUninitializedArray<byte>(checked((int)sourceLength));
+            int offset = 0;
+            while (offset < bytes.Length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int read = await RandomAccess.ReadAsync(
+                    sourceHandle,
+                    bytes.AsMemory(offset),
+                    offset,
+                    cancellationToken);
+                if (read == 0)
+                    return CreateFailure(requestId, fileName, sourceLength, "certificate input ended unexpectedly");
+                offset = checked(offset + read);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            using X509Certificate2 cert = X509CertificateLoader.LoadCertificate(bytes);
+            cancellationToken.ThrowIfCancellationRequested();
+            return CreateReady(requestId, fileName, sourceLength, cert);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (CryptographicException)
+        {
+            return CreateFailure(requestId, fileName, sourceLength, "failed to parse certificate");
+        }
+        catch (IOException)
+        {
+            return CreateFailure(requestId, fileName, sourceLength, "could not read certificate");
+        }
+        catch (Exception)
+        {
+            return CreateFailure(requestId, fileName, sourceLength, "certificate preview failed");
+        }
+    }
+
+    private static PreviewReady CreateReady(
+        string requestId,
+        string fileName,
+        long size,
+        X509Certificate2 cert)
+    {
             string[] usages = cert.Extensions
                 .OfType<X509EnhancedKeyUsageExtension>()
                 .SelectMany(extension => extension.EnhancedKeyUsages.Cast<Oid>())
@@ -43,15 +125,20 @@ public static class CertificatePreview
                 TextFormat = "plain",
                 TextLanguage = "text",
             };
-        }
-        catch (Exception ex)
+    }
+
+    private static PreviewReady CreateFailure(string requestId, string fileName, long size, string status)
+        => new(requestId, "certificate", fileName, 640, 420)
         {
-            return new PreviewReady(requestId, "certificate", fileName, 640, 420)
-            {
-                TextContent = $"Name: {fileName}\nKind: certificate\nSize: {size:N0} bytes\nStatus: failed to parse certificate\nError: {ex.Message}",
-                TextFormat = "plain",
-                TextLanguage = "text",
-            };
-        }
+            TextContent = $"Name: {fileName}\nKind: certificate\nSize: {size:N0} bytes\nStatus: {status}",
+            TextFormat = "plain",
+            TextLanguage = "text",
+        };
+
+    private static bool IsCertificateBundle(string fileName)
+    {
+        string extension = Path.GetExtension(fileName);
+        return extension.Equals(".p7b", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".p7c", StringComparison.OrdinalIgnoreCase);
     }
 }

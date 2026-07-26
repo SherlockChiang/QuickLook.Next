@@ -194,6 +194,19 @@ while (true)
                         await channel.SendAsync(new PreviewError(open.RequestId, "Unsupported ParserHost preview kind."));
                         return;
                     }
+                    if (kind == "certificate")
+                    {
+                        PreviewReady certificateReady = await CertificatePreview.CreateFromHandleAsync(
+                            open.RequestId,
+                            open.LogicalPath,
+                            ownedSourceHandle,
+                            open.SourceLength,
+                            handleCts.Token);
+                        handleCts.Token.ThrowIfCancellationRequested();
+                        await channel.SendAsync(certificateReady);
+                        published = true;
+                        return;
+                    }
                     if (ParserNativePreview.UsesHandleInput(kind))
                     {
                         var handleResult = ParserNativePreview.TryPreviewHandle(
