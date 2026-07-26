@@ -57,13 +57,17 @@ left visible instead of hidden behind vague TODOs.
      unusable OPF data reuses that same validated ZIP reader to publish a bounded archive listing with no root
     path; it never reopens the logical name through the path-based archive renderer.
   - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
-     snapshot (3), archive (4), Office (5), ebook (6), and archive entry (7). Implemented HANDLE
+     snapshot (3), archive (4), Office (5), ebook (6), archive entry (7), static ICO (8), and SVG (9).
+     Implemented HANDLE
      exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
     and direct invalid-handle/file-position tests.
   - UTF-8 text preview truncation backs up to a valid char boundary.
   - UTF-16 BOM text truncation avoids dangling half code units.
   - Office preview text truncation is char-boundary safe.
+  - Office hero and package icon raster candidates are rejected before full decode when either
+    dimension exceeds 8,192 pixels or the source exceeds 16 million pixels. XHTML and FB2 output
+    limits use incremental character accounting rather than rescanning the full output per XML event.
   - XML text extraction supports named entities and decimal/hex numeric
     character references.
 - Archive/package internal reads now have a hard read cap in addition to ZIP

@@ -290,6 +290,8 @@ Require-Pattern $nativePreview 'MAX_EBOOK_CHAPTERS:\s*usize\s*=\s*10' `
     "EPUB previews must remain capped at ten retained chapters."
 Require-Pattern $nativePreview 'MAX_EBOOK_TEXT_CHARS:\s*usize\s*=\s*140\s*\*\s*1024' `
     "Ebook previews must remain capped at 140 Ki retained characters."
+Require-Pattern $nativePreview 'fn\s+flush_ebook_block\([\s\S]*output_chars:\s*&mut\s+usize[\s\S]*MAX_EBOOK_TEXT_CHARS\.saturating_sub\(\*output_chars\)[\s\S]*block\.chars\(\)\.count\(\)[\s\S]*out\.extend\(block\.chars\(\)\.take\(remaining\)\)' `
+    "XHTML/FB2 output limits must use bounded per-block character accounting."
 Require-Pattern $nativePreview 'for\s+idref\s+in\s+opf\.spine\.iter\(\)\.take\(40\)' `
     "EPUB contents lists must remain capped at 40 spine items."
 Require-Pattern $nativePreview 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(512\)' `
@@ -358,6 +360,12 @@ Require-Pattern $nativePreview 'count_sqlite_table_rows\([\s\S]*while let Some\(
     "SQLite row traversal must remain cancelable between pages."
 Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Android resource table decoding must retain its 32 MiB input cap."
+Require-Pattern $nativePreview 'MAX_EMBEDDED_IMAGE_DIMENSION:\s*u32\s*=\s*8192' `
+    "Embedded Office/package images must retain an 8192-pixel dimension cap."
+Require-Pattern $nativePreview 'MAX_EMBEDDED_IMAGE_PIXELS:\s*u64\s*=\s*16_000_000' `
+    "Embedded Office/package images must remain capped at 16 million source pixels."
+Require-Pattern $nativePreview 'fn\s+load_bounded_embedded_image[\s\S]*into_dimensions\(\)[\s\S]*MAX_EMBEDDED_IMAGE_PIXELS[\s\S]*image::load_from_memory' `
+    "Embedded Office/package images must validate dimensions before full pixel decode."
 Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
     "APK icon extraction must resolve manifest-directed Android resources before heuristic images."
 Require-Pattern $nativePreview '0x04\s*=>\s*Some\(f32::from_bits\(data\)\.to_string\(\)\)' `

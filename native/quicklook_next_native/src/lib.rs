@@ -82,6 +82,7 @@ const QL_FEATURE_HANDLE_OFFICE: u64 = 1 << 5;
 const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
 const QL_FEATURE_HANDLE_STATIC_IMAGE: u64 = 1 << 8;
+const QL_FEATURE_HANDLE_SVG: u64 = 1 << 9;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -110,6 +111,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
         | QL_FEATURE_HANDLE_STATIC_IMAGE
+        | QL_FEATURE_HANDLE_SVG
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -3797,6 +3799,7 @@ fn native_abi_version_is_stable() {
         | QL_FEATURE_HANDLE_EBOOK
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
     let required = required | QL_FEATURE_HANDLE_STATIC_IMAGE;
+    let required = required | QL_FEATURE_HANDLE_SVG;
     assert_eq!(ql_capabilities() & required, required);
 }
 

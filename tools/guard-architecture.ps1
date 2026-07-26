@@ -583,6 +583,9 @@ if (Test-Path $parserHostProgram) {
     $parserHandleInputs = [regex]::Match(
         $nativeAbiText,
         'ParserHandleInputs\s*=\s*[\s\S]*?;').Value
+    $rasterHandleInputs = [regex]::Match(
+        $nativeAbiText,
+        'RasterHandleInputs\s*=\s*[\s\S]*?;').Value
     if ($nativeAbiText -notmatch 'HandleText\s*=\s*1UL\s*<<\s*0' -or
         $nativeAbiText -notmatch 'HandleExecutable\s*=\s*1UL\s*<<\s*1' -or
         $nativeAbiText -notmatch 'HandleTorrent\s*=\s*1UL\s*<<\s*2' -or
@@ -591,6 +594,8 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleOffice\s*=\s*1UL\s*<<\s*5' -or
         $nativeAbiText -notmatch 'HandleEbook\s*=\s*1UL\s*<<\s*6' -or
         $nativeAbiText -notmatch 'HandleArchiveEntry\s*=\s*1UL\s*<<\s*7' -or
+        $nativeAbiText -notmatch 'HandleStaticImage\s*=\s*1UL\s*<<\s*8' -or
+        $nativeAbiText -notmatch 'HandleSvg\s*=\s*1UL\s*<<\s*9' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -599,8 +604,10 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandleOffice\b' -or
         $parserHandleInputs -notmatch '\bHandleEbook\b' -or
         $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
+        $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
+        $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-7 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-9 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -672,12 +679,16 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_OFFICE:\s*u64\s*=\s*1\s*<<\s*5' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_EBOOK:\s*u64\s*=\s*1\s*<<\s*6' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY:\s*u64\s*=\s*1\s*<<\s*7' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_STATIC_IMAGE:\s*u64\s*=\s*1\s*<<\s*8' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_SVG:\s*u64\s*=\s*1\s*<<\s*9' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_STATIC_IMAGE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_SVG\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise archive/Office/ebook/archive-entry bits and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-9 and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {

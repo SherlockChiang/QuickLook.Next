@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
-use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImageView, ImageReader, Rgba, RgbaImage};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use serde::Serialize;
@@ -273,6 +273,8 @@ pub(crate) enum ReaderPreviewError {
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ANDROID_RESOURCE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_EMBEDDED_IMAGE_DIMENSION: u32 = 8192;
+const MAX_EMBEDDED_IMAGE_PIXELS: u64 = 16_000_000;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_DATABASE_HANDLE_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) const MAX_SQLITE_WAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -13543,6 +13545,7 @@ fn extract_xhtml_markdown_with_context(
     let mut heading_level = 0usize;
     let mut saw_heading = false;
     let mut event_count = 0usize;
+    let mut output_chars = 0usize;
 
     loop {
         event_count = event_count.saturating_add(1);
@@ -13566,24 +13569,24 @@ fn extract_xhtml_markdown_with_context(
                 }
                 match name.as_str() {
                     "h1" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
                         heading_level = 2;
                     }
                     "h2" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
                         heading_level = 3;
                     }
                     "h3" | "h4" | "h5" | "h6" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
                         heading_level = 4;
                     }
                     "p" | "div" | "section" | "blockquote" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
                     }
                     "br" => current_block.push('\n'),
                     "ul" | "ol" => list_depth += 1,
                     "li" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
                         current_block.push_str("- ");
                     }
                     _ => {}
@@ -13607,7 +13610,7 @@ fn extract_xhtml_markdown_with_context(
             Ok(Event::End(e)) => {
                 let name = local_xml_name(e.name().as_ref());
                 if name == "body" {
-                    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
                     break;
                 }
                 if ignored_depth > 0 {
@@ -13623,11 +13626,12 @@ fn extract_xhtml_markdown_with_context(
                             &mut current_block,
                             heading_level,
                             &mut saw_heading,
+                            &mut output_chars,
                         );
                         heading_level = 0;
                     }
                     "p" | "div" | "section" | "blockquote" | "li" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
                     }
                     "ul" | "ol" => list_depth = list_depth.saturating_sub(1),
                     _ => {}
@@ -13637,19 +13641,18 @@ fn extract_xhtml_markdown_with_context(
             Err(_) => break,
             _ => {}
         }
-        if out.chars().count() > MAX_EBOOK_TEXT_CHARS {
+        if output_chars >= MAX_EBOOK_TEXT_CHARS {
             break;
         }
         let _ = list_depth;
     }
 
-    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading);
+    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
     if !saw_heading && !out.trim().is_empty() {
-        Ok(format!(
-            "## {}\n\n{}",
-            markdown_escape_line(fallback_title),
-            out.trim()
-        ))
+        let mut rendered = format!("## {}\n\n", markdown_escape_line(fallback_title));
+        let remaining = MAX_EBOOK_TEXT_CHARS.saturating_sub(rendered.chars().count());
+        rendered.extend(out.trim().chars().take(remaining));
+        Ok(rendered)
     } else {
         Ok(out.trim().to_string())
     }
@@ -13660,24 +13663,38 @@ fn flush_ebook_block(
     current: &mut String,
     heading_level: usize,
     saw_heading: &mut bool,
+    output_chars: &mut usize,
 ) {
     let text = collapse_ws(current);
     current.clear();
     if text.is_empty() {
         return;
     }
+    let mut block = String::new();
     if !out.ends_with("\n\n") && !out.is_empty() {
-        out.push_str("\n\n");
+        block.push_str("\n\n");
     }
     if heading_level > 0 {
         *saw_heading = true;
-        out.push_str(&"#".repeat(heading_level));
-        out.push(' ');
-        out.push_str(&markdown_escape_line(&text));
+        block.push_str(&"#".repeat(heading_level));
+        block.push(' ');
+        block.push_str(&markdown_escape_line(&text));
     } else {
-        out.push_str(&text);
+        block.push_str(&text);
     }
-    out.push_str("\n\n");
+    block.push_str("\n\n");
+    let remaining = MAX_EBOOK_TEXT_CHARS.saturating_sub(*output_chars);
+    if remaining == 0 {
+        return;
+    }
+    let block_chars = block.chars().count();
+    if block_chars <= remaining {
+        out.push_str(&block);
+        *output_chars += block_chars;
+    } else {
+        out.extend(block.chars().take(remaining));
+        *output_chars = MAX_EBOOK_TEXT_CHARS;
+    }
 }
 
 fn render_fb2_reader<R: Read>(
@@ -13704,6 +13721,7 @@ fn render_fb2_reader<R: Read>(
     let mut markdown = String::new();
     let mut saw_body_heading = false;
     let mut event_count = 0usize;
+    let mut markdown_chars = 0usize;
 
     loop {
         event_count = event_count.saturating_add(1);
@@ -13719,6 +13737,7 @@ fn render_fb2_reader<R: Read>(
                         &mut current_block,
                         0,
                         &mut saw_body_heading,
+                        &mut markdown_chars,
                     ),
                     "title" if in_body => {
                         flush_ebook_block(
@@ -13726,6 +13745,7 @@ fn render_fb2_reader<R: Read>(
                             &mut current_block,
                             0,
                             &mut saw_body_heading,
+                            &mut markdown_chars,
                         );
                         current_meta = "body-title".to_string();
                     }
@@ -13734,6 +13754,7 @@ fn render_fb2_reader<R: Read>(
                         &mut current_block,
                         0,
                         &mut saw_body_heading,
+                        &mut markdown_chars,
                     ),
                     _ if in_title_info => current_meta = name,
                     _ => {}
@@ -13770,6 +13791,7 @@ fn render_fb2_reader<R: Read>(
                             &mut current_block,
                             0,
                             &mut saw_body_heading,
+                            &mut markdown_chars,
                         );
                         in_body = false;
                     }
@@ -13779,6 +13801,7 @@ fn render_fb2_reader<R: Read>(
                             &mut current_block,
                             2,
                             &mut saw_body_heading,
+                            &mut markdown_chars,
                         );
                         current_meta.clear();
                     }
@@ -13787,6 +13810,7 @@ fn render_fb2_reader<R: Read>(
                         &mut current_block,
                         0,
                         &mut saw_body_heading,
+                        &mut markdown_chars,
                     ),
                     _ if name == current_meta => current_meta.clear(),
                     _ => {}
@@ -13796,7 +13820,7 @@ fn render_fb2_reader<R: Read>(
             Err(_) => break,
             _ => {}
         }
-        if markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
+        if markdown_chars >= MAX_EBOOK_TEXT_CHARS {
             break;
         }
     }
@@ -14972,9 +14996,8 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
             Ok(None) => continue,
             Err(error) => return Err(office_reader_error(error)),
         };
-        let image = match image::load_from_memory(&bytes) {
-            Ok(img) => img,
-            Err(_) => continue,
+        let Some(image) = load_bounded_embedded_image(&bytes) else {
+            continue;
         };
         if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let (original_width, original_height) = image.dimensions();
@@ -15073,9 +15096,8 @@ pub fn extract_package_icon_bgra(
         let Some(bytes) = read_limited_to_end(&mut entry, MAX_PACKAGE_ICON_BYTES) else {
             continue;
         };
-        let image = match image::load_from_memory(&bytes) {
-            Ok(img) => img,
-            Err(_) => continue,
+        let Some(image) = load_bounded_embedded_image(&bytes) else {
+            continue;
         };
         if preview_cancelled(cancel_cb) { return None; }
         let (original_width, original_height) = image.dimensions();
@@ -15267,7 +15289,7 @@ fn load_android_archive_image(
 ) -> Option<DynamicImage> {
     let bytes = read_zip_bytes(zip, path, MAX_PACKAGE_ICON_BYTES)?;
     if is_supported_zip_image_name(&path.to_ascii_lowercase()) {
-        return image::load_from_memory(&bytes).ok();
+        return load_bounded_embedded_image(&bytes);
     }
     let xml = decode_android_xml(&bytes, resources)?;
     render_android_icon_xml(zip, resources, &xml, depth + 1, cancel_cb)
@@ -15862,6 +15884,27 @@ fn is_supported_zip_image_name(lower: &str) -> bool {
         || lower.ends_with(".bmp")
 }
 
+fn load_bounded_embedded_image(bytes: &[u8]) -> Option<DynamicImage> {
+    let (width, height) = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    if width == 0
+        || height == 0
+        || width > MAX_EMBEDDED_IMAGE_DIMENSION
+        || height > MAX_EMBEDDED_IMAGE_DIMENSION
+        || u64::from(width).checked_mul(u64::from(height))? > MAX_EMBEDDED_IMAGE_PIXELS
+    {
+        return None;
+    }
+    let image = image::load_from_memory(bytes).ok()?;
+    if image.dimensions() != (width, height) {
+        return None;
+    }
+    Some(image)
+}
+
 fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32, u32, Vec<u8>)> {
     let (original_width, original_height) = image.dimensions();
     if original_width == 0 || original_height == 0 {
@@ -15883,7 +15926,8 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
     };
 
     let rgba = raster.to_rgba8();
-    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    let output_bytes = usize::try_from(u64::from(width).checked_mul(u64::from(height))?.checked_mul(4)?).ok()?;
+    let mut bgra = Vec::with_capacity(output_bytes);
     for px in rgba.chunks_exact(4) {
         let r = px[0] as u32;
         let g = px[1] as u32;
@@ -17343,6 +17387,50 @@ mod tests {
         assert!(package_icon_candidate_score("base/res/mipmap-hdpi/brand_asset.webp") > 0);
         assert_eq!(package_icon_candidate_score("res/drawable/random_photo.png"), 0);
         assert_eq!(package_icon_candidate_score("res/mipmap-anydpi-v26/product_mark.xml"), 0);
+    }
+
+    #[test]
+    fn embedded_image_dimensions_are_bounded_before_pixel_decode() {
+        let mut oversized = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut oversized, 10_000, 10_000);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let _writer = encoder.write_header().expect("write oversized PNG header");
+        }
+        assert!(oversized.len() < 1024);
+        assert!(load_bounded_embedded_image(&oversized).is_none());
+
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            32,
+            16,
+            Rgba([20, 40, 60, 255]),
+        ));
+        let mut png = Cursor::new(Vec::new());
+        image
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("encode bounded PNG");
+        assert_eq!(
+            load_bounded_embedded_image(png.get_ref()).map(|decoded| decoded.dimensions()),
+            Some((32, 16))
+        );
+    }
+
+    #[test]
+    fn fragmented_ebook_xml_retains_bounded_linear_output() {
+        let mut xhtml = String::from("<html><body>");
+        for _ in 0..60_000 {
+            xhtml.push_str("<p>x</p>");
+        }
+        xhtml.push_str("</body></html>");
+        let rendered = extract_xhtml_markdown(&xhtml, "fragmented");
+        assert_eq!(rendered.chars().count(), MAX_EBOOK_TEXT_CHARS);
+
+        let large_block = "é".repeat(MAX_EBOOK_TEXT_CHARS + 1);
+        let xhtml = format!("<html><body><p>{large_block}</p></body></html>");
+        let rendered = extract_xhtml_markdown(&xhtml, "large block");
+        assert_eq!(rendered.chars().count(), MAX_EBOOK_TEXT_CHARS);
+        assert!(rendered.is_char_boundary(rendered.len()));
     }
 
     #[test]

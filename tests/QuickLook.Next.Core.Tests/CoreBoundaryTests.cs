@@ -145,6 +145,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1UL << 6, NativeAbi.HandleEbook);
         Assert.Equal(1UL << 7, NativeAbi.HandleArchiveEntry);
         Assert.Equal(1UL << 8, NativeAbi.HandleStaticImage);
+        Assert.Equal(1UL << 9, NativeAbi.HandleSvg);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
@@ -155,7 +156,7 @@ public sealed class CoreBoundaryTests : IDisposable
                 | NativeAbi.HandleEbook
                 | NativeAbi.HandleArchiveEntry,
             NativeAbi.ParserHandleInputs);
-        Assert.Equal(NativeAbi.HandleStaticImage, NativeAbi.RasterHandleInputs);
+        Assert.Equal(NativeAbi.HandleStaticImage | NativeAbi.HandleSvg, NativeAbi.RasterHandleInputs);
         NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(
             NativeAbi.ParserHandleInputs | (1UL << 63),
