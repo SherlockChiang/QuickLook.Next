@@ -83,6 +83,7 @@ const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
 const QL_FEATURE_HANDLE_STATIC_IMAGE: u64 = 1 << 8;
 const QL_FEATURE_HANDLE_SVG: u64 = 1 << 9;
+const QL_FEATURE_HANDLE_GIF: u64 = 1 << 10;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -112,6 +113,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
         | QL_FEATURE_HANDLE_STATIC_IMAGE
         | QL_FEATURE_HANDLE_SVG
+        | QL_FEATURE_HANDLE_GIF
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -941,7 +943,7 @@ pub unsafe extern "C" fn ql_decode_image_handle(
             .and_then(|extension| extension.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if extension != "ico" && extension != "svg" {
+        if extension != "ico" && extension != "svg" && extension != "gif" {
             return QL_ERROR_INVALID_ARGUMENT;
         }
         let decoded = if extension == "svg" {
@@ -969,13 +971,27 @@ pub unsafe extern "C" fn ql_decode_image_handle(
             }
             decode_svg_bgra_bytes(&data, target_width, target_height, cancel_cb)
         } else {
+            let required_format = if extension == "ico" {
+                ImageFormat::Ico
+            } else {
+                ImageFormat::Gif
+            };
+            if extension == "gif" {
+                if let Err(status) = validate_handle_image_dimensions(
+                    &mut file,
+                    required_format,
+                    MAX_NATIVE_IMAGE_DECODE_PIXELS,
+                ) {
+                    return status;
+                }
+            }
             decode_image_bgra_reader(
                 &mut file,
                 &logical_name,
                 target_width,
                 target_height,
                 cancel_cb,
-                Some(ImageFormat::Ico),
+                Some(required_format),
             )
         };
         let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
@@ -1000,6 +1016,113 @@ pub unsafe extern "C" fn ql_decode_image_handle(
         packet.extend_from_slice(&bgra);
         write_v2_out(&packet, out_buf, out_cap, out_required)
     })
+}
+
+/// Decode bounded GIF animation frames from a borrowed Windows file handle.
+/// Output layout matches `ql_decode_gif_frames_sized_cancelable`.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_gif_frames_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if expected_length > 256 * 1024 * 1024 {
+            return QL_ERROR_LIMIT_EXCEEDED;
+        }
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        if !Path::new(&logical_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"))
+        {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if let Err(status) = validate_handle_image_dimensions(
+            &mut file,
+            ImageFormat::Gif,
+            MAX_ANIMATED_SOURCE_PIXELS,
+        ) {
+            return status;
+        }
+        let (width, height, frames) = match decode_gif_frames_bgra_reader(
+            file,
+            target_width,
+            target_height,
+            cancel_cb,
+        ) {
+            Some(decoded) => decoded,
+            None => {
+                return if cancel_requested(cancel_cb) {
+                    QL_ERROR_CANCELLED
+                } else {
+                    QL_ERROR_MALFORMED
+                }
+            }
+        };
+        if frames.is_empty() {
+            return QL_ERROR_MALFORMED;
+        }
+        let packet = match animation_frames_packet(width, height, frames) {
+            Some(packet) => packet,
+            None => return QL_ERROR_LIMIT_EXCEEDED,
+        };
+        write_v2_out(&packet, out_buf, out_cap, out_required)
+    })
+}
+
+fn validate_handle_image_dimensions<R: Read + Seek>(
+    reader: &mut R,
+    required_format: ImageFormat,
+    max_pixels: u64,
+) -> std::result::Result<(), i32> {
+    reader.seek(SeekFrom::Start(0)).map_err(|_| QL_ERROR_IO)?;
+    let image_reader = ImageReader::new(BufReader::new(&mut *reader))
+        .with_guessed_format()
+        .map_err(|_| QL_ERROR_MALFORMED)?;
+    if image_reader.format() != Some(required_format) {
+        return Err(QL_ERROR_MALFORMED);
+    }
+    let (width, height) = image_reader
+        .into_dimensions()
+        .map_err(|_| QL_ERROR_MALFORMED)?;
+    reader.seek(SeekFrom::Start(0)).map_err(|_| QL_ERROR_IO)?;
+    if width == 0
+        || height == 0
+        || should_skip_native_image_decode(width, height)
+        || u64::from(width)
+            .checked_mul(u64::from(height))
+            .is_none_or(|pixels| pixels > max_pixels)
+    {
+        return Err(QL_ERROR_LIMIT_EXCEEDED);
+    }
+    Ok(())
 }
 
 #[no_mangle]
@@ -1243,9 +1366,14 @@ fn decode_image_bgra_reader<R: Read + Seek>(
 fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
+    decode_gif_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+}
+
+fn decode_gif_frames_bgra_reader<R: Read>(reader: R, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) { return None; }
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
-    let mut reader = options.read_info(BufReader::new(file)).ok()?;
+    let mut reader = options.read_info(BufReader::new(reader)).ok()?;
     let original_width = u32::from(reader.width());
     let original_height = u32::from(reader.height());
     if should_skip_native_image_decode(original_width, original_height)
@@ -1452,8 +1580,10 @@ fn decode_png_frames_bgra(path: &str, target_width: u32, target_height: u32, can
 }
 
 fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
-    let frame_bytes = (width as usize).saturating_mul(height as usize).saturating_mul(4);
-    let total = 12usize.saturating_add(frames.len().saturating_mul(4usize.saturating_add(frame_bytes)));
+    let Some(packet) = animation_frames_packet(width, height, frames) else {
+        return -2;
+    };
+    let total = packet.len();
     if total > i32::MAX as usize {
         return -2;
     }
@@ -1462,18 +1592,32 @@ fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, 
     }
 
     unsafe {
-        std::ptr::copy_nonoverlapping((frames.len() as u32).to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(8), 4);
-        let mut offset = 12usize;
-        for (delay_ms, bgra) in frames {
-            std::ptr::copy_nonoverlapping(delay_ms.to_le_bytes().as_ptr(), out.add(offset), 4);
-            offset += 4;
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(offset), bgra.len());
-            offset += bgra.len();
-        }
+        std::ptr::copy_nonoverlapping(packet.as_ptr(), out, total);
     }
     total as i32
+}
+
+fn animation_frames_packet(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>) -> Option<Vec<u8>> {
+    if frames.is_empty() {
+        return None;
+    }
+    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let total = 12usize.checked_add(frames.len().checked_mul(4usize.checked_add(frame_bytes)?)?)?;
+    if total > MAX_ANIMATED_FRAME_BYTES + 12 || frames.len() > u32::MAX as usize {
+        return None;
+    }
+    let mut packet = Vec::with_capacity(total);
+    packet.extend_from_slice(&(frames.len() as u32).to_le_bytes());
+    packet.extend_from_slice(&width.to_le_bytes());
+    packet.extend_from_slice(&height.to_le_bytes());
+    for (delay_ms, bgra) in frames {
+        if bgra.len() != frame_bytes {
+            return None;
+        }
+        packet.extend_from_slice(&delay_ms.to_le_bytes());
+        packet.extend_from_slice(&bgra);
+    }
+    Some(packet)
 }
 
 fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::ImageResult<image::Frame>>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
@@ -3800,6 +3944,7 @@ fn native_abi_version_is_stable() {
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
     let required = required | QL_FEATURE_HANDLE_STATIC_IMAGE;
     let required = required | QL_FEATURE_HANDLE_SVG;
+    let required = required | QL_FEATURE_HANDLE_GIF;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -3988,6 +4133,35 @@ mod handle_v2_tests {
     ) -> i32 {
         unsafe {
             ql_decode_image_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                target_width,
+                target_height,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_gif_frames_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        target_width: u32,
+        target_height: u32,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_decode_gif_frames_handle(
                 source_handle,
                 expected_length,
                 logical_name_utf8,
@@ -4693,6 +4867,162 @@ mod handle_v2_tests {
                 logical_name.len(),
                 8,
                 8,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_MALFORMED
+        );
+        assert_eq!(required, 0);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn gif_handle_decodes_static_and_animation_packets_without_moving_caller_position() {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut encoded, 2, 1, &[]).expect("GIF encoder");
+            let mut first_pixels = vec![255, 0, 0, 255, 0, 255, 0, 255];
+            let mut first = gif::Frame::from_rgba_speed(2, 1, &mut first_pixels, 10);
+            first.delay = 2;
+            encoder.write_frame(&first).expect("first GIF frame");
+            let mut second_pixels = vec![0, 0, 255, 255, 255, 255, 0, 255];
+            let mut second = gif::Frame::from_rgba_speed(2, 1, &mut second_pixels, 10);
+            second.delay = 3;
+            encoder.write_frame(&second).expect("second GIF frame");
+        }
+        let (path, mut file) = create_input("bin", &encoded);
+        file.seek(SeekFrom::Start(5)).expect("position GIF handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"logical.gif";
+        let length = file.metadata().unwrap().len();
+
+        let mut required = 0usize;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > 28);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        required = 0;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 1);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let wrong_name = b"logical.png";
+        required = usize::MAX;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                wrong_name.as_ptr(),
+                wrong_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let (path, file) = create_input("bin", b"not a GIF image");
+        required = usize::MAX;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
                 std::ptr::null_mut(),
                 0,
                 &mut required,

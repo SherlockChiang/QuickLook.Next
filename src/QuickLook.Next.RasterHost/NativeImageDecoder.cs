@@ -84,7 +84,13 @@ internal static class NativeImageDecoder
                     && probe.MagicPrefix is [0, 0, 1, 0, ..])
                 || (Path.GetExtension(logicalPath).Equals(".svg", StringComparison.OrdinalIgnoreCase)
                     && probe.Extension.Equals(".svg", StringComparison.OrdinalIgnoreCase)
-                    && IsSvgMagic(probe.MagicPrefix)));
+                    && IsSvgMagic(probe.MagicPrefix))
+                || (Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                    && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                    && probe.MagicPrefix.AsSpan().StartsWith("GIF87a"u8))
+                || (Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                    && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                    && probe.MagicPrefix.AsSpan().StartsWith("GIF89a"u8)));
 
     private static bool IsSvgMagic(byte[] magicPrefix)
     {

@@ -18,7 +18,8 @@ public sealed class RasterHostAnimationTests
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-        string path = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.gif");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.gif");
         string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
         using Process host = Process.Start(new ProcessStartInfo(hostPath)
         {
@@ -35,17 +36,17 @@ public sealed class RasterHostAnimationTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
-            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif"), path);
-            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif"), physicalPath);
+            var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
             string previewRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
-            var probe = new FileProbe(path, ".gif", File.ReadAllBytes(path)[..6])
+            var probe = new FileProbe(logicalPath, ".gif", File.ReadAllBytes(physicalPath)[..6])
             {
                 Kind = "image",
-                Size = new FileInfo(path).Length,
+                Size = new FileInfo(physicalPath).Length,
             };
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedInput.Handle, host.SafeHandle);
             pinnedInput.Handle.Dispose();
-            await channel.SendAsync(new PreviewOpenHandle(previewRequestId, hostHandle, pinnedInput.Length, path, probe)
+            await channel.SendAsync(new PreviewOpenHandle(previewRequestId, hostHandle, pinnedInput.Length, logicalPath, probe)
             {
                 TargetWidth = 256,
                 TargetHeight = 256,
@@ -71,7 +72,14 @@ public sealed class RasterHostAnimationTests
                 previewReady = message as PreviewReady;
             }
 
-            File.WriteAllBytes(path, [0]);
+            string inputDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "QuickLookNext",
+                "raster-inputs",
+                host.Id.ToString(),
+                "input-" + previewRequestId);
+            Assert.False(Directory.Exists(inputDirectory));
+            Assert.False(TryOverwriteFile(physicalPath));
 
             string animationRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             await channel.SendAsync(new PreviewAnimationFramesOpen(
@@ -104,14 +112,34 @@ public sealed class RasterHostAnimationTests
                 await Task.Delay(25, timeout.Token);
             Assert.True(frameStream.CanRead);
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
         }
         finally
         {
             try { pipe.Dispose(); } catch { }
             try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
             catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(path); } catch { }
+            try { File.Delete(physicalPath); } catch { }
         }
+    }
+
+    private static bool TryOverwriteFile(string path)
+    {
+        try
+        {
+            File.WriteAllText(path, "released");
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+            await Task.Delay(20, cancellationToken);
     }
 
 }

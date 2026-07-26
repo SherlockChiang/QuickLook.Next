@@ -8,6 +8,7 @@ internal enum RetainedRasterOperations
 {
     None = 0,
     StaticImage = 1,
+    Animation = 2,
 }
 
 internal sealed class RetainedRasterSource(

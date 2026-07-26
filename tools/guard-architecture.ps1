@@ -596,6 +596,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleArchiveEntry\s*=\s*1UL\s*<<\s*7' -or
         $nativeAbiText -notmatch 'HandleStaticImage\s*=\s*1UL\s*<<\s*8' -or
         $nativeAbiText -notmatch 'HandleSvg\s*=\s*1UL\s*<<\s*9' -or
+        $nativeAbiText -notmatch 'HandleGif\s*=\s*1UL\s*<<\s*10' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -606,8 +607,9 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
+        $rasterHandleInputs -notmatch '\bHandleGif\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-9 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-10 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -681,14 +683,16 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY:\s*u64\s*=\s*1\s*<<\s*7' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_STATIC_IMAGE:\s*u64\s*=\s*1\s*<<\s*8' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_SVG:\s*u64\s*=\s*1\s*<<\s*9' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_GIF:\s*u64\s*=\s*1\s*<<\s*10' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_STATIC_IMAGE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_SVG\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_GIF\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-9 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-10 and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
@@ -762,9 +766,12 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'EnsureCapabilities\(ql_capabilities\(\), NativeAbi\.RasterHandleInputs\)' -or
         $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.ico"' -or
         $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.svg"' -or
+        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.gif"' -or
+        $rasterHostText -notmatch 'ql_decode_gif_frames_handle\(' -or
+        $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.Animation' -or
         $rasterHostText -notmatch 'RetainedRasterSource' -or
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.StaticImage') {
-        Add-Failure "RasterHost ICO and SVG previews must use retained leases and the capability-checked native HANDLE decoder"
+        Add-Failure "RasterHost ICO, SVG, and GIF previews must use retained leases and capability-checked native HANDLE decoders"
     }
 }
 

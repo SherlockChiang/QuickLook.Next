@@ -162,7 +162,24 @@ while (true)
                                                               && activeOpen is { } parent
                                                               && string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal)
                                                               && string.Equals(parent.RequestId, animation.PreviewRequestId, StringComparison.Ordinal):
-                StartAnimationDecode(animation, parent.Path);
+                if (retainedRasterSources.TryGetValue(animation.PreviewRequestId, out var retainedSource))
+                {
+                    if (retainedSource.TryAcquire(
+                            RetainedRasterOperations.Animation,
+                            out RetainedRasterSourceLease? animationLease)
+                        && animationLease is not null)
+                        StartAnimationDecode(animation, null, animationLease);
+                    else
+                        await channel.SendAsync(new PreviewError(animation.RequestId, "Animation source is no longer available."));
+                }
+                else if (NativeImageDecoder.UsesHandleInput(parent.Path, parent.Probe))
+                {
+                    await channel.SendAsync(new PreviewError(animation.RequestId, "Animation source is no longer available."));
+                }
+                else
+                {
+                    StartAnimationDecode(animation, parent.Path, null);
+                }
                 break;
 
             case PreviewAnimationFramesClose animationClose when IsValidRequestId(animationClose.RequestId):
@@ -309,7 +326,9 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                             sourceHandle,
                             sourceLength,
                             Path.GetFileName(open.Path),
-                            RetainedRasterOperations.StaticImage);
+                            Path.GetExtension(open.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                                ? RetainedRasterOperations.StaticImage | RetainedRasterOperations.Animation
+                                : RetainedRasterOperations.StaticImage);
                         if (!retainedRasterSources.TryAdd(open.RequestId, retainedSource))
                         {
                             retainedSource.Dispose();
@@ -469,11 +488,15 @@ async Task<bool> HandleNativeImageOpenAsync(
     }
 }
 
-void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
+void StartAnimationDecode(
+    PreviewAnimationFramesOpen animation,
+    string? path,
+    RetainedRasterSourceLease? source)
 {
     if (animationPackets.ContainsKey(animation.RequestId))
     {
         _ = channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame packet has not been released."));
+        source?.Dispose();
         return;
     }
 
@@ -485,6 +508,7 @@ void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
         animationCts.TryRemove(animation.RequestId, out _);
         cts.Dispose();
         gate.Dispose();
+        source?.Dispose();
         _ = channel.SendAsync(new PreviewError(animation.RequestId, "Duplicate animation request ID."));
         return;
     }
@@ -495,8 +519,16 @@ void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
         string? tempPath = null;
         try
         {
-            byte[]? packet = await NativeAnimationPacketDecoder.TryDecodeAsync(
-                path, animation.TargetWidth, animation.TargetHeight, cts.Token);
+            byte[]? packet = source is null
+                ? await NativeAnimationPacketDecoder.TryDecodeAsync(
+                    path!, animation.TargetWidth, animation.TargetHeight, cts.Token)
+                : await NativeAnimationPacketDecoder.TryDecodeHandleAsync(
+                    source.Handle,
+                    source.Length,
+                    source.LogicalName,
+                    animation.TargetWidth,
+                    animation.TargetHeight,
+                    cts.Token);
             cts.Token.ThrowIfCancellationRequested();
             if (packet is null)
             {
@@ -544,6 +576,7 @@ void StartAnimationDecode(PreviewAnimationFramesOpen animation, string path)
         }
         finally
         {
+            source?.Dispose();
             if (tempPath is not null) DeleteAnimationPacket(tempPath);
             if (animationCts.TryRemove(animation.RequestId, out var current)) current.Dispose();
             if (!animationPackets.ContainsKey(animation.RequestId))
