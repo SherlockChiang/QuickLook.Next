@@ -539,6 +539,7 @@ if (Test-Path $parserHostProgram) {
         archive = "ql_preview_archive_handle"
         office = "ql_preview_office_handle"
         ebook = "ql_preview_ebook_handle"
+        package = "ql_preview_package_handle"
     }
     foreach ($mapping in $handleMappings.GetEnumerator()) {
         $kind = [Regex]::Escape($mapping.Key)
@@ -550,7 +551,7 @@ if (Test-Path $parserHostProgram) {
     $usesHandleInput = [regex]::Match(
         $parserNativePreviewText,
         'UsesHandleInput\s*\(string kind\)[\s\S]*?(?=\r?\n\s*public\s+static|\r?\n\s*private\s+static)').Value
-    foreach ($kind in @("text", "executable", "torrent", "archive", "office", "ebook")) {
+    foreach ($kind in @("text", "executable", "torrent", "archive", "office", "ebook", "package")) {
         if ($usesHandleInput -notmatch ('"' + [Regex]::Escape($kind) + '"')) {
             Add-Failure "ParserHost direct HANDLE routing must include '$kind'"
         }
@@ -567,15 +568,22 @@ if (Test-Path $parserHostProgram) {
         Add-Failure "ParserHost archive entry extraction must call the dedicated native HANDLE entry point"
     }
     if ($parserNativePreviewText -notmatch 'ql_extract_office_image_handle\(' -or
-        $parserNativePreviewText -notmatch 'TryExtractOfficeHeroRasterHandle\([\s\S]*ql_extract_office_image_handle\(') {
+        $parserNativePreviewText -notmatch 'TryExtractOfficeHeroRasterHandle\([\s\S]*ql_extract_office_image_handle') {
         Add-Failure "ParserHost Office hero extraction must call the dedicated native HANDLE entry point"
+    }
+    if ($parserNativePreviewText -notmatch 'ql_extract_package_icon_handle\(' -or
+        $parserNativePreviewText -notmatch 'TryExtractPackageHeroRasterHandle\([\s\S]*ql_extract_package_icon_handle') {
+        Add-Failure "ParserHost package hero extraction must call the dedicated native HANDLE entry point"
     }
     $heroExtractCase = [regex]::Match(
         $parserHostProgramText,
         'case\s+HeroRasterExtract\s+extract[\s\S]*?(?=\r?\n\s*case\s+HeroRasterExtractClose)').Value
-    if ($heroExtractCase -notmatch 'extract\.Kind\.Equals\("office"[\s\S]*if\s*\(extract\.ParentPreviewRequestId\s+is\s+\{\s*\}\s+officeParentRequestId\)[\s\S]*retainedOfficeSource\.TryAcquire\(\s*RetainedPreviewFollowUps\.OfficeHero,[\s\S]*out officeHeroLease' -or
-        $heroExtractCase -notmatch 'if\s*\(officeHeroLease\s+is\s+not\s+null\)[\s\S]*TryExtractOfficeHeroRasterHandle\(') {
-        Add-Failure "Parent-bound Office hero extraction must fail closed and use an independent HANDLE lease"
+    if ($heroExtractCase -notmatch '"office"\s*=>\s*RetainedPreviewFollowUps\.OfficeHero' -or
+        $heroExtractCase -notmatch '"package"\s*=>\s*RetainedPreviewFollowUps\.PackageHero' -or
+        $heroExtractCase -notmatch 'retainedHeroSource\.TryAcquire\([\s\S]*retainedHeroOperation,[\s\S]*out retainedHeroLease' -or
+        $heroExtractCase -notmatch 'TryExtractPackageHeroRasterHandle\(' -or
+        $heroExtractCase -match 'previewInputs\.TryGetValue') {
+        Add-Failure "Parent-bound Office/package hero extraction must fail closed and use independent HANDLE leases"
     }
 
     $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
@@ -597,6 +605,8 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleStaticImage\s*=\s*1UL\s*<<\s*8' -or
         $nativeAbiText -notmatch 'HandleSvg\s*=\s*1UL\s*<<\s*9' -or
         $nativeAbiText -notmatch 'HandleGif\s*=\s*1UL\s*<<\s*10' -or
+        $nativeAbiText -notmatch 'HandlePackage\s*=\s*1UL\s*<<\s*11' -or
+        $nativeAbiText -notmatch 'HandlePackageIcon\s*=\s*1UL\s*<<\s*12' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -605,11 +615,13 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandleOffice\b' -or
         $parserHandleInputs -notmatch '\bHandleEbook\b' -or
         $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
+        $parserHandleInputs -notmatch '\bHandlePackage\b' -or
+        $parserHandleInputs -notmatch '\bHandlePackageIcon\b' -or
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-10 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-12 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -684,6 +696,8 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_STATIC_IMAGE:\s*u64\s*=\s*1\s*<<\s*8' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_SVG:\s*u64\s*=\s*1\s*<<\s*9' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_GIF:\s*u64\s*=\s*1\s*<<\s*10' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE:\s*u64\s*=\s*1\s*<<\s*11' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE_ICON:\s*u64\s*=\s*1\s*<<\s*12' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -691,8 +705,10 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_STATIC_IMAGE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_SVG\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_GIF\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE_ICON\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-10 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-12 and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {

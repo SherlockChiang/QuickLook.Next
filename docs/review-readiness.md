@@ -58,7 +58,7 @@ left visible instead of hidden behind vague TODOs.
     path; it never reopens the logical name through the path-based archive renderer.
   - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
      snapshot (3), archive (4), Office (5), ebook (6), archive entry (7), static ICO (8), SVG (9),
-     and GIF static/animation (10).
+     GIF static/animation (10), package preview (11), and package icon extraction (12).
      Implemented HANDLE
      exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,

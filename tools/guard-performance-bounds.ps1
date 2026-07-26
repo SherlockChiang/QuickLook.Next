@@ -16,6 +16,12 @@ function Require-Pattern([string]$path, [string]$pattern, [string]$message) {
     }
 }
 
+function Require-TextPattern([string]$text, [string]$pattern, [string]$message) {
+    if ($text -notmatch $pattern) {
+        $script:failures.Add($message)
+    }
+}
+
 Write-Host "== performance bounds guard ==" -ForegroundColor Cyan
 
 $pipeChannel = Join-Path $Root "src/QuickLook.Next.Core/PipeChannel.cs"
@@ -376,8 +382,24 @@ Require-Pattern $nativePreview 'mask_android_adaptive_icon\(canvas\)' `
     "Adaptive Android icons must crop their motion-safe perimeter and mask the background."
 Require-Pattern $nativePreview 'depth\s*>\s*6' `
     "Recursive Android drawable resolution must retain its depth bound."
+Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS:\s*usize\s*=\s*64' `
+    "Android drawable resolution must retain its aggregate decode-attempt budget."
 Require-Pattern $nativePreview 'candidates\.len\(\)\s*>=\s*256' `
     "Package icon fallback collection must remain bounded."
+$packagePreviewStart = $nativePreviewText.IndexOf("pub fn render_package_reader<", [StringComparison]::Ordinal)
+$packagePreviewEnd = $nativePreviewText.IndexOf("pub fn extract_package_icon_bgra(", [StringComparison]::Ordinal)
+$packagePreviewReader = if ($packagePreviewStart -ge 0 -and $packagePreviewEnd -gt $packagePreviewStart) {
+    $nativePreviewText.Substring($packagePreviewStart, $packagePreviewEnd - $packagePreviewStart)
+} else { "" }
+Require-TextPattern $packagePreviewReader 'MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\(' `
+    "Package HANDLE previews must retain source and validated ZIP bounds."
+$packageIconStart = $nativePreviewText.IndexOf("pub fn extract_package_icon_bgra_reader<", [StringComparison]::Ordinal)
+$packageIconEnd = $nativePreviewText.IndexOf("fn package_zip_read_error(", [StringComparison]::Ordinal)
+$packageIconReader = if ($packageIconStart -ge 0 -and $packageIconEnd -gt $packageIconStart) {
+    $nativePreviewText.Substring($packageIconStart, $packageIconEnd - $packageIconStart)
+} else { "" }
+Require-TextPattern $packageIconReader 'MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\(' `
+    "Package icon HANDLE extraction must retain source and validated ZIP bounds."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `

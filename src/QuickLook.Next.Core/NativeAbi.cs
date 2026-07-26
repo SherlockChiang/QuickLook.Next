@@ -14,6 +14,8 @@ public static class NativeAbi
     public const ulong HandleStaticImage = 1UL << 8;
     public const ulong HandleSvg = 1UL << 9;
     public const ulong HandleGif = 1UL << 10;
+    public const ulong HandlePackage = 1UL << 11;
+    public const ulong HandlePackageIcon = 1UL << 12;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable
@@ -22,7 +24,9 @@ public static class NativeAbi
         | HandleArchive
         | HandleOffice
         | HandleEbook
-        | HandleArchiveEntry;
+        | HandleArchiveEntry
+        | HandlePackage
+        | HandlePackageIcon;
     public const ulong RasterHandleInputs = HandleStaticImage | HandleSvg | HandleGif;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
     public const long MaxParserHandleInputBytes = 256L * 1024 * 1024;

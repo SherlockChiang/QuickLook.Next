@@ -272,7 +272,10 @@ pub(crate) enum ReaderPreviewError {
 }
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_PACKAGE_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PACKAGE_ZIP_ENTRIES: u64 = 100_000;
 const MAX_ANDROID_RESOURCE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS: usize = 64;
 const MAX_EMBEDDED_IMAGE_DIMENSION: u32 = 8192;
 const MAX_EMBEDDED_IMAGE_PIXELS: u64 = 16_000_000;
 const MAX_INFO_HEADER_BYTES: usize = 1024 * 1024;
@@ -14683,11 +14686,40 @@ fn is_package_path(lower_path: &str) -> bool {
 }
 
 fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    let filename = Path::new(path)
+    if preview_cancelled(cancel_cb) {
+        return String::new();
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return String::new(),
+    };
+    let source_len = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return String::new(),
+    };
+    render_package_reader(file, path, source_len, cancel_cb).unwrap_or_default()
+}
+
+pub fn render_package_reader<R: Read + Seek>(
+    reader: R,
+    logical_name: &str,
+    source_len: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    if source_len > MAX_PACKAGE_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let lower = logical_name.to_ascii_lowercase();
+    if !is_package_path(&lower) {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let filename = Path::new(logical_name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    let lower = path.to_ascii_lowercase();
     let platform = if lower.ends_with(".apk") || lower.ends_with(".apks") || lower.ends_with(".aab")
     {
         "Android"
@@ -14695,14 +14727,7 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
         "Windows"
     };
 
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return String::new(),
-    };
-    let mut zip = match ZipArchive::new(file) {
-        Ok(z) => z,
-        Err(_) => return String::new(),
-    };
+    let mut zip = open_validated_zip(reader, source_len, MAX_PACKAGE_ZIP_ENTRIES, cancel_cb)?;
 
     let mut file_count = 0u64;
     let mut folder_count = 0u64;
@@ -14713,14 +14738,14 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
     let mut dex_count = 0u64;
     let mut certificate_count = 0u64;
     let mut native_abis = BTreeMap::<String, ()>::new();
-    let mut appx_manifest: Option<String> = None;
+    let mut appx_manifest_name: Option<String> = None;
 
     let partial = zip.len() > MAX_ARCHIVE_SCAN_ENTRIES;
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) {
-            return String::new();
+            return Err(ReaderPreviewError::Cancelled);
         }
-        let mut entry = match zip.by_index_raw(i) {
+        let entry = match zip.by_index_raw(i) {
             Ok(e) => e,
             Err(_) => continue,
         };
@@ -14743,9 +14768,7 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
         }
         if lower_name == "appxmanifest.xml" && entry.size() <= MAX_APPX_MANIFEST_BYTES {
             has_manifest = true;
-            if let Some(bytes) = read_limited_to_end(&mut entry, MAX_APPX_MANIFEST_BYTES) {
-                appx_manifest = Some(String::from_utf8_lossy(&bytes).to_string());
-            }
+            appx_manifest_name = Some(entry.name().to_string());
         }
         if lower_name.ends_with(".dex") {
             dex_count += 1;
@@ -14768,6 +14791,12 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
             has_icon = true;
         }
     }
+
+    let appx_manifest = appx_manifest_name
+        .as_deref()
+        .map(|name| read_package_zip_bytes(&mut zip, name, MAX_APPX_MANIFEST_BYTES, cancel_cb))
+        .transpose()?
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string());
 
     let manifest = appx_manifest
         .as_deref()
@@ -14846,7 +14875,10 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
         }
     }
 
-    to_json(&PreviewReadyDto {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(to_json(&PreviewReadyDto {
         kind: "package".to_string(),
         title: if version.is_empty() {
             format!("{display_name} - {platform} package")
@@ -14860,7 +14892,7 @@ fn render_package(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> Str
         listing: None,
         table: None,
         markdown: None,
-    })
+    }))
 }
 
 #[derive(Default)]
@@ -15056,10 +15088,33 @@ pub fn extract_package_icon_bgra(
 ) -> Option<(u32, u32, Vec<u8>)> {
     if preview_cancelled(cancel_cb) { return None; }
     let file = fs::File::open(path).ok()?;
-    let mut zip = ZipArchive::new(file).ok()?;
-    if path.to_ascii_lowercase().ends_with(".apk") {
+    let source_len = file.metadata().ok()?.len();
+    extract_package_icon_bgra_reader(file, source_len, path, cancel_cb).ok()
+}
+
+pub fn extract_package_icon_bgra_reader<R: Read + Seek>(
+    reader: R,
+    source_len: u64,
+    logical_name: &str,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(u32, u32, Vec<u8>), ReaderPreviewError> {
+    if source_len > MAX_PACKAGE_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let lower = logical_name.to_ascii_lowercase();
+    if !is_package_path(&lower) {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let mut zip = open_validated_zip(reader, source_len, MAX_PACKAGE_ZIP_ENTRIES, cancel_cb)?;
+    if lower.ends_with(".apk") {
         if let Some(icon) = extract_android_package_icon(&mut zip, cancel_cb) {
-            return Some(icon);
+            return Ok(icon);
+        }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
         }
     }
     let mut candidates = Vec::new();
@@ -15070,7 +15125,7 @@ pub fn extract_package_icon_bgra(
         .unwrap_or_default();
 
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -15089,50 +15144,103 @@ pub fn extract_package_icon_bgra(
 
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     for (path_score, name) in candidates.into_iter().take(32) {
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let Ok(mut entry) = zip.by_name(&name) else {
             continue;
         };
-        let Some(bytes) = read_limited_to_end(&mut entry, MAX_PACKAGE_ICON_BYTES) else {
-            continue;
+        let entry_size = entry.size();
+        let bytes = match read_reader_exact_bounded_cancelable(
+            &mut entry,
+            entry_size,
+            MAX_PACKAGE_ICON_BYTES,
+            cancel_cb,
+        ) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                if preview_cancelled(cancel_cb) {
+                    return Err(package_zip_read_error(error));
+                }
+                continue;
+            }
         };
         let Some(image) = load_bounded_embedded_image(&bytes) else {
             continue;
         };
-        if preview_cancelled(cancel_cb) { return None; }
+        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
         let (original_width, original_height) = image.dimensions();
         if original_width < 16 || original_height < 16 {
             continue;
         }
         let area_score = ((original_width.min(512) * original_height.min(512)) / 256) as i32;
         let score = path_score + area_score;
-        let (width, height, bgra) = image_to_bgra(image, 512)?;
+        let Some((width, height, bgra)) = image_to_bgra(image, 512) else {
+            continue;
+        };
         if best.as_ref().map(|b| score > b.0).unwrap_or(true) {
             best = Some((score, width, height, bgra));
         }
     }
 
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
     best.map(|(_, width, height, bgra)| (width, height, bgra))
+        .ok_or(ReaderPreviewError::Malformed)
 }
 
-fn extract_android_package_icon(
-    zip: &mut ZipArchive<fs::File>,
+fn extract_android_package_icon<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<(u32, u32, Vec<u8>)> {
     let manifest = read_zip_bytes(zip, "AndroidManifest.xml", MAX_PACKAGE_ICON_BYTES)?;
     let resources = read_zip_bytes(zip, "resources.arsc", MAX_ANDROID_RESOURCE_TABLE_BYTES);
     let manifest = decode_android_xml(&manifest, resources.as_deref())?;
     let icon_ref = android_manifest_icon_reference(&manifest)?;
-    let image = load_android_resource_image(zip, resources.as_deref(), &icon_ref, 0, cancel_cb)?;
+    let mut decode_attempts = 0usize;
+    let image = load_android_resource_image(
+        zip,
+        resources.as_deref(),
+        &icon_ref,
+        0,
+        &mut decode_attempts,
+        cancel_cb,
+    )?;
     image_to_bgra(image, 512)
 }
 
-fn read_zip_bytes(zip: &mut ZipArchive<fs::File>, name: &str, limit: u64) -> Option<Vec<u8>> {
+fn read_zip_bytes<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, limit: u64) -> Option<Vec<u8>> {
     let mut entry = zip.by_name(name).ok()?;
     if entry.size() > limit {
         return None;
     }
     read_limited_to_end(&mut entry, limit)
+}
+
+fn read_package_zip_bytes<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    limit: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<Vec<u8>, ReaderPreviewError> {
+    let mut entry = zip.by_name(name).map_err(|_| {
+        if preview_cancelled(cancel_cb) {
+            ReaderPreviewError::Cancelled
+        } else {
+            ReaderPreviewError::Malformed
+        }
+    })?;
+    let entry_size = entry.size();
+    read_reader_exact_bounded_cancelable(&mut entry, entry_size, limit, cancel_cb)
+        .map_err(package_zip_read_error)
+}
+
+fn package_zip_read_error(error: ReaderPreviewError) -> ReaderPreviewError {
+    match error {
+        ReaderPreviewError::Cancelled | ReaderPreviewError::LimitExceeded => error,
+        ReaderPreviewError::Io
+        | ReaderPreviewError::Malformed
+        | ReaderPreviewError::LengthMismatch => ReaderPreviewError::Malformed,
+    }
 }
 
 fn decode_android_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> {
@@ -15242,11 +15350,12 @@ fn android_manifest_icon_reference(xml: &str) -> Option<String> {
     }
 }
 
-fn load_android_resource_image(
-    zip: &mut ZipArchive<fs::File>,
+fn load_android_resource_image<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
     resources: Option<&[u8]>,
     reference: &str,
     depth: usize,
+    decode_attempts: &mut usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<DynamicImage> {
     if depth > 6 || preview_cancelled(cancel_cb) {
@@ -15258,10 +15367,10 @@ fn load_android_resource_image(
     if let Some(table) = resources {
         for value in resolve_android_resource_values(table, reference) {
             let resolved = match value {
-                AndroidResourceValue::Path(path) => load_android_archive_image(zip, resources, &path, depth, cancel_cb),
+                AndroidResourceValue::Path(path) => load_android_archive_image(zip, resources, &path, depth, decode_attempts, cancel_cb),
                 AndroidResourceValue::Color(color) => Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color))),
                 AndroidResourceValue::Reference(reference) => {
-                    load_android_resource_image(zip, resources, &reference, depth + 1, cancel_cb)
+                    load_android_resource_image(zip, resources, &reference, depth + 1, decode_attempts, cancel_cb)
                 }
             };
             if resolved.is_some() {
@@ -15273,26 +15382,31 @@ fn load_android_resource_image(
     let candidates = android_resource_candidates(zip, kind, name);
     for candidate in candidates {
         if preview_cancelled(cancel_cb) { return None; }
-        if let Some(image) = load_android_archive_image(zip, resources, &candidate, depth, cancel_cb) {
+        if let Some(image) = load_android_archive_image(zip, resources, &candidate, depth, decode_attempts, cancel_cb) {
             return Some(image);
         }
     }
     None
 }
 
-fn load_android_archive_image(
-    zip: &mut ZipArchive<fs::File>,
+fn load_android_archive_image<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
     resources: Option<&[u8]>,
     path: &str,
     depth: usize,
+    decode_attempts: &mut usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<DynamicImage> {
+    if *decode_attempts >= MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS {
+        return None;
+    }
+    *decode_attempts += 1;
     let bytes = read_zip_bytes(zip, path, MAX_PACKAGE_ICON_BYTES)?;
     if is_supported_zip_image_name(&path.to_ascii_lowercase()) {
         return load_bounded_embedded_image(&bytes);
     }
     let xml = decode_android_xml(&bytes, resources)?;
-    render_android_icon_xml(zip, resources, &xml, depth + 1, cancel_cb)
+    render_android_icon_xml(zip, resources, &xml, depth + 1, decode_attempts, cancel_cb)
 }
 
 enum AndroidResourceValue {
@@ -15543,7 +15657,7 @@ fn parse_android_resource_reference(reference: &str) -> Option<(&str, &str)> {
     (!kind.is_empty() && !name.is_empty()).then_some((kind, name))
 }
 
-fn android_resource_candidates(zip: &mut ZipArchive<fs::File>, kind: &str, name: &str) -> Vec<String> {
+fn android_resource_candidates<R: Read + Seek>(zip: &mut ZipArchive<R>, kind: &str, name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         let Ok(entry) = zip.by_index_raw(i) else { continue; };
@@ -15575,18 +15689,19 @@ fn android_density_score(path: &str) -> i32 {
     else { 0 }
 }
 
-fn render_android_icon_xml(
-    zip: &mut ZipArchive<fs::File>,
+fn render_android_icon_xml<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
     resources: Option<&[u8]>,
     xml: &str,
     depth: usize,
+    decode_attempts: &mut usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<DynamicImage> {
     if xml.contains("<adaptive-icon") {
         let background = android_xml_drawable_reference(xml, "background")
-            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, cancel_cb));
+            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb));
         let foreground = android_xml_drawable_reference(xml, "foreground")
-            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, cancel_cb))?;
+            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb))?;
         let mut canvas = background
             .map(|image| image.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8())
             .unwrap_or_else(|| RgbaImage::new(512, 512));

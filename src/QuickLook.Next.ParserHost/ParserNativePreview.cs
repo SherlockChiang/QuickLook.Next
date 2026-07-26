@@ -65,6 +65,16 @@ internal static class ParserNativePreview
         nuint outCap,
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_package_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -197,6 +207,16 @@ internal static class ParserNativePreview
     private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_package_icon_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
@@ -291,6 +311,7 @@ internal static class ParserNativePreview
             "torrent" => ql_preview_torrent_handle,
             "archive" => ql_preview_archive_handle,
             "office" => ql_preview_office_handle,
+            "package" => ql_preview_package_handle,
             "ebook" => ql_preview_ebook_handle,
             _ => null,
         };
@@ -456,6 +477,7 @@ internal static class ParserNativePreview
             || kind.Equals("torrent", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("office", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("package", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("ebook", StringComparison.OrdinalIgnoreCase);
 
     public static string DescribeHandleFailure(int status)
@@ -625,6 +647,31 @@ internal static class ParserNativePreview
         long sourceLength,
         string logicalName,
         CancellationToken cancellationToken)
+        => TryExtractHeroRasterHandle(
+            ql_extract_office_image_handle,
+            sourceHandle,
+            sourceLength,
+            logicalName,
+            cancellationToken);
+
+    public static (int Status, byte[]? Raster) TryExtractPackageHeroRasterHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName,
+        CancellationToken cancellationToken)
+        => TryExtractHeroRasterHandle(
+            ql_extract_package_icon_handle,
+            sourceHandle,
+            sourceLength,
+            logicalName,
+            cancellationToken);
+
+    private static (int Status, byte[]? Raster) TryExtractHeroRasterHandle(
+        NativeHandlePreviewCall handleCall,
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName,
+        CancellationToken cancellationToken)
     {
         if (sourceLength < 0 || sourceHandle.IsInvalid || sourceHandle.IsClosed)
             return (NativeAbi.StatusInvalidArgument, null);
@@ -648,7 +695,7 @@ internal static class ParserNativePreview
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
-                    int status = ql_extract_office_image_handle(
+                    int status = handleCall(
                         sourceHandle.DangerousGetHandle(),
                         checked((ulong)sourceLength),
                         logicalNameBytes,

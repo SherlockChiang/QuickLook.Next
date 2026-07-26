@@ -16,7 +16,7 @@ request that is already in progress.
   previews use the dedicated `PreviewOpenSqliteHandles` message so an SQLite main file and its
   optional WAL/SHM companions have explicit, independently owned slots.
 - ParserHost text previews (plain text, Markdown, CSV, and TSV), executable metadata, torrent
-  listings, archive listings, Office previews, and ebook previews pass the received file handle directly to the
+  listings, archive listings, Office previews, ebook previews, and package previews pass the received file handle directly to the
   Rust ABI. They do not create a `parser-input` anchor or reopen the logical path.
 - A normal ebook preview is stateless and releases its adopted input after the bounded call. A
   successfully published local archive listing instead retains its source handle under the parent
@@ -28,6 +28,10 @@ request that is already in progress.
 - ParserHost database previews also pass their received handles directly to Rust without creating a
   `parser-input` anchor. The App is the only component allowed to derive and open `main-wal` and
   `main-shm`; neither ParserHost nor Rust resolves companion paths from `LogicalPath`.
+- A successfully published local package preview retains its source under the parent preview ID.
+  Package icon Hero extraction acquires an independent lease and calls the package icon HANDLE ABI.
+  Supplied parent IDs fail closed when stale, closed, or of the wrong kind; only parentless
+  compatibility requests may use the path export.
 - RasterHost ICO, SVG, and GIF previews retain the received file object by parent request ID and acquire an
    independent read-only lease for `ql_decode_image_handle`; they do not create a `raster-inputs`
   anchor. Rust validates the logical basename and actual format, bounds SVG input to 16 MiB, disables
@@ -41,7 +45,7 @@ request that is already in progress.
   new leases while a decode that already acquired one remains valid. Animation output packets remain
   RasterHost-owned temporary files transferred to the App by read-only handle; their path does not
   provide input authority.
-- Package, certificate, and remaining ParserHost formats, plus remaining RasterHost formats, copy the
+- Certificate and remaining ParserHost formats, plus remaining RasterHost formats, copy the
   exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
   WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
   after handoff cannot change the rendered bytes.
@@ -139,6 +143,8 @@ bit 7  HANDLE_ARCHIVE_ENTRY
 bit 8  HANDLE_STATIC_IMAGE (ICO)
 bit 9  HANDLE_SVG
 bit 10 HANDLE_GIF (static and animation)
+bit 11 HANDLE_PACKAGE
+bit 12 HANDLE_PACKAGE_ICON
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
@@ -146,7 +152,8 @@ The corresponding implemented entry points share the validated/reopened HANDLE a
 `ql_preview_archive_handle`, `ql_preview_office_handle`, `ql_extract_office_image_handle`,
 `ql_preview_ebook_handle`, `ql_extract_archive_entry_handle`, `ql_decode_image_handle` for
 capability-gated ICO/SVG/GIF raster packets, and `ql_decode_gif_frames_handle` for GIF animation
-packets.
+packets. Package parsing and retained Hero extraction use `ql_preview_package_handle` and
+`ql_extract_package_icon_handle`.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
 the existing bounded bencode parser runs. Archive and ebook routes use bounded, cancellable

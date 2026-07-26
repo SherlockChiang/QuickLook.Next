@@ -9,6 +9,7 @@ internal enum RetainedPreviewFollowUps
     None = 0,
     ArchiveEntry = 1,
     OfficeHero = 2,
+    PackageHero = 4,
 }
 
 internal sealed class RetainedPreviewSource(
@@ -61,6 +62,7 @@ internal sealed class RetainedPreviewSource(
         {
             RetainedPreviewFollowUps.ArchiveEntry => SourceKind is "archive" or "ebook",
             RetainedPreviewFollowUps.OfficeHero => SourceKind == "office",
+            RetainedPreviewFollowUps.PackageHero => SourceKind == "package",
             _ => false,
         };
 

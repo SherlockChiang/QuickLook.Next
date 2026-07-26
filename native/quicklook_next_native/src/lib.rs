@@ -84,6 +84,8 @@ const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
 const QL_FEATURE_HANDLE_STATIC_IMAGE: u64 = 1 << 8;
 const QL_FEATURE_HANDLE_SVG: u64 = 1 << 9;
 const QL_FEATURE_HANDLE_GIF: u64 = 1 << 10;
+const QL_FEATURE_HANDLE_PACKAGE: u64 = 1 << 11;
+const QL_FEATURE_HANDLE_PACKAGE_ICON: u64 = 1 << 12;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -114,6 +116,8 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_STATIC_IMAGE
         | QL_FEATURE_HANDLE_SVG
         | QL_FEATURE_HANDLE_GIF
+        | QL_FEATURE_HANDLE_PACKAGE
+        | QL_FEATURE_HANDLE_PACKAGE_ICON
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -3362,6 +3366,40 @@ pub unsafe extern "C" fn ql_preview_archive_handle(
     })
 }
 
+/// Render package metadata from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_package_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, _| {
+                preview::render_package_reader(file, logical_name, expected_length, cancel_cb)
+                    .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
 /// Render an Office preview from a borrowed Windows file handle.
 ///
 /// # Safety
@@ -3438,6 +3476,61 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
             Err(status) => return status,
         };
         let (width, height, bgra) = match preview::extract_office_image_bgra_reader(
+            &mut file,
+            expected_length,
+            &logical_name,
+            cancel_cb,
+        ) {
+            Ok(image) => image,
+            Err(error) => return reader_preview_status(error),
+        };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        let mut packet = Vec::with_capacity(8 + bgra.len());
+        packet.extend_from_slice(&width.to_le_bytes());
+        packet.extend_from_slice(&height.to_le_bytes());
+        packet.extend_from_slice(&bgra);
+        write_v2_out(&packet, out_buf, out_cap, out_required)
+    })
+}
+
+/// Extract a package icon from a borrowed Windows file handle.
+/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_package_icon_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let (width, height, bgra) = match preview::extract_package_icon_bgra_reader(
             &mut file,
             expected_length,
             &logical_name,
@@ -3945,6 +4038,8 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_STATIC_IMAGE;
     let required = required | QL_FEATURE_HANDLE_SVG;
     let required = required | QL_FEATURE_HANDLE_GIF;
+    let required = required | QL_FEATURE_HANDLE_PACKAGE;
+    let required = required | QL_FEATURE_HANDLE_PACKAGE_ICON;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -4070,6 +4165,30 @@ mod handle_v2_tests {
         }
     }
 
+    fn call_package_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_package_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
     fn call_office_handle(
         source_handle: isize,
         expected_length: u64,
@@ -4106,6 +4225,30 @@ mod handle_v2_tests {
     ) -> i32 {
         unsafe {
             ql_extract_office_image_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    fn call_package_icon_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_extract_package_icon_handle(
                 source_handle,
                 expected_length,
                 logical_name_utf8,
@@ -4496,6 +4639,132 @@ mod handle_v2_tests {
             None,
         );
         assert_eq!(status, QL_ERROR_LENGTH_MISMATCH);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn package_handles_use_logical_name_and_preserve_caller_position_and_contract() {
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            24,
+            20,
+            image::Rgba([30, 120, 220, 255]),
+        ))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode package icon");
+        let icon = png.into_inner();
+        let package = zip_bytes(&[
+            (
+                "AppxManifest.xml",
+                br#"<Package><Identity Name="Handle.Package" Version="1.2.3.4" Publisher="CN=Rust"/><Applications><Application Executable="handle.exe"><uap:VisualElements DisplayName="Handle Package" Square150x150Logo="Assets/icon.png"/></Application></Applications></Package>"#,
+            ),
+            ("Assets/icon.png", icon.as_slice()),
+        ]);
+        let (path, mut file) = create_input("bin", &package);
+        file.seek(SeekFrom::Start(11)).expect("position package handle");
+        let position = file.stream_position().unwrap();
+        let expected_length = file.metadata().unwrap().len();
+        let logical_name = br"Z:\missing\nonexistent.appx";
+
+        let mut required = 0usize;
+        assert_eq!(
+            call_package_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+        let mut json = vec![0u8; required];
+        assert_eq!(
+            call_package_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                json.as_mut_ptr(),
+                json.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        let json: serde_json::Value = serde_json::from_slice(&json[..required]).unwrap();
+        assert_eq!(json["kind"], "package");
+        assert_eq!(json["title"], "Handle Package - 1.2.3.4");
+        assert!(json["text"].as_str().unwrap().contains("Preview image: found"));
+
+        required = 0;
+        assert_eq!(
+            call_package_icon_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > 8);
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_package_icon_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 24);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 20);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        for call in [call_package_handle, call_package_icon_handle] {
+            assert_eq!(
+                call(
+                    file.as_raw_handle() as isize,
+                    expected_length + 1,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    None,
+                ),
+                QL_ERROR_LENGTH_MISMATCH
+            );
+            assert_eq!(
+                call(
+                    file.as_raw_handle() as isize,
+                    expected_length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    Some(always_cancel),
+                ),
+                QL_ERROR_CANCELLED
+            );
+        }
+        assert_eq!(file.stream_position().unwrap(), position);
+
         drop(file);
         let _ = fs::remove_file(path);
     }

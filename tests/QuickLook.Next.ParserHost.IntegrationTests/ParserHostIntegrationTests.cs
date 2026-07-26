@@ -1513,8 +1513,9 @@ public sealed class ParserHostIntegrationTests
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
-        string apkPath = Path.Combine(tempDirectory, "hero.apk");
-        using (var archive = ZipFile.Open(apkPath, ZipArchiveMode.Create))
+        string sourcePath = Path.Combine(tempDirectory, "physical-package.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.apk");
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
         {
             WriteEntry(archive, "AndroidManifest.xml",
                 "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:icon=\"@mipmap/product_mark\"/></manifest>");
@@ -1539,8 +1540,36 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
+            string previewRequestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".apk", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "package",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(previewRequestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+            PreviewReady preview = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal("package", preview.Kind);
+            Assert.False(Directory.Exists(Path.Combine(
+                GetWritableRoot(host), "parser-input", "input-" + previewRequestId)));
+            Assert.False(TryOverwriteFile(sourcePath, "replacement"));
+
+            string invalidRequestId = Guid.NewGuid().ToString("n");
+            await channel.SendAsync(new HeroRasterExtract(invalidRequestId, sourcePath, "package")
+            {
+                ParentPreviewRequestId = Guid.NewGuid().ToString("n"),
+            }, timeout.Token);
+            Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+
             string requestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new HeroRasterExtract(requestId, apkPath, "package"), timeout.Token);
+            await channel.SendAsync(new HeroRasterExtract(requestId, "", "package")
+            {
+                ParentPreviewRequestId = previewRequestId,
+            }, timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
             handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
             string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
@@ -1558,6 +1587,8 @@ public sealed class ParserHostIntegrationTests
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
             await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
             Assert.True(heroStream.CanRead);
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
         finally
         {
