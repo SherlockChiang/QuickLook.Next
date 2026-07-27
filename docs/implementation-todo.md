@@ -41,6 +41,13 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Verify system-codec resource recovery after repeated HANDLE previews. The RasterHost test
+  exercises WIC PNG decoding until its deferred WinRT resources measurably exceed the warmed HANDLE
+  baseline, then waits for a one-second test-only idle trim and requires HANDLEs to return within a
+  fixed recovery budget. Private bytes must also return within 32 MiB of the warmed baseline, allowing
+  bounded allocator/runtime retention. Idle trim now waits for pending finalizers and performs a
+  second collection; its production 120-second threshold and 15-second check interval remain unchanged.
+
 - [x] Add short-cycle ParserHost and RasterHost resource regressions. Each test warms one host,
   repeatedly transfers pinned local inputs through the HANDLE protocol, closes every request,
   verifies immediate source-file release, and rejects HANDLE-count growth beyond a fixed runtime

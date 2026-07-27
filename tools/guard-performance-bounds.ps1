@@ -72,6 +72,13 @@ Require-Pattern $parserHostIntegration 'Repeated_handle_previews_release_sources
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
+$idleTrimmer = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
+Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=\s+50\s+and\s+<=\s+15_000' `
+    "RasterHost idle-trim test cadence must remain bounded without changing the production default."
+Require-Pattern $idleTrimmer 'GC\.Collect\([\s\S]*GC\.WaitForPendingFinalizers\(\)[\s\S]*GC\.Collect\(' `
+    "RasterHost idle trim must complete finalizers before its post-finalization collection."
+Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_resources_after_idle_trim[\s\S]*privateByteRecoveryBudget\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*QL_IDLE_TRIM_SECONDS[\s\S]*QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*peakHandles\s*>\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
+    "RasterHost must verify that repeated system-codec HANDLE usage recovers after idle trim."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
 Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."

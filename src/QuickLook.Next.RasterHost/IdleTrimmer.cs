@@ -14,7 +14,11 @@ internal sealed class IdleTrimmer : IDisposable
     // Idle threshold defaults to 2 minutes; override with QL_IDLE_TRIM_SECONDS (e.g. for testing/tuning).
     private static readonly TimeSpan IdleThreshold = TimeSpan.FromSeconds(
         int.TryParse(Environment.GetEnvironmentVariable("QL_IDLE_TRIM_SECONDS"), out var s) && s > 0 ? s : 120);
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromMilliseconds(
+        int.TryParse(Environment.GetEnvironmentVariable("QL_IDLE_TRIM_CHECK_MILLISECONDS"), out var ms)
+            && ms is >= 50 and <= 15_000
+            ? ms
+            : 15_000);
 
     private readonly CompositionProducer _producer;
     private readonly Timer _timer;
@@ -48,6 +52,8 @@ internal sealed class IdleTrimmer : IDisposable
             PdfPreviewSession.ClearCache();
             _producer.ReleaseRetired();
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
             DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
         }

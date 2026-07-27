@@ -10,6 +10,127 @@ namespace QuickLook.Next.RasterHost.IntegrationTests;
 public sealed class RasterHostStaticImageHandleTests
 {
     [Fact]
+    public async Task Repeated_system_codec_previews_return_resources_after_idle_trim()
+    {
+        const int warmupCycleCount = 8;
+        const int measuredCycleCount = 24;
+        const int handleRecoveryBudget = 16;
+        const long privateByteRecoveryBudget = 32L * 1024 * 1024;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        string pipeName = $"quicklook_next_raster_wic_cycle_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        var startInfo = new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        };
+        startInfo.Environment["QL_IDLE_TRIM_SECONDS"] = "1";
+        startInfo.Environment["QL_IDLE_TRIM_CHECK_MILLISECONDS"] = "100";
+        using Process host = Process.Start(startInfo) ?? throw new InvalidOperationException("RasterHost did not start");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-wic-cycle-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-wic-cycle-{Guid.NewGuid():N}.png");
+        byte[] image = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=");
+
+        try
+        {
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+
+            int baselineHandles = 0;
+            int peakHandles = 0;
+            long baselinePrivateBytes = 0;
+            long peakPrivateBytes = 0;
+            for (int cycle = 0; cycle <= warmupCycleCount + measuredCycleCount; cycle++)
+            {
+                await File.WriteAllBytesAsync(physicalPath, image, timeout.Token);
+                string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+                var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+                long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+                var probe = new FileProbe(logicalPath, ".png", image[..8])
+                {
+                    Kind = "image",
+                    Size = pinned.Length,
+                };
+                await channel.SendAsync(new PreviewOpenHandle(
+                    requestId,
+                    hostHandle,
+                    pinned.Length,
+                    logicalPath,
+                    probe)
+                {
+                    TargetWidth = 64,
+                    TargetHeight = 64,
+                }, timeout.Token);
+                pinned.Handle.Dispose();
+
+                PreviewSurface? surface = null;
+                PreviewReady? ready = null;
+                PreviewImageWaveform? waveform = null;
+                while (surface is null || ready is null || waveform is null)
+                {
+                    ControlMessage message = await channel.ReceiveAsync(timeout.Token)
+                        ?? throw new EndOfStreamException("RasterHost closed during system-codec cycle preview");
+                    if (message is PreviewError error)
+                        throw new Xunit.Sdk.XunitException(error.Message);
+                    if (message is PreviewSurface receivedSurface)
+                    {
+                        surface = receivedSurface;
+                        using var localSurfaceHandle = new Microsoft.Win32.SafeHandles.SafeFileHandle(
+                            WindowsHandleTransfer.DuplicateHandleFromProcess(host.SafeHandle, surface.SharedHandle),
+                            ownsHandle: true);
+                        Assert.False(localSurfaceHandle.IsInvalid);
+                        await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), timeout.Token);
+                    }
+                    ready = message as PreviewReady ?? ready;
+                    waveform = message as PreviewImageWaveform ?? waveform;
+                }
+
+                await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+                await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+                host.Refresh();
+                if (cycle == warmupCycleCount)
+                {
+                    baselineHandles = host.HandleCount;
+                    baselinePrivateBytes = host.PrivateMemorySize64;
+                }
+                else if (cycle > warmupCycleCount)
+                {
+                    peakHandles = Math.Max(peakHandles, host.HandleCount);
+                    peakPrivateBytes = Math.Max(peakPrivateBytes, host.PrivateMemorySize64);
+                }
+            }
+
+            Assert.True(peakHandles > baselineHandles + handleRecoveryBudget);
+            Assert.True(peakPrivateBytes >= baselinePrivateBytes);
+            await WaitUntilAsync(() =>
+            {
+                host.Refresh();
+                return host.HandleCount <= baselineHandles + handleRecoveryBudget
+                    && host.PrivateMemorySize64 <= baselinePrivateBytes + privateByteRecoveryBudget;
+            }, timeout.Token);
+            Assert.False(File.Exists(logicalPath));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            try { File.Delete(physicalPath); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Repeated_image_handle_previews_release_sources_without_linear_handle_growth()
     {
         const int warmupCycleCount = 16;
