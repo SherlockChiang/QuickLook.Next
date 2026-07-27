@@ -73,6 +73,8 @@ Require-Pattern $parserHostIntegration 'Repeated_parent_bound_archive_extraction
     "ParserHost must retain a parent-bound archive extraction lease, output HANDLE, and temp-root regression budget."
 Require-Pattern $parserHostIntegration 'Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file[\s\S]*ArchiveEntryExtract\(canceledId[\s\S]*ArchiveEntryExtractClose\(canceledId\)[\s\S]*PreviewOpen\(previewId[\s\S]*EnumerateExtractionRoots\(extractionRoot\)\.IsSubsetOf\(rootsBefore\)' `
     "ParserHost must retain inflight archive extraction cancellation, response suppression, and temp-root cleanup coverage."
+Require-Pattern $parserHostIntegration 'Repeated_parent_bound_package_heroes_release_leases_handles_and_temp_roots[\s\S]*cycleCount\s*=\s*32[\s\S]*expectedPacketLength\s*=\s*8\s*\+\s*512\s*\*\s*512\s*\*\s*4[\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*DuplicateFileFromProcess[\s\S]*HeroRasterExtractClose[\s\S]*!Directory\.Exists\(handoffDirectory\)[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*PreviewClose\(previewRequestId\)' `
+    "ParserHost must retain a parent-bound package hero lease, 1 MiB output HANDLE, and temp-root regression budget."
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."

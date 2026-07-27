@@ -1886,6 +1886,109 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Repeated_parent_bound_package_heroes_release_leases_handles_and_temp_roots()
+    {
+        const int cycleCount = 32;
+        const int handleGrowthBudget = 12;
+        const int expectedPacketLength = 8 + 512 * 512 * 4;
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-cycle-package.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-cycle-package.apk");
+        using (var archive = ZipFile.Open(sourcePath, ZipArchiveMode.Create))
+        {
+            WriteEntry(archive, "AndroidManifest.xml",
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"><application android:icon=\"@mipmap/product_mark\"/></manifest>");
+            WriteEntry(archive, "res/mipmap-anydpi-v26/product_mark.xml",
+                "<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\"><background android:drawable=\"#224466\"/><foreground android:drawable=\"@drawable/product_foreground\"/></adaptive-icon>");
+            byte[] png = Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mP4z8DwnxLMMGrAqAGjBgwXAwAwxP4QisZM5QAAAABJRU5ErkJggg==");
+            using Stream stream = archive.CreateEntry("res/drawable-xxxhdpi/product_foreground.png").Open();
+            stream.Write(png);
+        }
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string previewRequestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".apk", [0x50, 0x4B, 0x03, 0x04])
+            {
+                Kind = "package",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(previewRequestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+            Assert.Equal("package", Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token)).Kind);
+            Assert.False(TryOverwriteFile(sourcePath, "parent must remain retained"));
+
+            string rasterRoot = Path.Combine(GetWritableRoot(host), "parser-raster");
+            host.Refresh();
+            int baselineHandles = host.HandleCount;
+            int peakHandles = baselineHandles;
+            byte[] header = new byte[8];
+            for (int cycle = 0; cycle < cycleCount; cycle++)
+            {
+                string requestId = Guid.NewGuid().ToString("n");
+                await channel.SendAsync(new HeroRasterExtract(requestId, "", "package")
+                {
+                    ParentPreviewRequestId = previewRequestId,
+                }, timeout.Token);
+                HeroRasterExtracted extracted =
+                    Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
+                Assert.Equal((512, 512, (long)expectedPacketLength),
+                    (extracted.Width, extracted.Height, extracted.PacketLength));
+                string handoffDirectory = Path.Combine(rasterRoot, "raster-" + requestId);
+                string handoffPath = Path.Combine(handoffDirectory, "hero.bgra");
+                Assert.True(File.Exists(handoffPath));
+
+                using (var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+                    host.SafeHandle, extracted.FileHandle, extracted.PacketLength))
+                using (var heroStream = new FileStream(heroHandle, FileAccess.Read))
+                {
+                    heroStream.ReadExactly(header);
+                    Assert.Equal(512, BitConverter.ToInt32(header, 0));
+                    Assert.Equal(512, BitConverter.ToInt32(header, 4));
+                    await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
+                    await WaitUntilAsync(
+                        () => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory),
+                        timeout.Token);
+                    Assert.Equal(expectedPacketLength, heroStream.Length);
+                }
+
+                host.Refresh();
+                peakHandles = Math.Max(peakHandles, host.HandleCount);
+            }
+
+            Assert.InRange(peakHandles, 1, baselineHandles + handleGrowthBudget);
+            Assert.Empty(Directory.EnumerateDirectories(rasterRoot, "raster-*"));
+            Assert.False(File.Exists(logicalPath));
+            Assert.False(TryOverwriteFile(sourcePath, "parent still retained"));
+            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Pipe_disconnect_removes_unclosed_handoffs()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));

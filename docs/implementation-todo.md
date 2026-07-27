@@ -41,6 +41,11 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Add a 32-cycle parent-bound package hero regression using a stable adaptive icon. Every
+  extraction produces a 512x512 BGRA packet of roughly 1 MiB, transfers it through a read-only
+  HANDLE, removes its `parser-raster` directory on close, and leaves the App copy independently
+  readable. Parent leases and host HANDLE growth remain bounded until the retained preview closes.
+
 - [x] Add a 32-cycle parent-bound archive extraction regression. One retained archive HANDLE remains
   authoritative while each operation acquires an independent lease, publishes a host-owned output
   HANDLE, and removes its Rust temp root on explicit close. The copied App-side HANDLE remains readable,
