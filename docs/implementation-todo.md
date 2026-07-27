@@ -41,6 +41,10 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Remove the obsolete ParserHost `parser-input` compatibility layer. Local certificate,
+  SQLite, and native parser requests now consume only adopted HANDLEs; unsupported HANDLE kinds
+  fail closed, and ParserHost no longer creates or requires the `parser-input` writable directory.
+
 - [x] Add a bounded RGB spatial waveform to the persistent right-side image
   details rail. RasterHost derives a fixed 192x96 three-channel density scope
   from its already-bounded decoded BGRA raster, including alpha unpremultiplication

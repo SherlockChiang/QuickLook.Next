@@ -595,7 +595,7 @@ internal sealed class ParserHostSupervisor
         try
         {
             Directory.CreateDirectory(root);
-            foreach (string child in new[] { "logs", "parser-input", "archive-preview", "parser-raster" })
+            foreach (string child in new[] { "logs", "archive-preview", "parser-raster" })
                 Directory.CreateDirectory(Path.Combine(root, child));
             return root;
         }

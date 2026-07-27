@@ -187,6 +187,8 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial routing probe remains
   path-based, while the final probe after ParserHost/RasterHost pinning reads the same file object.
+  ParserHost and RasterHost no longer create HANDLE input anchors; both adopt unsupported HANDLE
+  requests and fail closed without consulting logical path metadata.
   The extracted archive child's bounded App handoff anchor remains while ParserHost publishes a
   temporary output object; RasterHost receives the resulting pinned child HANDLE directly.
 

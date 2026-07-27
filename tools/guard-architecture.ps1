@@ -483,23 +483,11 @@ if (Test-Path $parserHostProgram) {
         $handleCaseText -notmatch 'finally\s*\{[\s\S]*if\s*\(!published\)[\s\S]*DeleteRetainedPreviewSource\(open\.RequestId\)[\s\S]*if\s*\(!sourceRetained\)\s*\r?\n\s*ownedSourceHandle\.Dispose\(\)') {
         Add-Failure "ParserHost must adopt each transferred HANDLE before validation and dispose every early-return path"
     }
-    $directHandleBranch = $handleCaseText.IndexOf(
-        "if (ParserNativePreview.UsesHandleInput(kind))",
-        [StringComparison]::Ordinal)
-    $handlePreview = $handleCaseText.IndexOf("ParserNativePreview.TryPreviewHandle(", [StringComparison]::Ordinal)
-    $directHandleReturn = if ($handlePreview -ge 0) {
-        $handleCaseText.IndexOf("return;", $handlePreview, [StringComparison]::Ordinal)
-    } else {
-        -1
-    }
-    $anchorCreation = $handleCaseText.IndexOf("var input = CreatePreviewInput(", [StringComparison]::Ordinal)
-    $directHandleBranchEndsBeforeAnchor = $handleCaseText -match 'if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)\s*\{[\s\S]*ParserNativePreview\.TryPreviewHandle\([\s\S]*\r?\n\s*return;\s*\r?\n\s*\}\s*\r?\n\s*var input = CreatePreviewInput\('
-    if ($directHandleBranch -lt 0 -or $handlePreview -le $directHandleBranch -or $directHandleReturn -le $handlePreview -or $anchorCreation -le $directHandleReturn -or -not $directHandleBranchEndsBeforeAnchor) {
-        Add-Failure "ParserHost text, executable, torrent, archive, and ebook previews must use the native HANDLE ABI before any input anchor is created"
-    }
-    if ($handleCaseText -notmatch 'ParserNativePreview\.TryPreviewHandle\(\s*kind,\s*ownedSourceHandle,' -or
-        $handleCaseText -notmatch 'CreatePreviewInput\([^;]*ownedSourceHandle,') {
-        Add-Failure "ParserHost must pass only the adopted owning HANDLE to native and anchored preview paths"
+    if ($handleCaseText -notmatch 'if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)\s*\{[\s\S]*ParserNativePreview\.TryPreviewHandle\(\s*kind,\s*ownedSourceHandle,[\s\S]*\r?\n\s*return;\s*\r?\n\s*\}' -or
+        $parserHostProgramText -match 'CreatePreviewInput\(' -or
+        $parserHostProgramText -match 'parser-input' -or
+        $parserHostProgramText -match 'previewInputs') {
+        Add-Failure "ParserHost HANDLE requests must use direct HANDLE parsers and never materialize path-based input anchors"
     }
     $retainedSourcePath = Join-Path $Root "src/QuickLook.Next.ParserHost/RetainedPreviewSource.cs"
     $retainedSourceText = Get-Content -LiteralPath $retainedSourcePath -Raw
@@ -561,7 +549,7 @@ if (Test-Path $parserHostProgram) {
     }
     if ($parserHostProgramText -notmatch 'if\s*\(kind\s*==\s*"certificate"\)[\s\S]*CertificatePreview\.CreateFromHandleAsync\([\s\S]*return;[\s\S]*if\s*\(ParserNativePreview\.UsesHandleInput\(kind\)\)' -or
         $parserHostProgramText -notmatch 'CertificatePreview\.CreateFromHandleAsync\([\s\S]*ownedSourceHandle') {
-        Add-Failure "ParserHost local certificate previews must parse the transferred handle before any input anchor"
+        Add-Failure "ParserHost local certificate previews must parse the transferred handle directly"
     }
     if ($parserNativePreviewText -notmatch 'ql_preview_sqlite_handles\(' -or
         $parserNativePreviewText -notmatch 'TryPreviewSqliteHandles\([\s\S]*ql_preview_sqlite_handles\(') {

@@ -9,10 +9,9 @@ string writableRoot = GetArg(args, "--writable-root") ?? "";
 if (!Path.IsPathFullyQualified(writableRoot) || !Directory.Exists(writableRoot)
     || (File.GetAttributes(writableRoot) & FileAttributes.ReparsePoint) != 0) return;
 string logRoot = Path.Combine(writableRoot, "logs");
-string inputRoot = Path.Combine(writableRoot, "parser-input");
 string archiveRoot = Path.Combine(writableRoot, "archive-preview");
 string rasterRoot = Path.Combine(writableRoot, "parser-raster");
-foreach (string child in new[] { logRoot, inputRoot, archiveRoot, rasterRoot })
+foreach (string child in new[] { logRoot, archiveRoot, rasterRoot })
     if (!Directory.Exists(child) || (File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) return;
 Environment.SetEnvironmentVariable("QUICKLOOK_NEXT_ARCHIVE_ROOT", archiveRoot);
 
@@ -22,7 +21,6 @@ try { ParserNativePreview.EnsureCompatible(); }
 catch (Exception ex) { DiagLog.Write("ParserHost", "native ABI check failed: " + ex.Message); return; }
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
 CleanupStaleHeroRasters(rasterRoot);
-CleanupStalePreviewInputs(inputRoot);
 
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
@@ -44,7 +42,6 @@ var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-var previewInputs = new ConcurrentDictionary<string, (string Path, FileStream Anchor)>();
 var retainedPreviewSources = new ConcurrentDictionary<string, RetainedPreviewSource>();
 bool authenticated = false;
 string? activePreviewRequestId = null;
@@ -92,7 +89,6 @@ while (true)
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
-                DeletePreviewInput(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var cts = new CancellationTokenSource();
@@ -169,7 +165,6 @@ while (true)
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
-                DeletePreviewInput(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var handleCts = new CancellationTokenSource();
@@ -263,30 +258,9 @@ while (true)
                         }
                         return;
                     }
-                    var input = CreatePreviewInput(open.RequestId, open.LogicalPath, ownedSourceHandle, open.SourceLength, inputRoot);
-                    if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
-                    {
-                        input?.Anchor.Dispose();
-                        if (input is not null) DeletePreviewInputPath(input.Value.Path);
-                        await channel.SendAsync(new PreviewError(open.RequestId, "Could not anchor preview input."));
-                        return;
-                    }
-                    handleCts.Token.ThrowIfCancellationRequested();
-                    if (kind == "certificate")
-                    {
-                        await channel.SendAsync(CertificatePreview.Create(open.RequestId, input.Value.Path, open.SourceLength));
-                        published = true;
-                        return;
-                    }
-                    string? json = ParserNativePreview.TryPreview(kind, input.Value.Path, open.Probe, handleCts.Token);
-                    handleCts.Token.ThrowIfCancellationRequested();
-                    if (!PreviewReadyJson.TryParse(open.RequestId, json ?? "", out PreviewReady? ready, out string? error))
-                        await channel.SendAsync(new PreviewError(open.RequestId, error ?? "Native parser returned no preview."));
-                    else
-                    {
-                        await channel.SendAsync(ready!);
-                        published = true;
-                    }
+                    await channel.SendAsync(new PreviewError(
+                        open.RequestId,
+                        "HANDLE preview kind is not supported by ParserHost."));
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -299,7 +273,6 @@ while (true)
                     if (requests.TryRemove(open.RequestId, out var current)) current.Dispose();
                     if (!published)
                     {
-                        DeletePreviewInput(open.RequestId);
                         DeleteRetainedPreviewSource(open.RequestId);
                     }
                     if (!sourceRetained)
@@ -347,7 +320,6 @@ while (true)
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
-                DeletePreviewInput(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var sqliteCts = new CancellationTokenSource();
@@ -413,7 +385,6 @@ while (true)
 
         case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
-            DeletePreviewInput(close.RequestId);
             DeleteRetainedPreviewSource(close.RequestId);
             break;
 
@@ -774,8 +745,6 @@ foreach (var raster in heroRasters.Values)
     raster.Handle.Dispose();
     DeleteHeroRaster(raster.Path);
 }
-foreach (string requestId in previewInputs.Keys)
-    DeletePreviewInput(requestId);
 foreach (string requestId in retainedPreviewSources.Keys)
     DeleteRetainedPreviewSource(requestId);
 
@@ -876,85 +845,8 @@ static void CleanupStaleHeroRasters(string root)
     catch { }
 }
 
-static void CleanupStalePreviewInputs(string root)
-{
-    try
-    {
-        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return;
-        foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
-                Directory.Delete(directory, recursive: true);
-    }
-    catch { }
-}
-
-(string Path, FileStream Anchor)? CreatePreviewInput(
-    string requestId,
-    string logicalPath,
-    Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
-    long sourceLength,
-    string root)
-{
-    string fileName = Path.GetFileName(logicalPath);
-    string extension = fileName.EndsWith("-wal", StringComparison.OrdinalIgnoreCase)
-        ? "-wal"
-        : fileName.EndsWith("-shm", StringComparison.OrdinalIgnoreCase)
-            ? "-shm"
-            : Path.GetExtension(logicalPath);
-    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c is not '.' and not '-'))
-        extension = "";
-    string directory = Path.Combine(root, "input-" + requestId);
-    string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
-    try
-    {
-        Directory.CreateDirectory(root);
-        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) return null;
-        Directory.CreateDirectory(directory);
-        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return null;
-        using var source = new FileStream(sourceHandle, FileAccess.Read);
-        var anchor = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
-        try
-        {
-            source.CopyTo(anchor);
-            anchor.Flush(flushToDisk: true);
-            if (anchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
-            anchor.Position = 0;
-            return (path, anchor);
-        }
-        catch
-        {
-            anchor.Dispose();
-            throw;
-        }
-    }
-    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-    {
-        DeletePreviewInputPath(path);
-        return null;
-    }
-}
-
-void DeletePreviewInput(string requestId)
-{
-    if (!previewInputs.TryRemove(requestId, out var input)) return;
-    input.Anchor.Dispose();
-    DeletePreviewInputPath(input.Path);
-}
-
 void DeleteRetainedPreviewSource(string requestId)
 {
     if (retainedPreviewSources.TryRemove(requestId, out var source))
         source.Dispose();
-}
-
-static void DeletePreviewInputPath(string path)
-{
-    try
-    {
-        File.Delete(path);
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null) Directory.Delete(directory, recursive: false);
-    }
-    catch { }
 }

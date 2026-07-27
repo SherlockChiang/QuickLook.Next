@@ -707,6 +707,56 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
+    public async Task Unsupported_handle_kind_fails_closed_without_materializing_a_path()
+    {
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-source.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-database.db");
+        await File.WriteAllBytesAsync(sourcePath, "SQLite format 3\0"u8.ToArray());
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".db", "SQLite format 3\0"u8.ToArray())
+            {
+                Kind = "database",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewError error = Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+            Assert.Equal(requestId, error.RequestId);
+            Assert.Contains("HANDLE preview kind is not supported", error.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(logicalPath));
+            Assert.False(Directory.Exists(Path.Combine(GetWritableRoot(host), "parser-input")));
+            await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released handle"), timeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Duplicate_handle_request_ID_releases_every_transferred_handle()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
@@ -1821,7 +1871,7 @@ public sealed class ParserHostIntegrationTests
         string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
         string writableRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", "host-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(writableRoot);
-        foreach (string child in new[] { "logs", "parser-input", "archive-preview", "parser-raster" })
+        foreach (string child in new[] { "logs", "archive-preview", "parser-raster" })
             Directory.CreateDirectory(Path.Combine(writableRoot, child));
         try
         {

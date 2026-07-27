@@ -68,6 +68,11 @@ request that is already in progress.
   the normal pinned ParserHost/RasterHost handoff preserves the bytes through probing and rendering.
 - Cloud fail-closed compatibility inputs remain path-based and recycle the host when canceled while
   opening.
+- ParserHost no longer materializes any `PreviewOpenHandle` input under `parser-input`; that writable
+  directory is no longer created. Certificate inputs use the bounded managed HANDLE reader, SQLite
+  uses its dedicated multi-HANDLE message, and every other supported local ParserHost kind uses the
+  Rust HANDLE ABI. Unsupported HANDLE kinds fail closed after adoption without consulting the
+  logical path. Explicit cloud/legacy `PreviewOpen` requests remain path-based compatibility inputs.
 - The App's initial routing probe remains path-based for cloud and compatibility behavior. After it
   pins a local ParserHost or RasterHost source, the final verified probe uses
   `ql_probe_file_handle` when native advertises `HANDLE_PROBE`; a native probe failure then fails
