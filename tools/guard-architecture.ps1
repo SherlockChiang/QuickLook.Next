@@ -612,6 +612,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandlePackage\s*=\s*1UL\s*<<\s*11' -or
         $nativeAbiText -notmatch 'HandlePackageIcon\s*=\s*1UL\s*<<\s*12' -or
         $nativeAbiText -notmatch 'HandleProbe\s*=\s*1UL\s*<<\s*13' -or
+        $nativeAbiText -notmatch 'HandleRasterImage\s*=\s*1UL\s*<<\s*14' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -625,8 +626,9 @@ if (Test-Path $parserHostProgram) {
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
+        $rasterHandleInputs -notmatch '\bHandleRasterImage\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-13 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-14 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -705,6 +707,7 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE:\s*u64\s*=\s*1\s*<<\s*11' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE_ICON:\s*u64\s*=\s*1\s*<<\s*12' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PROBE:\s*u64\s*=\s*1\s*<<\s*13' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_RASTER_IMAGE:\s*u64\s*=\s*1\s*<<\s*14' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -715,8 +718,9 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE_ICON\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PROBE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_RASTER_IMAGE\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-13 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-14 and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
@@ -791,14 +795,15 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'TryDecodeHandleAsync\(' -or
         $rasterHostText -notmatch 'ql_decode_image_handle\(' -or
         $rasterHostText -notmatch 'EnsureCapabilities\(ql_capabilities\(\), NativeAbi\.RasterHandleInputs\)' -or
-        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.ico"' -or
-        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.svg"' -or
-        $rasterHostText -notmatch 'Path\.GetExtension\(logicalPath\)\.Equals\("\.gif"' -or
+        $rasterHostText -notmatch 'probe\.Kind\.Equals\("image"[\s\S]{0,300}Path\.GetExtension\(logicalPath\)\.Equals\(probe\.Extension' -or
+        $rasterHostText -notmatch 'SystemImageDecoder\.TryDecodeHandleAsync\(' -or
+        $rasterHostText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
+        $rasterHostText -notmatch 'fileStream\.AsRandomAccessStream\(\)' -or
         $rasterHostText -notmatch 'ql_decode_gif_frames_handle\(' -or
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.Animation' -or
         $rasterHostText -notmatch 'RetainedRasterSource' -or
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.StaticImage') {
-        Add-Failure "RasterHost ICO, SVG, and GIF previews must use retained leases and capability-checked native HANDLE decoders"
+        Add-Failure "RasterHost local images must use retained leases with HANDLE-backed system/native decoders"
     }
 }
 

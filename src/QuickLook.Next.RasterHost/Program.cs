@@ -326,7 +326,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                             sourceHandle,
                             sourceLength,
                             Path.GetFileName(open.Path),
-                            Path.GetExtension(open.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+                            NativeImageDecoder.SupportsHandleAnimation(open.Path, open.Probe)
                                 ? RetainedRasterOperations.StaticImage | RetainedRasterOperations.Animation
                                 : RetainedRasterOperations.StaticImage);
                         if (!retainedRasterSources.TryAdd(open.RequestId, retainedSource))
@@ -359,7 +359,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                             return;
                         }
                         using (lease)
-                            if (!await HandleNativeImageOpenAsync(open, lease, cts.Token))
+                            if (!await HandleImageOpenAsync(open, lease, cts.Token))
                                 DeleteRetainedRasterSource(open.RequestId);
                         return;
                     }
@@ -418,19 +418,45 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     });
 }
 
-async Task<bool> HandleNativeImageOpenAsync(
+async Task<bool> HandleImageOpenAsync(
     RasterOpen open,
     RetainedRasterSourceLease source,
     CancellationToken cancellationToken)
 {
-    NativeDecodedImage? image = await NativeImageDecoder.TryDecodeHandleAsync(
-        source.Handle,
-        source.Length,
-        source.LogicalName,
-        imageDecodeTimeout,
-        cancellationToken,
-        open.TargetWidth,
-        open.TargetHeight);
+    NativeDecodedImage? image = null;
+    if (PreferSystemImageDecoder(source.LogicalName))
+    {
+        image = await DecodeSystemImageHandleWithTimeoutAsync(
+            source,
+            systemImageDecodeTimeout,
+            cancellationToken,
+            open.TargetWidth,
+            open.TargetHeight);
+    }
+    if (image is null
+        && !NativeImageDecoder.RequiresSystemDecoderHandle(
+            source.Handle, source.Length, source.LogicalName)
+        && !NativeImageDecoder.SkipNativeHandleFallbackAfterSystemFailure(
+            source.Length, source.LogicalName))
+    {
+        image = await NativeImageDecoder.TryDecodeHandleAsync(
+            source.Handle,
+            source.Length,
+            source.LogicalName,
+            imageDecodeTimeout,
+            cancellationToken,
+            open.TargetWidth,
+            open.TargetHeight);
+    }
+    if (image is null && !PreferSystemImageDecoder(source.LogicalName))
+    {
+        image = await DecodeSystemImageHandleWithTimeoutAsync(
+            source,
+            systemImageDecodeTimeout,
+            cancellationToken,
+            open.TargetWidth,
+            open.TargetHeight);
+    }
     cancellationToken.ThrowIfCancellationRequested();
     if (image is null)
     {
@@ -485,6 +511,32 @@ async Task<bool> HandleNativeImageOpenAsync(
     finally
     {
         surfacePublishGate.Release();
+    }
+}
+
+static async Task<NativeDecodedImage?> DecodeSystemImageHandleWithTimeoutAsync(
+    RetainedRasterSourceLease source,
+    TimeSpan timeout,
+    CancellationToken cancellationToken,
+    uint targetWidth,
+    uint targetHeight)
+{
+    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeoutCts.CancelAfter(timeout);
+    try
+    {
+        return await SystemImageDecoder.TryDecodeHandleAsync(
+            source.Handle,
+            source.Length,
+            source.LogicalName,
+            timeoutCts.Token,
+            targetWidth,
+            targetHeight);
+    }
+    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+    {
+        DiagLog.Write("RasterHost", $"system HANDLE image decode timed out; timeout={timeout.TotalMilliseconds:0}ms");
+        return null;
     }
 }
 

@@ -79,18 +79,38 @@ internal static class NativeImageDecoder
     public static bool UsesHandleInput(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
         => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
             && string.Equals(probe.Path, logicalPath, StringComparison.OrdinalIgnoreCase)
-            && ((Path.GetExtension(logicalPath).Equals(".ico", StringComparison.OrdinalIgnoreCase)
-                    && probe.Extension.Equals(".ico", StringComparison.OrdinalIgnoreCase)
-                    && probe.MagicPrefix is [0, 0, 1, 0, ..])
-                || (Path.GetExtension(logicalPath).Equals(".svg", StringComparison.OrdinalIgnoreCase)
-                    && probe.Extension.Equals(".svg", StringComparison.OrdinalIgnoreCase)
-                    && IsSvgMagic(probe.MagicPrefix))
-                || (Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
-                    && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-                    && probe.MagicPrefix.AsSpan().StartsWith("GIF87a"u8))
-                || (Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
-                    && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-                    && probe.MagicPrefix.AsSpan().StartsWith("GIF89a"u8)));
+            && !string.IsNullOrWhiteSpace(probe.Extension)
+            && Path.GetExtension(logicalPath).Equals(probe.Extension, StringComparison.OrdinalIgnoreCase);
+
+    public static bool SupportsHandleAnimation(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
+        => Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+            && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+            && (probe.MagicPrefix.AsSpan().StartsWith("GIF87a"u8)
+                || probe.MagicPrefix.AsSpan().StartsWith("GIF89a"u8));
+
+    public static bool RequiresSystemDecoderHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName)
+    {
+        string ext = Path.GetExtension(logicalName).ToLowerInvariant();
+        if (ext is ".avif" or ".heic" or ".heif" or ".jxl")
+            return true;
+        if (ext is not (".jpg" or ".jpeg" or ".jpe"))
+            return false;
+
+        try
+        {
+            using SafeFileHandle probeHandle = WindowsHandleTransfer.ReopenReadOnlyFile(sourceHandle, sourceLength);
+            using var stream = new FileStream(probeHandle, FileAccess.Read);
+            return JpegRequiresSystemDecoder(stream);
+        }
+        catch { return false; }
+    }
+
+    public static bool SkipNativeHandleFallbackAfterSystemFailure(long sourceLength, string logicalName)
+        => Path.GetExtension(logicalName).ToLowerInvariant() is ".png" or ".bmp" or ".webp"
+            && sourceLength > MaxNativeFallbackAfterSystemFailureBytes;
 
     private static bool IsSvgMagic(byte[] magicPrefix)
     {
@@ -422,33 +442,37 @@ internal static class NativeImageDecoder
         try
         {
             using FileStream stream = File.OpenRead(path);
-            if (stream.ReadByte() != 0xFF || stream.ReadByte() != 0xD8)
-                return false;
-
-            while (stream.Position + 4 <= stream.Length)
-            {
-                if (stream.ReadByte() != 0xFF)
-                    return false;
-                int marker = stream.ReadByte();
-                if (marker is 0xDA or 0xD9 || marker < 0)
-                    return false;
-
-                int hi = stream.ReadByte();
-                int lo = stream.ReadByte();
-                if (hi < 0 || lo < 0)
-                    return false;
-                int length = (hi << 8) | lo;
-                if (length < 2 || stream.Position + length - 2 > stream.Length)
-                    return false;
-
-                if (marker is 0xEE)
-                    return true;
-
-                stream.Position += length - 2;
-            }
+            return JpegRequiresSystemDecoder(stream);
         }
         catch { }
 
+        return false;
+    }
+
+    private static bool JpegRequiresSystemDecoder(Stream stream)
+    {
+        if (stream.ReadByte() != 0xFF || stream.ReadByte() != 0xD8)
+            return false;
+
+        while (stream.Position + 4 <= stream.Length)
+        {
+            if (stream.ReadByte() != 0xFF)
+                return false;
+            int marker = stream.ReadByte();
+            if (marker is 0xDA or 0xD9 || marker < 0)
+                return false;
+
+            int hi = stream.ReadByte();
+            int lo = stream.ReadByte();
+            if (hi < 0 || lo < 0)
+                return false;
+            int length = (hi << 8) | lo;
+            if (length < 2 || stream.Position + length - 2 > stream.Length)
+                return false;
+            if (marker is 0xEE)
+                return true;
+            stream.Position += length - 2;
+        }
         return false;
     }
 

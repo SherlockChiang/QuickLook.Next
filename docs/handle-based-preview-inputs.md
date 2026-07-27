@@ -50,8 +50,11 @@ request that is already in progress.
   new leases while a decode that already acquired one remains valid. Animation output packets remain
   RasterHost-owned temporary files transferred to the App by read-only handle; their path does not
   provide input authority.
-- Remaining RasterHost formats copy the exact duplicated file object into a bounded host-owned
-  anchor before invoking WinRT PDF, system codec, or shell-thumbnail providers. Replacing the
+- Local system-codec images create a WinRT random-access stream over an independently reopened lease
+  of the retained source HANDLE. PNG/JPEG/BMP/TIFF/WebP may fall back to Rust decoding through the
+  same retained object; AVIF/HEIC/JXL and Adobe-marker JPEG remain system-codec-only. These requests
+  do not create a `raster-inputs` anchor and cannot fall back to a Shell/path provider. WinRT PDF and
+  Shell-thumbnail providers still use bounded host-owned anchors for compatibility. Replacing the
   original path after handoff cannot change the rendered bytes.
 - Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
   that ID to the retained archive source handle before considering the legacy path fallback, and the
@@ -152,6 +155,7 @@ bit 10 HANDLE_GIF (static and animation)
 bit 11 HANDLE_PACKAGE
 bit 12 HANDLE_PACKAGE_ICON
 bit 13 HANDLE_PROBE
+bit 14 HANDLE_RASTER_IMAGE (PNG/JPEG/BMP/TIFF/WebP native fallback; system codecs use the same HANDLE)
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
@@ -277,8 +281,8 @@ a supplied parent ID never falls back to that path.
 
 Remaining migration order:
 
-1. Remaining system-codec still-image formats through a separately reviewed Windows adapter.
-2. PDF and Shell paths through separately reviewed Windows-specific adapters or brokers.
+1. PDF through a separately reviewed Windows HANDLE adapter.
+2. Shell paths through a separately reviewed broker.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.

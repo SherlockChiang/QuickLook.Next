@@ -87,6 +87,7 @@ const QL_FEATURE_HANDLE_GIF: u64 = 1 << 10;
 const QL_FEATURE_HANDLE_PACKAGE: u64 = 1 << 11;
 const QL_FEATURE_HANDLE_PACKAGE_ICON: u64 = 1 << 12;
 const QL_FEATURE_HANDLE_PROBE: u64 = 1 << 13;
+const QL_FEATURE_HANDLE_RASTER_IMAGE: u64 = 1 << 14;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -120,6 +121,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_PACKAGE
         | QL_FEATURE_HANDLE_PACKAGE_ICON
         | QL_FEATURE_HANDLE_PROBE
+        | QL_FEATURE_HANDLE_RASTER_IMAGE
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -976,9 +978,6 @@ pub unsafe extern "C" fn ql_decode_image_handle(
             .and_then(|extension| extension.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if extension != "ico" && extension != "svg" && extension != "gif" {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
         let decoded = if extension == "svg" {
             if expected_length > MAX_SVG_INPUT_BYTES {
                 return QL_ERROR_LIMIT_EXCEEDED;
@@ -1004,19 +1003,22 @@ pub unsafe extern "C" fn ql_decode_image_handle(
             }
             decode_svg_bgra_bytes(&data, target_width, target_height, cancel_cb)
         } else {
-            let required_format = if extension == "ico" {
-                ImageFormat::Ico
-            } else {
-                ImageFormat::Gif
+            let required_format = match extension.as_str() {
+                "png" => ImageFormat::Png,
+                "jpg" | "jpeg" | "jpe" => ImageFormat::Jpeg,
+                "gif" => ImageFormat::Gif,
+                "bmp" => ImageFormat::Bmp,
+                "ico" => ImageFormat::Ico,
+                "tif" | "tiff" => ImageFormat::Tiff,
+                "webp" => ImageFormat::WebP,
+                _ => return QL_ERROR_INVALID_ARGUMENT,
             };
-            if extension == "gif" {
-                if let Err(status) = validate_handle_image_dimensions(
-                    &mut file,
-                    required_format,
-                    MAX_NATIVE_IMAGE_DECODE_PIXELS,
-                ) {
-                    return status;
-                }
+            if let Err(status) = validate_handle_image_dimensions(
+                &mut file,
+                required_format,
+                MAX_NATIVE_IMAGE_DECODE_PIXELS,
+            ) {
+                return status;
             }
             decode_image_bgra_reader(
                 &mut file,
@@ -4102,6 +4104,7 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_PACKAGE;
     let required = required | QL_FEATURE_HANDLE_PACKAGE_ICON;
     let required = required | QL_FEATURE_HANDLE_PROBE;
+    let required = required | QL_FEATURE_HANDLE_RASTER_IMAGE;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -5236,7 +5239,7 @@ mod handle_v2_tests {
         assert_eq!(u32::from_le_bytes(packet[12..16].try_into().unwrap()), 8);
         assert_eq!(file.stream_position().unwrap(), position);
 
-        let wrong_name = b"logical.png";
+        let wrong_name = b"logical.avif";
         required = usize::MAX;
         assert_eq!(
             call_image_handle(
@@ -5494,6 +5497,62 @@ mod handle_v2_tests {
         assert_eq!(file.stream_position().unwrap(), position);
         assert!(packet[28..].chunks_exact(4).any(|pixel| pixel[3] != 0));
 
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn raster_image_handle_decodes_png_without_moving_caller_position() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 128])
+                .unwrap();
+        }
+        let (path, mut file) = create_input("bin", &png_bytes);
+        file.seek(SeekFrom::Start(5)).expect("position PNG handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"missing-logical.png";
+        let mut required = 0;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0; required];
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 1);
+        assert_eq!(file.stream_position().unwrap(), position);
         drop(file);
         let _ = fs::remove_file(path);
     }

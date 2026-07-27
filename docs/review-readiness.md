@@ -59,7 +59,8 @@ left visible instead of hidden behind vague TODOs.
   - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
      snapshot (3), archive (4), Office (5), ebook (6), archive entry (7), static ICO (8), SVG (9),
      GIF static/animation (10), package preview (11), package icon extraction (12), and final local
-     HANDLE probe (13).
+     HANDLE probe (13), and general raster image input (14). Bit 8 remains the published ICO-only
+     static-image capability; bit 14 gates PNG/JPEG/BMP/TIFF/WebP native HANDLE fallback.
      Implemented HANDLE
      exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
@@ -177,8 +178,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
   boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
   RasterHost ICO, SVG, and GIF static/animation previews now decode from independent leases on a
-  retained HANDLE source without an input anchor. System-codec images, PDF, and Shell fallback still
-  require broader adapters and retain their compatibility anchors.
+  retained HANDLE source without an input anchor. Local system-codec images now wrap an independently
+  reopened source lease as a WinRT random-access stream and do not create an input anchor. PDF and
+  Shell fallback still require broader adapters and retain their compatibility anchors.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial routing probe remains
   path-based, while the final probe after ParserHost/RasterHost pinning reads the same file object.

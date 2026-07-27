@@ -9,11 +9,13 @@ namespace QuickLook.Next.RasterHost.IntegrationTests;
 
 public sealed class RasterHostStaticImageHandleTests
 {
-    [Fact]
-    public async Task Ico_handle_decodes_without_an_input_anchor_or_logical_path()
+    [Theory]
+    [InlineData("ico")]
+    [InlineData("png")]
+    public async Task Image_handle_decodes_without_an_input_anchor_or_logical_path(string format)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        string pipeName = $"quicklook_next_raster_ico_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string pipeName = $"quicklook_next_raster_{format}_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(
             pipeName,
@@ -29,11 +31,15 @@ public sealed class RasterHostStaticImageHandleTests
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
-        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.ico");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.{format}");
 
         try
         {
-            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"), physicalPath);
+            if (format == "ico")
+                File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"), physicalPath);
+            else
+                await File.WriteAllBytesAsync(physicalPath, Convert.FromBase64String(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII="), timeout.Token);
             await pipe.WaitForConnectionAsync(timeout.Token);
             using var channel = new PipeChannel(pipe);
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
@@ -42,7 +48,9 @@ public sealed class RasterHostStaticImageHandleTests
             string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
             var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
-            var probe = new FileProbe(logicalPath, ".ico", [0, 0, 1, 0])
+            string extension = "." + format;
+            byte[] magic = format == "ico" ? [0, 0, 1, 0] : [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+            var probe = new FileProbe(logicalPath, extension, magic)
             {
                 Kind = "image",
                 Size = pinned.Length,
@@ -65,7 +73,7 @@ public sealed class RasterHostStaticImageHandleTests
             while (surface is null || ready is null || waveform is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before completing the ICO preview");
+                    ?? throw new EndOfStreamException("RasterHost closed before completing the image preview");
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (message is PreviewSurface receivedSurface)
