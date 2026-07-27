@@ -34,6 +34,7 @@ public sealed class RasterHostCodecErrorTests
 
             await AssertImageErrorAsync(channel, ".avif", PreviewErrorCodes.ImageCodecRequired, "avif", timeout.Token);
             await AssertImageErrorAsync(channel, ".png", PreviewErrorCodes.ImageDecodeFailed, "png", timeout.Token);
+            await AssertUnsupportedHandleFailsClosedAsync(channel, host, timeout.Token);
         }
         finally
         {
@@ -67,5 +68,63 @@ public sealed class RasterHostCodecErrorTests
         Assert.DoesNotContain(path, error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(path, error.Code, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(path, error.Format, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task AssertUnsupportedHandleFailsClosedAsync(
+        PipeChannel channel,
+        Process host,
+        CancellationToken cancellationToken)
+    {
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.bin");
+        string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+        try
+        {
+            await File.WriteAllBytesAsync(physicalPath, [0, 1, 2, 3], cancellationToken);
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            pinned.Handle.Dispose();
+            var probe = new FileProbe(logicalPath, ".bin", [0, 1, 2, 3])
+            {
+                Kind = "binary",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(new PreviewOpenHandle(
+                requestId,
+                hostHandle,
+                pinned.Length,
+                logicalPath,
+                probe), cancellationToken);
+            var error = Assert.IsType<PreviewError>(await channel.ReceiveAsync(cancellationToken));
+            Assert.Equal(requestId, error.RequestId);
+            Assert.Contains("not supported", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(logicalPath));
+            Assert.False(Directory.Exists(Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId)));
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), cancellationToken);
+        }
+        finally
+        {
+            try { File.Delete(physicalPath); } catch { }
+        }
+    }
+
+    private static bool TryOverwriteFile(string path)
+    {
+        try
+        {
+            File.WriteAllText(path, "released");
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+            await Task.Delay(20, cancellationToken);
     }
 }

@@ -163,6 +163,9 @@ Completed entries move here with the verification commands and commit hash.
   256 MiB, validate disk type and exact length, preserve only the logical name
   for UI/routing, and clean anchors on close, replacement, cancellation, and exit.
   Cloud fail-closed compatibility requests remain explicitly path-based.
+  Superseded by direct HANDLE adapters for native/system images and PDF: RasterHost no longer creates
+  `raster-inputs` anchors, and unsupported HANDLE kinds fail closed. Shell fallback remains available
+  only to explicit path-based cloud/legacy requests.
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`
   - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj --no-restore`

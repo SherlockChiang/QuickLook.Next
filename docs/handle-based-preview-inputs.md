@@ -57,8 +57,10 @@ request that is already in progress.
   sessions similarly call `PdfDocument.LoadFromStreamAsync` over an independently reopened HANDLE
   stream and retain that stream until page operations drain on close. Their page-cache identity comes
   from the disk-file volume/index, exact length, and last-write time rather than the logical path.
-  Shell-thumbnail providers still use bounded host-owned anchors for compatibility. Replacing the
-  original path after handoff cannot change the rendered bytes.
+  RasterHost no longer materializes any HANDLE input under `raster-inputs`; unsupported HANDLE kinds
+  fail closed after adoption. Shell thumbnails remain available only to explicit path-based
+  cloud/legacy compatibility requests and never receive a path derived from a HANDLE request.
+  Replacing the original path after local handoff cannot change the rendered bytes.
 - Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
   that ID to the retained archive source handle before considering the legacy path fallback, and the
   Rust archive-entry HANDLE ABI reopens the same file object. The extracted object is returned as a
@@ -284,7 +286,8 @@ a supplied parent ID never falls back to that path.
 
 Remaining migration order:
 
-1. Shell paths through a separately reviewed broker.
+1. Move explicit cloud/legacy Shell paths through a separately reviewed broker if RasterHost is
+   later sandboxed beyond their required Shell access.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.

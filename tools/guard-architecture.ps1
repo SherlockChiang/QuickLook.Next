@@ -785,11 +785,10 @@ if (Test-Path $rasterHostRoot) {
     if ($rasterHostText -notmatch 'case PreviewOpenHandle open' -or $rasterHostText -notmatch 'TakeLocalFileHandle\(open\.SourceHandle, open\.SourceLength\)') {
         Add-Failure "RasterHost local previews must consume the exact duplicated source handle"
     }
-    if ($rasterHostText -notmatch 'CreatePreviewInputAsync\(' -or
-        $rasterHostText -notmatch 'source\.CopyToAsync\(writableAnchor, cancellationToken\)' -or
-        $rasterHostText -notmatch 'ReopenTransitionalReadOnlyFile\(' -or
-        $rasterHostText -notmatch 'ReopenReadOnlyFile\(') {
-        Add-Failure "RasterHost compatibility inputs must be anchored before path-only raster providers run"
+    if ($rasterHostText -match 'CreatePreviewInputAsync\(' -or
+        $rasterHostText -match 'raster-inputs' -or
+        $rasterHostText -match 'previewInputs') {
+        Add-Failure "RasterHost HANDLE requests must never materialize path-based input anchors"
     }
     if ($rasterHostText -notmatch 'UsesHandleInput\(open\.Path, open\.Probe\)' -or
         $rasterHostText -notmatch 'TryDecodeHandleAsync\(' -or
@@ -811,13 +810,16 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText,
         'if\s*\(IsPdf\(open\.Probe\)\)\s*\{[\s\S]*?PdfPreviewSession\.OpenHandleAsync\([\s\S]*?return;\s*\}').Value
     if ($handleOpenBranch -eq "" -or
-        $handleOpenBranch -match 'CreatePreviewInputAsync\(' -or
         $pdfSessionText -notmatch 'PdfDocument\.LoadFromStreamAsync\(randomAccessStream\)' -or
         $pdfSessionText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
         $pdfSessionText -notmatch 'GetFileIdentity\(sourceHandle, sourceLength\)' -or
         $pdfSessionText -notmatch '_inputRandomAccessStream\?\.Dispose\(\)' -or
         $pdfSessionText -notmatch '_inputFileStream\?\.Dispose\(\)') {
         Add-Failure "RasterHost local PDFs must load and retain the exact HANDLE stream without creating an input anchor"
+    }
+    if ($rasterHostText -notmatch 'HANDLE preview kind is not supported by RasterHost\.' -or
+        $rasterHostText -notmatch 'if\s*\(IsPdf\(open\.Probe\)\)[\s\S]*if\s*\(NativeImageDecoder\.UsesHandleInput\(open\.Path, open\.Probe\)\)[\s\S]*HANDLE preview kind is not supported') {
+        Add-Failure "RasterHost HANDLE requests must fail closed unless they are PDF or image inputs"
     }
 }
 

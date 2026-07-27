@@ -45,9 +45,6 @@ var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHandle Handle)>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-string inputBaseRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-inputs");
-string inputRoot = Path.Combine(inputBaseRoot, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-var previewInputs = new ConcurrentDictionary<string, (string Path, SafeFileHandle Anchor)>();
 var retainedRasterSources = new ConcurrentDictionary<string, RetainedRasterSource>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
@@ -57,7 +54,6 @@ RasterOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
 const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
 CleanupStaleAnimationPackets();
-CleanupPreviewInputs(inputRoot);
 
 while (true)
 {
@@ -255,7 +251,6 @@ while (true)
                         surfacePublishGate.Release();
                     }
                 }
-                DeletePreviewInput(close.RequestId);
                 DeleteRetainedRasterSource(close.RequestId);
                 break;
 
@@ -282,11 +277,8 @@ foreach (string requestId in animationCts.Keys)
 foreach (PdfPreviewSession session in pdfSessions.Values)
     await session.DisposeAsync();
 pdfSessions.Clear();
-foreach (string requestId in previewInputs.Keys)
-    DeletePreviewInput(requestId);
 foreach (string requestId in retainedRasterSources.Keys)
     DeleteRetainedRasterSource(requestId);
-CleanupPreviewInputs(inputRoot);
 foreach (var packet in animationPackets.Values)
 {
     packet.Handle.Dispose();
@@ -378,25 +370,15 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                                 DeleteRetainedRasterSource(open.RequestId);
                         return;
                     }
-                    var input = await CreatePreviewInputAsync(
-                        open.RequestId, open.Path, sourceHandle, sourceLength, inputRoot, cts.Token);
-                    if (input is null || !previewInputs.TryAdd(open.RequestId, input.Value))
-                    {
-                        input?.Anchor.Dispose();
-                        if (input is not null) DeletePreviewInputPath(input.Value.Path);
-                        await channel.SendAsync(new PreviewError(open.RequestId, "Could not anchor preview input."));
-                        return;
-                    }
-                    open = open with { Path = input.Value.Path };
+                    await channel.SendAsync(new PreviewError(
+                        open.RequestId,
+                        "HANDLE preview kind is not supported by RasterHost."));
+                    return;
                 }
                 finally
                 {
                     sourceHandle?.Dispose();
                 }
-                cts.Token.ThrowIfCancellationRequested();
-                if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-                    return;
-                activeOpen = open;
             }
             await HandleOpenAsync(open, cts.Token);
         }
@@ -420,7 +402,6 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         {
             if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
             {
-                DeletePreviewInput(open.RequestId);
                 DeleteRetainedRasterSource(open.RequestId);
             }
             lock (openCtsLock)
@@ -1047,99 +1028,10 @@ static bool IsValidTargetSize(uint width, uint height)
 static bool IsValidAnimationTargetSize(uint width, uint height)
     => IsValidTargetSize(width, height);
 
-static async Task<(string Path, SafeFileHandle Anchor)?> CreatePreviewInputAsync(
-    string requestId,
-    string logicalPath,
-    SafeFileHandle sourceHandle,
-    long sourceLength,
-    string root,
-    CancellationToken cancellationToken)
-{
-    string extension = Path.GetExtension(logicalPath);
-    if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
-        extension = "";
-    string directory = Path.Combine(root, "input-" + requestId);
-    string path = Path.Combine(directory, "source" + extension.ToLowerInvariant());
-    try
-    {
-        Directory.CreateDirectory(root);
-        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) return null;
-        Directory.CreateDirectory(directory);
-        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return null;
-        using var source = new FileStream(sourceHandle, FileAccess.Read);
-        var writableAnchor = new FileStream(path, new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.ReadWrite,
-            Share = FileShare.Read | FileShare.Delete,
-            Options = FileOptions.Asynchronous | FileOptions.WriteThrough,
-        });
-        try
-        {
-            await source.CopyToAsync(writableAnchor, cancellationToken);
-            await writableAnchor.FlushAsync(cancellationToken);
-            if (writableAnchor.Length != sourceLength) throw new InvalidDataException("Preview input changed while anchoring.");
-            using var transitionalHandle = WindowsHandleTransfer.ReopenTransitionalReadOnlyFile(
-                writableAnchor.SafeFileHandle, sourceLength);
-            writableAnchor.Dispose();
-            writableAnchor = null!;
-            return (path, WindowsHandleTransfer.ReopenReadOnlyFile(transitionalHandle, sourceLength));
-        }
-        catch
-        {
-            writableAnchor?.Dispose();
-            throw;
-        }
-    }
-    catch (OperationCanceledException)
-    {
-        DeletePreviewInputPath(path);
-        throw;
-    }
-    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-    {
-        DiagLog.Write("RasterHost", $"preview input anchor failed: {ex.GetType().Name}: {ex.Message}");
-        DeletePreviewInputPath(path);
-        return null;
-    }
-}
-
-void DeletePreviewInput(string requestId)
-{
-    if (!previewInputs.TryRemove(requestId, out var input)) return;
-    input.Anchor.Dispose();
-    DeletePreviewInputPath(input.Path);
-}
-
 void DeleteRetainedRasterSource(string requestId)
 {
     if (retainedRasterSources.TryRemove(requestId, out var source))
         source.Dispose();
-}
-
-static void DeletePreviewInputPath(string path)
-{
-    try
-    {
-        File.Delete(path);
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null) Directory.Delete(directory, recursive: false);
-    }
-    catch { }
-}
-
-static void CleanupPreviewInputs(string root)
-{
-    try
-    {
-        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return;
-        foreach (string directory in Directory.EnumerateDirectories(root, "input-*"))
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
-                Directory.Delete(directory, recursive: true);
-        Directory.Delete(root, recursive: false);
-    }
-    catch { }
 }
 
 static string? WriteAnimationPacket(string requestId, byte[] packet)

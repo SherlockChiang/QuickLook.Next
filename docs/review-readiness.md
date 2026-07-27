@@ -181,13 +181,14 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   retained HANDLE source without an input anchor. Local system-codec images now wrap an independently
   reopened source lease as a WinRT random-access stream and do not create an input anchor. Local PDF
   sessions now load and retain the exact HANDLE-backed WinRT stream through page rendering, with
-  HANDLE-derived cache identity. Shell fallback still requires a broader broker and retains its
-  compatibility anchor.
+  HANDLE-derived cache identity. RasterHost no longer creates HANDLE input anchors; unsupported
+  HANDLE kinds fail closed. Shell fallback remains path-based only for explicit cloud/legacy
+  compatibility requests and should move to a broker if RasterHost is later sandboxed further.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial routing probe remains
   path-based, while the final probe after ParserHost/RasterHost pinning reads the same file object.
-  The extracted archive child's downstream App/RasterHost compatibility anchor remains for path-only
-  system providers and is a visible limitation rather than being described as complete migration.
+  The extracted archive child's bounded App handoff anchor remains while ParserHost publishes a
+  temporary output object; RasterHost receives the resulting pinned child HANDLE directly.
 
 ## Why Legacy Plugin Source Remains
 
