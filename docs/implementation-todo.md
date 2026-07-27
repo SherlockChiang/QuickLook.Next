@@ -41,6 +41,13 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Add a 32-cycle parent-bound archive extraction regression. One retained archive HANDLE remains
+  authoritative while each operation acquires an independent lease, publishes a host-owned output
+  HANDLE, and removes its Rust temp root on explicit close. The copied App-side HANDLE remains readable,
+  host HANDLE growth stays bounded, and the parent source unlocks only after its preview closes. The
+  existing 8 MiB inflight-close regression remains guarded to suppress canceled responses and clean
+  partial extraction roots before the host accepts the next preview.
+
 - [x] Add repeated HANDLE-backed PDF session and page-render resource coverage. Every cycle uses a
   distinct bounded file identity, opens one session, renders and copies one page surface, releases
   the transfer and page, closes the session, and verifies the source unlocks. The test proves at

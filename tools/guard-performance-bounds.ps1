@@ -69,6 +69,10 @@ Require-Pattern $rasterHostProgram 'void StartOpen\([^)]*\)[\s\S]*producer\.Rele
 $parserHostIntegration = Join-Path $Root "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs"
 Require-Pattern $parserHostIntegration 'Repeated_handle_previews_release_sources_without_linear_handle_growth[\s\S]*cycleCount\s*=\s*32[\s\S]*baselineHandles[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "ParserHost must retain a repeat-preview HANDLE growth regression budget."
+Require-Pattern $parserHostIntegration 'Repeated_parent_bound_archive_extractions_release_leases_handles_and_temp_roots[\s\S]*cycleCount\s*=\s*32[\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*DuplicateFileFromProcess[\s\S]*ArchiveEntryExtractClose[\s\S]*EnumerateExtractionRoots\(extractionRoot\)\.IsSubsetOf\(rootsBefore\)[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*PreviewClose\(previewRequestId\)' `
+    "ParserHost must retain a parent-bound archive extraction lease, output HANDLE, and temp-root regression budget."
+Require-Pattern $parserHostIntegration 'Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file[\s\S]*ArchiveEntryExtract\(canceledId[\s\S]*ArchiveEntryExtractClose\(canceledId\)[\s\S]*PreviewOpen\(previewId[\s\S]*EnumerateExtractionRoots\(extractionRoot\)\.IsSubsetOf\(rootsBefore\)' `
+    "ParserHost must retain inflight archive extraction cancellation, response suppression, and temp-root cleanup coverage."
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
