@@ -50,10 +50,9 @@ request that is already in progress.
   new leases while a decode that already acquired one remains valid. Animation output packets remain
   RasterHost-owned temporary files transferred to the App by read-only handle; their path does not
   provide input authority.
-- Remaining ParserHost formats, plus remaining RasterHost formats, copy the
-  exact duplicated file object into a bounded host-owned anchor before invoking path-only native,
-  WinRT PDF, system codec, shell-thumbnail, or animation providers. Replacing the original path
-  after handoff cannot change the rendered bytes.
+- Remaining RasterHost formats copy the exact duplicated file object into a bounded host-owned
+  anchor before invoking WinRT PDF, system codec, or shell-thumbnail providers. Replacing the
+  original path after handoff cannot change the rendered bytes.
 - Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
   that ID to the retained archive source handle before considering the legacy path fallback, and the
   Rust archive-entry HANDLE ABI reopens the same file object. The extracted object is returned as a
@@ -61,11 +60,13 @@ request that is already in progress.
   the normal pinned ParserHost/RasterHost handoff preserves the bytes through probing and rendering.
 - Cloud fail-closed compatibility inputs remain path-based and recycle the host when canceled while
   opening.
-- The App currently pins local files with a non-write/non-delete-sharing handle before calling the
-  path-based probe. That pin prevents the path from being modified or replaced during probing, but
-  the probe has not yet been converted to read from the same handle. `PreviewOpenHandle` also still
-  carries path-shaped `LogicalPath` and `FileProbe.Path` metadata; direct Rust HANDLE routes reduce
-  the logical value to a basename and never treat either string as file authority.
+- The App's initial routing probe remains path-based for cloud and compatibility behavior. After it
+  pins a local ParserHost or RasterHost source, the final verified probe uses
+  `ql_probe_file_handle` when native advertises `HANDLE_PROBE`; a native probe failure then fails
+  closed. Only native builds without that capability may use the legacy path probe. The HANDLE probe
+  reads from an independent reopened file position and uses the logical basename only for extension
+  routing. `PreviewOpenHandle` still carries path-shaped `LogicalPath` and `FileProbe.Path` metadata,
+  but neither string provides file authority.
 
 ## Target protocol invariants
 
@@ -126,10 +127,10 @@ The host must:
    handle has been created. Process teardown is the reliable rollback for a partially transferred
    SQLite snapshot.
 
-Step 2 above remains a future invariant for the initial App probe. The current App pins the source
-with a non-write/non-delete-sharing handle before running the path-based probe, which prevents
-replacement during probing, but the probe itself has not yet been converted to read from that same
-file object.
+Step 2 applies to the final verified local probe after the App pins the source. The earlier routing
+probe remains path-based by design so cloud availability and legacy compatibility behavior do not
+change. ParserHost/RasterHost handoff accepts only the kind and exact length verified from the pinned
+file object when `HANDLE_PROBE` is available.
 
 ## Native ABI 2 HANDLE contract
 
@@ -150,6 +151,7 @@ bit 9  HANDLE_SVG
 bit 10 HANDLE_GIF (static and animation)
 bit 11 HANDLE_PACKAGE
 bit 12 HANDLE_PACKAGE_ICON
+bit 13 HANDLE_PROBE
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
@@ -158,7 +160,7 @@ The corresponding implemented entry points share the validated/reopened HANDLE a
 `ql_preview_ebook_handle`, `ql_extract_archive_entry_handle`, `ql_decode_image_handle` for
 capability-gated ICO/SVG/GIF raster packets, and `ql_decode_gif_frames_handle` for GIF animation
 packets. Package parsing and retained Hero extraction use `ql_preview_package_handle` and
-`ql_extract_package_icon_handle`.
+`ql_extract_package_icon_handle`. Final local handoff verification uses `ql_probe_file_handle`.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
 the existing bounded bencode parser runs. Archive and ebook routes use bounded, cancellable
@@ -221,8 +223,9 @@ dispose the retained owner and reject new child leases. An extraction that alrea
 uses its own reopened read-only handle and may finish; releasing that lease closes the last reference.
 
 The extracted entry may still use a ParserHost-private bounded temp file before being published as a
-read-only handle. The App's downstream anchor is also still required while probing and raster
-compatibility routes remain path-based. Neither path is authority for reopening the parent archive.
+read-only handle. The App's downstream anchor remains required by path-only raster compatibility
+providers, but its final local probe reads the pinned child file object. Neither path is authority
+for reopening the parent archive.
 
 ## Ebook HANDLE contract
 
@@ -274,9 +277,8 @@ a supplied parent ID never falls back to that path.
 
 Remaining migration order:
 
-1. Remaining native still-image and animation decoders. ICO and SVG now use the direct HANDLE ABI;
-   GIF keeps its anchor until animation follow-up also consumes the retained file object.
-2. PDF/WIC/Shell paths through separately reviewed Windows-specific adapters or brokers.
+1. Remaining system-codec still-image formats through a separately reviewed Windows adapter.
+2. PDF and Shell paths through separately reviewed Windows-specific adapters or brokers.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.
@@ -291,7 +293,7 @@ read-shared anchor and duplicates the pinned object into the destination preview
 
 This preserves the parent archive identity through extraction and the child identity through handoff.
 A future bounded writable section or caller-provided output handle can remove the remaining child
-temp/anchor copy after probing and raster providers no longer require a path.
+temp/anchor copy after remaining raster providers no longer require a path.
 
 ## Sandbox sequence
 

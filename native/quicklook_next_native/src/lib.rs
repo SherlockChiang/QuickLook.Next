@@ -86,6 +86,7 @@ const QL_FEATURE_HANDLE_SVG: u64 = 1 << 9;
 const QL_FEATURE_HANDLE_GIF: u64 = 1 << 10;
 const QL_FEATURE_HANDLE_PACKAGE: u64 = 1 << 11;
 const QL_FEATURE_HANDLE_PACKAGE_ICON: u64 = 1 << 12;
+const QL_FEATURE_HANDLE_PROBE: u64 = 1 << 13;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -118,6 +119,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_GIF
         | QL_FEATURE_HANDLE_PACKAGE
         | QL_FEATURE_HANDLE_PACKAGE_ICON
+        | QL_FEATURE_HANDLE_PROBE
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -901,6 +903,33 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
         std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(28), bgra.len());
     }
     total as i32
+}
+
+fn probe_reader_json(
+    file: &mut fs::File,
+    logical_name: &str,
+    size: u64,
+    modified_unix: i64,
+) -> std::result::Result<String, i32> {
+    let ext = std::path::Path::new(logical_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value.to_lowercase()))
+        .unwrap_or_default();
+    let mut prefix = [0u8; 64];
+    let read = file.read(&mut prefix).map_err(|_| QL_ERROR_IO)?;
+    let magic = &prefix[..read];
+    let kind = classify(logical_name, &ext, magic, size == 0);
+    let magic_hex: String = magic.iter().map(|value| format!("{value:02X}")).collect();
+    Ok(format!(
+        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{}}}",
+        json_escape(logical_name),
+        json_escape(&ext),
+        magic_hex,
+        kind,
+        size,
+        modified_unix
+    ))
 }
 
 /// Decode a native-safe static image from a borrowed Windows file handle.
@@ -3174,6 +3203,38 @@ unsafe fn preview_handle_v2(
     unsafe { write_v2_out(json.as_bytes(), out_buf, out_cap, out_required) }
 }
 
+/// Probe a borrowed Windows file handle without resolving the logical filename as a path.
+///
+/// # Safety
+/// Pointer, output, handle ownership, and logical-name requirements match the ABI 2 HANDLE preview
+/// entry points. The caller retains the source handle; Rust reopens it with an independent position.
+#[no_mangle]
+pub unsafe extern "C" fn ql_probe_file_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            None,
+            |file, logical_name, size, modified_unix| {
+                probe_reader_json(file, logical_name, size as u64, modified_unix)
+            },
+        )
+    })
+}
+
 fn reader_preview_status(error: preview::ReaderPreviewError) -> i32 {
     match error {
         preview::ReaderPreviewError::Cancelled => QL_ERROR_CANCELLED,
@@ -4040,6 +4101,7 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_GIF;
     let required = required | QL_FEATURE_HANDLE_PACKAGE;
     let required = required | QL_FEATURE_HANDLE_PACKAGE_ICON;
+    let required = required | QL_FEATURE_HANDLE_PROBE;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -4089,6 +4151,28 @@ mod handle_v2_tests {
                 out_cap,
                 out_required,
                 cancel_cb,
+            )
+        }
+    }
+
+    fn call_probe_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+    ) -> i32 {
+        unsafe {
+            ql_probe_file_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
             )
         }
     }
@@ -4579,6 +4663,63 @@ mod handle_v2_tests {
             original_position
         );
 
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn handle_probe_obeys_buffer_contract_without_moving_caller_position() {
+        let (path, mut file) = create_input("svg", br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#);
+        file.seek(SeekFrom::Start(7)).expect("position caller handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"renamed.svg";
+        let length = file.metadata().unwrap().len();
+        let mut required = 0;
+
+        let status = call_probe_handle(
+            file.as_raw_handle() as isize,
+            length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+        );
+        assert_eq!(status, QL_ERROR_BUFFER_TOO_SMALL);
+        assert!(required > 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut output = vec![0; required];
+        let status = call_probe_handle(
+            file.as_raw_handle() as isize,
+            length,
+            logical_name.as_ptr(),
+            logical_name.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut required,
+        );
+        assert_eq!(status, QL_OK);
+        let probe: serde_json::Value = serde_json::from_slice(&output).expect("handle probe JSON");
+        assert_eq!(probe["path"], "renamed.svg");
+        assert_eq!(probe["extension"], ".svg");
+        assert_eq!(probe["kind"], "image");
+        assert_eq!(probe["size"], length);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        assert_eq!(
+            call_probe_handle(
+                file.as_raw_handle() as isize,
+                length + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut required,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
         drop(file);
         let _ = fs::remove_file(path);
     }

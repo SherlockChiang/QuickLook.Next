@@ -611,6 +611,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleGif\s*=\s*1UL\s*<<\s*10' -or
         $nativeAbiText -notmatch 'HandlePackage\s*=\s*1UL\s*<<\s*11' -or
         $nativeAbiText -notmatch 'HandlePackageIcon\s*=\s*1UL\s*<<\s*12' -or
+        $nativeAbiText -notmatch 'HandleProbe\s*=\s*1UL\s*<<\s*13' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -625,7 +626,7 @@ if (Test-Path $parserHostProgram) {
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-12 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-13 and LIMIT_EXCEEDED status must remain stable"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -653,6 +654,7 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_archive_handle",
         "ql_preview_office_handle",
         "ql_preview_ebook_handle"
+        "ql_probe_file_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
@@ -702,6 +704,7 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_GIF:\s*u64\s*=\s*1\s*<<\s*10' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE:\s*u64\s*=\s*1\s*<<\s*11' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE_ICON:\s*u64\s*=\s*1\s*<<\s*12' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PROBE:\s*u64\s*=\s*1\s*<<\s*13' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -711,8 +714,9 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_GIF\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE_ICON\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PROBE\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-12 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-13 and retain LIMIT_EXCEEDED"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
@@ -728,6 +732,9 @@ if (Test-Path $mainWindowPath) {
     }
     if ($mainWindowText -notmatch 'BeginPinnedRasterOpen\(path, probe, targetSize\.Width, targetSize\.Height\)') {
         Add-Failure "Local RasterHost previews must enter through a pinned source handle"
+    }
+    if (([regex]::Matches($mainWindowText, '_native\.SupportsHandleProbe\s*\?\s*_native\.ProbeFileHandle\(pinned\.Handle, pinned\.Length, path\)[\s\S]{0,180}:\s*_native\.ProbeFile\(path\)')).Count -ne 2) {
+        Add-Failure "Pinned ParserHost/RasterHost probes must use HANDLE capability gating and reserve path fallback for old native builds"
     }
     $pinnedParserOpen = [regex]::Match(
         $mainWindowText,

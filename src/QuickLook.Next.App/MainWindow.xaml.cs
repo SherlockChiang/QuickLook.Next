@@ -3604,7 +3604,10 @@ public sealed partial class MainWindow : Window
         (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length)? shm = null;
         try
         {
-            FileProbe verifiedProbe = _native.ProbeFile(path) ?? BuildProbe(path);
+            FileProbe verifiedProbe = _native.SupportsHandleProbe
+                ? _native.ProbeFileHandle(pinned.Handle, pinned.Length, path)
+                    ?? throw new InvalidDataException("Native HANDLE probe returned no result.")
+                : _native.ProbeFile(path) ?? BuildProbe(path);
             if (verifiedProbe.Size != pinned.Length
                 || !IsParserHostPreview(verifiedProbe)
                 || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
@@ -3651,7 +3654,10 @@ public sealed partial class MainWindow : Window
         var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
         try
         {
-            FileProbe verifiedProbe = _native.ProbeFile(path) ?? BuildProbe(path);
+            FileProbe verifiedProbe = _native.SupportsHandleProbe
+                ? _native.ProbeFileHandle(pinned.Handle, pinned.Length, path)
+                    ?? throw new InvalidDataException("Native HANDLE probe returned no result.")
+                : _native.ProbeFile(path) ?? BuildProbe(path);
             if (verifiedProbe.Size != pinned.Length
                 || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
             {

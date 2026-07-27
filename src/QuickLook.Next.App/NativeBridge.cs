@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
@@ -25,6 +26,8 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern uint ql_abi_version();
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong ql_capabilities();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern void ql_set_callback(NativeCallback cb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_start();
@@ -34,6 +37,15 @@ internal sealed class NativeBridge
     private static extern void ql_get_selection();
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_probe_file(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_probe_file_handle(
+        SafeFileHandle sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -74,10 +86,12 @@ internal sealed class NativeBridge
 
     private NativeCallback? _callback; // keep alive: native stores the function pointer
     private Action<NativeIntent>? _onIntent;
+    private ulong _capabilities;
 
     public void Start(Action<NativeIntent> onIntent)
     {
         NativeAbi.EnsureCompatible(ql_abi_version());
+        _capabilities = ql_capabilities();
         _onIntent = onIntent;
         _callback = OnNative;
         ql_set_callback(_callback);
@@ -135,6 +149,66 @@ internal sealed class NativeBridge
             finally { ArrayPool<byte>.Shared.Return(outBuf); }
         }
         catch { return null; }
+    }
+
+    public bool SupportsHandleProbe => (_capabilities & NativeAbi.HandleProbe) != 0;
+
+    public FileProbe? ProbeFileHandle(SafeFileHandle sourceHandle, long expectedLength, string logicalPath)
+    {
+        if (!SupportsHandleProbe)
+            return null;
+        if (expectedLength < 0)
+            throw new InvalidDataException("Pinned preview length is invalid.");
+
+        byte[] logicalName = Encoding.UTF8.GetBytes(Path.GetFileName(logicalPath));
+        if (logicalName.Length is 0 or > NativeAbi.MaxLogicalNameUtf8Bytes)
+            throw new InvalidDataException("Pinned preview logical name is invalid.");
+
+        byte[] outBuf = ArrayPool<byte>.Shared.Rent(2048);
+        try
+        {
+            int status = ql_probe_file_handle(
+                sourceHandle,
+                checked((ulong)expectedLength),
+                logicalName,
+                (nuint)logicalName.Length,
+                outBuf,
+                (nuint)outBuf.Length,
+                out nuint required);
+            if (status == NativeAbi.StatusBufferTooSmall)
+            {
+                if (required is 0 || required > MaxNativeProbeJsonBytes)
+                    throw new InvalidDataException("Native HANDLE probe output exceeds its bound.");
+                ArrayPool<byte>.Shared.Return(outBuf);
+                outBuf = ArrayPool<byte>.Shared.Rent(checked((int)required));
+                status = ql_probe_file_handle(
+                    sourceHandle,
+                    checked((ulong)expectedLength),
+                    logicalName,
+                    (nuint)logicalName.Length,
+                    outBuf,
+                    (nuint)outBuf.Length,
+                    out required);
+            }
+            if (status != NativeAbi.StatusOk || required is 0 || required > (nuint)outBuf.Length)
+                throw new InvalidDataException($"Native HANDLE probe failed with status {status}.");
+
+            return ParseProbe(outBuf, checked((int)required), logicalPath);
+        }
+        finally { ArrayPool<byte>.Shared.Return(outBuf); }
+    }
+
+    private static FileProbe ParseProbe(byte[] utf8Json, int length, string path)
+    {
+        using var doc = JsonDocument.Parse(new ReadOnlyMemory<byte>(utf8Json, 0, length));
+        var root = doc.RootElement;
+        string magicHex = root.GetProperty("magicHex").GetString() ?? "";
+        return new FileProbe(path, root.GetProperty("extension").GetString() ?? "", magicHex.Length > 0 ? Convert.FromHexString(magicHex) : [])
+        {
+            Kind = root.GetProperty("kind").GetString() ?? "unknown",
+            Size = root.GetProperty("size").GetInt64(),
+            ModifiedUnix = root.GetProperty("modifiedUnix").GetInt64(),
+        };
     }
 
     public PreviewReady? TryPreview(string requestId, string path, FileProbe probe, CancellationToken cancellationToken = default)

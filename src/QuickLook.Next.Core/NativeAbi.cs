@@ -16,6 +16,7 @@ public static class NativeAbi
     public const ulong HandleGif = 1UL << 10;
     public const ulong HandlePackage = 1UL << 11;
     public const ulong HandlePackageIcon = 1UL << 12;
+    public const ulong HandleProbe = 1UL << 13;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable
