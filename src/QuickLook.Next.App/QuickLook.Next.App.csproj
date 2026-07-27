@@ -12,6 +12,8 @@
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <ApplicationIcon>Assets\QuickLookNext.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ProjectPriIndexName>SherlockChiang.QuickLookNext</ProjectPriIndexName>
+    <ProjectPriFileName>resources.pri</ProjectPriFileName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />

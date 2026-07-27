@@ -75,9 +75,12 @@ $sdkBin = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Director
     Where-Object Name -Match '^\d+\.\d+\.\d+\.\d+$' |
     Sort-Object { [version]$_.Name } -Descending |
     ForEach-Object { Join-Path $_.FullName "x64" } |
-    Where-Object { Test-Path (Join-Path $_ "makeappx.exe") } |
+    Where-Object {
+        (Test-Path (Join-Path $_ "makeappx.exe")) -and
+        (Test-Path (Join-Path $_ "makepri.exe"))
+    } |
     Select-Object -First 1
-if (-not $sdkBin) { throw "Windows SDK MakeAppx.exe was not found." }
+if (-not $sdkBin) { throw "Windows SDK MakeAppx.exe and MakePri.exe were not found." }
 
 if ($CreateDevelopmentCertificate -and (-not $CertificatePath -or -not (Test-Path -LiteralPath $CertificatePath))) {
     if (-not $CertificatePath) { $CertificatePath = Join-Path $artifacts "QuickLook.Next-Development.pfx" }
@@ -106,6 +109,26 @@ if (-not $CreateDevelopmentCertificate) {
 
 $msixPath = Join-Path $artifacts $msixName
 Remove-Item -LiteralPath $msixPath -Force -ErrorAction SilentlyContinue
+$packagePri = Join-Path $msixRoot "resources.pri"
+if (-not (Test-Path -LiteralPath $packagePri -PathType Leaf)) {
+    throw "The complete package resources.pri is missing from the tested release output."
+}
+$priDump = Join-Path $msixRoot "resources.pri.xml"
+& (Join-Path $sdkBin "makepri.exe") dump /if $packagePri /of $priDump /dt detailed /o | Out-Null
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $priDump -PathType Leaf)) {
+    throw "MakePri failed to inspect the package resource index."
+}
+$priText = [IO.File]::ReadAllText($priDump)
+if ($priText -notmatch '<ResourceMap name="SherlockChiang\.QuickLookNext" primary="true"') {
+    throw "Package PRI primary map does not match the MSIX identity."
+}
+if ($priText -notmatch 'Microsoft\.UI\.Xaml[/\\]Themes[/\\]themeresources\.xbf') {
+    throw "Package PRI is missing the complete WinUI theme resources."
+}
+if ($priText -notmatch 'Square44x44Logo\.targetsize-16_altform-unplated\.png') {
+    throw "Package PRI is missing unplated taskbar icon candidates."
+}
+Remove-Item -LiteralPath $priDump -Force
 & (Join-Path $sdkBin "makeappx.exe") pack /d $msixRoot /p $msixPath /o
 if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed." }
 

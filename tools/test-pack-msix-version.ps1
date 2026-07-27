@@ -12,6 +12,7 @@ foreach ($name in @("Version", "VersionPrefix", "VersionSuffix", "SkipBuild")) {
 }
 
 $text = Get-Content -LiteralPath $scriptPath -Raw
+$appProjectText = Get-Content -LiteralPath (Join-Path $Root "src\QuickLook.Next.App\QuickLook.Next.App.csproj") -Raw
 $requiredPatterns = @(
     @('\$Version\s+-and\s+\(\$VersionPrefix\s+-or\s+\$VersionSuffix\)', "Version must remain mutually exclusive with prefix/suffix parameters."),
     @("\^\\d\+\\\.\\d\+\\\.\\d\+\\\.\\d\+\$", "Version must retain X.Y.Z.W validation."),
@@ -26,6 +27,18 @@ $requiredPatterns = @(
 foreach ($rule in $requiredPatterns) {
     if ($text -notmatch $rule[0]) {
         throw $rule[1]
+    }
+}
+if ($appProjectText -notmatch '<ProjectPriIndexName>SherlockChiang\.QuickLookNext</ProjectPriIndexName>' -or
+    $appProjectText -notmatch '<ProjectPriFileName>resources\.pri</ProjectPriFileName>') {
+    throw "The app must generate one complete PRI using the MSIX package identity."
+}
+foreach ($pattern in @(
+    'makepri\.exe"\)\s+dump',
+    'Microsoft\\\.UI\\\.Xaml',
+    'Square44x44Logo\\\.targetsize-16_altform-unplated')) {
+    if ($text -notmatch $pattern) {
+        throw "MSIX packaging must validate the complete WinUI and unplated icon resource map."
     }
 }
 

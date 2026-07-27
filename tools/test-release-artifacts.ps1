@@ -83,6 +83,7 @@ try {
             $payload = @($msix.Entries.FullName)
             foreach ($required in @(
                 'QuickLook.Next.App.exe',
+                'resources.pri',
                 'quicklook_next_native.dll',
                 'ParserHost/QuickLook.Next.ParserHost.exe',
                 'ParserHost/quicklook_next_native.dll',
@@ -90,6 +91,7 @@ try {
                 'RasterHost/quicklook_next_native.dll')) {
                 if ($payload -notcontains $required) { throw "MSIX is missing $required." }
             }
+
             if ($DistPath) {
                 $dist = (Resolve-Path -LiteralPath $DistPath).Path
                 foreach ($relativePath in @(
