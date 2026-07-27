@@ -772,6 +772,24 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void File_identity_is_stable_across_independent_read_only_handles()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "identity.bin");
+        File.WriteAllBytes(path, "stable identity"u8.ToArray());
+        var source = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        using (source.Handle)
+        using (var reopened = WindowsHandleTransfer.ReopenReadOnlyFile(source.Handle, source.Length))
+        {
+            string sourceIdentity = WindowsHandleTransfer.GetFileIdentity(source.Handle, source.Length);
+            string reopenedIdentity = WindowsHandleTransfer.GetFileIdentity(reopened, source.Length);
+            Assert.Equal(sourceIdentity, reopenedIdentity);
+            Assert.Throws<InvalidDataException>(
+                () => WindowsHandleTransfer.GetFileIdentity(reopened, source.Length + 1));
+        }
+    }
+
+    [Fact]
     public void SQLite_handle_bundle_adopts_all_handles_before_late_validation_failure()
     {
         Directory.CreateDirectory(_tempRoot);

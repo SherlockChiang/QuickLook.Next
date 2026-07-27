@@ -5,6 +5,7 @@ using Windows.Data.Pdf;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 using WinColor = Windows.UI.Color;
 using WinSize = Windows.Foundation.Size;
@@ -20,7 +21,8 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
 
     // Cross-session rendered-page cache: re-previewing the same PDF at the same zoom skips the
     // Windows.Data.Pdf render entirely (and the surface churn it drives). Keyed by path+mtime+page+dims,
-    // bounded by total BGRA bytes with LRU eviction.
+    // bounded by total BGRA bytes with LRU eviction. HANDLE sessions use a Win32 file identity
+    // instead of logical path metadata, so an untrusted logical name cannot alias cache authority.
     private const long MaxCacheBytes = 128L * 1024 * 1024;
     private static readonly object _cacheLock = new();
     private static readonly Dictionary<string, CachedPage> _pageCache = new();
@@ -64,18 +66,29 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
     private readonly object _lifetimeLock = new();
     private readonly object _pageSizeLock = new();
     private readonly Dictionary<int, WinSize> _pageSizes = new();
-    private readonly long _mtimeTicks;
+    private readonly string _cacheIdentity;
+    private FileStream? _inputFileStream;
+    private IRandomAccessStream? _inputRandomAccessStream;
     private bool _disposed;
     private int _activeOperations;
     private TaskCompletionSource? _operationsDrained;
 
-    private PdfPreviewSession(string path, PdfDocument document, WinSize firstPageSize, PdfPageGeometry[]? pageGeometries, long mtimeTicks)
+    private PdfPreviewSession(
+        string path,
+        PdfDocument document,
+        WinSize firstPageSize,
+        PdfPageGeometry[]? pageGeometries,
+        string cacheIdentity,
+        FileStream? inputFileStream = null,
+        IRandomAccessStream? inputRandomAccessStream = null)
     {
         Path = path;
         _document = document;
         FirstPageSize = firstPageSize;
         PageGeometries = pageGeometries;
-        _mtimeTicks = mtimeTicks;
+        _cacheIdentity = cacheIdentity;
+        _inputFileStream = inputFileStream;
+        _inputRandomAccessStream = inputRandomAccessStream;
         _pageSizes[0] = firstPageSize;
     }
 
@@ -99,7 +112,49 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         using PdfPage first = document.GetPage(0);
         watch.Stop();
         DiagLog.Write("RasterHost", $"pdf open {watch.ElapsedMilliseconds}ms; pages={document.PageCount}; path={path}");
-        return new PdfPreviewSession(path, document, first.Size, pageGeometries: null, mtime);
+        return new PdfPreviewSession(path, document, first.Size, pageGeometries: null, $"path:{path}:{mtime}");
+    }
+
+    public static async Task<PdfPreviewSession> OpenHandleAsync(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName)
+    {
+        string name = System.IO.Path.GetFileName(logicalName);
+        if (string.IsNullOrWhiteSpace(name) || sourceLength < 0)
+            throw new InvalidDataException("Invalid PDF HANDLE input.");
+        string cacheIdentity = "handle:" + WindowsHandleTransfer.GetFileIdentity(sourceHandle, sourceLength);
+        SafeFileHandle? decodeHandle = WindowsHandleTransfer.ReopenReadOnlyFile(sourceHandle, sourceLength);
+        FileStream? fileStream = null;
+        IRandomAccessStream? randomAccessStream = null;
+        try
+        {
+            fileStream = new FileStream(decodeHandle, FileAccess.Read, 64 * 1024, isAsync: false);
+            decodeHandle = null;
+            randomAccessStream = fileStream.AsRandomAccessStream();
+            var watch = Stopwatch.StartNew();
+            PdfDocument document = await PdfDocument.LoadFromStreamAsync(randomAccessStream);
+            if (document.PageCount == 0)
+                throw new InvalidOperationException("PDF contains no pages.");
+            using PdfPage first = document.GetPage(0);
+            watch.Stop();
+            DiagLog.Write("RasterHost", $"pdf HANDLE open {watch.ElapsedMilliseconds}ms; pages={document.PageCount}; name={name}");
+            return new PdfPreviewSession(
+                name,
+                document,
+                first.Size,
+                pageGeometries: null,
+                cacheIdentity,
+                fileStream,
+                randomAccessStream);
+        }
+        catch
+        {
+            randomAccessStream?.Dispose();
+            fileStream?.Dispose();
+            decodeHandle?.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Drop all cached rendered pages (called on idle to return memory to the OS).</summary>
@@ -387,7 +442,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         uint targetW = Math.Max(1, (uint)Math.Round(pageSize.Width * targetScale));
         uint targetH = Math.Max(1, (uint)Math.Round(pageSize.Height * targetScale));
 
-        string cacheKey = $"{Path}|{_mtimeTicks}|{pageIndex}|{targetW}x{targetH}";
+        string cacheKey = $"{_cacheIdentity}|{pageIndex}|{targetW}x{targetH}";
         if (TryGetCached(cacheKey, out var cached) && IsExpectedSize(cached, targetW, targetH))
             return cached;
         if (TryGetDiskCached(cacheKey, out cached) && IsExpectedSize(cached, targetW, targetH))
@@ -513,6 +568,10 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
             await waitForOperations.ConfigureAwait(false);
 
         _document = null;
+        _inputRandomAccessStream?.Dispose();
+        _inputRandomAccessStream = null;
+        _inputFileStream?.Dispose();
+        _inputFileStream = null;
         _documentRenderLock.Dispose();
         _disposeCts.Dispose();
     }

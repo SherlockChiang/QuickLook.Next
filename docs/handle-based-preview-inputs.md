@@ -53,7 +53,10 @@ request that is already in progress.
 - Local system-codec images create a WinRT random-access stream over an independently reopened lease
   of the retained source HANDLE. PNG/JPEG/BMP/TIFF/WebP may fall back to Rust decoding through the
   same retained object; AVIF/HEIC/JXL and Adobe-marker JPEG remain system-codec-only. These requests
-  do not create a `raster-inputs` anchor and cannot fall back to a Shell/path provider. WinRT PDF and
+  do not create a `raster-inputs` anchor and cannot fall back to a Shell/path provider. Local PDF
+  sessions similarly call `PdfDocument.LoadFromStreamAsync` over an independently reopened HANDLE
+  stream and retain that stream until page operations drain on close. Their page-cache identity comes
+  from the disk-file volume/index, exact length, and last-write time rather than the logical path.
   Shell-thumbnail providers still use bounded host-owned anchors for compatibility. Replacing the
   original path after handoff cannot change the rendered bytes.
 - Local archive entry extraction sends an optional parent preview request ID. ParserHost resolves
@@ -281,8 +284,7 @@ a supplied parent ID never falls back to that path.
 
 Remaining migration order:
 
-1. PDF through a separately reviewed Windows HANDLE adapter.
-2. Shell paths through a separately reviewed broker.
+1. Shell paths through a separately reviewed broker.
 
 Shell thumbnail extraction is path/PIDL-based and should remain in a separate, more narrowly scoped
 broker rather than weakening every parser host.

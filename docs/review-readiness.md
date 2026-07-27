@@ -179,8 +179,10 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
   RasterHost ICO, SVG, and GIF static/animation previews now decode from independent leases on a
   retained HANDLE source without an input anchor. Local system-codec images now wrap an independently
-  reopened source lease as a WinRT random-access stream and do not create an input anchor. PDF and
-  Shell fallback still require broader adapters and retain their compatibility anchors.
+  reopened source lease as a WinRT random-access stream and do not create an input anchor. Local PDF
+  sessions now load and retain the exact HANDLE-backed WinRT stream through page rendering, with
+  HANDLE-derived cache identity. Shell fallback still requires a broader broker and retains its
+  compatibility anchor.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
   Archive/Ebook requests must stay on the HANDLE routes. The App's initial routing probe remains
   path-based, while the final probe after ParserHost/RasterHost pinning reads the same file object.

@@ -87,6 +87,16 @@ public static class WindowsHandleTransfer
     public static SafeFileHandle ReopenReadOnlyFile(SafeFileHandle source, long expectedLength)
         => ReopenReadOnlyFile(source, expectedLength, FileShareRead | FileShareDelete);
 
+    public static string GetFileIdentity(SafeFileHandle source, long expectedLength)
+    {
+        if (!IsExpectedDiskFile(source, expectedLength)
+            || !GetFileInformationByHandle(source, out ByHandleFileInformation info))
+            throw new InvalidDataException("Could not identify the preview file.");
+        ulong fileIndex = ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow;
+        ulong modified = ((ulong)info.LastWriteTimeHigh << 32) | info.LastWriteTimeLow;
+        return $"{info.VolumeSerialNumber:X8}:{fileIndex:X16}:{expectedLength:X16}:{modified:X16}";
+    }
+
     private static SafeFileHandle ReopenReadOnlyFile(SafeFileHandle source, long expectedLength, uint shareMode)
     {
         SafeFileHandle handle = ReOpenFile(source, GenericRead, shareMode, 0);
@@ -239,6 +249,30 @@ public static class WindowsHandleTransfer
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileSizeEx(SafeFileHandle file, out long fileSize);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public uint CreationTimeLow;
+        public uint CreationTimeHigh;
+        public uint LastAccessTimeLow;
+        public uint LastAccessTimeHigh;
+        public uint LastWriteTimeLow;
+        public uint LastWriteTimeHigh;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+        SafeFileHandle file,
+        out ByHandleFileInformation information);
 
     [DllImport("kernel32.dll")]
     private static extern nint GetCurrentProcess();

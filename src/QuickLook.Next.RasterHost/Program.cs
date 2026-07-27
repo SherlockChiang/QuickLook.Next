@@ -320,6 +320,21 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             {
                 try
                 {
+                    if (IsPdf(open.Probe))
+                    {
+                        cts.Token.ThrowIfCancellationRequested();
+                        if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                            return;
+                        activeOpen = open;
+                        await OpenPdfSessionAsync(
+                            open,
+                            () => PdfPreviewSession.OpenHandleAsync(
+                                sourceHandle,
+                                sourceLength,
+                                Path.GetFileName(open.Path)),
+                            cts.Token);
+                        return;
+                    }
                     if (NativeImageDecoder.UsesHandleInput(open.Path, open.Probe))
                     {
                         var retainedSource = new RetainedRasterSource(
@@ -696,54 +711,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
         cancellationToken.ThrowIfCancellationRequested();
         if (IsPdf(open.Probe))
         {
-            if (pdfSessions.TryRemove(open.RequestId, out var old)) await old.DisposeAsync();
-            PdfPreviewSession? session = await PdfPreviewSession.OpenAsync(open.Path);
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var first = session.FirstPageSize;
-                uint pageCount = session.PageCount;
-                var pageGeometries = session.PageGeometries;
-                await surfacePublishGate.WaitAsync(cancellationToken);
-                try
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-                        return;
-
-                    pdfSessions[open.RequestId] = session;
-                    session = null;
-                    try
-                    {
-                        await channel.SendAsync(new PreviewReady(
-                            open.RequestId,
-                            "pdf",
-                            $"{Path.GetFileName(open.Probe.Path)} — {pageCount} pages",
-                            first.Width,
-                            first.Height)
-                        {
-                            PageCount = checked((int)pageCount),
-                            PageWidth = first.Width,
-                            PageHeight = first.Height,
-                            PdfPageGeometries = pageGeometries,
-                        });
-                    }
-                    catch
-                    {
-                        if (pdfSessions.TryRemove(open.RequestId, out var failed)) await failed.DisposeAsync();
-                        throw;
-                    }
-                }
-                finally
-                {
-                    surfacePublishGate.Release();
-                }
-            }
-            finally
-            {
-                if (session is not null)
-                    await session.DisposeAsync();
-            }
+            await OpenPdfSessionAsync(open, () => PdfPreviewSession.OpenAsync(open.Path), cancellationToken);
             return;
         }
 
@@ -843,6 +811,63 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
         await channel.SendAsync(IsImage(open.Probe)
             ? CreateImagePreviewError(open.RequestId, open.Probe.Extension)
             : new PreviewError(open.RequestId, ex.Message));
+    }
+}
+
+async Task OpenPdfSessionAsync(
+    RasterOpen open,
+    Func<Task<PdfPreviewSession>> openSession,
+    CancellationToken cancellationToken)
+{
+    if (pdfSessions.TryRemove(open.RequestId, out var old))
+        await old.DisposeAsync();
+    PdfPreviewSession? session = await openSession();
+    try
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var first = session.FirstPageSize;
+        uint pageCount = session.PageCount;
+        var pageGeometries = session.PageGeometries;
+        await surfacePublishGate.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                return;
+
+            pdfSessions[open.RequestId] = session;
+            session = null;
+            try
+            {
+                await channel.SendAsync(new PreviewReady(
+                    open.RequestId,
+                    "pdf",
+                    $"{Path.GetFileName(open.Probe.Path)} — {pageCount} pages",
+                    first.Width,
+                    first.Height)
+                {
+                    PageCount = checked((int)pageCount),
+                    PageWidth = first.Width,
+                    PageHeight = first.Height,
+                    PdfPageGeometries = pageGeometries,
+                });
+            }
+            catch
+            {
+                if (pdfSessions.TryRemove(open.RequestId, out var failed))
+                    await failed.DisposeAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            surfacePublishGate.Release();
+        }
+    }
+    finally
+    {
+        if (session is not null)
+            await session.DisposeAsync();
     }
 }
 

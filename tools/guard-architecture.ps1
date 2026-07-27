@@ -805,6 +805,20 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.StaticImage') {
         Add-Failure "RasterHost local images must use retained leases with HANDLE-backed system/native decoders"
     }
+    $pdfSessionPath = Join-Path $rasterHostRoot "PdfPreviewSession.cs"
+    $pdfSessionText = Get-Content -LiteralPath $pdfSessionPath -Raw
+    $handleOpenBranch = [regex]::Match(
+        $rasterHostText,
+        'if\s*\(IsPdf\(open\.Probe\)\)\s*\{[\s\S]*?PdfPreviewSession\.OpenHandleAsync\([\s\S]*?return;\s*\}').Value
+    if ($handleOpenBranch -eq "" -or
+        $handleOpenBranch -match 'CreatePreviewInputAsync\(' -or
+        $pdfSessionText -notmatch 'PdfDocument\.LoadFromStreamAsync\(randomAccessStream\)' -or
+        $pdfSessionText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
+        $pdfSessionText -notmatch 'GetFileIdentity\(sourceHandle, sourceLength\)' -or
+        $pdfSessionText -notmatch '_inputRandomAccessStream\?\.Dispose\(\)' -or
+        $pdfSessionText -notmatch '_inputFileStream\?\.Dispose\(\)') {
+        Add-Failure "RasterHost local PDFs must load and retain the exact HANDLE stream without creating an input anchor"
+    }
 }
 
 $appManifestPath = Join-Path $Root "src/QuickLook.Next.App/app.manifest"
