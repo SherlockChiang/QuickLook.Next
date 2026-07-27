@@ -222,6 +222,13 @@ if (Test-Path $hostLauncher) {
     if ($hostLauncherText -notmatch 'job\.Assign\(information\.Process\)[\s\S]*ResumeThread\(information\.Thread\)') {
         Add-Failure "Host process must enter its job before its initial thread resumes"
     }
+    if ($hostLauncherText -notmatch 'WriteRestricted\s*=\s*0x00000008' -or
+        $hostLauncherText -notmatch 'RestrictedCodeSid\s*=\s*new\("S-1-5-12"\)' -or
+        $hostLauncherText -notmatch 'DisableMaxPrivilege\s*\|\s*\(restrictWrites\s*\?\s*WriteRestricted\s*:\s*0\)' -or
+        $hostLauncherText -notmatch 'CreateWriteRestrictedPipe\(' -or
+        $hostLauncherText -notmatch 'GrantRestrictedWriteAccess\(') {
+        Add-Failure "Host launcher must retain the optional write-restricted token, pipe, and writable-root ACL boundary"
+    }
 }
 
 $hostJob = Join-Path $Root "src/QuickLook.Next.App/HostProcessJob.cs"
@@ -264,6 +271,11 @@ if (Test-Path $parserSupervisor) {
     }
     if ($parserSupervisorText -notmatch '"--writable-root", writableRoot') {
         Add-Failure "ParserHost must receive a per-launch writable root"
+    }
+    if ($parserSupervisorText -notmatch 'CreateWriteRestrictedPipe\(pipeName\)' -or
+        $parserSupervisorText -notmatch 'GrantRestrictedWriteAccess\(root\)' -or
+        $parserSupervisorText -notmatch 'restrictWrites:\s*true') {
+        Add-Failure "ParserHost must launch write-restricted with access only to its authenticated pipe and per-launch writable root"
     }
     if ($parserSupervisorText -notmatch 'BeginOpenSqliteHandles\(' -or
         $parserSupervisorText -notmatch 'new PreviewOpenSqliteHandles\(') {
@@ -308,6 +320,14 @@ if (Test-Path $parserSupervisor) {
         $openSendAwait -le $openSendLookup -or
         $previewCloseSend -le $openSendAwait) {
         Add-Failure "Preview close must wait for an in-flight HANDLE open send before sending PreviewClose"
+    }
+}
+$rasterSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
+if (Test-Path $rasterSupervisorPath) {
+    $rasterSupervisorText = Get-Content -LiteralPath $rasterSupervisorPath -Raw
+    if ($rasterSupervisorText -match 'restrictWrites:\s*true' -or
+        $rasterSupervisorText -match 'CreateWriteRestrictedPipe\(') {
+        Add-Failure "RasterHost must not inherit the ParserHost write-restricted profile before WinRT and Shell paths are prepared"
     }
 }
 

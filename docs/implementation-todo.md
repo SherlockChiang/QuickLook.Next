@@ -28,8 +28,8 @@ and commit so changes remain independently reviewable and revertible.
 
 - [ ] Move animated decode/playback into RasterHost shared surfaces with a
   decoded-byte budget.
-- [ ] Add AppContainer or restricting-SID isolation, network denial, and process
-  mitigation policies to hostile-format hosts.
+- [ ] Add AppContainer isolation and enforced network denial to hostile-format hosts after the
+  ParserHost write-restricted boundary and RasterHost compatibility split are complete.
 - [ ] Split the native preview implementation by format family.
 - [ ] Add App policy tests, fuzzing, ETW/WPA baselines, and long-cycle resource
   regression tests.
@@ -40,6 +40,14 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Launch ParserHost with a Windows write-restricted token using the Restricted Code SID. Its
+  normal user SID still permits read-only runtime and native-DLL loading, while write access must
+  also match the restricted SID. Only the random authenticated pipe and per-launch writable root
+  receive that SID; smoke coverage proves allowed-root writes and pipe I/O succeed while writes to
+  an ordinary user temp directory fail. RasterHost remains on the privilege-stripped profile until
+  its WinRT and explicit Shell compatibility paths are prepared. AppContainer and network denial
+  remain open.
 
 - [x] Add a 32-cycle parent-bound package hero regression using a stable adaptive icon. Every
   extraction produces a 512x512 BGRA packet of roughly 1 MiB, transfers it through a read-only
@@ -104,9 +112,9 @@ Completed entries move here with the verification commands and commit hash.
   access, display/system-parameter changes, desktop switching, and ExitWindows,
   while preserving suspended-create, job-assign-before-resume, one-process and
   memory limits. Runtime smoke now queries effective DEP/ASLR/extension-point and
-  job policies with policy-specific exit codes. AppContainer/restricting SID and
-  enforced network denial remain open because RasterHost WinRT/WIC/shell paths
-  require writable-root and ACL preparation first.
+  job policies with policy-specific exit codes. ParserHost subsequently gained a write-restricted
+  SID and dedicated output/pipe ACLs; AppContainer and enforced network denial remain open, while
+  RasterHost WinRT/WIC/Shell paths still require a compatibility split.
   - Verification: Release and Debug App builds 0 warnings via installed 10.0.302 MSBuild because pinned SDK 10.0.301 was unavailable
   - Verification: `tools/smoke-restricted-host-launch.ps1`
   - Verification: ParserHost integration 15/15; RasterHost integration 7/7

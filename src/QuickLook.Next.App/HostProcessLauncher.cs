@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 
 namespace QuickLook.Next.App;
@@ -11,13 +14,21 @@ internal static class HostProcessLauncher
     private const uint TokenDuplicate = 0x0002;
     private const uint TokenQuery = 0x0008;
     private const uint DisableMaxPrivilege = 0x00000001;
+    private const uint WriteRestricted = 0x00000008;
     private const uint CreateSuspended = 0x00000004;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
     private const nuint ProcThreadAttributeMitigationPolicy = 0x00020007;
     private const ulong RequiredMitigationPolicy = 0x0000000100111005;
 
-    public static Process StartRestricted(string executablePath, IEnumerable<string> arguments, HostProcessJob job)
+    private static readonly SecurityIdentifier RestrictedCodeSid = new("S-1-5-12");
+    private static readonly byte[] RestrictedCodeSidBytes = GetSidBytes(RestrictedCodeSid);
+
+    public static Process StartRestricted(
+        string executablePath,
+        IEnumerable<string> arguments,
+        HostProcessJob job,
+        bool restrictWrites = false)
     {
         if (!Path.IsPathFullyQualified(executablePath))
             throw new ArgumentException("Host executable path must be absolute.", nameof(executablePath));
@@ -26,87 +37,194 @@ internal static class HostProcessLauncher
             throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
         try
         {
-            if (!CreateRestrictedToken(processToken, DisableMaxPrivilege, 0, 0, 0, 0, 0, 0, out nint restrictedToken))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken failed.");
+            nint restrictedSidBytes = Marshal.AllocHGlobal(RestrictedCodeSidBytes.Length);
+            nint restrictedSid = Marshal.AllocHGlobal(Marshal.SizeOf<SidAndAttributes>());
             try
             {
-                nuint attributeListSize = 0;
-                InitializeProcThreadAttributeList(0, 1, 0, ref attributeListSize);
-                nint attributeList = Marshal.AllocHGlobal(checked((int)attributeListSize));
-                nint mitigationPolicy = Marshal.AllocHGlobal(sizeof(long));
-                var startup = new StartupInfoEx
+                Marshal.Copy(RestrictedCodeSidBytes, 0, restrictedSidBytes, RestrictedCodeSidBytes.Length);
+                Marshal.StructureToPtr(
+                    new SidAndAttributes { Sid = restrictedSidBytes, Attributes = 0 },
+                    restrictedSid,
+                    fDeleteOld: false);
+                if (!CreateRestrictedToken(
+                        processToken,
+                        DisableMaxPrivilege | (restrictWrites ? WriteRestricted : 0),
+                        0,
+                        0,
+                        0,
+                        0,
+                        restrictWrites ? 1u : 0u,
+                        restrictWrites ? restrictedSid : 0,
+                        out nint restrictedToken))
                 {
-                    StartupInfo = new StartupInfo { Cb = Marshal.SizeOf<StartupInfoEx>() },
-                    AttributeList = attributeList,
-                };
-                string commandLine = QuoteArgument(executablePath) + string.Concat(arguments.Select(argument => " " + QuoteArgument(argument)));
-                var mutableCommandLine = new StringBuilder(commandLine);
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken failed.");
+                }
                 try
                 {
-                    if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
-                    Marshal.WriteInt64(mitigationPolicy, unchecked((long)RequiredMitigationPolicy));
-                    if (!UpdateProcThreadAttribute(
-                            attributeList, 0, ProcThreadAttributeMitigationPolicy,
-                            mitigationPolicy, (nuint)sizeof(long), 0, 0))
+                    nuint attributeListSize = 0;
+                    InitializeProcThreadAttributeList(0, 1, 0, ref attributeListSize);
+                    nint attributeList = Marshal.AllocHGlobal(checked((int)attributeListSize));
+                    nint mitigationPolicy = Marshal.AllocHGlobal(sizeof(long));
+                    var startup = new StartupInfoEx
                     {
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
-                    }
-                    if (!CreateProcessAsUser(
-                        restrictedToken,
-                        executablePath,
-                        mutableCommandLine,
-                        0,
-                        0,
-                        false,
-                        CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
-                        0,
-                        Path.GetDirectoryName(executablePath),
-                        ref startup,
-                        out ProcessInformation information))
-                    {
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed.");
-                    }
-
+                        StartupInfo = new StartupInfo { Cb = Marshal.SizeOf<StartupInfoEx>() },
+                        AttributeList = attributeList,
+                    };
+                    string commandLine = QuoteArgument(executablePath) + string.Concat(arguments.Select(argument => " " + QuoteArgument(argument)));
+                    var mutableCommandLine = new StringBuilder(commandLine);
                     try
                     {
-                        job.Assign(information.Process);
-                        Process process = Process.GetProcessById(checked((int)information.ProcessId));
-                        _ = process.Handle;
-                        if (ResumeThread(information.Thread) == uint.MaxValue)
+                        if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
+                        Marshal.WriteInt64(mitigationPolicy, unchecked((long)RequiredMitigationPolicy));
+                        if (!UpdateProcThreadAttribute(
+                                attributeList, 0, ProcThreadAttributeMitigationPolicy,
+                                mitigationPolicy, (nuint)sizeof(long), 0, 0))
                         {
-                            process.Dispose();
-                            throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
                         }
-                        return process;
-                    }
-                    catch
-                    {
-                        TerminateProcess(information.Process, 1);
-                        throw;
+                        if (!CreateProcessAsUser(
+                            restrictedToken,
+                            executablePath,
+                            mutableCommandLine,
+                            0,
+                            0,
+                            false,
+                            CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
+                            0,
+                            Path.GetDirectoryName(executablePath),
+                            ref startup,
+                            out ProcessInformation information))
+                        {
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed.");
+                        }
+
+                        try
+                        {
+                            job.Assign(information.Process);
+                            Process process = Process.GetProcessById(checked((int)information.ProcessId));
+                            _ = process.Handle;
+                            if (ResumeThread(information.Thread) == uint.MaxValue)
+                            {
+                                process.Dispose();
+                                throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+                            }
+                            return process;
+                        }
+                        catch
+                        {
+                            TerminateProcess(information.Process, 1);
+                            throw;
+                        }
+                        finally
+                        {
+                            CloseHandle(information.Thread);
+                            CloseHandle(information.Process);
+                        }
                     }
                     finally
                     {
-                        CloseHandle(information.Thread);
-                        CloseHandle(information.Process);
+                        DeleteProcThreadAttributeList(attributeList);
+                        Marshal.FreeHGlobal(mitigationPolicy);
+                        Marshal.FreeHGlobal(attributeList);
                     }
                 }
                 finally
                 {
-                    DeleteProcThreadAttributeList(attributeList);
-                    Marshal.FreeHGlobal(mitigationPolicy);
-                    Marshal.FreeHGlobal(attributeList);
+                    CloseHandle(restrictedToken);
                 }
             }
             finally
             {
-                CloseHandle(restrictedToken);
+                Marshal.FreeHGlobal(restrictedSid);
+                Marshal.FreeHGlobal(restrictedSidBytes);
             }
         }
         finally
         {
             CloseHandle(processToken);
         }
+    }
+
+    public static void GrantRestrictedWriteAccess(string directory)
+    {
+        var info = new DirectoryInfo(directory);
+        DirectorySecurity security = info.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            RestrictedCodeSid,
+            FileSystemRights.Modify | FileSystemRights.Synchronize,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        info.SetAccessControl(security);
+    }
+
+    public static NamedPipeServerStream CreateWriteRestrictedPipe(string pipeName)
+    {
+        SecurityIdentifier currentUser = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("Current user SID is unavailable.");
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(currentUser, PipeAccessRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(RestrictedCodeSid, PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        return NamedPipeServerStreamAcl.Create(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0,
+            0,
+            security);
+    }
+
+    public static bool CurrentProcessIsWriteRestricted()
+    {
+        if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out nint token))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
+        try
+        {
+            GetTokenInformation(token, 11, 0, 0, out int required);
+            nint buffer = Marshal.AllocHGlobal(required);
+            try
+            {
+                if (!GetTokenInformation(token, 11, buffer, required, out _))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "GetTokenInformation(TokenRestrictedSids) failed.");
+                int count = Marshal.ReadInt32(buffer);
+                int offset = IntPtr.Size == 8 ? 8 : 4;
+                int entrySize = Marshal.SizeOf<SidAndAttributes>();
+                nint expectedSid = Marshal.AllocHGlobal(RestrictedCodeSidBytes.Length);
+                try
+                {
+                    Marshal.Copy(RestrictedCodeSidBytes, 0, expectedSid, RestrictedCodeSidBytes.Length);
+                    for (int i = 0; i < count; i++)
+                    {
+                        var entry = Marshal.PtrToStructure<SidAndAttributes>(buffer + offset + i * entrySize);
+                        if (EqualSid(entry.Sid, expectedSid))
+                            return true;
+                    }
+                    return false;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(expectedSid);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            CloseHandle(token);
+        }
+    }
+
+    private static byte[] GetSidBytes(SecurityIdentifier sid)
+    {
+        var bytes = new byte[sid.BinaryLength];
+        sid.GetBinaryForm(bytes, 0);
+        return bytes;
     }
 
     public static bool IsCurrentProcessInJob()
@@ -244,6 +362,13 @@ internal static class HostProcessLauncher
         public uint Attributes;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SidAndAttributes
+    {
+        public nint Sid;
+        public uint Attributes;
+    }
+
     [DllImport("kernel32.dll")]
     private static extern nint GetCurrentProcess();
 
@@ -266,6 +391,10 @@ internal static class HostProcessLauncher
     [DllImport("advapi32.dll", EntryPoint = "LookupPrivilegeNameW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool LookupPrivilegeName(string? systemName, ref Luid luid, StringBuilder? name, ref int nameLength);
+
+    [DllImport("advapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EqualSid(nint firstSid, nint secondSid);
 
     [DllImport("advapi32.dll", EntryPoint = "CreateProcessAsUserW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

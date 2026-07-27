@@ -65,15 +65,15 @@ internal sealed class ParserHostSupervisor
         _sessionToken = RandomNumberGenerator.GetHexString(32);
         _writableRoot = CreateWritableRoot();
         string writableRoot = _writableRoot;
-        _server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        _server = HostProcessLauncher.CreateWriteRestrictedPipe(pipeName);
         var job = new HostProcessJob((nint)(512L * 1024 * 1024));
         try
         {
             _host = HostProcessLauncher.StartRestricted(
                 _hostExePath,
                 ["--pipe", pipeName, "--session-token", _sessionToken, "--writable-root", writableRoot],
-                job);
+                job,
+                restrictWrites: true);
             _job = job;
         }
         catch
@@ -595,6 +595,7 @@ internal sealed class ParserHostSupervisor
         try
         {
             Directory.CreateDirectory(root);
+            HostProcessLauncher.GrantRestrictedWriteAccess(root);
             foreach (string child in new[] { "logs", "archive-preview", "parser-raster" })
                 Directory.CreateDirectory(Path.Combine(root, child));
             return root;

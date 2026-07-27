@@ -311,8 +311,8 @@ temp/anchor copy after remaining raster providers no longer require a path.
 
 ## Sandbox sequence
 
-1. Complete handle-based input for ParserHost.
-2. Enable a write-restricted ParserHost with dedicated output ACLs.
+1. Complete handle-based input for ParserHost. (Complete.)
+2. Enable a write-restricted ParserHost with dedicated output and pipe ACLs. (Complete.)
 3. Reverse D3D surface duplication so RasterHost cannot open the App process.
 4. Move Shell thumbnails to a broker.
 5. Test low integrity, then AppContainer without network capabilities.

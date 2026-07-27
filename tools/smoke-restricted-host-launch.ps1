@@ -14,4 +14,14 @@ $process = Start-Process -FilePath $app -ArgumentList "--smoke-restricted-host-l
 if ($process.ExitCode -ne 0) {
     throw "Restricted host launch smoke failed with exit code $($process.ExitCode)."
 }
+$parserHost = Join-Path $Root "src\QuickLook.Next.ParserHost\bin\$Configuration\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ParserHost.exe"
+if (-not (Test-Path -LiteralPath $parserHost -PathType Leaf)) {
+    throw "Write-restricted ParserHost smoke requires a built host: $parserHost"
+}
+$parserProcess = Start-Process -FilePath $app `
+    -ArgumentList @("--smoke-write-restricted-parser-host", $parserHost) `
+    -Wait -PassThru
+if ($parserProcess.ExitCode -ne 0) {
+    throw "Write-restricted ParserHost smoke failed with exit code $($parserProcess.ExitCode)."
+}
 Write-Host "restricted host launch smoke passed" -ForegroundColor Green
