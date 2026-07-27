@@ -79,6 +79,9 @@ Require-Pattern $idleTrimmer 'GC\.Collect\([\s\S]*GC\.WaitForPendingFinalizers\(
     "RasterHost idle trim must complete finalizers before its post-finalization collection."
 Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_resources_after_idle_trim[\s\S]*privateByteRecoveryBudget\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*QL_IDLE_TRIM_SECONDS[\s\S]*QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*peakHandles\s*>\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
     "RasterHost must verify that repeated system-codec HANDLE usage recovers after idle trim."
+$pdfHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostPdfTests.cs"
+Require-Pattern $pdfHostIntegration 'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*measuredCycleCount\s*=\s*24[\s\S]*minimumMeasuredCacheGrowth\s*=\s*4L\s*\*\s*1024\s*\*\s*1024[\s\S]*PreviewSurfaceRelease[\s\S]*PreviewPageClose[\s\S]*peakPrivateBytes\s*>=\s*baselinePrivateBytes\s*\+\s*minimumMeasuredCacheGrowth[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
+    "RasterHost must verify PDF session, page cache, projection, and surface recovery after idle trim."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
 Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."

@@ -41,6 +41,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Add repeated HANDLE-backed PDF session and page-render resource coverage. Every cycle uses a
+  distinct bounded file identity, opens one session, renders and copies one page surface, releases
+  the transfer and page, closes the session, and verifies the source unlocks. The test proves at
+  least 4 MiB of measured cache growth, then requires idle trim to return HANDLEs and private bytes
+  to fixed warmed-baseline budgets.
+
 - [x] Verify system-codec resource recovery after repeated HANDLE previews. The RasterHost test
   exercises WIC PNG decoding until its deferred WinRT resources measurably exceed the warmed HANDLE
   baseline, then waits for a one-second test-only idle trim and requires HANDLEs to return within a
