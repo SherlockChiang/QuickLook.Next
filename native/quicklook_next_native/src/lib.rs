@@ -129,7 +129,9 @@ const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
-const QL_THUMBNAIL_KNOWN_FLAGS: u32 = QL_THUMBNAIL_FLAG_CACHE_ONLY;
+const QL_THUMBNAIL_FLAG_BOUNDED_SIZE: u32 = 2;
+const QL_THUMBNAIL_KNOWN_FLAGS: u32 =
+    QL_THUMBNAIL_FLAG_CACHE_ONLY | QL_THUMBNAIL_FLAG_BOUNDED_SIZE;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
@@ -1950,6 +1952,10 @@ fn thumbnail_cache_only(flags: u32) -> bool {
     flags & QL_THUMBNAIL_FLAG_CACHE_ONLY != 0
 }
 
+fn thumbnail_bounded_size(flags: u32) -> bool {
+    flags & QL_THUMBNAIL_FLAG_BOUNDED_SIZE != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2071,9 +2077,11 @@ mod tests {
     fn thumbnail_flags_reject_unknown_bits() {
         assert!(thumbnail_flags_valid(0));
         assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY));
+        assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_BOUNDED_SIZE));
         assert!(thumbnail_cache_only(QL_THUMBNAIL_FLAG_CACHE_ONLY));
+        assert!(thumbnail_bounded_size(QL_THUMBNAIL_FLAG_BOUNDED_SIZE));
         assert!(!thumbnail_cache_only(0));
-        assert!(!thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY | 2));
+        assert!(!thumbnail_flags_valid(QL_THUMBNAIL_KNOWN_FLAGS | 4));
     }
 
     #[test]
@@ -2883,10 +2891,11 @@ unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()?;
     let factory: IShellItemImageFactory = item.cast().ok()?;
-    let shell_flags = if thumbnail_cache_only(flags) {
-        SIIGBF_BIGGERSIZEOK | SIIGBF_INCACHEONLY
-    } else {
-        SIIGBF_BIGGERSIZEOK
+    let shell_flags = match (thumbnail_cache_only(flags), thumbnail_bounded_size(flags)) {
+        (true, true) => SIIGBF_INCACHEONLY,
+        (true, false) => SIIGBF_BIGGERSIZEOK | SIIGBF_INCACHEONLY,
+        (false, true) => Default::default(),
+        (false, false) => SIIGBF_BIGGERSIZEOK,
     };
     let hbm = factory.GetImage(SIZE { cx: size, cy: size }, shell_flags).ok()?;
     let result = hbitmap_to_bgra(hbm);

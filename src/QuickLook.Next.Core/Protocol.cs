@@ -15,6 +15,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(Hello), "hello")]
 [JsonDerivedType(typeof(HostReady), "host.ready")]
 [JsonDerivedType(typeof(ParserReady), "parser.ready")]
+[JsonDerivedType(typeof(ShellBrokerReady), "shell.ready")]
 [JsonDerivedType(typeof(PreviewOpen), "preview.open")]
 [JsonDerivedType(typeof(PreviewOpenHandle), "preview.open.handle")]
 [JsonDerivedType(typeof(PreviewOpenSqliteHandles), "preview.open.sqlite-handles")]
@@ -37,6 +38,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewAnimationFramesOpen), "preview.animation.open")]
 [JsonDerivedType(typeof(PreviewAnimationFramesReady), "preview.animation.ready")]
 [JsonDerivedType(typeof(PreviewAnimationFramesClose), "preview.animation.close")]
+[JsonDerivedType(typeof(ShellThumbnailOpen), "shell.thumbnail.open")]
+[JsonDerivedType(typeof(ShellThumbnailReady), "shell.thumbnail.ready")]
+[JsonDerivedType(typeof(ShellThumbnailClose), "shell.thumbnail.close")]
 public abstract record ControlMessage;
 
 /// <summary>
@@ -50,6 +54,9 @@ public sealed record HostReady(long AdapterLuid) : ControlMessage;
 
 /// <summary>ParserHost → App after the authenticated handshake completes.</summary>
 public sealed record ParserReady : ControlMessage;
+
+/// <summary>ShellBroker → App after the authenticated handshake completes.</summary>
+public sealed record ShellBrokerReady : ControlMessage;
 
 /// <summary>App → Host: open a path. Used for cloud fail-closed metadata and compatibility paths.</summary>
 public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe) : ControlMessage
@@ -185,3 +192,13 @@ public sealed record PreviewAnimationFramesReady(
 
 /// <summary>App → RasterHost: release an animation frame packet after consumption.</summary>
 public sealed record PreviewAnimationFramesClose(string RequestId) : ControlMessage;
+
+/// <summary>App → ShellBroker: request one bounded thumbnail for an explicit compatibility path.</summary>
+public sealed record ShellThumbnailOpen(string RequestId, string Path, int Size) : ControlMessage;
+
+/// <summary>ShellBroker → App: a bounded BGRA packet in broker-owned temporary storage.</summary>
+public sealed record ShellThumbnailReady(
+    string RequestId, long FileHandle, long PacketLength, int Width, int Height) : ControlMessage;
+
+/// <summary>App → ShellBroker: release a thumbnail packet or cancel its extraction.</summary>
+public sealed record ShellThumbnailClose(string RequestId) : ControlMessage;

@@ -156,6 +156,28 @@ public static class Program
             }
             return;
         }
+        if (args is ["--smoke-shell-broker", var brokerPath, var shellSourcePath])
+        {
+            var supervisor = new ShellBrokerSupervisor(brokerPath);
+            try
+            {
+                HostProcessLauncher.GrantRestrictedReadAccess(
+                    Path.GetDirectoryName(brokerPath) ?? throw new InvalidDataException("ShellBroker directory is unavailable."));
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                supervisor.EnsureStartedAsync(timeout.Token).GetAwaiter().GetResult();
+                NativeRasterImage raster = supervisor.GetThumbnailAsync(shellSourcePath, 128, timeout.Token)
+                    .GetAwaiter().GetResult()
+                    ?? throw new InvalidDataException("ShellBroker returned no thumbnail.");
+                if (raster.Width is <= 0 or > 128 || raster.Height is <= 0 or > 128
+                    || raster.Bgra.Length != raster.Width * raster.Height * 4)
+                    throw new InvalidDataException("ShellBroker returned an invalid thumbnail.");
+                Environment.ExitCode = 0;
+            }
+            catch (System.ComponentModel.Win32Exception ex) { Environment.ExitCode = 1000 + ex.NativeErrorCode; }
+            catch { Environment.ExitCode = 28; }
+            finally { supervisor.Stop(); }
+            return;
+        }
 
         // Single-instance guard: if another instance is already running (holding the named pipe),
         // exit immediately instead of becoming a broken tray-zombie process.

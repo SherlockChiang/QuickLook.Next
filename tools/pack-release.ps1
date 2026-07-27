@@ -1,5 +1,5 @@
 # Builds everything in Release and assembles a clean dist\ package.
-# The default release path is Rust/App/RasterHost/ParserHost only; legacy .NET plugins are intentionally excluded.
+# The default release path is Rust/App/RasterHost/ParserHost/ShellBroker only; legacy .NET plugins are intentionally excluded.
 param(
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
@@ -42,6 +42,8 @@ if (-not $SkipBuild) {
     if (Test-Path $rasterHostRelease) { Remove-Item $rasterHostRelease -Recurse -Force }
     $parserHostRelease = Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release"
     if (Test-Path $parserHostRelease) { Remove-Item $parserHostRelease -Recurse -Force }
+    $shellBrokerRelease = Join-Path $root "src\QuickLook.Next.ShellBroker\bin\Release"
+    if (Test-Path $shellBrokerRelease) { Remove-Item $shellBrokerRelease -Recurse -Force }
 
     Write-Host "== building solution (Release) ==" -ForegroundColor Cyan
     $buildArgs = @("build", (Join-Path $root "QuickLook.Next.slnx"), "-c", "Release", "--no-restore")
@@ -59,7 +61,8 @@ $requiredOutputs = @(
     (Join-Path $root "native\quicklook_next_native\target\release\quicklook_next_native.dll"),
     (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe"),
     (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe"),
-    (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe")
+    (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe"),
+    (Join-Path $root "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.exe")
 )
 foreach ($requiredOutput in $requiredOutputs) {
     if (-not (Test-Path -LiteralPath $requiredOutput -PathType Leaf)) {
@@ -104,6 +107,14 @@ function Copy-Clean($src, $dst) {
 Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
 Copy-Clean (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm") "$dist\RasterHost"
 Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$dist\ParserHost"
+$shellBrokerOutput = Join-Path $root "src\QuickLook.Next.ShellBroker\bin\Release\$tfm"
+foreach ($name in @(
+    "QuickLook.Next.ShellBroker.exe",
+    "QuickLook.Next.ShellBroker.dll",
+    "QuickLook.Next.ShellBroker.deps.json",
+    "QuickLook.Next.ShellBroker.runtimeconfig.json")) {
+    Copy-Item -LiteralPath (Join-Path $shellBrokerOutput $name) -Destination $dist -Force
+}
 
 Write-Host "== pruning unused optional runtime payloads ==" -ForegroundColor Cyan
 $optionalPayloadPatterns = @(

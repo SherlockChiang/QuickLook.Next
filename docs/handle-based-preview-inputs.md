@@ -314,7 +314,7 @@ temp/anchor copy after remaining raster providers no longer require a path.
 1. Complete handle-based input for ParserHost. (Complete.)
 2. Enable a write-restricted ParserHost with dedicated output and pipe ACLs. (Complete.)
 3. Keep D3D surface duplication App-pulled so RasterHost never opens the App process. (Complete.)
-4. Move Shell thumbnails to a broker.
+4. Move Shell thumbnails to a broker. (Complete for preview fallback.)
 5. Test low integrity, then AppContainer without network capabilities.
 
 Never relaunch a less-restricted host after a parser crash, timeout, invalid output, or malformed-file

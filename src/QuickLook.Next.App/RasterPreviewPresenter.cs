@@ -1,9 +1,11 @@
 using System.Numerics;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
@@ -16,8 +18,10 @@ internal sealed class RasterPreviewPresenter
     private const double ToolbarHeight = 162;
 
     private readonly Border _previewRoot;
+    private readonly Image _fallbackImage;
     private readonly TextBlock _zoomText;
     private SpriteVisual? _sprite;
+    private CompositeTransform? _fallbackTransform;
     private uint _surfaceWidth;
     private uint _surfaceHeight;
     private double _zoom = 1.0;
@@ -28,13 +32,14 @@ internal sealed class RasterPreviewPresenter
     private double _panStartX;
     private double _panStartY;
 
-    public RasterPreviewPresenter(Border previewRoot, TextBlock zoomText)
+    public RasterPreviewPresenter(Border previewRoot, Image fallbackImage, TextBlock zoomText)
     {
         _previewRoot = previewRoot;
+        _fallbackImage = fallbackImage;
         _zoomText = zoomText;
     }
 
-    public bool HasSurface => _sprite is not null;
+    public bool HasSurface => _sprite is not null || _fallbackImage.Source is not null;
 
     public RasterPreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
@@ -71,6 +76,11 @@ internal sealed class RasterPreviewPresenter
         }
 
         ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
+        _fallbackImage.Source = null;
+        _fallbackImage.Visibility = Visibility.Collapsed;
+        _fallbackImage.RenderTransform = null;
+        _fallbackImage.Clip = null;
+        _fallbackTransform = null;
         DisposeSprite();
 
         var brush = compositor.CreateSurfaceBrush(compSurface);
@@ -85,10 +95,36 @@ internal sealed class RasterPreviewPresenter
         return true;
     }
 
+    public bool AttachBitmap(NativeRasterImage raster)
+    {
+        if (raster.Width <= 0 || raster.Height <= 0 || raster.Bgra.Length != raster.Width * raster.Height * 4)
+            return false;
+        ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
+        DisposeSprite();
+        var bitmap = new WriteableBitmap(raster.Width, raster.Height);
+        using (Stream stream = bitmap.PixelBuffer.AsStream())
+            stream.Write(raster.Bgra);
+        bitmap.Invalidate();
+        _fallbackImage.Source = bitmap;
+        _fallbackImage.Visibility = Visibility.Visible;
+        _fallbackTransform = new CompositeTransform();
+        _fallbackImage.RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5);
+        _fallbackImage.RenderTransform = _fallbackTransform;
+        _surfaceWidth = (uint)raster.Width;
+        _surfaceHeight = (uint)raster.Height;
+        UpdateLayout();
+        return true;
+    }
+
     public void Clear()
     {
         ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
         DisposeSprite();
+        _fallbackImage.Source = null;
+        _fallbackImage.Visibility = Visibility.Collapsed;
+        _fallbackImage.RenderTransform = null;
+        _fallbackImage.Clip = null;
+        _fallbackTransform = null;
         _previewRoot.Clip = null;
         _surfaceWidth = 0;
         _surfaceHeight = 0;
@@ -97,7 +133,7 @@ internal sealed class RasterPreviewPresenter
 
     public void UpdateLayout()
     {
-        if (_sprite is null || _surfaceWidth == 0 || _surfaceHeight == 0)
+        if (!HasSurface || _surfaceWidth == 0 || _surfaceHeight == 0)
             return;
 
         double availableWidth = Math.Max(1, _previewRoot.ActualWidth);
@@ -116,12 +152,26 @@ internal sealed class RasterPreviewPresenter
         _panX = Math.Clamp(_panX, -maxPanX, maxPanX);
         _panY = Math.Clamp(_panY, -maxPanY, maxPanY);
 
-        _sprite.Size = new Vector2(_surfaceWidth, _surfaceHeight);
-        _sprite.Scale = new Vector3((float)scale, (float)scale, 1f);
-        _sprite.Offset = new Vector3(
-            (float)Math.Round((availableWidth - scaledWidth) / 2 + _panX),
-            (float)Math.Round((availableHeight - scaledHeight) / 2 + _panY),
-            0);
+        if (_sprite is not null)
+        {
+            _sprite.Size = new Vector2(_surfaceWidth, _surfaceHeight);
+            _sprite.Scale = new Vector3((float)scale, (float)scale, 1f);
+            _sprite.Offset = new Vector3(
+                (float)Math.Round((availableWidth - scaledWidth) / 2 + _panX),
+                (float)Math.Round((availableHeight - scaledHeight) / 2 + _panY),
+                0);
+        }
+        else if (_fallbackTransform is not null)
+        {
+            _fallbackImage.Clip = new RectangleGeometry
+            {
+                Rect = new Windows.Foundation.Rect(0, 0, availableWidth, availableHeight),
+            };
+            _fallbackTransform.ScaleX = _zoom;
+            _fallbackTransform.ScaleY = _zoom;
+            _fallbackTransform.TranslateX = _panX;
+            _fallbackTransform.TranslateY = _panY;
+        }
         UpdateZoomLabel();
     }
 
@@ -147,14 +197,14 @@ internal sealed class RasterPreviewPresenter
 
     public void ZoomBy(double factor)
     {
-        if (_sprite is null) return;
+        if (!HasSurface) return;
         _zoom = Math.Clamp(_zoom * factor, MinImageZoom, MaxImageZoom);
         UpdateLayout();
     }
 
     private void ZoomAt(double factor, Windows.Foundation.Point point)
     {
-        if (_sprite is null)
+        if (!HasSurface)
             return;
 
         double previousZoom = _zoom;
@@ -169,7 +219,7 @@ internal sealed class RasterPreviewPresenter
 
     public void SetZoom(double zoom)
     {
-        if (_sprite is null) return;
+        if (!HasSurface) return;
         double fitScale = FitScale();
         _zoom = Math.Clamp(zoom / Math.Max(0.001, fitScale), MinImageZoom, MaxImageZoom);
         _panX = 0;
@@ -182,7 +232,7 @@ internal sealed class RasterPreviewPresenter
 
     public void PanBy(double x, double y)
     {
-        if (_sprite is null)
+        if (!HasSurface)
             return;
         _panX += x;
         _panY += y;
@@ -191,7 +241,7 @@ internal sealed class RasterPreviewPresenter
 
     public void OnPointerPressed(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        if (_sprite is null || _previewRoot.Visibility != Visibility.Visible) return;
+        if (!HasSurface || _previewRoot.Visibility != Visibility.Visible) return;
         if (!e.GetCurrentPoint(_previewRoot).Properties.IsLeftButtonPressed) return;
         _isPanning = true;
         _panStart = e.GetCurrentPoint(_previewRoot).Position;
@@ -221,7 +271,7 @@ internal sealed class RasterPreviewPresenter
 
     public void OnPointerWheelChanged(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        if (_sprite is null || _previewRoot.Visibility != Visibility.Visible)
+        if (!HasSurface || _previewRoot.Visibility != Visibility.Visible)
             return;
 
         var point = e.GetCurrentPoint(_previewRoot);
@@ -234,14 +284,14 @@ internal sealed class RasterPreviewPresenter
 
     public void OnMouseWheel(int delta, Windows.Foundation.Point point)
     {
-        if (_sprite is null || delta == 0)
+        if (!HasSurface || delta == 0)
             return;
         ZoomAt(delta > 0 ? 1.15 : 1.0 / 1.15, point);
     }
 
     public void OnDoubleTapped(Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
     {
-        if (_sprite is null || _previewRoot.Visibility != Visibility.Visible)
+        if (!HasSurface || _previewRoot.Visibility != Visibility.Visible)
             return;
 
         ResetView();

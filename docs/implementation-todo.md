@@ -41,6 +41,13 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Move preview Shell thumbnail fallback out of RasterHost into a dedicated write-restricted
+  ShellBroker. Only explicit cloud/legacy path images that already failed RasterHost decoding may
+  call it. The authenticated broker returns a maximum 512x512 BGRA packet through a broker-owned
+  read-only HANDLE; the App pulls and validates that packet, then explicitly closes the handoff.
+  RasterHost no longer links `NativeThumbnail` or `ql_get_thumbnail` and HANDLE requests cannot
+  reach the broker.
+
 - [x] Confirm and guard the existing App-pulled D3D surface boundary. RasterHost publishes only a
   host-local handle value and transfer ID; the App duplicates from its existing host process handle,
   closes any failed App-local copy, and always acknowledges the host transfer. RasterHost has no

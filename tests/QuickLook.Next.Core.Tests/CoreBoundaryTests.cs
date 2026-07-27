@@ -548,6 +548,16 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_shell_broker_handoff_message()
+    {
+        var message = new ShellThumbnailReady("0".PadLeft(32, '0'), 1234, 4104, 32, 32);
+        string json = ProtocolJson.Serialize(message);
+
+        Assert.Contains("\"type\":\"shell.thumbnail.ready\"", json);
+        Assert.Equal(message, Assert.IsType<ShellThumbnailReady>(ProtocolJson.Deserialize(json)));
+    }
+
+    [Fact]
     public void ProtocolJson_round_trips_bounded_image_waveform()
     {
         var message = new PreviewSurface("request", 1234, 64, 32, 96, "B8G8R8A8_UNORM")

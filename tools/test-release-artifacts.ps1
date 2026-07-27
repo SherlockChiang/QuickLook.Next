@@ -88,7 +88,8 @@ try {
                 'ParserHost/QuickLook.Next.ParserHost.exe',
                 'ParserHost/quicklook_next_native.dll',
                 'RasterHost/QuickLook.Next.RasterHost.exe',
-                'RasterHost/quicklook_next_native.dll')) {
+                'RasterHost/quicklook_next_native.dll',
+                'QuickLook.Next.ShellBroker.exe')) {
                 if ($payload -notcontains $required) { throw "MSIX is missing $required." }
             }
 
@@ -100,7 +101,10 @@ try {
                     'ParserHost/QuickLook.Next.ParserHost.dll',
                     'ParserHost/quicklook_next_native.dll',
                     'RasterHost/QuickLook.Next.RasterHost.dll',
-                    'RasterHost/quicklook_next_native.dll')) {
+                    'RasterHost/quicklook_next_native.dll',
+                    'QuickLook.Next.ShellBroker.dll',
+                    'QuickLook.Next.ShellBroker.deps.json',
+                    'QuickLook.Next.ShellBroker.runtimeconfig.json')) {
                     $entry = $msix.GetEntry($relativePath)
                     if (-not $entry) { throw "MSIX is missing tested payload $relativePath." }
                     $distFile = Join-Path $dist $relativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)

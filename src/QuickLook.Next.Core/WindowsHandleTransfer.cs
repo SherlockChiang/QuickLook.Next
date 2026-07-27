@@ -23,6 +23,15 @@ public static class WindowsHandleTransfer
         return serverProcessId;
     }
 
+    public static uint VerifyNamedPipeClientProcess(SafePipeHandle pipe, int expectedProcessId)
+    {
+        if (expectedProcessId <= 0
+            || !GetNamedPipeClientProcessId(pipe, out uint clientProcessId)
+            || clientProcessId != (uint)expectedProcessId)
+            throw new InvalidOperationException("Named pipe client process did not match the launched broker process.");
+        return clientProcessId;
+    }
+
     public static (SafeFileHandle Handle, long Length) OpenReadOnlyFile(string path)
     {
         SafeFileHandle handle = CreateFile(path, GenericRead, FileShareRead | FileShareDelete, 0, OpenExisting, 0, 0);
@@ -237,6 +246,10 @@ public static class WindowsHandleTransfer
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint clientProcessId);
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFile(

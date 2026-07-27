@@ -64,7 +64,11 @@ $testedOutputs = @(
     "src\QuickLook.Next.RasterHost\bin\Release\$tfm\quicklook_next_native.dll",
     "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe",
     "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.dll",
-    "src\QuickLook.Next.ParserHost\bin\Release\$tfm\quicklook_next_native.dll"
+    "src\QuickLook.Next.ParserHost\bin\Release\$tfm\quicklook_next_native.dll",
+    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.exe",
+    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.dll",
+    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.deps.json",
+    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.runtimeconfig.json"
 )
 $outputHashes = [ordered]@{}
 foreach ($relativePath in $testedOutputs) {

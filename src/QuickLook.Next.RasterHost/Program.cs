@@ -744,36 +744,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                 return;
             }
 
-            DiagLog.Write("RasterHost", "native image decode returned no raster; falling back to shell thumbnail");
-        }
-
-        if (await NativeThumbnail.TryGetAsync(open.Path, 1920, cancellationToken) is { } fallbackThumb)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            DiagLog.Write("RasterHost", $"shell thumbnail {fallbackThumb.Width}x{fallbackThumb.Height}");
-            await surfacePublishGate.WaitAsync(cancellationToken);
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-                    return;
-                SurfaceTransfer fallbackHandle = producer.CreatePresentedSurface(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height);
-                await channel.SendAsync(new PreviewSurface(
-                    open.RequestId, fallbackHandle.HostHandle, (uint)fallbackThumb.Width, (uint)fallbackThumb.Height, 96.0, "B8G8R8A8_UNORM")
-                { TransferId = fallbackHandle.TransferId });
-                await channel.SendAsync(new PreviewReady(
-                    open.RequestId, "thumbnail", Path.GetFileName(open.Probe.Path), fallbackThumb.Width, fallbackThumb.Height));
-            }
-            finally
-            {
-                surfacePublishGate.Release();
-            }
-            ImageWaveform waveform = await Task.Run(
-                () => ImageWaveformBuilder.Create(fallbackThumb.Bgra, fallbackThumb.Width, fallbackThumb.Height),
-                cancellationToken);
-            if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-                await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
-            return;
+            DiagLog.Write("RasterHost", "path image decode returned no raster");
         }
 
         if (IsImage(open.Probe))

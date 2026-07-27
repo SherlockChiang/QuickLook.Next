@@ -88,7 +88,8 @@ if (Test-Path $pluginLoaderPath) {
 $productProjectFiles = @(
     "src/QuickLook.Next.App/QuickLook.Next.App.csproj",
     "src/QuickLook.Next.ParserHost/QuickLook.Next.ParserHost.csproj",
-    "src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj"
+    "src/QuickLook.Next.RasterHost/QuickLook.Next.RasterHost.csproj",
+    "src/QuickLook.Next.ShellBroker/QuickLook.Next.ShellBroker.csproj"
 )
 foreach ($projectRelative in $productProjectFiles) {
     $projectPath = Join-Path $Root $projectRelative
@@ -790,6 +791,9 @@ if (Test-Path $rasterHostRoot) {
     if ($rasterHostText -match 'OpenAuthenticatedPipeServerProcess|PROCESS_DUP_HANDLE|OpenProcess\s*\(') {
         Add-Failure "RasterHost must not receive a handle to the App process"
     }
+    if ($rasterHostText -match 'NativeThumbnail' -or $rasterHostText -match 'ql_get_thumbnail') {
+        Add-Failure "RasterHost must not link Shell thumbnail extraction after the compatibility broker split"
+    }
     if ($rasterHostText -notmatch 'case PreviewOpenHandle open' -or $rasterHostText -notmatch 'TakeLocalFileHandle\(open\.SourceHandle, open\.SourceLength\)') {
         Add-Failure "RasterHost local previews must consume the exact duplicated source handle"
     }
@@ -828,6 +832,39 @@ if (Test-Path $rasterHostRoot) {
     if ($rasterHostText -notmatch 'HANDLE preview kind is not supported by RasterHost\.' -or
         $rasterHostText -notmatch 'if\s*\(IsPdf\(open\.Probe\)\)[\s\S]*if\s*\(NativeImageDecoder\.UsesHandleInput\(open\.Path, open\.Probe\)\)[\s\S]*HANDLE preview kind is not supported') {
         Add-Failure "RasterHost HANDLE requests must fail closed unless they are PDF or image inputs"
+    }
+}
+$shellBrokerRoot = Join-Path $Root "src/QuickLook.Next.ShellBroker"
+if (Test-Path $shellBrokerRoot) {
+    $shellBrokerText = (Get-ChildItem -LiteralPath $shellBrokerRoot -File -Filter "*.cs" |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    if ($shellBrokerText -notmatch 'ql_get_thumbnail_cancelable_with_flags' -or
+        $shellBrokerText -notmatch 'BoundedSizeFlag\s*=\s*2' -or
+        $shellBrokerText -notmatch 'MaxPacketBytes\s*=\s*8\s*\+\s*512\s*\*\s*512\s*\*\s*4' -or
+        $shellBrokerText -notmatch 'VerifyNamedPipeServerProcess' -or
+        $shellBrokerText -notmatch '\["CLOSE"') {
+        Add-Failure "ShellBroker must keep authenticated, cancellable, 512px bounded thumbnail handoffs"
+    }
+}
+else {
+    Add-Failure "Shell thumbnail compatibility must remain isolated in QuickLook.Next.ShellBroker"
+}
+$shellSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/ShellBrokerSupervisor.cs"
+if (Test-Path $shellSupervisorPath) {
+    $shellSupervisorText = Get-Content -LiteralPath $shellSupervisorPath -Raw
+    if ($shellSupervisorText -notmatch 'GrantRestrictedWriteAccess\(_writableRoot\)' -or
+        $shellSupervisorText -notmatch 'CreateWriteRestrictedPipe\(pipeName\)' -or
+        $shellSupervisorText -notmatch 'restrictWrites:\s*true' -or
+        $shellSupervisorText -notmatch 'VerifyNamedPipeClientProcess' -or
+        $shellSupervisorText -notmatch 'DuplicateFileFromProcess') {
+        Add-Failure "The App must supervise ShellBroker with write restriction, mutual pipe identity, and App-pulled packet HANDLEs"
+    }
+}
+$mainWindowShellPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
+if (Test-Path $mainWindowShellPath) {
+    $mainWindowShellText = Get-Content -LiteralPath $mainWindowShellPath -Raw
+    if ($mainWindowShellText -notmatch 'result\s+is\s+PreviewError[\s\S]*mayRequireHydration[\s\S]*probe\.Kind\.Equals\("image"[\s\S]*ShellBrokerSupervisor[\s\S]*GetThumbnailAsync') {
+        Add-Failure "ShellBroker fallback must be limited to explicit cloud/legacy path image failures"
     }
 }
 $rasterSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"

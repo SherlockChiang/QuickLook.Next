@@ -67,6 +67,7 @@ public sealed partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private RasterHostSupervisor? _supervisor;
     private ParserHostSupervisor? _parserSupervisor;
+    private ShellBrokerSupervisor? _shellBroker;
     private readonly Dictionary<string, PreviewHostOwner> _requestHosts = new(StringComparer.Ordinal);
     private PreviewKeyboardHook? _previewKeyboardHook;
     private UiThreadWatchdog? _uiWatchdog;
@@ -244,7 +245,7 @@ public sealed partial class MainWindow : Window
             OfficeScrollViewer,
             OfficePagesPanel,
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
-        _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, ImageZoomText);
+        _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, RasterFallbackImage, ImageZoomText);
         _imageWaveformPresenter = new ImageWaveformPresenter(ImageWaveformPanel, ImageWaveformImage);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText)
         {
@@ -354,6 +355,7 @@ public sealed partial class MainWindow : Window
             RemoveTrayIcon();
             _supervisor?.Stop();
             _parserSupervisor?.Stop();
+            _shellBroker?.Stop();
         };
 
         RootGrid.ActualThemeChanged += (s, e) =>
@@ -943,6 +945,40 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", $"preview host result gen={generation}; request={requestId}; type={result.GetType().Name}");
             if (!IsPreviewGenerationCurrent(generation, previewToken) || !_previewSession.IsCurrentRequest(requestId))
                 return;
+            if (result is PreviewError
+                && mayRequireHydration
+                && probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    _shellBroker ??= new ShellBrokerSupervisor(ResolveShellBrokerExePath());
+                    await _shellBroker.EnsureStartedAsync(previewToken);
+                    NativeRasterImage? shellRaster = await _shellBroker.GetThumbnailAsync(path, 512, previewToken);
+                    if (shellRaster is not null)
+                    {
+                        var shellReady = new PreviewReady(
+                            requestId,
+                            "thumbnail",
+                            System.IO.Path.GetFileName(path),
+                            shellRaster.Width,
+                            shellRaster.Height);
+                        StatusText.Text = ShowRasterPreview(shellReady);
+                        if (!_rasterPresenter!.AttachBitmap(shellRaster))
+                            throw new InvalidDataException("ShellBroker returned an invalid raster packet.");
+                        ImageWaveform waveform = await Task.Run(
+                            () => ImageWaveformBuilder.Create(shellRaster.Bgra, shellRaster.Width, shellRaster.Height),
+                            previewToken);
+                        if (!IsPreviewGenerationCurrent(generation, previewToken)
+                            || !_previewSession.IsCurrentRequest(requestId))
+                            return;
+                        _imageWaveformPresenter!.Show(waveform);
+                        RevealPreviewWindow(ShouldActivatePreview(shellReady));
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { DiagLog.Write("App", "ShellBroker fallback failed: " + ex); }
+            }
             StatusText.Text = result switch
             {
                 PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
@@ -3535,6 +3571,7 @@ public sealed partial class MainWindow : Window
         _settingsWindow?.Close();
         _supervisor?.Stop();
         _parserSupervisor?.Stop();
+        _shellBroker?.Stop();
         try { Microsoft.UI.Xaml.Application.Current.Exit(); }
         catch (Exception ex) { DiagLog.Write("App", "graceful exit failed: " + ex); }
     }
@@ -3592,6 +3629,16 @@ public sealed partial class MainWindow : Window
         if (System.IO.File.Exists(local)) return local;
         return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
             @"..\..\..\..\..\QuickLook.Next.ParserHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ParserHost.exe"));
+    }
+
+    private static string ResolveShellBrokerExePath()
+    {
+        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.ShellBroker.exe");
+        if (System.IO.File.Exists(local)) return local;
+        string broker = System.IO.Path.Combine(AppContext.BaseDirectory, "ShellBroker", "QuickLook.Next.ShellBroker.exe");
+        if (System.IO.File.Exists(broker)) return broker;
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
+            @"..\..\..\..\..\QuickLook.Next.ShellBroker\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ShellBroker.exe"));
     }
 
     private static bool IsParserHostPreview(FileProbe probe)

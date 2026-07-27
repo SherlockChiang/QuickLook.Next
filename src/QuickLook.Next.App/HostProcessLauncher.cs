@@ -159,6 +159,19 @@ internal static class HostProcessLauncher
         info.SetAccessControl(security);
     }
 
+    public static void GrantRestrictedReadAccess(string directory)
+    {
+        var info = new DirectoryInfo(directory);
+        DirectorySecurity security = info.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(
+            RestrictedCodeSid,
+            FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        info.SetAccessControl(security);
+    }
+
     public static NamedPipeServerStream CreateWriteRestrictedPipe(string pipeName)
     {
         SecurityIdentifier currentUser = WindowsIdentity.GetCurrent().User
