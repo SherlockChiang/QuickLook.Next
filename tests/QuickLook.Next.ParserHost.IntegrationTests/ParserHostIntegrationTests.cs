@@ -16,6 +16,72 @@ public sealed class ParserHostIntegrationTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     [Fact]
+    public async Task Repeated_handle_previews_release_sources_without_linear_handle_growth()
+    {
+        const int cycleCount = 32;
+        const int handleGrowthBudget = 12;
+        string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "cycle-source.txt");
+        string logicalPath = Path.Combine(tempDirectory, "missing-cycle-source.txt");
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            int baselineHandles = 0;
+            int peakHandles = 0;
+            for (int cycle = 0; cycle <= cycleCount; cycle++)
+            {
+                string contents = $"cycle {cycle}";
+                await File.WriteAllTextAsync(sourcePath, contents, timeout.Token);
+                string requestId = Guid.NewGuid().ToString("n");
+                var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+                long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+                var probe = new FileProbe(logicalPath, ".txt", "cycle"u8.ToArray())
+                {
+                    Kind = "text",
+                    Size = pinned.Length,
+                };
+                await channel.SendAsync(
+                    new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                    timeout.Token);
+                pinned.Handle.Dispose();
+
+                PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
+                Assert.Equal(contents, ready.TextContent);
+                await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+                await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
+
+                host.Refresh();
+                if (cycle == 0)
+                    baselineHandles = host.HandleCount;
+                else
+                    peakHandles = Math.Max(peakHandles, host.HandleCount);
+            }
+
+            Assert.InRange(peakHandles, 1, baselineHandles + handleGrowthBudget);
+            Assert.False(File.Exists(logicalPath));
+            Assert.False(Directory.Exists(Path.Combine(GetWritableRoot(host), "parser-input")));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Retained_preview_source_lease_survives_parent_close_and_blocks_new_leases()
     {
         string tempDirectory = Path.Combine(

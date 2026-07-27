@@ -41,6 +41,13 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Add short-cycle ParserHost and RasterHost resource regressions. Each test warms one host,
+  repeatedly transfers pinned local inputs through the HANDLE protocol, closes every request,
+  verifies immediate source-file release, and rejects HANDLE-count growth beyond a fixed runtime
+  fluctuation budget. RasterHost receives a separate 16-cycle native/D3D warm-up before its
+  32 measured native-ICO cycles, which also release every transferred shared surface. This isolates
+  deterministic source/surface ownership from WIC projection objects that are reclaimed by GC.
+
 - [x] Remove the obsolete ParserHost `parser-input` compatibility layer. Local certificate,
   SQLite, and native parser requests now consume only adopted HANDLEs; unsupported HANDLE kinds
   fail closed, and ParserHost no longer creates or requires the `parser-input` writable directory.

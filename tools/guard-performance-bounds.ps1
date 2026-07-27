@@ -64,6 +64,14 @@ Require-Pattern $imageWaveform '1_000_000d' `
 $rasterHostProgram = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
 Require-Pattern $rasterHostProgram 'PreviewReady\(open\.RequestId,\s*"image"[\s\S]*Task\.Run\([\s\S]*ImageWaveformBuilder\.Create' `
     "Static image waveforms must be computed after first-frame readiness."
+Require-Pattern $rasterHostProgram 'void StartOpen\([^)]*\)[\s\S]*producer\.ReleaseRetired\(\)' `
+    "Every path and HANDLE open must release surfaces retired by the previous preview."
+$parserHostIntegration = Join-Path $Root "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs"
+Require-Pattern $parserHostIntegration 'Repeated_handle_previews_release_sources_without_linear_handle_growth[\s\S]*cycleCount\s*=\s*32[\s\S]*baselineHandles[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
+    "ParserHost must retain a repeat-preview HANDLE growth regression budget."
+$rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
+Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
+    "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
 Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."

@@ -287,6 +287,9 @@ foreach (var packet in animationPackets.Values)
 
 void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long sourceLength = 0)
 {
+    // A new open means the App has completed the previous Close -> Open transition, so surfaces
+    // retired by that previous preview are no longer needed by its compositor visual.
+    producer.ReleaseRetired();
     string? previousRequestId = activeRequestId;
     if (previousRequestId is not null && !string.Equals(previousRequestId, open.RequestId, StringComparison.Ordinal))
     {
@@ -686,7 +689,6 @@ void CancelPageRender(string requestId, int pageIndex, long pageGeneration)
 async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
 {
     DiagLog.Write("RasterHost", $"open path={open.Path} ext={open.Probe.Extension} kind={open.Probe.Kind} size={open.Probe.Size}");
-    _ = Task.Delay(250, cancellationToken).ContinueWith(_ => producer.ReleaseRetired(), TaskContinuationOptions.OnlyOnRanToCompletion);
     try
     {
         cancellationToken.ThrowIfCancellationRequested();
