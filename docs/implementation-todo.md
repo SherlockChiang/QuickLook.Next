@@ -41,6 +41,12 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Confirm and guard the existing App-pulled D3D surface boundary. RasterHost publishes only a
+  host-local handle value and transfer ID; the App duplicates from its existing host process handle,
+  closes any failed App-local copy, and always acknowledges the host transfer. RasterHost has no
+  `OpenProcess`, `PROCESS_DUP_HANDLE`, or App process handle authority; `Hello.AppProcessId` is used
+  only to compare the authenticated named-pipe server PID.
+
 - [x] Launch ParserHost with a Windows write-restricted token using the Restricted Code SID. Its
   normal user SID still permits read-only runtime and native-DLL loading, while write access must
   also match the restricted SID. Only the random authenticated pipe and per-launch writable root

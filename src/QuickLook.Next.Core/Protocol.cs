@@ -39,7 +39,10 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewAnimationFramesClose), "preview.animation.close")]
 public abstract record ControlMessage;
 
-/// <summary>App → Host on connect: authenticates the launch and lets the host duplicate surface handles into the App.</summary>
+/// <summary>
+/// App → Host on connect: authenticates the launch. AppProcessId is identity metadata checked against
+/// the named-pipe server PID; the host never opens the App process or duplicates handles into it.
+/// </summary>
 public sealed record Hello(int AppProcessId, string SessionToken) : ControlMessage;
 
 /// <summary>Host → App once ready. AdapterLuid must match the App's compositor adapter for sharing.</summary>
@@ -78,7 +81,10 @@ public sealed record PreviewOpenSqliteHandles(
     string LogicalPath,
     FileProbe Probe) : ControlMessage;
 
-/// <summary>RasterHost → App: a host-local composition handle that the App must copy and release.</summary>
+/// <summary>
+/// RasterHost → App: a host-local composition handle value. The App pulls a duplicate through its
+/// existing RasterHost process handle, then acknowledges so the host can close its transfer handle.
+/// </summary>
 public sealed record PreviewSurface(
     string RequestId, long SharedHandle, uint Width, uint Height, double Dpi, string Format,
     int PageIndex = -1, long PageGeneration = 0) : ControlMessage

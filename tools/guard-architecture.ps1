@@ -830,6 +830,17 @@ if (Test-Path $rasterHostRoot) {
         Add-Failure "RasterHost HANDLE requests must fail closed unless they are PDF or image inputs"
     }
 }
+$rasterSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
+if (Test-Path $rasterSupervisorPath) {
+    $rasterSupervisorText = Get-Content -LiteralPath $rasterSupervisorPath -Raw
+    $receiveSurface = [regex]::Match(
+        $rasterSupervisorText,
+        'private\s+void\s+ReceiveSurface\(PreviewSurface surface\)[\s\S]*?(?=\r?\n\s*private\s+async\s+Task\s+ReleaseSurfaceTransferAsync)').Value
+    if ($receiveSurface -notmatch 'DuplicateHandleFromProcess\(_host\.SafeHandle,\s*surface\.SharedHandle\)' -or
+        $receiveSurface -notmatch 'finally\s*\{[\s\S]*CloseSharedHandle\(localHandle\)[\s\S]*ReleaseSurfaceTransferAsync\(surface\.TransferId\)') {
+        Add-Failure "The App must pull RasterHost surface HANDLEs and always acknowledge or close failed transfers"
+    }
+}
 
 $appManifestPath = Join-Path $Root "src/QuickLook.Next.App/app.manifest"
 $appProjectPath = Join-Path $Root "src/QuickLook.Next.App/QuickLook.Next.App.csproj"
