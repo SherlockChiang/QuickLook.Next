@@ -40,6 +40,14 @@ internal static class UiStrings
     public static string NoExifData => Get(nameof(NoExifData), "No EXIF data");
     public static string OpeningFileFormat => Get(nameof(OpeningFileFormat), "Opening {0}...");
     public static string DownloadingCloudFileFormat => Get(nameof(DownloadingCloudFileFormat), "Downloading {0} from cloud storage...");
+    public static string DownloadingCloudFileProgressFormat => Get(nameof(DownloadingCloudFileProgressFormat), "Downloading {0}: {1}% ({2} of {3})");
+    public static string DownloadingCloudFileBytesFormat => Get(nameof(DownloadingCloudFileBytesFormat), "Downloading {0}: {1}");
+    public static string CloudDownloadConsentTitle => Get(nameof(CloudDownloadConsentTitle), "Download cloud file for preview?");
+    public static string CloudDownloadConsentMessageFormat => Get(nameof(CloudDownloadConsentMessageFormat), "{0} is stored in cloud storage and is {1}. Download it now to preview? The preview download limit is {2}; larger files are deferred.");
+    public static string DownloadForPreview => Get(nameof(DownloadForPreview), "Download for preview");
+    public static string UnknownFileSize => Get(nameof(UnknownFileSize), "unknown size");
+    public static string CloudDownloadDeclined => Get(nameof(CloudDownloadDeclined), "Preview was deferred because the cloud download was not approved.");
+    public static string CloudDownloadTooLargeFormat => Get(nameof(CloudDownloadTooLargeFormat), "Preview was deferred because cloud downloads are limited to {0}.");
     public static string CheckingFileAvailabilityFormat => Get(nameof(CheckingFileAvailabilityFormat), "Checking {0} availability safely...");
     public static string CloudUnknownDeferred => Get(nameof(CloudUnknownDeferred), "Preview is deferred because this cloud file type cannot be identified without downloading its contents.");
     public static string CloudAvailabilityUnknownDeferred => Get(nameof(CloudAvailabilityUnknownDeferred), "Preview is deferred because file availability could not be verified without reading its contents.");

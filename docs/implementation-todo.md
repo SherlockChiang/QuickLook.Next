@@ -21,9 +21,6 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P2: Product capabilities
 
-- [ ] Resolve Android manifest/resource-table icons and compose adaptive icons.
-- [ ] Add explicit cloud hydration with consent, progress, cancellation, and a
-  size policy.
 - [ ] Add bounded PDF text search and copy.
 
 ## P3: Strategic architecture
@@ -42,6 +39,18 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add explicit cloud hydration with localized consent, throttled byte/percentage progress,
+  preview-generation cancellation, a 45-second open/read timeout, and a 256 MiB application-read
+  policy. Declared size is queried through cancellable WinRT metadata only after consent; oversized
+  placeholders are deferred before content open, while changing lengths are stopped by a cumulative
+  limit with a one-byte overflow probe and no sequential read-ahead.
+
+- [x] Resolve Android binary manifest/resource-table icon references and compose bounded adaptive
+  icons. Manifest aliases and obfuscated resource IDs resolve to density-aware foreground/background
+  candidates; adaptive layers are transformed, masked, and scaled under existing package input,
+  dimension, decompression, and raster packet budgets. Related commits: `c02ca58`, `372c8e9`,
+  `97cb70c`, `0adc06c`.
 
 - [x] Move preview Shell thumbnail fallback out of RasterHost into a dedicated write-restricted
   ShellBroker. Only explicit cloud/legacy path images that already failed RasterHost decoding may

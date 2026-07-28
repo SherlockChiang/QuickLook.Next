@@ -85,6 +85,7 @@ public sealed partial class MainWindow : Window
     private bool _previewTemporarilyHidden;
     private bool _keyboardCloseQueued;
     private bool _isModalDialogOpen;
+    private readonly SemaphoreSlim _modalDialogGate = new(1, 1);
     private long _lastPreviewRevealTick;
     private long _loadingShellShowStarted;
     private PreviewLifecycleTiming? _previewTiming;
@@ -705,21 +706,42 @@ public sealed partial class MainWindow : Window
             archiveHandoffTransferred = archiveHandoff is not null;
             CloudFileAvailability availability = await availabilityTask;
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            if (availability == CloudFileAvailability.RequiresHydration)
+            if (availability != CloudFileAvailability.Local)
             {
+                if (!await ConfirmCloudHydrationAsync(path, previewToken))
+                {
+                    if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
+                    FileProbe declinedProbe = FallbackFileProbe.CreateMetadataOnlyProbe(path);
+                    var declined = CreateCloudMetadataPreview(
+                        $"cloud-declined-{generation}",
+                        path,
+                        declinedProbe,
+                        UiStrings.CloudDownloadDeclined);
+                    _previewSession.CommitPath(path);
+                    _previewSession.SetRequestId(null);
+                    StatusText.Text = ShowTextPreview(declined);
+                    RevealPreviewWindow(activate: false);
+                    return;
+                }
+                if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
                 StatusText.Text = UiStrings.Format(UiStrings.DownloadingCloudFileFormat, System.IO.Path.GetFileName(path));
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
-                bool hydrated = await HydrateCloudFileAsync(path, previewToken);
+                CloudHydrationResult hydration = await HydrateCloudFileAsync(
+                    path, generation, previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                if (!hydrated)
+                if (hydration != CloudHydrationResult.Completed)
                 {
                     FileProbe deferredProbe = FallbackFileProbe.CreateMetadataOnlyProbe(path);
                     var deferred = CreateCloudMetadataPreview(
                         $"cloud-deferred-{generation}",
                         path,
                         deferredProbe,
-                        UiStrings.CloudDownloadDeferred);
+                        hydration == CloudHydrationResult.LimitExceeded
+                            ? UiStrings.Format(
+                                UiStrings.CloudDownloadTooLargeFormat,
+                                FormatBytes(CloudHydrationPolicy.MaxDownloadBytes))
+                            : UiStrings.CloudDownloadDeferred);
                     _previewSession.CommitPath(path);
                     _previewSession.SetRequestId(null);
                     StatusText.Text = ShowTextPreview(deferred);
@@ -728,12 +750,6 @@ public sealed partial class MainWindow : Window
                 }
                 availability = CloudFileAvailability.Local;
                 DiagLog.Write("App", $"cloud hydration completed gen={generation}; path={path}");
-            }
-            else if (availability == CloudFileAvailability.Unknown)
-            {
-                StatusText.Text = UiStrings.Format(UiStrings.CheckingFileAvailabilityFormat, System.IO.Path.GetFileName(path));
-                RevealPreviewWindow(activate: false, finalContent: false);
-                DiagLog.Write("App", $"file availability unknown; using isolated preview gen={generation}; path={path}");
             }
             bool mayRequireHydration = availability != CloudFileAvailability.Local;
             _currentPreviewWasCloudPlaceholder = mayRequireHydration;
@@ -1453,33 +1469,124 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static async Task<bool> HydrateCloudFileAsync(string path, CancellationToken cancellationToken)
+    private async Task<bool> ConfirmCloudHydrationAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        await _modalDialogGate.WaitAsync(cancellationToken);
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = UiStrings.CloudDownloadConsentTitle,
+                Content = UiStrings.Format(
+                    UiStrings.CloudDownloadConsentMessageFormat,
+                    Path.GetFileName(path),
+                    UiStrings.UnknownFileSize,
+                    FormatBytes(CloudHydrationPolicy.MaxDownloadBytes)),
+                PrimaryButtonText = UiStrings.DownloadForPreview,
+                CloseButtonText = UiStrings.Cancel,
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = RootGrid.XamlRoot,
+            };
+            _isModalDialogOpen = true;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var showOperation = dialog.ShowAsync();
+                using CancellationTokenRegistration registration = cancellationToken.Register(
+                    () => DispatcherQueue.TryEnqueue(dialog.Hide));
+                ContentDialogResult result = await showOperation;
+                return !cancellationToken.IsCancellationRequested && result == ContentDialogResult.Primary;
+            }
+            finally
+            {
+                _isModalDialogOpen = false;
+            }
+        }
+        finally
+        {
+            _modalDialogGate.Release();
+        }
+    }
+
+    private async Task<CloudHydrationResult> HydrateCloudFileAsync(
+        string path,
+        int generation,
+        CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(CloudPreviewTimeout);
+        int progressActive = 1;
+        IProgress<(long Downloaded, long Length)> progress = new Progress<(long Downloaded, long Length)>(value =>
+        {
+            if (Volatile.Read(ref progressActive) == 0
+                || !IsPreviewGenerationCurrent(generation, cancellationToken))
+                return;
+            StatusText.Text = value.Length > 0
+                ? UiStrings.Format(
+                    UiStrings.DownloadingCloudFileProgressFormat,
+                    Path.GetFileName(path),
+                    CloudHydrationPolicy.ProgressPercent(value.Downloaded, value.Length),
+                    FormatBytes(value.Downloaded),
+                    FormatBytes(value.Length))
+                : UiStrings.Format(
+                    UiStrings.DownloadingCloudFileBytesFormat,
+                    Path.GetFileName(path),
+                    FormatBytes(value.Downloaded));
+        });
         try
         {
-            await using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            byte[] buffer = new byte[64 * 1024];
-            while (await stream.ReadAsync(buffer, timeout.Token) > 0)
+            return await Task.Run(async () =>
             {
-            }
-            return true;
+                StorageFile file = await StorageFile.GetFileFromPathAsync(path).AsTask(timeout.Token);
+                BasicProperties properties = await file.GetBasicPropertiesAsync().AsTask(timeout.Token);
+                long declaredLength = properties.Size > long.MaxValue ? -1 : (long)properties.Size;
+                if (!CloudHydrationPolicy.IsDeclaredLengthAllowed(declaredLength))
+                    return CloudHydrationResult.LimitExceeded;
+                using IRandomAccessStreamWithContentType randomAccess =
+                    await file.OpenReadAsync().AsTask(timeout.Token);
+                using Stream stream = randomAccess.AsStreamForRead(bufferSize: 1);
+                byte[] buffer = new byte[64 * 1024];
+                long downloaded = 0;
+                long lastProgress = 0;
+                while (true)
+                {
+                    int nextRead = CloudHydrationPolicy.NextReadSize(downloaded, buffer.Length);
+                    if (nextRead == 0)
+                        return CloudHydrationResult.LimitExceeded;
+                    int read = await stream.ReadAsync(buffer.AsMemory(0, nextRead), timeout.Token);
+                    if (read == 0)
+                        break;
+                    downloaded += read;
+                    if (downloaded > CloudHydrationPolicy.MaxDownloadBytes)
+                        return CloudHydrationResult.LimitExceeded;
+                    long now = Stopwatch.GetTimestamp();
+                    if (lastProgress == 0 || Stopwatch.GetElapsedTime(lastProgress, now) >= TimeSpan.FromMilliseconds(250))
+                    {
+                        lastProgress = now;
+                        progress.Report((downloaded, declaredLength));
+                    }
+                }
+                return CloudHydrationResult.Completed;
+            }, timeout.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return false;
+            return CloudHydrationResult.Deferred;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException
+                                   or ArgumentException
+                                   or System.Runtime.InteropServices.COMException)
         {
             DiagLog.Write("App", "cloud hydration failed: " + ex.Message);
-            return false;
+            return CloudHydrationResult.Deferred;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref progressActive, 0);
         }
     }
 
@@ -3248,19 +3355,19 @@ public sealed partial class MainWindow : Window
             XamlRoot = RootGrid.XamlRoot,
         };
 
-        ContentDialogResult result;
-        _isModalDialogOpen = true;
+        await _modalDialogGate.WaitAsync();
         try
         {
-            result = await dialog.ShowAsync();
+            _isModalDialogOpen = true;
+            ContentDialogResult result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary)
+                return;
         }
         finally
         {
             _isModalDialogOpen = false;
+            _modalDialogGate.Release();
         }
-
-        if (result != ContentDialogResult.Primary)
-            return;
 
         string? nextPath = _imageSidecarController?.NextPathAfterDelete(path);
         try

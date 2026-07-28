@@ -260,10 +260,22 @@ Require-Pattern $nativeAbi 'MaxSqliteShmBytes\s*=\s*4L\s*\*\s*1024\s*\*\s*1024' 
 $cloudFileStatus = Join-Path $Root "src/QuickLook.Next.Core/CloudFileStatus.cs"
 Require-Pattern $cloudFileStatus 'Recall attributes, not cloud identity alone[\s\S]*return CloudFileAvailability\.Local' `
     "Hydrated cloud reparse files must remain eligible for normal image and animation routing."
-Require-Pattern $mainWindow 'HydrateCloudFileAsync\(path,\s*previewToken\)[\s\S]*availability\s*=\s*CloudFileAvailability\.Local' `
+Require-Pattern $mainWindow 'ConfirmCloudHydrationAsync\(path,\s*previewToken\)[\s\S]*HydrateCloudFileAsync\([\s\S]*generation,\s*previewToken\)[\s\S]*availability\s*=\s*CloudFileAvailability\.Local' `
     "Cloud placeholders must hydrate before normal preview routing."
-Require-Pattern $mainWindow 'FileOptions\.Asynchronous\s*\|\s*FileOptions\.SequentialScan[\s\S]*ReadAsync\(buffer,\s*timeout\.Token\)' `
-    "Cloud hydration must stream with cancellation instead of buffering whole files or using Shell thumbnails."
+Require-Pattern $mainWindow 'Task\.Run\(async\s*\(\)\s*=>[\s\S]*GetFileFromPathAsync\(path\)\.AsTask\(timeout\.Token\)[\s\S]*GetBasicPropertiesAsync\(\)\.AsTask\(timeout\.Token\)[\s\S]*IsDeclaredLengthAllowed\(declaredLength\)[\s\S]*OpenReadAsync\(\)\.AsTask\(timeout\.Token\)[\s\S]*AsStreamForRead\(bufferSize:\s*1\)[\s\S]*ReadAsync\(buffer\.AsMemory\(0,\s*nextRead\),\s*timeout\.Token\)' `
+    "Cloud hydration WinRT open and reads must remain off the UI thread, cancellable, and free of sequential read-ahead."
+Require-Pattern $mainWindow 'Stopwatch\.GetElapsedTime\(lastProgress,\s*now\)\s*>=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*progress\.Report\(\(downloaded,\s*declaredLength\)\)' `
+    "Cloud hydration progress reports must remain throttled to at most four updates per second."
+Require-Pattern $mainWindow 'new Progress<\(long Downloaded,\s*long Length\)>\(value\s*=>[\s\S]*Volatile\.Read\(ref progressActive\)[\s\S]*IsPreviewGenerationCurrent\(generation,\s*cancellationToken\)[\s\S]*StatusText\.Text[\s\S]*Interlocked\.Exchange\(ref progressActive,\s*0\)' `
+    "Cloud hydration progress presentation must reject stale preview generations."
+$cloudHydrationPolicy = Join-Path $Root "src/QuickLook.Next.Core/CloudHydrationPolicy.cs"
+Require-Pattern $cloudHydrationPolicy 'MaxDownloadBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024[\s\S]*MaxDownloadBytes\s*-\s*downloadedBytes\s*\+\s*1' `
+    "Cloud hydration must retain its 256 MiB limit and one-byte overflow detection read."
+Require-Pattern $mainWindow 'availability\s*!=\s*CloudFileAvailability\.Local[\s\S]*ConfirmCloudHydrationAsync[\s\S]*HydrateCloudFileAsync' `
+    "Every non-local or unknown cloud status must require consent and bounded hydration before content routing."
+$cloudHydrationTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/CloudHydrationPolicyTests.cs"
+Require-Pattern $cloudHydrationTests '268435456,\s*true[\s\S]*268435457,\s*false[\s\S]*268435456,\s*65536,\s*1[\s\S]*268435457,\s*65536,\s*0' `
+    "Cloud hydration tests must retain exact-limit and overflow-read boundaries."
 Require-Pattern $mainWindow 'mayRequireHydration[\s\S]*!PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)[\s\S]*!probe\.Kind\.Equals\("image"[\s\S]*CreateCloudMetadataPreview' `
     "Unknown cloud availability must keep non-raster formats out of Shell thumbnail fallback."
 

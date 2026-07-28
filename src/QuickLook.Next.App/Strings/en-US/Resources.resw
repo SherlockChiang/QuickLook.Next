@@ -279,6 +279,14 @@
   <data name="ErrorRetryText.Text" xml:space="preserve"><value>Try again</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>Opening {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>Downloading {0} from cloud storage...</value></data>
+  <data name="DownloadingCloudFileProgressFormat" xml:space="preserve"><value>Downloading {0}: {1}% ({2} of {3})</value></data>
+  <data name="DownloadingCloudFileBytesFormat" xml:space="preserve"><value>Downloading {0}: {1}</value></data>
+  <data name="CloudDownloadConsentTitle" xml:space="preserve"><value>Download cloud file for preview?</value></data>
+  <data name="CloudDownloadConsentMessageFormat" xml:space="preserve"><value>{0} is stored in cloud storage and is {1}. Download it now to preview? The preview download limit is {2}; larger files are deferred.</value></data>
+  <data name="DownloadForPreview" xml:space="preserve"><value>Download for preview</value></data>
+  <data name="UnknownFileSize" xml:space="preserve"><value>unknown size</value></data>
+  <data name="CloudDownloadDeclined" xml:space="preserve"><value>Preview was deferred because the cloud download was not approved.</value></data>
+  <data name="CloudDownloadTooLargeFormat" xml:space="preserve"><value>Preview was deferred because cloud downloads are limited to {0}.</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>Checking {0} availability safely...</value></data>
   <data name="CloudUnknownDeferred" xml:space="preserve"><value>Preview is deferred because this cloud file type cannot be identified without downloading its contents.</value></data>
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>Preview is deferred because file availability could not be verified without reading its contents.</value></data>

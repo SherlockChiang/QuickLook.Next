@@ -109,6 +109,10 @@ left visible instead of hidden behind vague TODOs.
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a
   fallback, and repairs stale QuickLookNext entries that point at an old exe.
+- Cloud placeholders require localized user consent before content access. Hydration is bounded by a
+  256 MiB application-read policy, a 45-second timeout covering stream open and reads, preview
+  cancellation, and generation-guarded progress updates; declined, oversized, timed-out, or failed
+  downloads remain metadata-only previews.
 - Specialized/professional formats are covered in frequency order with bounded
   native metadata previews: fonts, SQLite/database headers, media container
   info in the playback chrome, ELF/minidump diagnostics, and safe Mail/CHM

@@ -930,6 +930,13 @@ if (Test-Path $mainWindowShellPath) {
     if ($mainWindowShellText -notmatch 'result\s+is\s+PreviewError[\s\S]*mayRequireHydration[\s\S]*probe\.Kind\.Equals\("image"[\s\S]*ShellBrokerSupervisor[\s\S]*GetThumbnailAsync') {
         Add-Failure "ShellBroker fallback must be limited to explicit cloud/legacy path image failures"
     }
+    if ($mainWindowShellText -notmatch 'CloudFileAvailability\.RequiresHydration[\s\S]*ConfirmCloudHydrationAsync' -or
+        $mainWindowShellText -notmatch '_modalDialogGate\.WaitAsync\(cancellationToken\)' -or
+        $mainWindowShellText -notmatch 'ContentDialog[\s\S]*CloudDownloadConsentTitle[\s\S]*DownloadForPreview' -or
+        $mainWindowShellText -notmatch 'cancellationToken\.Register\([\s\S]*dialog\.Hide' -or
+        $mainWindowShellText -notmatch 'OnDeletePreviewFileClick[\s\S]*_modalDialogGate\.WaitAsync\(\)[\s\S]*dialog\.ShowAsync\(\)[\s\S]*_modalDialogGate\.Release\(\)') {
+        Add-Failure "Cloud hydration must require one serialized, cancellable, localized consent dialog"
+    }
 }
 $rasterSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
 if (Test-Path $rasterSupervisorPath) {

@@ -169,6 +169,14 @@
   <data name="ErrorRetryText.Text" xml:space="preserve"><value>重试</value></data>
   <data name="OpeningFileFormat" xml:space="preserve"><value>正在打开 {0}...</value></data>
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>正在从云存储下载 {0}...</value></data>
+  <data name="DownloadingCloudFileProgressFormat" xml:space="preserve"><value>正在下载 {0}：{1}%（{2}/{3}）</value></data>
+  <data name="DownloadingCloudFileBytesFormat" xml:space="preserve"><value>正在下载 {0}：{1}</value></data>
+  <data name="CloudDownloadConsentTitle" xml:space="preserve"><value>下载云端文件以进行预览？</value></data>
+  <data name="CloudDownloadConsentMessageFormat" xml:space="preserve"><value>{0} 存储在云端，大小为 {1}。是否立即下载以进行预览？预览下载上限为 {2}，更大的文件将推迟处理。</value></data>
+  <data name="DownloadForPreview" xml:space="preserve"><value>下载并预览</value></data>
+  <data name="UnknownFileSize" xml:space="preserve"><value>大小未知</value></data>
+  <data name="CloudDownloadDeclined" xml:space="preserve"><value>未允许下载云端文件，因此已推迟预览。</value></data>
+  <data name="CloudDownloadTooLargeFormat" xml:space="preserve"><value>云端文件下载上限为 {0}，因此已推迟预览。</value></data>
   <data name="CheckingFileAvailabilityFormat" xml:space="preserve"><value>正在安全检查 {0} 的可用性...</value></data>
   <data name="CloudUnknownDeferred" xml:space="preserve"><value>无法在不下载内容的情况下识别此云文件类型，因此已推迟预览。</value></data>
   <data name="CloudAvailabilityUnknownDeferred" xml:space="preserve"><value>无法在不读取内容的情况下验证文件可用性，因此已推迟预览。</value></data>
