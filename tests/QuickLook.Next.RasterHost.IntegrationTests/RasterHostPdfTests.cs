@@ -207,6 +207,87 @@ public sealed class RasterHostPdfTests
         }
     }
 
+    [Fact]
+    public async Task Closing_inflight_pdf_render_drains_projection_before_next_session()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        string pipeName = $"quicklook_next_raster_pdf_close_render_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-pdf-inflight-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-pdf-inflight-{Guid.NewGuid():N}.pdf");
+
+        try
+        {
+            await File.WriteAllBytesAsync(physicalPath, CreateOnePagePdf(pageWidth: 2200, pageHeight: 2200), timeout.Token);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string firstRequestId = await OpenPinnedPdfAsync(
+                channel, host, physicalPath, logicalPath, timeout.Token);
+            host.Refresh();
+            int preRenderHandles = host.HandleCount;
+            await channel.SendAsync(new PreviewPageOpen(firstRequestId, 0, 1, 4), timeout.Token);
+            await WaitUntilAsync(() =>
+            {
+                host.Refresh();
+                return host.HandleCount > preRenderHandles;
+            }, timeout.Token);
+            await channel.SendAsync(new PreviewClose(firstRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+            Assert.False(host.HasExited);
+
+            await File.WriteAllBytesAsync(physicalPath, CreateOnePagePdf(), timeout.Token);
+            string secondRequestId = await OpenPinnedPdfAsync(
+                channel, host, physicalPath, logicalPath, timeout.Token);
+            await channel.SendAsync(new PreviewClose(secondRequestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+            Assert.False(host.HasExited);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            try { File.Delete(physicalPath); } catch { }
+        }
+    }
+
+    private static async Task<string> OpenPinnedPdfAsync(
+        PipeChannel channel,
+        Process host,
+        string physicalPath,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+        long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+        string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+        var probe = new FileProbe(logicalPath, ".pdf", "%PDF"u8.ToArray())
+        {
+            Kind = "pdf",
+            Size = pinned.Length,
+        };
+        await channel.SendAsync(
+            new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+            cancellationToken);
+        pinned.Handle.Dispose();
+        PreviewReady ready = Assert.IsType<PreviewReady>(
+            await ReceiveUntilAsync<PreviewReady>(channel, cancellationToken));
+        Assert.Equal(requestId, ready.RequestId);
+        return requestId;
+    }
+
     private static async Task<ControlMessage> ReceiveUntilAsync<T>(PipeChannel channel, CancellationToken cancellationToken)
         where T : ControlMessage
     {
@@ -221,13 +302,16 @@ public sealed class RasterHostPdfTests
         }
     }
 
-    private static byte[] CreateOnePagePdf(int trailingCommentBytes = 0)
+    private static byte[] CreateOnePagePdf(
+        int trailingCommentBytes = 0,
+        int pageWidth = 300,
+        int pageHeight = 200)
     {
         string[] objects =
         [
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << >> /Contents 4 0 R >>",
+            $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pageWidth} {pageHeight}] /Resources << >> /Contents 4 0 R >>",
             "<< /Length 0 >>\nstream\n\nendstream",
         ];
         using var stream = new MemoryStream();

@@ -850,6 +850,7 @@ if (Test-Path $rasterHostRoot) {
         $pdfSessionText -notmatch 'PdfDocument\.LoadFromStreamAsync\(randomAccessStream\)' -or
         $pdfSessionText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
         $pdfSessionText -notmatch 'GetFileIdentity\(sourceHandle, sourceLength\)' -or
+        $rasterHostText -notmatch 'DisposePdfSessionAsync\([\s\S]*catch\s*\(TimeoutException\)[\s\S]{0,300}PDF render drain timed out; exiting host[\s\S]{0,100}Environment\.Exit\(31\)' -or
         $pdfSessionText -notmatch '_inputRandomAccessStream\?\.Dispose\(\)' -or
         $pdfSessionText -notmatch '_inputFileStream\?\.Dispose\(\)') {
         Add-Failure "RasterHost local PDFs must load and retain the exact HANDLE stream without creating an input anchor"

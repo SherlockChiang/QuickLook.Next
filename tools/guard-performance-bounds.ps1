@@ -97,6 +97,8 @@ Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_re
 $pdfHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostPdfTests.cs"
 Require-Pattern $pdfHostIntegration 'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*measuredCycleCount\s*=\s*24[\s\S]*minimumMeasuredCacheGrowth\s*=\s*4L\s*\*\s*1024\s*\*\s*1024[\s\S]*PreviewSurfaceRelease[\s\S]*PreviewPageClose[\s\S]*peakPrivateBytes\s*>=\s*baselinePrivateBytes\s*\+\s*minimumMeasuredCacheGrowth[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
     "RasterHost must verify PDF session, page cache, projection, and surface recovery after idle trim."
+Require-Pattern $pdfHostIntegration 'Closing_inflight_pdf_render_drains_projection_before_next_session[\s\S]*pageWidth:\s*2200[\s\S]*preRenderHandles[\s\S]*PreviewPageOpen\(firstRequestId[\s\S]*host\.HandleCount\s*>\s*preRenderHandles[\s\S]*PreviewClose\(firstRequestId\)[\s\S]*TryOverwriteFile\(physicalPath\)[\s\S]*OpenPinnedPdfAsync[\s\S]*PreviewClose\(secondRequestId\)' `
+    "RasterHost must drain an in-flight PDF render before reusing the host for a later session."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"
 Require-Pattern $waveformPresenter 'ImageWaveformBuilder\.IsValid\(waveform\)' `
     "Image waveform presentation must reject malformed channel payloads."
@@ -196,6 +198,10 @@ Require-Pattern $pdfSession 'BitmapEncoderId\s*=\s*BitmapEncoder\.BmpEncoderId' 
     "PDF rendering must avoid the default PNG encode/decode round trip."
 Require-Pattern $pdfSession '_pageSizes\[0\]\s*=\s*firstPageSize' `
     "PDF sessions must reuse the page geometry already read during open."
+Require-Pattern $pdfSession 'TrackRenderTask\(renderTask\)[\s\S]*renderTask\.WaitAsync\(PageRenderTimeout,\s*token\)' `
+    "PDF sessions must retain the underlying WinRT render after a cancelable waiter exits."
+Require-Pattern $pdfSession '_renderTasks\.ToArray\(\)[\s\S]*Task\.WhenAll\(renderTasks\)\.WaitAsync\(PageRenderTimeout\)[\s\S]*_document\s*=\s*null' `
+    "PDF session disposal must drain underlying renders before releasing document-owned resources."
 Require-Pattern $pdfSession 'DiskCacheTouches\.Writer\.TryWrite\(path\)' `
     "PDF disk cache hits must defer LRU metadata writes off the render path."
 $inputHook = Join-Path $Root "src/QuickLook.Next.App/PreviewKeyboardHook.cs"

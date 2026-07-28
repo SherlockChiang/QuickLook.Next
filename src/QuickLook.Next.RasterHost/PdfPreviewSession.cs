@@ -65,7 +65,9 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
     private readonly SemaphoreSlim _documentRenderLock = new(1, 1);
     private readonly object _lifetimeLock = new();
     private readonly object _pageSizeLock = new();
+    private readonly object _renderTasksLock = new();
     private readonly Dictionary<int, WinSize> _pageSizes = new();
+    private readonly HashSet<Task> _renderTasks = [];
     private readonly string _cacheIdentity;
     private FileStream? _inputFileStream;
     private IRandomAccessStream? _inputRandomAccessStream;
@@ -452,8 +454,10 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         }
 
         var waitWatch = Stopwatch.StartNew();
-        var rendered = await GetOrStartInflight(cacheKey, () => RenderPageCoreAsync(pageIndex, targetW, targetH, token))
-            .WaitAsync(PageRenderTimeout, token);
+        Task<(byte[] Bgra, int Width, int Height)> renderTask = GetOrStartInflight(
+            cacheKey, () => RenderPageCoreAsync(pageIndex, targetW, targetH, token));
+        TrackRenderTask(renderTask);
+        var rendered = await renderTask.WaitAsync(PageRenderTimeout, token);
         waitWatch.Stop();
         DiagLog.Write("RasterHost", $"pdf page ready {waitWatch.ElapsedMilliseconds}ms; page={pageIndex}; size={rendered.Width}x{rendered.Height}; path={Path}");
         return rendered;
@@ -548,6 +552,24 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         drained?.TrySetResult();
     }
 
+    private void TrackRenderTask(Task renderTask)
+    {
+        lock (_renderTasksLock)
+            _renderTasks.Add(renderTask);
+        _ = renderTask.ContinueWith(
+            static (completed, state) => ((PdfPreviewSession)state!).ForgetRenderTask(completed),
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void ForgetRenderTask(Task renderTask)
+    {
+        lock (_renderTasksLock)
+            _renderTasks.Remove(renderTask);
+    }
+
     public async ValueTask DisposeAsync()
     {
         Task? waitForOperations = null;
@@ -566,6 +588,16 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
         try { _disposeCts.Cancel(); } catch { }
         if (waitForOperations is not null)
             await waitForOperations.ConfigureAwait(false);
+
+        Task[] renderTasks;
+        lock (_renderTasksLock)
+            renderTasks = _renderTasks.ToArray();
+        if (renderTasks.Length > 0)
+        {
+            try { await Task.WhenAll(renderTasks).WaitAsync(PageRenderTimeout).ConfigureAwait(false); }
+            catch (TimeoutException) { throw; }
+            catch { }
+        }
 
         _document = null;
         _inputRandomAccessStream?.Dispose();

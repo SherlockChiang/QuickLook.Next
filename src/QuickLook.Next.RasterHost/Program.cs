@@ -225,7 +225,7 @@ while (true)
                 bool isActiveRequest = string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal);
                 CancelOpen(close.RequestId);
                 if (pdfSessions.TryRemove(close.RequestId, out var pdf))
-                    await pdf.DisposeAsync();
+                    await DisposePdfSessionAsync(pdf, close.RequestId);
                 foreach (var key in pdfPageRenderCts.Keys.Where(k => k.RequestId == close.RequestId).ToArray())
                 {
                     if (pdfPageRenderCts.TryRemove(key, out var cts))
@@ -275,7 +275,7 @@ foreach (var cts in remainingOpenCts)
 foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
 foreach (PdfPreviewSession session in pdfSessions.Values)
-    await session.DisposeAsync();
+    await DisposePdfSessionAsync(session, "pipe-disconnect");
 pdfSessions.Clear();
 foreach (string requestId in retainedRasterSources.Keys)
     DeleteRetainedRasterSource(requestId);
@@ -774,7 +774,7 @@ async Task OpenPdfSessionAsync(
     CancellationToken cancellationToken)
 {
     if (pdfSessions.TryRemove(open.RequestId, out var old))
-        await old.DisposeAsync();
+        await DisposePdfSessionAsync(old, open.RequestId);
     PdfPreviewSession? session = await openSession();
     try
     {
@@ -809,7 +809,7 @@ async Task OpenPdfSessionAsync(
             catch
             {
                 if (pdfSessions.TryRemove(open.RequestId, out var failed))
-                    await failed.DisposeAsync();
+                    await DisposePdfSessionAsync(failed, open.RequestId);
                 throw;
             }
         }
@@ -821,7 +821,17 @@ async Task OpenPdfSessionAsync(
     finally
     {
         if (session is not null)
-            await session.DisposeAsync();
+            await DisposePdfSessionAsync(session, open.RequestId);
+    }
+}
+
+static async Task DisposePdfSessionAsync(PdfPreviewSession session, string requestId)
+{
+    try { await session.DisposeAsync(); }
+    catch (TimeoutException)
+    {
+        DiagLog.Write("RasterHost", $"PDF render drain timed out; exiting host: request={requestId}");
+        Environment.Exit(31);
     }
 }
 

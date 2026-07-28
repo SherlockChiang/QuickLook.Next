@@ -12,8 +12,10 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
-- [ ] Replace the PDF document projection with an input/ownership path that
-  exposes deterministic close semantics.
+- [ ] Replace the remaining `PdfDocument` projection with an API that exposes a native close
+  contract. Until Windows provides that boundary, RasterHost now deterministically tracks and drains
+  every underlying render task before releasing session-owned HANDLE streams; a 12-second drain
+  failure exits the isolated host rather than disposing resources beneath an active WinRT call.
 - [ ] Verify loading, success, failure, and PDF page-error announcements with
   Narrator on a Windows accessibility test machine.
 

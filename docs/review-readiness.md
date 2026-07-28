@@ -193,7 +193,11 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   retained HANDLE source without an input anchor. Local system-codec images now wrap an independently
   reopened source lease as a WinRT random-access stream and do not create an input anchor. Local PDF
   sessions now load and retain the exact HANDLE-backed WinRT stream through page rendering, with
-  HANDLE-derived cache identity. RasterHost no longer creates HANDLE input anchors; unsupported
+  HANDLE-derived cache identity. PDF session close tracks and drains the underlying WinRT render
+  task even when its cancelable waiter exits; document-owned streams and synchronization objects
+  are released only after that drain. A render that cannot drain within 12 seconds terminates the
+  RasterHost so the process boundary reclaims the non-cancelable Windows PDF operation safely.
+  RasterHost no longer creates HANDLE input anchors; unsupported
   HANDLE kinds fail closed. Shell fallback remains path-based only for explicit cloud/legacy
   compatibility requests and should move to a broker if RasterHost is later sandboxed further.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
