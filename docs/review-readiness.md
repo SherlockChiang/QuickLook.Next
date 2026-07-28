@@ -98,6 +98,9 @@ left visible instead of hidden behind vague TODOs.
 - Native animated-frame presentation writes into the fixed WinRT pixel buffer without resizing it
   and releases the buffer stream before invalidation, so GIF frame playback no longer fails at the
   App-side upload boundary.
+- ShellBroker thumbnail handoffs release their broker-owned HANDLE and packet directory on explicit
+  `CLOSE` and on abrupt pipe EOF. Channel teardown tolerates the expected broken-pipe flush while the
+  independently duplicated App HANDLE remains readable.
 - Folder navigation and listing icon work use the active preview cancellation
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a

@@ -83,6 +83,10 @@ Require-Pattern $shellBrokerIntegration 'Repeated_handoffs_do_not_leak_handles_o
     "ShellBroker must retain warmed repeated-HANDLE and packet-directory resource bounds."
 Require-Pattern $shellBrokerIntegration 'ExecuteHandoffAsync[\s\S]*DuplicateFileFromProcess[\s\S]*CLOSE\\t\{requestId\}[\s\S]*!Directory\.Exists' `
     "Every measured ShellBroker handoff must copy, close, and clean its broker-owned packet."
+Require-Pattern $shellBrokerIntegration 'Abrupt_pipe_disconnect_releases_active_handoff_and_packet_directory[\s\S]*DuplicateFileFromProcess[\s\S]*DisconnectAsync\(\)[\s\S]*Host\.ExitCode[\s\S]*Assert\.False\(Directory\.Exists\(packetDirectory\)\)[\s\S]*new FileStream\(copiedHandle' `
+    "ShellBroker disconnects must release the broker-owned packet while preserving the App copy."
+Require-Pattern $shellBrokerIntegration 'Invalid_message_after_handoff_exits_and_cleans_packet_directory[\s\S]*SendAsync\("UNKNOWN"\)[\s\S]*Host\.WaitForExitAsync[\s\S]*Assert\.False\(Directory\.Exists\(packetDirectory\)\)' `
+    "ShellBroker protocol failures after publication must clean the active packet directory."
 $idleTrimmer = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
 Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=\s+50\s+and\s+<=\s+15_000' `
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."

@@ -887,9 +887,12 @@ else {
         $shellBrokerTests -notmatch 'Host_rejects_wrong_pipe_server_process_id' -or
         $shellBrokerTests -notmatch 'DuplicateFileFromProcess' -or
         $shellBrokerTests -notmatch 'CLOSE\\t\{requestId\}' -or
+        $shellBrokerTests -notmatch 'Abrupt_pipe_disconnect_releases_active_handoff_and_packet_directory' -or
+        $shellBrokerTests -notmatch 'public async Task DisconnectAsync\(\)\s*\{[^}]*Host\.WaitForExitAsync' -or
+        $shellBrokerTests -notmatch 'Invalid_message_after_handoff_exits_and_cleans_packet_directory' -or
         $shellBrokerTests -notmatch 'Second_open_is_rejected_until_first_handoff_closes' -or
         $shellBrokerTests -notmatch 'Repeated_handoffs_do_not_leak_handles_or_packet_directories') {
-        Add-Failure "ShellBroker integration tests must retain authentication, App-pulled HANDLE, close, single-request exclusivity, and resource coverage"
+        Add-Failure "ShellBroker integration tests must retain authentication, App-pulled HANDLE, close/disconnect cleanup, single-request exclusivity, and resource coverage"
     }
     $solutionText = Get-Content -LiteralPath $solutionPath -Raw
     if ($solutionText -notmatch 'QuickLook\.Next\.ShellBroker\.IntegrationTests\.csproj') {

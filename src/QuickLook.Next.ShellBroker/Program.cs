@@ -41,22 +41,24 @@ try
         {
             case ["HELLO", var processIdText, var receivedToken] when !authenticated:
                 if (!string.Equals(receivedToken, sessionToken, StringComparison.Ordinal)
-                    || !int.TryParse(processIdText, out int appProcessId)) return;
+                    || !int.TryParse(processIdText, out int appProcessId))
+                    throw new InvalidDataException("ShellBroker authentication failed.");
                 WindowsHandleTransfer.VerifyNamedPipeServerProcess(pipe.SafePipeHandle, appProcessId);
                 authenticated = true;
                 channel.Send("READY");
                 break;
             case var _ when !authenticated:
             case ["HELLO", ..]:
-                return;
+                throw new InvalidDataException("ShellBroker received an invalid authentication message.");
             case ["OPEN", var requestId, var sizeText, var encodedPath]
                 when IsValidRequestId(requestId)
                      && int.TryParse(sizeText, out int size)
                      && size is >= 16 and <= 512:
                 string path;
                 try { path = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encodedPath)); }
-                catch { return; }
-                if (!Path.IsPathFullyQualified(path) || path.Length > 32767) return;
+                catch { throw new InvalidDataException("ShellBroker path payload is invalid."); }
+                if (!Path.IsPathFullyQualified(path) || path.Length > 32767)
+                    throw new InvalidDataException("ShellBroker path must be absolute and bounded.");
                 var request = new ShellRequest(requestId);
                 lock (requestLock)
                 {
@@ -126,7 +128,7 @@ try
             }
                 break;
             default:
-                return;
+                throw new InvalidDataException("ShellBroker received an invalid control message.");
         }
     }
 }
@@ -140,6 +142,7 @@ if (activeRequest is not null)
     activeRequest.Cancellation.Cancel();
     activeRequest.PacketHandle?.Dispose();
     if (activeRequest.PacketPath is not null) DeletePacket(activeRequest.PacketPath);
+    activeRequest.Dispose();
 }
 
 static bool IsValidRequestId(string? requestId)
@@ -165,8 +168,10 @@ static void DeletePacket(string path)
 
 sealed class BrokerChannel(Stream stream) : IDisposable
 {
-    private readonly StreamReader _reader = new(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
-    private readonly StreamWriter _writer = new(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+    private readonly StreamReader _reader = new(
+        stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+    private readonly StreamWriter _writer = new(
+        stream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
     private readonly object _writeLock = new();
 
     public string? Receive()
@@ -200,8 +205,8 @@ sealed class BrokerChannel(Stream stream) : IDisposable
 
     public void Dispose()
     {
-        _reader.Dispose();
-        _writer.Dispose();
+        try { _reader.Dispose(); } catch { }
+        try { _writer.Dispose(); } catch { }
     }
 }
 

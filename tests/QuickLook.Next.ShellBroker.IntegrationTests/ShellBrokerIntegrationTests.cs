@@ -84,6 +84,47 @@ public sealed class ShellBrokerIntegrationTests
     }
 
     [Fact]
+    public async Task Abrupt_pipe_disconnect_releases_active_handoff_and_packet_directory()
+    {
+        await using BrokerSession session = await BrokerSession.StartAuthenticatedAsync();
+        string requestId = RequestId();
+        await session.OpenAsync(requestId, FixturePath, 128);
+        ThumbnailResponse response = ParseThumbnail(await session.Channel.ReceiveAsync());
+        using var copiedHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
+            session.Host.SafeHandle, response.FileHandle, response.PacketLength);
+        string packetDirectory = Path.Combine(session.WritableRoot, "thumbnail-" + requestId);
+        Assert.True(Directory.Exists(packetDirectory));
+
+        await session.DisconnectAsync();
+
+        Assert.Equal(0, session.Host.ExitCode);
+        Assert.False(Directory.Exists(packetDirectory));
+        using var stream = new FileStream(copiedHandle, FileAccess.Read);
+        byte[] header = new byte[8];
+        stream.ReadExactly(header);
+        Assert.Equal(response.Width, BitConverter.ToInt32(header, 0));
+        Assert.Equal(response.Height, BitConverter.ToInt32(header, 4));
+    }
+
+    [Fact]
+    public async Task Invalid_message_after_handoff_exits_and_cleans_packet_directory()
+    {
+        await using BrokerSession session = await BrokerSession.StartAuthenticatedAsync();
+        string requestId = RequestId();
+        await session.OpenAsync(requestId, FixturePath, 64);
+        _ = ParseThumbnail(await session.Channel.ReceiveAsync());
+        string packetDirectory = Path.Combine(session.WritableRoot, "thumbnail-" + requestId);
+        Assert.True(Directory.Exists(packetDirectory));
+
+        await session.Channel.SendAsync("UNKNOWN");
+        Assert.Null(await session.Channel.ReceiveAsync());
+        await session.Host.WaitForExitAsync().WaitAsync(Timeout);
+
+        Assert.Equal(0, session.Host.ExitCode);
+        Assert.False(Directory.Exists(packetDirectory));
+    }
+
+    [Fact]
     public async Task Second_open_is_rejected_until_first_handoff_closes()
     {
         await using BrokerSession session = await BrokerSession.StartAuthenticatedAsync();
@@ -252,6 +293,13 @@ public sealed class ShellBrokerIntegrationTests
         {
             string encodedPath = Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
             return Channel.SendAsync($"OPEN\t{requestId}\t{size}\t{encodedPath}");
+        }
+
+        public async Task DisconnectAsync()
+        {
+            Channel.Dispose();
+            _pipe.Dispose();
+            await Host.WaitForExitAsync().WaitAsync(Timeout);
         }
 
         public async ValueTask DisposeAsync()
