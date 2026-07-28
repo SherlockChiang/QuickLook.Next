@@ -113,6 +113,12 @@ Require-Pattern $animatedImagePresenter '"\.png"\s*=>\s*TryReadAnimatedPngSize' 
     "Animated PNG detection must require APNG chunk inspection."
 Require-Pattern $animatedImagePresenter 'type\.SequenceEqual\("IDAT"u8\)[\s\S]*return null' `
     "Static PNG files must not trigger animation frame extraction."
+Require-Pattern $animatedImagePresenter 'PixelBuffer\.AsStream\(\)[\s\S]*stream\.Position\s*=\s*0[\s\S]*stream\.Write\([\s\S]*\}\s*\r?\n\s*_nativeFrameBitmap\.Invalidate\(\)' `
+    "Animated native frames must release the WinRT pixel-buffer stream before invalidation."
+$animatedImagePresenterText = Get-Content -LiteralPath $animatedImagePresenter -Raw
+if ($animatedImagePresenterText -match 'PixelBuffer\.AsStream\(\)[\s\S]{0,400}\.SetLength\(') {
+    $failures.Add("Animated native frames must not resize the fixed WinRT pixel buffer.")
+}
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
 Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `

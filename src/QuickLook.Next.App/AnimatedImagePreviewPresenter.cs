@@ -249,10 +249,14 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_nativeFrameBitmap is null)
             _nativeFrameBitmap = new WriteableBitmap(_nativeFrames.Width, _nativeFrames.Height);
 
-        using var stream = _nativeFrameBitmap.PixelBuffer.AsStream();
-        stream.SetLength(0);
         byte[] bgra = _nativeFrames.Frames[index].Bgra;
-        stream.Write(bgra, 0, bgra.Length);
+        // PixelBuffer is a fixed-size WinRT buffer. Resizing it (SetLength) can throw a
+        // COMException, and it must be unmapped before Invalidate asks XAML to consume it.
+        using (var stream = _nativeFrameBitmap.PixelBuffer.AsStream())
+        {
+            stream.Position = 0;
+            stream.Write(bgra, 0, bgra.Length);
+        }
         _nativeFrameBitmap.Invalidate();
         _image.Source = _nativeFrameBitmap;
         long elapsed = _nativeFrameClock?.ElapsedMilliseconds ?? 0;

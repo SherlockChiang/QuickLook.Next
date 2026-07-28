@@ -1079,7 +1079,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            DiagLog.Write("App", $"animated image upgrade failed gen={generation}; {ex.GetType().Name}: {ex.Message}");
+            DiagLog.Write("App", $"animated image upgrade failed gen={generation}; {ex}");
         }
     }
 
