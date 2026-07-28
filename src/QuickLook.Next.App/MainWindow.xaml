@@ -52,6 +52,9 @@
                         <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#0A000000" />
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="#EBFFFFFF" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#F7FFFFFF" />
+                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#B7791F" />
+                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#C65D00" />
+                        <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="#8A000000" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
                         <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="#D91F1F1F" />
@@ -59,6 +62,9 @@
                         <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#12FFFFFF" />
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="#E61F1F1F" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#D41F1F1F" />
+                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#FFC83D" />
+                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#FF9F4A" />
+                        <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="#C8FFFFFF" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="HighContrast">
                         <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
@@ -66,6 +72,9 @@
                         <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
@@ -943,9 +952,28 @@
                                 BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                                 BorderThickness="1"
                                 Background="{ThemeResource PreviewHeroSurfaceBrush}">
-                            <Image x:Name="ListingHeroImage"
-                                   Stretch="Uniform"
-                                   Margin="5" />
+                            <Grid>
+                                <FontIcon x:Name="ListingFolderHeroIcon"
+                                          Glyph="&#xE8B7;"
+                                          FontSize="25"
+                                          Foreground="{ThemeResource ListingFolderIconBrush}"
+                                          Visibility="Collapsed"
+                                          IsHitTestVisible="False"
+                                          AutomationProperties.AccessibilityView="Raw" />
+                                <FontIcon x:Name="ListingArchiveHeroIcon"
+                                          Glyph="&#xF012;"
+                                          FontSize="25"
+                                          Foreground="{ThemeResource ListingArchiveIconBrush}"
+                                          Visibility="Collapsed"
+                                          IsHitTestVisible="False"
+                                          AutomationProperties.AccessibilityView="Raw" />
+                                <Image x:Name="ListingHeroImage"
+                                       Stretch="Uniform"
+                                       Margin="5"
+                                       Visibility="Collapsed"
+                                       IsHitTestVisible="False"
+                                       AutomationProperties.AccessibilityView="Raw" />
+                            </Grid>
                         </Border>
                         <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
                             <TextBlock x:Name="ListingTitle"
@@ -1057,16 +1085,38 @@
                                           Width="22"
                                           Height="22"
                                           VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Glyph}"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="15" />
+                                        <FontIcon Glyph="{Binding Glyph}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  FontSize="15"
+                                                  Foreground="{ThemeResource ListingFolderIconBrush}"
+                                                  Visibility="{Binding FolderGlyphVisibility}"
+                                                  IsHitTestVisible="False"
+                                                  AutomationProperties.AccessibilityView="Raw" />
+                                        <FontIcon Glyph="{Binding Glyph}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  FontSize="15"
+                                                  Foreground="{ThemeResource ListingArchiveIconBrush}"
+                                                  Visibility="{Binding ArchiveGlyphVisibility}"
+                                                  IsHitTestVisible="False"
+                                                  AutomationProperties.AccessibilityView="Raw" />
+                                        <FontIcon Glyph="{Binding Glyph}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  FontSize="15"
+                                                  Foreground="{ThemeResource ListingNeutralIconBrush}"
+                                                  Visibility="{Binding NeutralGlyphVisibility}"
+                                                  IsHitTestVisible="False"
+                                                  AutomationProperties.AccessibilityView="Raw" />
                                         <Image Width="18"
                                                Height="18"
                                                HorizontalAlignment="Center"
                                                VerticalAlignment="Center"
-                                               Source="{Binding IconSource, Mode=OneWay}" />
+                                               Source="{Binding IconSource, Mode=OneWay}"
+                                               Visibility="{Binding RasterIconVisibility}"
+                                               IsHitTestVisible="False"
+                                               AutomationProperties.AccessibilityView="Raw" />
                                     </Grid>
                                     <Grid Grid.Column="1" ColumnSpacing="6">
                                         <Grid.ColumnDefinitions>

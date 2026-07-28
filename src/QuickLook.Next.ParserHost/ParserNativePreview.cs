@@ -315,11 +315,16 @@ internal static class ParserNativePreview
             "ebook" => ql_preview_ebook_handle,
             _ => null,
         };
+        long maxSourceLength = kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
+            ? NativeAbi.MaxArchiveHandleInputBytes
+            : NativeAbi.MaxParserHandleInputBytes;
         if (handleCall is null
             || sourceLength < 0
             || sourceHandle.IsInvalid
             || sourceHandle.IsClosed)
             return (NativeAbi.StatusInvalidArgument, null);
+        if (sourceLength > maxSourceLength)
+            return (NativeAbi.StatusLimitExceeded, null);
 
         string logicalName = Path.GetFileName(logicalPath);
         if (string.IsNullOrEmpty(logicalName))

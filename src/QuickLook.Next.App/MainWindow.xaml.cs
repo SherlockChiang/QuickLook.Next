@@ -1846,6 +1846,7 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         ListingPreviewResult result = _listingPresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
+        ShowListingHeroFallback(ready);
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
@@ -1996,7 +1997,10 @@ public sealed partial class MainWindow : Window
         string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path) || !ShouldLoadPreviewHero(ready, path))
         {
-            ClearPreviewHeroImages();
+            if (ready.Listing is not null && ListingPanel.Visibility == Visibility.Visible)
+                ShowListingHeroFallback(ready);
+            else
+                ClearPreviewHeroImages();
             return;
         }
 
@@ -2032,6 +2036,9 @@ public sealed partial class MainWindow : Window
                 if (ListingPanel.Visibility == Visibility.Visible)
                 {
                     ListingHeroImage.Source = source;
+                    ListingHeroImage.Visibility = Visibility.Visible;
+                    ListingFolderHeroIcon.Visibility = Visibility.Collapsed;
+                    ListingArchiveHeroIcon.Visibility = Visibility.Collapsed;
                     ListingHeroFrame.Visibility = Visibility.Visible;
                 }
                 else if (TextPreviewContainer.Visibility == Visibility.Visible)
@@ -2133,6 +2140,21 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
+    private void ShowListingHeroFallback(PreviewReady ready)
+    {
+        bool isFolder = ready.Listing?.ListingKind.Equals(
+            "folder",
+            StringComparison.OrdinalIgnoreCase) == true;
+        bool isArchive = ready.Listing?.ListingKind.Equals(
+            "archive",
+            StringComparison.OrdinalIgnoreCase) == true;
+        ListingHeroImage.Source = null;
+        ListingHeroImage.Visibility = Visibility.Collapsed;
+        ListingFolderHeroIcon.Visibility = isFolder ? Visibility.Visible : Visibility.Collapsed;
+        ListingArchiveHeroIcon.Visibility = isArchive ? Visibility.Visible : Visibility.Collapsed;
+        ListingHeroFrame.Visibility = isFolder || isArchive ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private static string BuildPreviewHeroSubtitle(PreviewReady ready, string path)
     {
         string ext = System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
@@ -2178,6 +2200,9 @@ public sealed partial class MainWindow : Window
         TextHeroPanel.Visibility = Visibility.Collapsed;
         TextHeroFrame.Visibility = Visibility.Collapsed;
         ListingHeroImage.Source = null;
+        ListingHeroImage.Visibility = Visibility.Collapsed;
+        ListingFolderHeroIcon.Visibility = Visibility.Collapsed;
+        ListingArchiveHeroIcon.Visibility = Visibility.Collapsed;
         ListingHeroFrame.Visibility = Visibility.Collapsed;
     }
 

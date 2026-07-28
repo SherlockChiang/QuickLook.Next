@@ -226,6 +226,8 @@ Require-Pattern $parserNativePreview 'TryPreviewSqliteHandles\([\s\S]*mainLength
 $nativeAbi = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
 Require-Pattern $nativeAbi 'MaxParserHandleInputBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024' `
     "Database main HANDLE envelopes must retain their 256 MiB transfer limit."
+Require-Pattern $nativeAbi 'MaxArchiveHandleInputBytes\s*=\s*16L\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
+    "Seek-only archive HANDLE envelopes must remain capped at 16 TiB."
 Require-Pattern $nativeAbi 'MaxSqliteWalBytes\s*=\s*64L\s*\*\s*1024\s*\*\s*1024' `
     "SQLite WAL HANDLE envelopes must remain capped at 64 MiB."
 Require-Pattern $nativeAbi 'MaxSqliteShmBytes\s*=\s*4L\s*\*\s*1024\s*\*\s*1024' `
@@ -294,8 +296,8 @@ Require-Pattern $nativePreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
     "Torrent bencode parsing must retain its depth limit of 64."
 Require-Pattern $nativePreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
     "Torrent bencode parsing must retain its 100000-node budget."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
-    "Archive HANDLE inputs must remain capped at 256 MiB."
+Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
+    "Seek-only archive HANDLE inputs must remain capped at 16 TiB."
 Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Ebook HANDLE inputs must remain capped at 256 MiB."
 Require-Pattern $nativePreview 'MAX_OFFICE_INPUT_BYTES:\s*u64\s*=\s*128\s*\*\s*1024\s*\*\s*1024' `
@@ -308,6 +310,29 @@ Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
     "Archive metadata scans must remain capped at 10000 records."
+$rarListing = Join-Path $Root "native/quicklook_next_native/src/rar_listing.rs"
+Require-Pattern $rarListing 'MAX_HEADER_SIZE:\s*u64\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `
+    "RAR scans must retain the 2 MiB per-header cap."
+Require-Pattern $rarListing 'MAX_SCANNED_HEADERS:\s*usize\s*=\s*10_000' `
+    "RAR scans must retain the 10000-header cap."
+Require-Pattern $rarListing 'MAX_LISTED_ENTRIES:\s*usize\s*=\s*10_000' `
+    "RAR scans must retain the 10000-entry cap."
+Require-Pattern $rarListing 'MAX_PATH_BYTES:\s*usize\s*=\s*1024' `
+    "RAR entry paths must retain their 1024-byte normalization cap."
+Require-Pattern $rarListing 'MAX_PATH_COMPONENTS:\s*usize\s*=\s*128' `
+    "RAR entry paths must retain their 128-component normalization cap."
+Require-Pattern $rarListing 'MAX_SCAN_TIME:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
+    "RAR scans must retain the four-second deadline."
+Require-Pattern $rarListing 'pub fn scan_rar<R:\s*Read\s*\+\s*Seek>[\s\S]*header_size\s*>\s*MAX_HEADER_SIZE[\s\S]*SeekFrom::Start\(block\.next_offset\)' `
+    "RAR listing must remain a bounded header-only Read+Seek scan."
+Require-Pattern $nativePreview 'fn\s+render_rar_entries<R:\s*Read\s*\+\s*Seek>[\s\S]*rar_listing::scan_rar[\s\S]*archive_listing_json\([\s\S]*false,' `
+    "RAR previews must remain listing-only and disable entry extraction."
+Require-Pattern $nativePreview 'MAX_RAR_RETAINED_PATH_BYTES:\s*usize\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `
+    "RAR listing JSON must retain its 2 MiB aggregate path-string budget."
+Require-Pattern $nativePreview 'fn\s+add_rar_parent_folders\([\s\S]*MAX_RAR_RETAINED_PATH_BYTES' `
+    "RAR parent synthesis must charge every retained path string to the aggregate budget."
+Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*reader_starts_with_rar_magic[\s\S]*if\s+is_rar' `
+    "RAR entry extraction must fail closed before the ZIP extractor."
 Require-Pattern $nativePreview 'MAX_TAR_SCAN_BYTES:\s*u64\s*=\s*512\s*\*\s*1024\s*\*\s*1024' `
     "TAR and compressed TAR scans must retain their 512 MiB decompressed-read budget."
 Require-Pattern $nativePreview 'TAR_SCAN_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `

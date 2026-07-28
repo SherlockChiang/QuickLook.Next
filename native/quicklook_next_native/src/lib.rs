@@ -22,6 +22,7 @@ use image::{AnimationDecoder, ImageDecoder, ImageFormat, ImageReader};
 
 mod native_input;
 mod preview;
+mod rar_listing;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -827,6 +828,7 @@ fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'stati
     if m.starts_with(&[0x50, 0x4B, 0x03, 0x04])             // ZIP / OOXML
         || m.starts_with(&[0x1F, 0x8B])
     // gzip
+        || rar_listing::is_rar_magic(m)
     {
         return "archive";
     }
@@ -2115,6 +2117,37 @@ mod tests {
             classify("data.sqlite3-shm", ".sqlite3-shm", &[], false),
             "database"
         );
+    }
+
+    #[test]
+    fn classify_requires_rar_magic_instead_of_trusting_the_extension() {
+        assert_eq!(
+            classify(
+                "archive.rar",
+                ".rar",
+                rar_listing::RAR5_SIGNATURE,
+                false
+            ),
+            "archive"
+        );
+        assert_eq!(
+            classify(
+                "legacy.bin",
+                ".bin",
+                rar_listing::RAR4_SIGNATURE,
+                false
+            ),
+            "archive"
+        );
+        assert_eq!(
+            classify("renamed.rar", ".rar", &[0, 1, 2, 3, 4, 5, 6, 7], false),
+            "binary"
+        );
+        assert!(!preview::is_archive(
+            ".rar",
+            "archive",
+            b"Rar!\x1a\x07\x02\x00"
+        ));
     }
 
     #[test]

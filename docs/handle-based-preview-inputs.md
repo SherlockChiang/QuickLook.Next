@@ -219,11 +219,18 @@ legacy, per-function return conventions until each one is migrated.
 
 `ql_preview_archive_handle` accepts the selected archive object, its exact length, and a logical
 basename. The logical name selects ZIP/TAR/GZip routing and supplies UI labels only. It is never
-opened. Local HANDLE archive inputs are capped at 256 MiB; ZIP central-directory work is capped at
-32 MiB; ZIP preflight rejects more than 100,000 declared entries; metadata scans stop at 10,000
-entries; and at most 5,000 listing items are represented.
+opened. Because archive readers seek over payload bytes rather than buffering the complete source,
+the archive-specific HANDLE envelope accepts local files up to 16 TiB. Every parser inside that
+envelope remains independently bounded: ZIP central-directory work is capped at 32 MiB; ZIP
+preflight rejects more than 100,000 declared entries; metadata scans stop at 10,000 entries; and at
+most 5,000 listing items are represented. RAR4/RAR5 uses a header-only scanner with a 2 MiB
+per-header cap, 10,000-header cap, four-second deadline, checked `u64` seeks, and signature/CRC
+validation. Normalized RAR paths are capped at 1,024 UTF-8 bytes and 128 components before parent
+synthesis, and all represented path/name/parent strings share a 2 MiB budget. It never decompresses
+RAR payloads and advertises `CanPreviewEntries=false`.
 Archive-entry extraction keeps the existing 64 MiB compressed and uncompressed limits, expansion
 ratio limit of 1,000, four-second deadline, cancellation checks, and bounded temp-root retention.
+RAR entry extraction is intentionally rejected; its preview is a browse-only metadata listing.
 
 After a valid direct HANDLE archive listing is published, ParserHost retains the owning source
 handle under the preview request ID. This includes the reader-based archive fallback for an EPUB

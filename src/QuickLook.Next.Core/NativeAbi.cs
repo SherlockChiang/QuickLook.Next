@@ -32,6 +32,9 @@ public static class NativeAbi
     public const ulong RasterHandleInputs = HandleStaticImage | HandleSvg | HandleGif | HandleRasterImage;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
     public const long MaxParserHandleInputBytes = 256L * 1024 * 1024;
+    // Archive readers seek across compressed payloads and retain only bounded headers/listing
+    // metadata, so they can safely inspect large local archives without mapping the whole file.
+    public const long MaxArchiveHandleInputBytes = 16L * 1024 * 1024 * 1024 * 1024;
     public const long MaxSqliteWalBytes = 64L * 1024 * 1024;
     public const long MaxSqliteShmBytes = 4L * 1024 * 1024;
 

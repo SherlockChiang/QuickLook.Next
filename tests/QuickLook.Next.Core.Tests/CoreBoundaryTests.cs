@@ -189,6 +189,14 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(-9, NativeAbi.StatusLimitExceeded);
     }
 
+    [Fact]
+    public void Archive_handle_budget_supports_large_seek_only_listings()
+    {
+        Assert.Equal(256L * 1024 * 1024, NativeAbi.MaxParserHandleInputBytes);
+        Assert.True(NativeAbi.MaxArchiveHandleInputBytes >= 16L * 1024 * 1024 * 1024);
+        Assert.True(NativeAbi.MaxArchiveHandleInputBytes > NativeAbi.MaxParserHandleInputBytes);
+    }
+
     [Theory]
     [InlineData("file.vhdx", "disk-image")]
     [InlineData("font.woff2", "font")]
@@ -447,6 +455,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("cloud.png", "image")]
     [InlineData("cloud.svg", "image")]
     [InlineData("cloud.zip", "archive")]
+    [InlineData("cloud.rar", "archive")]
     [InlineData("cloud.mp4", "video")]
     [InlineData("cloud.cer", "certificate")]
     [InlineData("cloud.vendor", "unknown")]
@@ -495,6 +504,9 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.False(FallbackFileProbe.IsText("data.vendor", "%PDF-readable header"u8));
         Assert.False(FallbackFileProbe.IsText("payload.config", "MZprintable header"u8));
         Assert.False(FallbackFileProbe.IsText("document.config", "%PDF-readable header"u8));
+        Assert.False(FallbackFileProbe.IsText(
+            "archive.vendor",
+            [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]));
         Assert.False(FallbackFileProbe.IsText("data.vendor", [0xFF, 0xFE, 0x00, 0xD8]));
     }
 

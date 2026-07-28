@@ -924,6 +924,23 @@ if (-not (Test-Path -LiteralPath $mainWindowXamlPath) -or
     (Get-Content -LiteralPath $mainWindowXamlPath -Raw) -notmatch 'x:Name="RootGrid"[^>]*UseLayoutRounding="True"') {
     Add-Failure "Main window root must align layout to physical pixels"
 }
+if (Test-Path -LiteralPath $mainWindowXamlPath) {
+    $listingIconXaml = Get-Content -LiteralPath $mainWindowXamlPath -Raw
+    if ($listingIconXaml -notmatch 'x:Key="ListingFolderIconBrush"' -or
+        $listingIconXaml -notmatch 'x:Key="ListingArchiveIconBrush"' -or
+        $listingIconXaml -notmatch 'Foreground="\{ThemeResource ListingFolderIconBrush\}"[\s\S]*Visibility="\{Binding FolderGlyphVisibility\}"' -or
+        $listingIconXaml -notmatch 'Foreground="\{ThemeResource ListingArchiveIconBrush\}"[\s\S]*Visibility="\{Binding ArchiveGlyphVisibility\}"' -or
+        $listingIconXaml -notmatch 'Source="\{Binding IconSource,\s*Mode=OneWay\}"[\s\S]*Visibility="\{Binding RasterIconVisibility\}"' -or
+        $listingIconXaml -notmatch 'x:Name="ListingFolderHeroIcon"' -or
+        $listingIconXaml -notmatch 'x:Name="ListingArchiveHeroIcon"') {
+        Add-Failure "Folder and archive listings must retain theme-aware colored fallback and hero icons"
+    }
+}
+$listingRowPath = Join-Path $Root "src/QuickLook.Next.App/ListingRow.cs"
+if (-not (Test-Path -LiteralPath $listingRowPath) -or
+    (Get-Content -LiteralPath $listingRowPath -Raw) -notmatch 'OnPropertyChanged\(nameof\(RasterIconVisibility\)\)') {
+    Add-Failure "Listing rows must hide colored fallback glyphs when an asynchronous Shell icon arrives"
+}
 if (-not (Test-Path -LiteralPath $mainWindowPath) -or
     (Get-Content -LiteralPath $mainWindowPath -Raw) -notmatch 'xamlRoot\.Changed\s*\+=\s*OnXamlRootChanged') {
     Add-Failure "Main window must relayout when monitor DPI changes"

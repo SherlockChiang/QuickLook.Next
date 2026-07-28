@@ -45,12 +45,16 @@ left visible instead of hidden behind vague TODOs.
      the dedicated archive-entry HANDLE ABI. Parent close, failed publication, replacement, and
      disconnect dispose retained owners and reject new leases; an in-flight extraction keeps its
      independently reopened lease until completion. Normal content ebook previews remain stateless.
-  - Archive HANDLE inputs are capped at 256 MiB. ZIP container validation limits central-directory
-    work to 32 MiB and declared entries to 100,000 before listing scans apply their existing
-    10,000-record/5,000-item bounds. TAR/TGZ scans retain their 512 MiB decompressed-read, four-second,
-    and cancellation limits. Entry extraction retains 64 MiB compressed/uncompressed caps, a
-     1,000:1 expansion-ratio cap, and a four-second deadline. ZIP-compatible listings advertise entry
-     preview; TAR/TGZ/GZip listings are browse-only until bounded extraction is implemented.
+  - Archive HANDLE inputs use a 16 TiB logical envelope because the readers seek over payload bytes
+    instead of buffering the source. ZIP container validation limits central-directory work to
+    32 MiB and declared entries to 100,000 before listing scans apply their existing
+    10,000-record/5,000-item bounds. TAR/TGZ scans retain their 512 MiB decompressed-read,
+    four-second, and cancellation limits. RAR4/RAR5 is a header-only, CRC-validating scanner with
+    2 MiB per-header, 10,000-header, four-second, and 5,000 represented-item bounds. It performs
+    checked `u64` seeks; caps normalized paths at 1,024 UTF-8 bytes/128 components and aggregate
+    represented path strings at 2 MiB; never decompresses payloads; and publishes a browse-only listing.
+    ZIP entry extraction retains 64 MiB compressed/uncompressed caps, a 1,000:1 expansion-ratio
+    cap, and a four-second deadline; RAR entry extraction fails closed.
   - Ebook HANDLE inputs are capped at 256 MiB. EPUB processing limits central-directory work to
     32 MiB, ZIP entries to 8,192, cumulative decompression to 16 MiB, metadata XML to 2 MiB, chapter
      input to 768 KiB, retained chapters to ten, and retained text to 140 Ki characters. Missing or
@@ -84,11 +88,14 @@ left visible instead of hidden behind vague TODOs.
   preview detail labels, image zoom presets, and preview chrome actions.
 - Preview chrome actions are wired: copy path, open file, reveal in Explorer,
   and image zoom presets no longer appear as non-functional visual controls.
-- Folder/listing previews keep glyph placeholders but asynchronously replace
-  real filesystem rows with Shell thumbnail/icon cache images when available.
-- Virtual archive entries use extension-aware glyphs for common images, media,
+- Folder/listing previews use theme-aware colored folder/archive glyphs while asynchronously
+  replacing real filesystem rows with Shell thumbnail/icon cache images when available.
+- Virtual archive entries use a colored archive glyph plus extension-aware glyphs for common images, media,
   archives, Office documents, code/text files, installers, certificates,
   torrents, and disk images.
+- Native animated-frame presentation writes into the fixed WinRT pixel buffer without resizing it
+  and releases the buffer stream before invalidation, so GIF frame playback no longer fails at the
+  App-side upload boundary.
 - Folder navigation and listing icon work use the active preview cancellation
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a

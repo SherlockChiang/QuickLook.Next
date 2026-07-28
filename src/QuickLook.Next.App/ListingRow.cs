@@ -15,6 +15,7 @@ public sealed class ListingRow : INotifyPropertyChanged
         NativePath = item.NativePath;
         IsFolder = item.IsFolder;
         IsEncrypted = item.IsEncrypted;
+        IsArchive = !item.IsFolder && IsArchiveName(item.Name);
         Glyph = ChooseGlyph(item);
         TypeDisplay = item.IsFolder ? UiStrings.FolderTypeDisplay : item.Type;
         SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
@@ -32,12 +33,21 @@ public sealed class ListingRow : INotifyPropertyChanged
     public string? NativePath { get; }
     public bool IsFolder { get; }
     public bool IsEncrypted { get; }
+    public bool IsArchive { get; }
     public string Glyph { get; }
     public string ModifiedDisplay { get; }
     public string TypeDisplay { get; }
     public string SizeDisplay { get; }
     public Visibility EncryptedVisibility { get; }
     public string AccessibleName { get; }
+    public Visibility FolderGlyphVisibility
+        => IconSource is null && IsFolder ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility ArchiveGlyphVisibility
+        => IconSource is null && IsArchive ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility NeutralGlyphVisibility
+        => IconSource is null && !IsFolder && !IsArchive ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility RasterIconVisibility
+        => IconSource is not null ? Visibility.Visible : Visibility.Collapsed;
 
     private ImageSource? _iconSource;
     public ImageSource? IconSource
@@ -49,6 +59,10 @@ public sealed class ListingRow : INotifyPropertyChanged
                 return;
             _iconSource = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(FolderGlyphVisibility));
+            OnPropertyChanged(nameof(ArchiveGlyphVisibility));
+            OnPropertyChanged(nameof(NeutralGlyphVisibility));
+            OnPropertyChanged(nameof(RasterIconVisibility));
         }
     }
 
@@ -68,7 +82,10 @@ public sealed class ListingRow : INotifyPropertyChanged
             ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".tif" or ".tiff" or ".ico" or ".svg" => "\uEB9F",
             ".mp4" or ".mkv" or ".mov" or ".avi" or ".webm" or ".wmv" => "\uE8B2",
             ".mp3" or ".wav" or ".flac" or ".aac" or ".m4a" or ".ogg" => "\uE8D6",
-            ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" => "\uF012",
+            ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" or ".bz2" or ".xz" or ".zst"
+                or ".cab" or ".jar" or ".nupkg" or ".vsix" or ".whl" or ".cbz" or ".xpi"
+                or ".apk" or ".apks" or ".aab" or ".msix" or ".msixbundle" or ".appx"
+                or ".appxbundle" => "\uF012",
             ".pdf" => "\uEA90",
             ".epub" or ".fb2" or ".mobi" or ".azw" or ".azw3" => "\uE8A5",
             ".doc" or ".docx" or ".xls" or ".xlsx" or ".ppt" or ".pptx" or ".odt" or ".ods" or ".odp" => "\uE8A5",
@@ -81,4 +98,11 @@ public sealed class ListingRow : INotifyPropertyChanged
             _ => "\uE8A5",
         };
     }
+
+    private static bool IsArchiveName(string name)
+        => System.IO.Path.GetExtension(name).ToLowerInvariant() is
+            ".zip" or ".rar" or ".7z" or ".tar" or ".tgz" or ".gz" or ".bz2" or ".xz" or ".zst"
+            or ".cab" or ".jar" or ".nupkg" or ".vsix" or ".whl" or ".cbz" or ".xpi"
+            or ".apk" or ".apks" or ".aab" or ".msix" or ".msixbundle" or ".appx"
+            or ".appxbundle";
 }

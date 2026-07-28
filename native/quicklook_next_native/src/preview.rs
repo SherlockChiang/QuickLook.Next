@@ -17,6 +17,8 @@ use serde::Serialize;
 use tar::Archive as TarArchive;
 use zip::ZipArchive;
 
+use crate::rar_listing::{self, RarScanError};
+
 fn preview_cancelled(cancel_cb: Option<extern "C" fn() -> bool>) -> bool {
     cancel_cb.map(|callback| callback()).unwrap_or(false)
 }
@@ -13939,7 +13941,8 @@ fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
 const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
-pub(crate) const MAX_ARCHIVE_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_RAR_RETAINED_PATH_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_ARCHIVE_HANDLE_INPUT_BYTES: u64 = 16 * 1024 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ZIP_ENTRIES: u64 = 100_000;
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 32 * 1024 * 1024;
 const ZIP_EOCD_MIN_BYTES: u64 = 22;
@@ -13973,6 +13976,7 @@ const ZIP_EXTS: &[&str] = &[
 const TAR_EXTS: &[&str] = &[".tar"];
 const TAR_GZ_EXTS: &[&str] = &[".tar.gz", ".tgz"];
 const GZ_EXTS: &[&str] = &[".gz"];
+const RAR_EXTS: &[&str] = &[".rar"];
 
 fn prepare_seekable_reader<R: Seek>(
     reader: &mut R,
@@ -14178,6 +14182,14 @@ fn open_validated_zip<R: Read + Seek>(
 }
 
 pub fn is_archive(ext: &str, kind: &str, magic: &[u8]) -> bool {
+    if rar_listing::is_rar_magic(magic) {
+        return true;
+    }
+    if RAR_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
+        // Unlike the ZIP family, RAR is routed only after a complete RAR4/RAR5 signature check.
+        // This keeps renamed binaries out of the native header scanner.
+        return false;
+    }
     if ZIP_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
         return true;
     }
@@ -14191,6 +14203,166 @@ pub fn is_archive(ext: &str, kind: &str, magic: &[u8]) -> bool {
         && magic.len() >= 2
         && magic[0] == 0x50
         && magic[1] == 0x4B
+}
+
+fn reader_starts_with_rar_magic<R: Read + Seek>(
+    reader: &mut R,
+    source_len: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<bool, ReaderPreviewError> {
+    prepare_seekable_reader(reader, source_len, cancel_cb)?;
+    let prefix_len = source_len.min(rar_listing::RAR5_SIGNATURE.len() as u64) as usize;
+    let mut prefix = [0_u8; 8];
+    read_exact_cancelable(reader, &mut prefix[..prefix_len], cancel_cb)?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ReaderPreviewError::Io)?;
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    Ok(rar_listing::is_rar_magic(&prefix[..prefix_len]))
+}
+
+fn render_rar_entries<R: Read + Seek>(
+    reader: &mut R,
+    logical_name: &str,
+    root_path: &str,
+    source_len: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<String, ReaderPreviewError> {
+    let mut cancelable = CancelableSeekReader::new(reader, cancel_cb);
+    let listing = rar_listing::scan_rar(&mut cancelable, source_len, || {
+        preview_cancelled(cancel_cb)
+    })
+    .map_err(|error| match error {
+        RarScanError::Cancelled => ReaderPreviewError::Cancelled,
+        RarScanError::Io(_) if preview_cancelled(cancel_cb) => ReaderPreviewError::Cancelled,
+        RarScanError::Io(_) => ReaderPreviewError::Io,
+        RarScanError::HeaderTooLarge | RarScanError::SizeOverflow => {
+            ReaderPreviewError::LimitExceeded
+        }
+        RarScanError::InvalidMagic
+        | RarScanError::Truncated
+        | RarScanError::Malformed(_)
+        | RarScanError::HeaderCrcMismatch => ReaderPreviewError::Malformed,
+    })?;
+
+    let filename = Path::new(logical_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let file_count = listing.total_file_count;
+    let uncompressed = listing.total_unpacked.min(i64::MAX as u64) as i64;
+    let compressed = listing.total_packed.min(i64::MAX as u64) as i64;
+    let encrypted_file_count = listing.encrypted_file_count;
+    let mut partial = listing.is_partial;
+    let mut entries: BTreeMap<String, ArchiveListingEntry> = BTreeMap::new();
+    let mut retained_path_bytes = 0_usize;
+
+    for entry in listing.entries {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let full_name = entry.path.trim_start_matches('/').to_string();
+        if full_name.is_empty() {
+            continue;
+        }
+        if entries.len() >= MAX_ARCHIVE_ENTRIES {
+            partial = true;
+            continue;
+        }
+
+        if !add_rar_parent_folders(&full_name, &mut entries, &mut retained_path_bytes) {
+            partial = true;
+            continue;
+        }
+
+        if entry.is_folder {
+            let path = ensure_trailing_slash(&full_name);
+            if entries.contains_key(&path) {
+                continue;
+            }
+            let name = path
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let parent = parent_of(&path);
+            let retained = path
+                .len()
+                .saturating_add(name.len())
+                .saturating_add(parent.len());
+            if retained_path_bytes
+                .checked_add(retained)
+                .is_none_or(|total| total > MAX_RAR_RETAINED_PATH_BYTES)
+            {
+                partial = true;
+                continue;
+            }
+            retained_path_bytes += retained;
+            entries.insert(
+                path,
+                (
+                    name,
+                    parent,
+                    true,
+                    0,
+                    0,
+                    entry.modified_unix,
+                    entry.is_encrypted,
+                ),
+            );
+        } else {
+            if entries.contains_key(&full_name) {
+                partial = true;
+                continue;
+            }
+            let name = full_name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&full_name)
+                .to_string();
+            let parent = parent_of(&full_name);
+            let retained = full_name
+                .len()
+                .saturating_add(name.len())
+                .saturating_add(parent.len());
+            if retained_path_bytes
+                .checked_add(retained)
+                .is_none_or(|total| total > MAX_RAR_RETAINED_PATH_BYTES)
+            {
+                partial = true;
+                continue;
+            }
+            retained_path_bytes += retained;
+            entries.insert(
+                full_name,
+                (
+                    name,
+                    parent,
+                    false,
+                    entry.unpacked_size.min(i64::MAX as u64) as i64,
+                    entry.packed_size.min(i64::MAX as u64) as i64,
+                    entry.modified_unix,
+                    entry.is_encrypted,
+                ),
+            );
+        }
+    }
+
+    Ok(archive_listing_json(
+        filename,
+        root_path,
+        "archive",
+        entries,
+        file_count,
+        uncompressed,
+        compressed,
+        partial,
+        encrypted_file_count,
+        false,
+    ))
 }
 
 /// Produce JSON for an archive listing: `{"kind":"archive","title":"...","listing":{...}}`.
@@ -14263,7 +14435,16 @@ fn render_archive_reader_with_root<R: Read + Seek>(
         return Err(ReaderPreviewError::Malformed);
     }
 
-    let json = if TAR_GZ_EXTS
+    let is_rar = reader_starts_with_rar_magic(&mut reader, source_len, cancel_cb)?;
+    let json = if is_rar {
+        render_rar_entries(
+            &mut reader,
+            logical_name,
+            root_path,
+            source_len,
+            cancel_cb,
+        )?
+    } else if TAR_GZ_EXTS
         .iter()
         .any(|extension| lower.ends_with(extension))
     {
@@ -14336,7 +14517,7 @@ pub fn extract_archive_entry_to_temp(
 }
 
 pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
-    reader: R,
+    mut reader: R,
     source_len: u64,
     logical_name: &str,
     entry_path: &str,
@@ -14349,7 +14530,12 @@ pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
         return Err(ReaderPreviewError::Cancelled);
     }
     let lower = logical_name.to_ascii_lowercase();
-    if TAR_EXTS.iter().any(|extension| lower.ends_with(extension))
+    let is_rar = reader_starts_with_rar_magic(&mut reader, source_len, cancel_cb)?;
+    if is_rar
+        || RAR_EXTS
+            .iter()
+            .any(|extension| lower.ends_with(extension))
+        || TAR_EXTS.iter().any(|extension| lower.ends_with(extension))
         || TAR_GZ_EXTS
             .iter()
             .any(|extension| lower.ends_with(extension))
@@ -16894,6 +17080,43 @@ fn add_parent_folders(
         }
         start = full_idx + 1;
     }
+}
+
+fn add_rar_parent_folders(
+    path: &str,
+    entries: &mut BTreeMap<String, ArchiveListingEntry>,
+    retained_path_bytes: &mut usize,
+) -> bool {
+    let mut start = 0;
+    while let Some(idx) = path[start..].find('/') {
+        let full_idx = start + idx;
+        let folder_path = format!("{}/", &path[..full_idx]);
+        if !entries.contains_key(&folder_path) {
+            if entries.len() >= MAX_ARCHIVE_ENTRIES {
+                return false;
+            }
+            let name = path[..full_idx]
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let parent = parent_of(&folder_path);
+            let retained = folder_path
+                .len()
+                .saturating_add(name.len())
+                .saturating_add(parent.len());
+            let Some(total) = retained_path_bytes.checked_add(retained) else {
+                return false;
+            };
+            if total > MAX_RAR_RETAINED_PATH_BYTES {
+                return false;
+            }
+            *retained_path_bytes = total;
+            entries.insert(folder_path, (name, parent, true, 0, 0, 0, false));
+        }
+        start = full_idx + 1;
+    }
+    true
 }
 
 fn ensure_trailing_slash(s: &str) -> String {

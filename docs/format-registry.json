@@ -17,5 +17,6 @@
   },
   "systemRequiredImages": [".avif", ".heic", ".heif", ".jxl"],
   "animatedImages": [".gif", ".webp"],
-  "unsupportedArchives": [".7z", ".rar"]
+  "listingOnlyArchives": [".rar"],
+  "unsupportedArchives": [".7z"]
 }

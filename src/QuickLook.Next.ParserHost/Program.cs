@@ -149,8 +149,15 @@ while (true)
                     DiagLog.Write("ParserHost", "rejected invalid handle preview request");
                 break;
             }
+            long maxHandleInputLength = string.Equals(
+                open.Probe?.Kind,
+                "archive",
+                StringComparison.OrdinalIgnoreCase)
+                ? NativeAbi.MaxArchiveHandleInputBytes
+                : NativeAbi.MaxParserHandleInputBytes;
             if (!IsValidRequestId(open.RequestId)
-                || open.SourceLength is not (>= 0 and <= NativeAbi.MaxParserHandleInputBytes)
+                || open.SourceLength < 0
+                || open.SourceLength > maxHandleInputLength
                 || string.IsNullOrWhiteSpace(open.LogicalPath)
                 || !IsValidProbe(open.Probe)
                 || open.Probe.Size != open.SourceLength)
@@ -770,7 +777,8 @@ static bool IsValidHeroKind(string? kind)
 static bool IsValidRequestId(string? requestId)
     => requestId is { Length: 32 } && requestId.All(static c => char.IsAsciiHexDigit(c));
 
-static bool IsValidProbe(QuickLook.Next.Contracts.FileProbe? probe)
+static bool IsValidProbe(
+    [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] QuickLook.Next.Contracts.FileProbe? probe)
     => probe is not null
        && !string.IsNullOrWhiteSpace(probe.Path)
        && probe.Extension is not null

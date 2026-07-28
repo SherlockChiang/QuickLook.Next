@@ -30,12 +30,28 @@ foreach ($kind in $registry.parserHostKinds) {
     }
 }
 
-$fallback = Get-Content -LiteralPath (Join-Path $Root "src/QuickLook.Next.Core/FallbackFileProbe.cs") -Raw
+$fallbackPath = Join-Path $Root "src/QuickLook.Next.Core/FallbackFileProbe.cs"
+$fallback = Get-Content -LiteralPath $fallbackPath -Raw
 foreach ($kind in @("disk-image", "font", "database", "mail", "chm", "dump", "elf")) {
     if ($fallback -notmatch [regex]::Escape('"' + $kind + '"')) {
         $failures.Add("Metadata-only fallback kind missing: $kind")
     }
 }
+
+$nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$unsupportedArchives = @($registry.unsupportedArchives)
+foreach ($extension in @($registry.listingOnlyArchives)) {
+    if ($extension -in $unsupportedArchives) {
+        $failures.Add("Archive cannot be both listing-only and unsupported: $extension")
+    }
+    Require-Pattern $fallbackPath ([regex]::Escape('"' + $extension + '"')) `
+        "Managed fallback probe omits listing-only archive $extension."
+    Require-Pattern $nativePreview ([regex]::Escape('"' + $extension + '"')) `
+        "Native archive routing omits listing-only archive $extension."
+}
+Require-Pattern (Join-Path $Root "native/quicklook_next_native/src/rar_listing.rs") `
+    'RAR4_SIGNATURE[\s\S]*RAR5_SIGNATURE[\s\S]*pub fn scan_rar<R:\s*Read\s*\+\s*Seek>' `
+    "RAR listing support must retain signature validation and the header-only Read+Seek scanner."
 
 $rasterProgram = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
 $nativeDecoder = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeImageDecoder.cs"

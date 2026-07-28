@@ -159,6 +159,11 @@ internal sealed class ParserHostSupervisor
         TimeSpan? timeout = null)
     {
         if (_channel is null || _host is null) throw new InvalidOperationException("ParserHost not connected");
+        long maxLength = probe.Kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
+            ? NativeAbi.MaxArchiveHandleInputBytes
+            : NativeAbi.MaxParserHandleInputBytes;
+        if (sourceLength is < 0 || sourceLength > maxLength)
+            throw new ArgumentOutOfRangeException(nameof(sourceLength));
         PipeChannel channel = _channel;
         Process host = _host;
         int generation = _generation;

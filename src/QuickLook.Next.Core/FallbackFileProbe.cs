@@ -11,6 +11,8 @@ public static class FallbackFileProbe
     private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47];
     private static readonly byte[] JpegSignature = [0xFF, 0xD8, 0xFF];
     private static readonly byte[] ElfSignature = [0x7F, (byte)'E', (byte)'L', (byte)'F'];
+    private static readonly byte[] Rar4Signature = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00];
+    private static readonly byte[] Rar5Signature = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00];
 
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -41,7 +43,7 @@ public static class FallbackFileProbe
         [".ico"] = "image", [".heic"] = "image", [".heif"] = "image", [".avif"] = "image", [".jxl"] = "image", [".svg"] = "image",
         [".zip"] = "archive", [".jar"] = "archive", [".nupkg"] = "archive", [".vsix"] = "archive",
         [".whl"] = "archive", [".cbz"] = "archive", [".xpi"] = "archive", [".tar"] = "archive",
-        [".tgz"] = "archive", [".gz"] = "archive",
+        [".tgz"] = "archive", [".gz"] = "archive", [".rar"] = "archive",
         [".apk"] = "package", [".apks"] = "package", [".aab"] = "package", [".msix"] = "package",
         [".msixbundle"] = "package", [".appx"] = "package", [".appxbundle"] = "package",
         [".mp4"] = "video", [".mkv"] = "video", [".avi"] = "video", [".mov"] = "video", [".webm"] = "video",
@@ -208,6 +210,8 @@ public static class FallbackFileProbe
            || prefix.StartsWith(PngSignature)
            || prefix.StartsWith(JpegSignature)
            || prefix.StartsWith("GIF8"u8)
+           || prefix.StartsWith(Rar4Signature)
+           || prefix.StartsWith(Rar5Signature)
            || prefix.StartsWith("SQLite format 3\0"u8)
            || prefix.StartsWith(ElfSignature);
 
