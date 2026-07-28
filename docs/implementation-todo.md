@@ -54,13 +54,14 @@ Completed entries move here with the verification commands and commit hash.
   `OpenProcess`, `PROCESS_DUP_HANDLE`, or App process handle authority; `Hello.AppProcessId` is used
   only to compare the authenticated named-pipe server PID.
 
-- [x] Launch ParserHost with a Windows write-restricted token using the Restricted Code SID. Its
-  normal user SID still permits read-only runtime and native-DLL loading, while write access must
-  also match the restricted SID. Only the random authenticated pipe and per-launch writable root
-  receive that SID; smoke coverage proves allowed-root writes and pipe I/O succeed while writes to
-  an ordinary user temp directory fail. RasterHost remains on the privilege-stripped profile until
-  its WinRT and explicit Shell compatibility paths are prepared. AppContainer and network denial
-  remain open.
+- [x] Launch ParserHost with a Windows write-restricted token using Restricted Code and World
+  restricting SIDs. `WRITE_RESTRICTED` consults them only for write access: World permits CLR/BCrypt
+  kernel-object initialization, while only the random authenticated pipe and per-launch writable
+  root receive an explicit Restricted Code grant. Smoke coverage now preserves paths containing
+  spaces and proves allowed-root writes, pipe I/O, native-DLL loading, and HANDLE parsing succeed,
+  while writes to ordinary temp and LocalAppData roots fail. RasterHost remains on the
+  privilege-stripped profile until its WinRT and explicit Shell compatibility paths are prepared.
+  AppContainer and network denial remain open.
 
 - [x] Add a 32-cycle parent-bound package hero regression using a stable adaptive icon. Every
   extraction produces a 512x512 BGRA packet of roughly 1 MiB, transfers it through a read-only

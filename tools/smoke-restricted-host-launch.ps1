@@ -26,9 +26,7 @@ $parserHost = Join-Path $Root "src\QuickLook.Next.ParserHost\bin\$Configuration\
 if (-not (Test-Path -LiteralPath $parserHost -PathType Leaf)) {
     throw "Write-restricted ParserHost smoke requires a built host: $parserHost"
 }
-$parserProcess = Start-Process -FilePath $app `
-    -ArgumentList @("--smoke-write-restricted-parser-host", $parserHost) `
-    -Wait -PassThru
+$parserProcess = Start-AppSmoke @("--smoke-write-restricted-parser-host", $parserHost)
 if ($parserProcess.ExitCode -ne 0) {
     throw "Write-restricted ParserHost smoke failed with exit code $($parserProcess.ExitCode)."
 }

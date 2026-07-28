@@ -225,10 +225,35 @@ if (Test-Path $hostLauncher) {
     }
     if ($hostLauncherText -notmatch 'WriteRestricted\s*=\s*0x00000008' -or
         $hostLauncherText -notmatch 'RestrictedCodeSid\s*=\s*new\("S-1-5-12"\)' -or
+        $hostLauncherText -notmatch 'WorldSid\s*=\s*new\(WellKnownSidType\.WorldSid' -or
+        $hostLauncherText -notmatch 'GetSidBytes\(RestrictedCodeSid\),\s*GetSidBytes\(WorldSid\)' -or
         $hostLauncherText -notmatch 'DisableMaxPrivilege\s*\|\s*\(restrictWrites\s*\?\s*WriteRestricted\s*:\s*0\)' -or
         $hostLauncherText -notmatch 'CreateWriteRestrictedPipe\(' -or
         $hostLauncherText -notmatch 'GrantRestrictedWriteAccess\(') {
         Add-Failure "Host launcher must retain the optional write-restricted token, pipe, and writable-root ACL boundary"
+    }
+}
+$restrictedSmokePath = Join-Path $Root "tools/smoke-restricted-host-launch.ps1"
+if (Test-Path $restrictedSmokePath) {
+    $restrictedSmokeText = Get-Content -LiteralPath $restrictedSmokePath -Raw
+    if ($restrictedSmokeText -notmatch '\$parserProcess\s*=\s*Start-AppSmoke\s+@\("--smoke-write-restricted-parser-host",\s*\$parserHost\)' -or
+        $restrictedSmokeText -notmatch 'ProcessStartInfo[\s\S]*ArgumentList\.Add') {
+        Add-Failure "Restricted ParserHost smoke must preserve exact arguments, including paths with spaces"
+    }
+}
+$appProgramPath = Join-Path $Root "src/QuickLook.Next.App/Program.cs"
+if (Test-Path $appProgramPath) {
+    $appProgramText = Get-Content -LiteralPath $appProgramPath -Raw
+    if ($appProgramText -notmatch '"--smoke-write-restricted-parser-host"' -or
+        $appProgramText -notmatch 'GrantRestrictedReadAccess' -or
+        $appProgramText -notmatch 'ParserHostSupervisor' -or
+        $appProgramText -notmatch 'EnsureStartedAsync' -or
+        $appProgramText -notmatch 'BeginOpenHandle' -or
+        $appProgramText -notmatch 'TextContent') {
+        Add-Failure "Restricted ParserHost smoke must launch the real host and verify HANDLE parsing"
+    }
+    if ($appProgramText -notmatch 'CurrentProcessHasWorldWriteRestriction[\s\S]*deniedProfileRoot[\s\S]*UnauthorizedAccessException') {
+        Add-Failure "Write-restricted launch probe must verify both restricting SIDs and deny profile writes"
     }
 }
 

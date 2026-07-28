@@ -20,13 +20,14 @@ public static class Program
     {
         _ = SetProcessDpiAwarenessContext(DpiAwarenessContextPerMonitorAwareV2);
         AppStartupTiming.Start();
-        if (args is ["--restricted-host-probe-child", var allowedProbeRoot, var deniedProbeRoot, var probePipeName])
+        if (args is ["--restricted-host-probe-child", var allowedProbeRoot, var deniedProbeRoot, var deniedProfileRoot, var probePipeName])
         {
             try
             {
                 if (!HostProcessLauncher.IsCurrentProcessInJob()) Environment.ExitCode = 10;
                 else if (!HostProcessLauncher.CurrentProcessHasOnlyTraversalPrivilege()) Environment.ExitCode = 12;
                 else if (!HostProcessLauncher.CurrentProcessIsWriteRestricted()) Environment.ExitCode = 17;
+                else if (!HostProcessLauncher.CurrentProcessHasWorldWriteRestriction()) Environment.ExitCode = 29;
                 else
                 {
                     Environment.ExitCode = HostProcessLauncher.CurrentProcessMitigationStatus() switch
@@ -47,6 +48,12 @@ public static class Program
                     {
                         File.WriteAllText(Path.Combine(deniedProbeRoot, "denied.txt"), "denied");
                         Environment.ExitCode = 18;
+                    }
+                    catch (UnauthorizedAccessException) { }
+                    try
+                    {
+                        File.WriteAllText(Path.Combine(deniedProfileRoot, "denied.txt"), "denied");
+                        Environment.ExitCode = 30;
                     }
                     catch (UnauthorizedAccessException) { }
                     if (Environment.ExitCode == 0)
@@ -73,15 +80,19 @@ public static class Program
                 string probeRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "RestrictedHostProbe", Guid.NewGuid().ToString("n"));
                 string writableRoot = Path.Combine(probeRoot, "allowed");
                 string deniedRoot = Path.Combine(probeRoot, "denied");
+                string profileProbeRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "QuickLookNext", "RestrictedHostDenied", Guid.NewGuid().ToString("n"));
                 string pipeName = $"quicklook_next_restricted_probe_{Environment.ProcessId}_{Guid.NewGuid():N}";
                 Directory.CreateDirectory(writableRoot);
                 Directory.CreateDirectory(deniedRoot);
+                Directory.CreateDirectory(profileProbeRoot);
                 HostProcessLauncher.GrantRestrictedWriteAccess(writableRoot);
                 using NamedPipeServerStream pipe = HostProcessLauncher.CreateWriteRestrictedPipe(pipeName);
                 using var job = new HostProcessJob((nint)(128L * 1024 * 1024));
                 using Process child = HostProcessLauncher.StartRestricted(
                     Environment.ProcessPath ?? throw new InvalidOperationException("Current process path is unavailable."),
-                    ["--restricted-host-probe-child", writableRoot, deniedRoot, pipeName],
+                    ["--restricted-host-probe-child", writableRoot, deniedRoot, profileProbeRoot, pipeName],
                     job,
                     restrictWrites: true);
                 using var pipeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -103,8 +114,13 @@ public static class Program
                 else if (Environment.ExitCode == 0)
                     Environment.ExitCode = child.ExitCode;
                 try { Directory.Delete(probeRoot, recursive: true); } catch { }
+                try { Directory.Delete(profileProbeRoot, recursive: true); } catch { }
             }
-            catch (System.ComponentModel.Win32Exception ex) { Environment.ExitCode = 1000 + ex.NativeErrorCode; }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 1000 + ex.NativeErrorCode;
+            }
             catch (UnauthorizedAccessException) { Environment.ExitCode = 23; }
             catch (IOException) { Environment.ExitCode = 24; }
             catch (ArgumentException) { Environment.ExitCode = 25; }
@@ -121,6 +137,8 @@ public static class Program
             var supervisor = new ParserHostSupervisor(parserHostPath);
             try
             {
+                HostProcessLauncher.GrantRestrictedReadAccess(
+                    Path.GetDirectoryName(parserHostPath) ?? throw new InvalidDataException("ParserHost directory is unavailable."));
                 const string contents = "write-restricted parser HANDLE smoke";
                 File.WriteAllText(sourcePath, contents);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -148,7 +166,11 @@ public static class Program
                 Environment.ExitCode = 0;
             }
             catch (System.ComponentModel.Win32Exception ex) { Environment.ExitCode = 1000 + ex.NativeErrorCode; }
-            catch { Environment.ExitCode = 27; }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 27;
+            }
             finally
             {
                 supervisor.Stop();

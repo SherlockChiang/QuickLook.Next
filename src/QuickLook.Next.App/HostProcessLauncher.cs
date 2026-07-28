@@ -22,7 +22,9 @@ internal static class HostProcessLauncher
     private const ulong RequiredMitigationPolicy = 0x0000000100111005;
 
     private static readonly SecurityIdentifier RestrictedCodeSid = new("S-1-5-12");
-    private static readonly byte[] RestrictedCodeSidBytes = GetSidBytes(RestrictedCodeSid);
+    // WRITE_RESTRICTED consults these SIDs only for write access. World permits CLR/BCrypt kernel
+    // object initialization; Restricted Code remains the explicit grant for host output and pipes.
+    private static readonly SecurityIdentifier WorldSid = new(WellKnownSidType.WorldSid, null);
 
     public static Process StartRestricted(
         string executablePath,
@@ -37,15 +39,26 @@ internal static class HostProcessLauncher
             throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
         try
         {
-            nint restrictedSidBytes = Marshal.AllocHGlobal(RestrictedCodeSidBytes.Length);
-            nint restrictedSid = Marshal.AllocHGlobal(Marshal.SizeOf<SidAndAttributes>());
+            byte[][] restrictedSidValues = restrictWrites
+                ? [GetSidBytes(RestrictedCodeSid), GetSidBytes(WorldSid)]
+                : [];
+            nint[] restrictedSidBytes = restrictedSidValues
+                .Select(value => Marshal.AllocHGlobal(value.Length))
+                .ToArray();
+            int sidEntrySize = Marshal.SizeOf<SidAndAttributes>();
+            nint restrictedSids = restrictedSidValues.Length == 0
+                ? 0
+                : Marshal.AllocHGlobal(sidEntrySize * restrictedSidValues.Length);
             try
             {
-                Marshal.Copy(RestrictedCodeSidBytes, 0, restrictedSidBytes, RestrictedCodeSidBytes.Length);
-                Marshal.StructureToPtr(
-                    new SidAndAttributes { Sid = restrictedSidBytes, Attributes = 0 },
-                    restrictedSid,
-                    fDeleteOld: false);
+                for (int i = 0; i < restrictedSidValues.Length; i++)
+                {
+                    Marshal.Copy(restrictedSidValues[i], 0, restrictedSidBytes[i], restrictedSidValues[i].Length);
+                    Marshal.StructureToPtr(
+                        new SidAndAttributes { Sid = restrictedSidBytes[i], Attributes = 0 },
+                        restrictedSids + i * sidEntrySize,
+                        fDeleteOld: false);
+                }
                 if (!CreateRestrictedToken(
                         processToken,
                         DisableMaxPrivilege | (restrictWrites ? WriteRestricted : 0),
@@ -53,8 +66,8 @@ internal static class HostProcessLauncher
                         0,
                         0,
                         0,
-                        restrictWrites ? 1u : 0u,
-                        restrictWrites ? restrictedSid : 0,
+                        (uint)restrictedSidValues.Length,
+                        restrictedSids,
                         out nint restrictedToken))
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken failed.");
@@ -136,8 +149,8 @@ internal static class HostProcessLauncher
             }
             finally
             {
-                Marshal.FreeHGlobal(restrictedSid);
-                Marshal.FreeHGlobal(restrictedSidBytes);
+                if (restrictedSids != 0) Marshal.FreeHGlobal(restrictedSids);
+                foreach (nint sidBytes in restrictedSidBytes) Marshal.FreeHGlobal(sidBytes);
             }
         }
         finally
@@ -191,6 +204,12 @@ internal static class HostProcessLauncher
     }
 
     public static bool CurrentProcessIsWriteRestricted()
+        => CurrentProcessHasRestrictedSid(RestrictedCodeSid);
+
+    public static bool CurrentProcessHasWorldWriteRestriction()
+        => CurrentProcessHasRestrictedSid(WorldSid);
+
+    private static bool CurrentProcessHasRestrictedSid(SecurityIdentifier sid)
     {
         if (!OpenProcessToken(GetCurrentProcess(), TokenQuery, out nint token))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed.");
@@ -205,32 +224,23 @@ internal static class HostProcessLauncher
                 int count = Marshal.ReadInt32(buffer);
                 int offset = IntPtr.Size == 8 ? 8 : 4;
                 int entrySize = Marshal.SizeOf<SidAndAttributes>();
-                nint expectedSid = Marshal.AllocHGlobal(RestrictedCodeSidBytes.Length);
+                byte[] sidBytes = GetSidBytes(sid);
+                nint expectedSid = Marshal.AllocHGlobal(sidBytes.Length);
                 try
                 {
-                    Marshal.Copy(RestrictedCodeSidBytes, 0, expectedSid, RestrictedCodeSidBytes.Length);
+                    Marshal.Copy(sidBytes, 0, expectedSid, sidBytes.Length);
                     for (int i = 0; i < count; i++)
                     {
                         var entry = Marshal.PtrToStructure<SidAndAttributes>(buffer + offset + i * entrySize);
-                        if (EqualSid(entry.Sid, expectedSid))
-                            return true;
+                        if (EqualSid(entry.Sid, expectedSid)) return true;
                     }
                     return false;
                 }
-                finally
-                {
-                    Marshal.FreeHGlobal(expectedSid);
-                }
+                finally { Marshal.FreeHGlobal(expectedSid); }
             }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
+            finally { Marshal.FreeHGlobal(buffer); }
         }
-        finally
-        {
-            CloseHandle(token);
-        }
+        finally { CloseHandle(token); }
     }
 
     private static byte[] GetSidBytes(SecurityIdentifier sid)
