@@ -51,9 +51,10 @@ internal sealed class ShellBrokerSupervisor(string brokerExePath)
                 await _server.WaitForConnectionAsync(connectCts.Token);
                 WindowsHandleTransfer.VerifyNamedPipeClientProcess(_server.SafePipeHandle, _broker.Id);
                 _channel = new ShellBrokerChannel(_server);
-                _ = ReadLoopAsync(_channel, generation);
+                TaskCompletionSource ready = _ready;
+                _ = ReadLoopAsync(_channel, generation, ready);
                 await _channel.SendAsync($"HELLO\t{Environment.ProcessId}\t{sessionToken}", connectCts.Token);
-                await _ready.Task.WaitAsync(connectCts.Token);
+                await ready.Task.WaitAsync(connectCts.Token);
             }
             catch (Exception ex)
             {
@@ -84,6 +85,8 @@ internal sealed class ShellBrokerSupervisor(string brokerExePath)
             throw new InvalidOperationException("ShellBroker is not connected.");
         var (requestId, completion) = _pending.Begin(RequestTimeout);
         bool receivedTerminal = false;
+        bool receivedThumbnail = false;
+        bool validatedThumbnail = false;
         try
         {
             string encodedPath = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(path));
@@ -91,55 +94,54 @@ internal sealed class ShellBrokerSupervisor(string brokerExePath)
             ControlMessage response = await completion.WaitAsync(cancellationToken);
             receivedTerminal = true;
             if (response is not ShellThumbnailReady ready
-                || ready.Width is <= 0 or > 512
-                || ready.Height is <= 0 or > 512
-                || ready.PacketLength != 8L + ready.Width * ready.Height * 4L)
+                || !ShellBrokerProtocol.TryGetPixelByteCount(ready, out int pixelBytes))
                 return null;
+            receivedThumbnail = true;
             using var handle = WindowsHandleTransfer.DuplicateFileFromProcess(
                 _broker.SafeHandle, ready.FileHandle, ready.PacketLength);
             using var stream = new FileStream(handle, FileAccess.Read);
             byte[] header = new byte[8];
             stream.ReadExactly(header);
-            int width = BitConverter.ToInt32(header, 0);
-            int height = BitConverter.ToInt32(header, 4);
-            if (width != ready.Width || height != ready.Height)
+            if (!ShellBrokerProtocol.HeaderMatches(ready, header))
                 return null;
-            var bgra = new byte[checked(width * height * 4)];
+            var bgra = new byte[pixelBytes];
             stream.ReadExactly(bgra);
-            return stream.Position == stream.Length ? new NativeRasterImage(bgra, width, height) : null;
+            if (stream.Position != stream.Length)
+                return null;
+            validatedThumbnail = true;
+            return new NativeRasterImage(bgra, ready.Width, ready.Height);
         }
         finally
         {
             _pending.Cancel(requestId);
-            if (!receivedTerminal || cancellationToken.IsCancellationRequested)
+            if (!receivedTerminal
+                || cancellationToken.IsCancellationRequested
+                || (receivedThumbnail && !validatedThumbnail))
                 Stop();
             else
                 try { await (_channel?.SendAsync($"CLOSE\t{requestId}") ?? Task.CompletedTask); } catch { }
         }
     }
 
-    private async Task ReadLoopAsync(ShellBrokerChannel channel, int generation)
+    private async Task ReadLoopAsync(
+        ShellBrokerChannel channel,
+        int generation,
+        TaskCompletionSource readyCompletion)
     {
         try
         {
             while (generation == _generation && await channel.ReceiveAsync() is { } message)
             {
-                string[] parts = message.Split('\t');
-                if (parts is ["READY"]) _ready.TrySetResult();
-                else if (parts is ["THUMB", var requestId, var handleText, var lengthText, var widthText, var heightText]
-                         && long.TryParse(handleText, out long handle)
-                         && long.TryParse(lengthText, out long length)
-                         && int.TryParse(widthText, out int width)
-                         && int.TryParse(heightText, out int height))
-                    _pending.TryComplete(requestId, new ShellThumbnailReady(requestId, handle, length, width, height));
-                else if (parts.Length == 3 && parts[0] == "ERROR")
+                ControlMessage parsed = ShellBrokerProtocol.Parse(message);
+                bool accepted = parsed switch
                 {
-                    string error;
-                    try { error = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])); }
-                    catch { throw new InvalidDataException("ShellBroker returned an invalid error payload."); }
-                    _pending.TryComplete(parts[1], new PreviewError(parts[1], error));
-                }
-                else throw new InvalidDataException("ShellBroker returned an invalid control message.");
+                    ShellBrokerReady => readyCompletion.TrySetResult(),
+                    ShellThumbnailReady ready => _pending.TryComplete(ready.RequestId, ready),
+                    PreviewError error => _pending.TryComplete(error.RequestId, error),
+                    _ => false,
+                };
+                if (!accepted)
+                    throw new InvalidDataException("ShellBroker returned an unsolicited control message.");
             }
             if (generation == _generation)
             {
@@ -166,11 +168,17 @@ internal sealed class ShellBrokerSupervisor(string brokerExePath)
         }
         catch (Exception ex)
         {
-            if (generation == _generation)
+            readyCompletion.TrySetException(ex);
+            await _startLock.WaitAsync();
+            try
             {
-                _ready.TrySetException(ex);
+                if (generation != _generation)
+                    return;
                 _pending.FailAll(ex);
+                ++_generation;
+                StopCore();
             }
+            finally { _startLock.Release(); }
         }
     }
 

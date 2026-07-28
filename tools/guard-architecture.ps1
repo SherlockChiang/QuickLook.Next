@@ -910,6 +910,19 @@ if (Test-Path $shellSupervisorPath) {
         $shellSupervisorText -notmatch 'DuplicateFileFromProcess') {
         Add-Failure "The App must supervise ShellBroker with write restriction, mutual pipe identity, and App-pulled packet HANDLEs"
     }
+    if ($shellSupervisorText -notmatch 'ShellBrokerProtocol\.Parse\(message\)' -or
+        $shellSupervisorText -notmatch 'ShellBrokerProtocol\.TryGetPixelByteCount' -or
+        $shellSupervisorText -notmatch 'ShellBrokerProtocol\.HeaderMatches' -or
+        $shellSupervisorText -notmatch 'if\s*\(!accepted\)[\s\S]{0,150}unsolicited control message' -or
+        $shellSupervisorText -notmatch 'receivedThumbnail\s*&&\s*!validatedThumbnail' -or
+        $shellSupervisorText -notmatch 'ReadLoopAsync\(_channel,\s*generation,\s*ready\)' -or
+        $shellSupervisorText -notmatch 'readyCompletion\.TrySetException\(ex\)[\s\S]{0,300}_startLock\.WaitAsync\(\)[\s\S]{0,200}generation\s*!=\s*_generation[\s\S]{0,200}StopCore\(\)') {
+        Add-Failure "ShellBroker output must pass the Core protocol and packet validators or recycle the broker"
+    }
+}
+$shellProtocolPath = Join-Path $Root "src/QuickLook.Next.Core/ShellBrokerProtocol.cs"
+if (-not (Test-Path -LiteralPath $shellProtocolPath)) {
+    Add-Failure "ShellBroker response parsing must remain in a testable Core boundary"
 }
 $mainWindowShellPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 if (Test-Path $mainWindowShellPath) {

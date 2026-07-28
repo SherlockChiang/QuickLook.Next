@@ -87,6 +87,16 @@ Require-Pattern $shellBrokerIntegration 'Abrupt_pipe_disconnect_releases_active_
     "ShellBroker disconnects must release the broker-owned packet while preserving the App copy."
 Require-Pattern $shellBrokerIntegration 'Invalid_message_after_handoff_exits_and_cleans_packet_directory[\s\S]*SendAsync\("UNKNOWN"\)[\s\S]*Host\.WaitForExitAsync[\s\S]*Assert\.False\(Directory\.Exists\(packetDirectory\)\)' `
     "ShellBroker protocol failures after publication must clean the active packet directory."
+$shellBrokerProtocol = Join-Path $Root "src/QuickLook.Next.Core/ShellBrokerProtocol.cs"
+Require-Pattern $shellBrokerProtocol 'MaxDimension\s*=\s*512' `
+    "ShellBroker output dimensions must remain capped at 512 pixels."
+Require-Pattern $shellBrokerProtocol 'MaxErrorUtf8Bytes\s*=\s*4096[\s\S]*payload\.Length[\s\S]*Convert\.FromBase64String' `
+    "ShellBroker errors must reject oversized Base64 before decoding."
+Require-Pattern $shellBrokerProtocol 'StrictUtf8\s*=\s*new\(false,\s*true\)[\s\S]*CultureInfo\.InvariantCulture[\s\S]*ready\.PacketLength\s*!=\s*8\s*\+\s*bytes' `
+    "ShellBroker output parsing must retain strict UTF-8, invariant numbers, and exact packet lengths."
+$shellBrokerProtocolTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/ShellBrokerProtocolTests.cs"
+Require-Pattern $shellBrokerProtocolTests 'Rejects_malformed_control_messages[\s\S]*Rejects_non_utf8_and_oversized_error_payloads[\s\S]*Validates_thumbnail_dimensions_and_checked_packet_length[\s\S]*Header_validation_requires_matching_little_endian_dimensions' `
+    "ShellBroker protocol tests must retain malformed control, error, metadata, and header coverage."
 $idleTrimmer = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
 Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=\s+50\s+and\s+<=\s+15_000' `
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."

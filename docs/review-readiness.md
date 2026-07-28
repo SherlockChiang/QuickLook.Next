@@ -101,6 +101,10 @@ left visible instead of hidden behind vague TODOs.
 - ShellBroker thumbnail handoffs release their broker-owned HANDLE and packet directory on explicit
   `CLOSE` and on abrupt pipe EOF. Channel teardown tolerates the expected broken-pipe flush while the
   independently duplicated App HANDLE remains readable.
+- ShellBroker responses cross a testable Core parser before reaching App state. Request IDs, invariant
+  numeric fields, 512-pixel dimensions, exact BGRA packet lengths, strict UTF-8 errors, and packet
+  headers are validated; malformed control output or a bad packet recycles the broker instead of
+  leaving an untrusted connection available for another request.
 - Folder navigation and listing icon work use the active preview cancellation
   token/generation guard so stale results do not merge into a later preview.
 - Autostart now prefers HKCU Run, uses Startup-folder shortcuts only as a
