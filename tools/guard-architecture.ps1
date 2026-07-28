@@ -41,18 +41,47 @@ function Get-SourceFiles {
         Where-Object { (Get-RelativePath $_.FullName) -ne "tools/guard-architecture.ps1" }
 }
 
-# Governance documents must remain explicit while project license selection is still pending.
+# Governance documents and license metadata must remain explicit.
+$licensePath = Join-Path $Root "LICENSE"
 $securityPolicyPath = Join-Path $Root "SECURITY.md"
 $contributingPath = Join-Path $Root "CONTRIBUTING.md"
 $readmePath = Join-Path $Root "README.md"
 $readmeChinesePath = Join-Path $Root "README_CN.md"
-if (-not (Test-Path -LiteralPath $securityPolicyPath) -or
+if (-not (Test-Path -LiteralPath $licensePath) -or
+    -not (Test-Path -LiteralPath $securityPolicyPath) -or
     -not (Test-Path -LiteralPath $contributingPath)) {
-    Add-Failure "SECURITY.md and CONTRIBUTING.md must be present before public contribution work"
+    Add-Failure "LICENSE, SECURITY.md, and CONTRIBUTING.md must be present"
 }
 else {
+    $license = Get-Content -LiteralPath $licensePath -Raw
     $securityPolicy = Get-Content -LiteralPath $securityPolicyPath -Raw
     $contributing = Get-Content -LiteralPath $contributingPath -Raw
+    $expectedMitLicense = @'
+MIT License
+
+Copyright (c) 2026 SherlockChiang
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'@
+    if ($license.Replace("`r`n", "`n").TrimEnd() -cne $expectedMitLicense.Replace("`r`n", "`n").TrimEnd()) {
+        Add-Failure "LICENSE must retain the standard MIT grant, warranty disclaimer, and copyright holder"
+    }
     if ($securityPolicy -notmatch '## Reporting A Vulnerability' -or
         $securityPolicy -notmatch '## Disclosure And Response' -or
         $securityPolicy -notmatch 'report security problems privately' -or
@@ -62,13 +91,13 @@ else {
         Add-Failure "Security policy must retain private reporting and sensitive-sample guidance"
     }
     if ($contributing -notmatch '## Current Contribution Status' -or
-        $contributing -notmatch 'Do not submit code' -or
-        $contributing -notmatch 'assets, translations, or other copyrightable changes' -or
-        $contributing -notmatch 'outbound license' -or
-        $contributing -notmatch 'inbound contribution' -or
+        $contributing -notmatch '\[MIT License\]\(LICENSE\)' -or
+        $contributing -notmatch 'contribution is provided under the project''s MIT License' -or
+        $contributing -notmatch 'right to submit it' -or
+        $contributing -notmatch 'terms are compatible with MIT distribution' -or
         $contributing -notmatch '## Engineering Expectations' -or
         $contributing -notmatch '## Pull Requests') {
-        Add-Failure "Contribution policy must retain contribution-status, architecture, and rights boundaries"
+        Add-Failure "Contribution policy must retain MIT inbound terms, architecture, and submission-rights boundaries"
     }
 }
 foreach ($projectReadme in @($readmePath, $readmeChinesePath)) {
@@ -77,10 +106,21 @@ foreach ($projectReadme in @($readmePath, $readmeChinesePath)) {
         continue
     }
     $readmeText = Get-Content -LiteralPath $projectReadme -Raw
-    if ($readmeText -notmatch '\[`?SECURITY\.md`?\]\(SECURITY\.md\)' -or
+    if ($readmeText -notmatch '\[MIT License\]\(LICENSE\)' -or
+        $readmeText -notmatch '\[`?SECURITY\.md`?\]\(SECURITY\.md\)' -or
         $readmeText -notmatch '\[`?CONTRIBUTING\.md`?\]\(CONTRIBUTING\.md\)') {
-        Add-Failure "Project READMEs must link the security and contribution policies: $projectReadme"
+        Add-Failure "Project READMEs must link the MIT license, security policy, and contribution policy: $projectReadme"
     }
+}
+$directoryBuildProps = Get-Content -LiteralPath (Join-Path $Root "Directory.Build.props") -Raw
+$cargoManifest = Get-Content -LiteralPath (Join-Path $Root "native/quicklook_next_native/Cargo.toml") -Raw
+$websitePackage = Get-Content -LiteralPath (Join-Path $Root "website/package.json") -Raw
+$websitePackageLock = Get-Content -LiteralPath (Join-Path $Root "website/package-lock.json") -Raw
+if ($directoryBuildProps -notmatch '<PackageLicenseExpression>MIT</PackageLicenseExpression>' -or
+    $cargoManifest -notmatch '(?m)^license\s*=\s*"MIT"\s*$' -or
+    $websitePackage -notmatch '"license"\s*:\s*"MIT"' -or
+    $websitePackageLock -notmatch '"name"\s*:\s*"quicklook-next-website"[\s\S]{0,200}"license"\s*:\s*"MIT"') {
+    Add-Failure "Project package metadata must consistently declare MIT"
 }
 
 Write-Host "== architecture guard ==" -ForegroundColor Cyan

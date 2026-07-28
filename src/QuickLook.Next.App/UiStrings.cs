@@ -111,7 +111,7 @@ internal static class UiStrings
     public static string SettingsHelpShortcuts => Get(nameof(SettingsHelpShortcuts), "Help and shortcuts");
     public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
     public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
-    public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "The project has not yet published a formal software license. See the repository for the current terms and source history.");
+    public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "QuickLook Next's original source code and assets are licensed under the MIT License. Third-party components retain their respective licenses and notices.");
     public static string SettingsDiagnostics => Get(nameof(SettingsDiagnostics), "Diagnostics");
     public static string SettingsDiagnosticsDescription => Get(nameof(SettingsDiagnosticsDescription), "Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.");
     public static string SettingsCreateDiagnostics => Get(nameof(SettingsCreateDiagnostics), "Create diagnostics bundle");

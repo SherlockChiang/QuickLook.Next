@@ -115,6 +115,7 @@ foreach ($name in @(
     "QuickLook.Next.ShellBroker.runtimeconfig.json")) {
     Copy-Item -LiteralPath (Join-Path $shellBrokerOutput $name) -Destination $dist -Force
 }
+Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $dist -Force
 
 Write-Host "== pruning unused optional runtime payloads ==" -ForegroundColor Cyan
 $optionalPayloadPatterns = @(

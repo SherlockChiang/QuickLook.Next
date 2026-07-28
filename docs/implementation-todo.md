@@ -6,6 +6,9 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P0: Immediate safety and usability
 
+- [ ] Generate and ship complete third-party license notices for bundled .NET, Windows App SDK, and
+  statically linked Rust dependencies before the next public release. The root MIT License covers
+  QuickLook Next's original work and does not replace dependency licenses or required notices.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
@@ -32,9 +35,6 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Split the native preview implementation by format family.
 - [ ] Add App policy tests, fuzzing, ETW/WPA baselines, and long-cycle resource
   regression tests.
-- [ ] Publish a project LICENSE and owner-approved inbound contribution terms before ecosystem work.
-  `SECURITY.md` and `CONTRIBUTING.md` are now present, but code/asset/translation submissions remain
-  paused until both outbound and inbound rights are explicit owner decisions.
 - [ ] Design any future extension SDK as signed, bounded, out-of-process, and
   denied network access by default.
 
@@ -42,10 +42,13 @@ and commit so changes remain independently reviewable and revertible.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Publish the project under the MIT License with `SherlockChiang` as the copyright holder, add
+  MIT metadata for .NET, Rust, and the website package, and accept inbound contributions under the
+  same MIT terms while requiring contributors to have the rights to submitted code and assets.
+
 - [x] Publish `SECURITY.md` and `CONTRIBUTING.md` with private vulnerability reporting, sensitive
   sample handling, supported-version scope, pinned-toolchain setup, locked verification commands,
-  architectural expectations, dependency policy, and future pull-request requirements. The policy
-  does not invite copyrightable submissions before owner-approved license and inbound terms exist.
+  architectural expectations, dependency policy, and pull-request requirements.
 
 - [x] Add explicit cloud hydration with localized consent, throttled byte/percentage progress,
   preview-generation cancellation, a 45-second open/read timeout, and a 256 MiB application-read

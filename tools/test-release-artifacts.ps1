@@ -23,10 +23,10 @@ try {
     $entryNames = @($entries.FullName | ForEach-Object { $_.Replace('\', '/') })
     $msixEntries = @($entries | Where-Object { $_.FullName -like '*.msix' })
     if ($msixEntries.Count -ne 1) { throw "Installer must contain exactly one MSIX; found $($msixEntries.Count)." }
-    foreach ($required in @('Install.ps1', 'Install.cmd', 'Install-ZH-CN.cmd', 'QuickLook.Next-Release.cer', 'README.txt')) {
+    foreach ($required in @('Install.ps1', 'Install.cmd', 'Install-ZH-CN.cmd', 'QuickLook.Next-Release.cer', 'README.txt', 'LICENSE')) {
         if ($entryNames -notcontains $required) { throw "Installer is missing $required." }
     }
-    if ($entryNames.Count -ne 6) { throw "Installer contains unexpected files: $($entryNames -join ', ')." }
+    if ($entryNames.Count -ne 7) { throw "Installer contains unexpected files: $($entryNames -join ', ')." }
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("quicklook-release-artifacts-" + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($tempRoot) | Out-Null

@@ -11,6 +11,7 @@ $requiredPatterns = @(
     @('dotnet\s+@buildArgs[\s\S]{0,200}\$LASTEXITCODE\s+-ne\s+0', ".NET build failures must stop release packaging."),
     @('if\s*\(-not\s+\$SkipBuild\)[\s\S]*cargo\s+build[\s\S]*dotnet\s+@buildArgs', "Release build work must be skippable after authoritative tests."),
     @('\$requiredOutputs[\s\S]*QuickLook\.Next\.App\.exe[\s\S]*QuickLook\.Next\.RasterHost\.exe[\s\S]*QuickLook\.Next\.ParserHost\.exe[\s\S]*QuickLook\.Next\.ShellBroker\.exe', "No-build packaging must require all release executables."),
+    @('Copy-Item\s+-LiteralPath\s+\(Join-Path\s+\$root\s+"LICENSE"\)\s+-Destination\s+\$dist', "Release packages must include the project license."),
     @('tested-release-build\.json[\s\S]*versionPrefix[\s\S]*proof\.commit[\s\S]*Get-FileHash', "No-build packaging must verify the tested version, commit, and output hashes."),
     @('if\s*\(-not\s+\$SkipArchive\)', "MSIX staging must be able to skip the unused raw release archive."),
     @('Test-Path\s+-LiteralPath\s+\$src\s+-PathType\s+Container', "Dist assembly must reject missing build output directories."),

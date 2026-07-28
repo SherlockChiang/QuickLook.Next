@@ -138,7 +138,7 @@ dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 - `QuickLook.Next.RasterHost`: isolated image, PDF, and system-codec rendering through shared GPU surfaces.
 - App/host IPC uses authenticated current-user-only named pipes with cancellation and stale-result guards.
 
-CI is configured for owner-authorized or future pull requests; the current submission status is defined in [`CONTRIBUTING.md`](CONTRIBUTING.md). A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
+Pull requests run CI; contribution and verification requirements are defined in [`CONTRIBUTING.md`](CONTRIBUTING.md). A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
 
 See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries and verification details.
 
@@ -150,4 +150,5 @@ Do not file a public issue for an undisclosed vulnerability. Follow [`SECURITY.m
 
 ## License
 
-A project license has not yet been published. Source availability does not grant redistribution or modification rights beyond applicable law.
+QuickLook Next's original source code and assets are available under the [MIT License](LICENSE).
+Bundled third-party components remain subject to their respective licenses and notices.

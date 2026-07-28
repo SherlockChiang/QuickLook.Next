@@ -144,6 +144,7 @@ Copy-Item -LiteralPath $installScript -Destination $installerRoot
 Get-ChildItem -LiteralPath (Join-Path $root "packaging") -Filter "*.cmd" |
     Copy-Item -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $root "packaging\README.txt") -Destination $installerRoot
+Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $installerRoot
 
 $installerPath = Join-Path $artifacts $installerName
 Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue

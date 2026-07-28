@@ -2,20 +2,13 @@
 
 ## Current Contribution Status
 
-The project has not yet published an outbound license or owner-approved inbound contribution terms
-such as a CLA or DCO. Source availability does not by itself grant permission to prepare derivative
-works, and the repository has not established the rights needed to accept, modify, and distribute
-third-party code submissions.
+QuickLook Next is licensed under the [MIT License](LICENSE). Bug reports, feature requests, design
+discussion, documentation, translations, tests, and focused code contributions are welcome.
 
-For now, please limit public participation to bug reports, feature requests, design discussion, and
-documentation feedback that does not include a patch or replacement project text. Do not submit code,
-assets, translations, or other copyrightable changes until the owner publishes both project license
-terms and an inbound contribution policy. Do not add or replace a project license without explicit
-owner approval.
-
-The remaining sections document the engineering process that will apply after contribution terms are
-published and are also useful to maintainers working in an authorized checkout. They are not a grant
-of permission to modify or redistribute the project.
+By submitting a contribution, you represent that you have the right to submit it and agree that your
+contribution is provided under the project's MIT License. Do not submit third-party code, assets,
+samples, or translations unless their terms are compatible with MIT distribution and you preserve
+all required notices. A contribution does not transfer ownership of your copyright.
 
 ## Development Environment
 
@@ -73,7 +66,7 @@ changes. Keep GitHub Actions pinned to immutable commit SHAs.
 
 ## Pull Requests
 
-After the owner publishes contribution terms, a pull request should include:
+A pull request should include:
 
 - The user-visible or security problem being solved.
 - The relevant trust, ownership, cancellation, and resource-limit decisions.

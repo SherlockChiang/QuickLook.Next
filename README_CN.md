@@ -138,7 +138,7 @@ dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 - `QuickLook.Next.RasterHost`：通过共享 GPU 表面隔离处理图片、PDF 和系统解码器渲染。
 - App 与 Host 使用仅限当前用户、经过认证的命名管道，并通过取消和过期结果守卫确保请求隔离。
 
-CI 已为所有者授权或未来的 Pull Request 配置；当前提交状态以 [`CONTRIBUTING.md`](CONTRIBUTING.md) 为准。经过本地完整验证、标题以 `release:` 开头的提交会运行稳定版打包工作流。发布资产包含签名安装包、校验值、Release 元数据、更新元数据、构建清单和 SBOM。
+Pull Request 会运行 CI；贡献和验证要求参见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。经过本地完整验证、标题以 `release:` 开头的提交会运行稳定版打包工作流。发布资产包含签名安装包、校验值、Release 元数据、更新元数据、构建清单和 SBOM。
 
 工程边界和验证详情参见 [`docs/review-readiness.md`](docs/review-readiness.md)。
 
@@ -150,4 +150,4 @@ CI 已为所有者授权或未来的 Pull Request 配置；当前提交状态以
 
 ## 许可证
 
-项目尚未发布正式许可证。源码公开并不自动授予适用法律之外的再分发或修改权。
+QuickLook Next 的原创源代码和资产采用 [MIT License](LICENSE)。随附的第三方组件仍适用其各自的许可证和声明。
