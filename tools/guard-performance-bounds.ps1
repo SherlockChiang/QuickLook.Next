@@ -78,6 +78,11 @@ Require-Pattern $parserHostIntegration 'Repeated_parent_bound_package_heroes_rel
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
+$shellBrokerIntegration = Join-Path $Root "tests/QuickLook.Next.ShellBroker.IntegrationTests/ShellBrokerIntegrationTests.cs"
+Require-Pattern $shellBrokerIntegration 'Repeated_handoffs_do_not_leak_handles_or_packet_directories[\s\S]*warmupCycles\s*=\s*8[\s\S]*cycles\s*=\s*32[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*Assert\.Empty\(Directory\.EnumerateDirectories' `
+    "ShellBroker must retain warmed repeated-HANDLE and packet-directory resource bounds."
+Require-Pattern $shellBrokerIntegration 'ExecuteHandoffAsync[\s\S]*DuplicateFileFromProcess[\s\S]*CLOSE\\t\{requestId\}[\s\S]*!Directory\.Exists' `
+    "Every measured ShellBroker handoff must copy, close, and clean its broker-owned packet."
 $idleTrimmer = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
 Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=\s+50\s+and\s+<=\s+15_000' `
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."

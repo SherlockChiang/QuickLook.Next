@@ -874,6 +874,28 @@ if (Test-Path $shellBrokerRoot) {
 else {
     Add-Failure "Shell thumbnail compatibility must remain isolated in QuickLook.Next.ShellBroker"
 }
+$shellBrokerTestsPath = Join-Path $Root "tests/QuickLook.Next.ShellBroker.IntegrationTests/ShellBrokerIntegrationTests.cs"
+$shellBrokerTestsProject = Join-Path $Root "tests/QuickLook.Next.ShellBroker.IntegrationTests/QuickLook.Next.ShellBroker.IntegrationTests.csproj"
+if (-not (Test-Path -LiteralPath $shellBrokerTestsPath) -or
+    -not (Test-Path -LiteralPath $shellBrokerTestsProject)) {
+    Add-Failure "ShellBroker must retain a dedicated integration test project"
+}
+else {
+    $shellBrokerTests = Get-Content -LiteralPath $shellBrokerTestsPath -Raw
+    if ($shellBrokerTests -notmatch 'Host_rejects_bad_session_token' -or
+        $shellBrokerTests -notmatch 'Host_rejects_control_message_before_authentication' -or
+        $shellBrokerTests -notmatch 'Host_rejects_wrong_pipe_server_process_id' -or
+        $shellBrokerTests -notmatch 'DuplicateFileFromProcess' -or
+        $shellBrokerTests -notmatch 'CLOSE\\t\{requestId\}' -or
+        $shellBrokerTests -notmatch 'Second_open_is_rejected_until_first_handoff_closes' -or
+        $shellBrokerTests -notmatch 'Repeated_handoffs_do_not_leak_handles_or_packet_directories') {
+        Add-Failure "ShellBroker integration tests must retain authentication, App-pulled HANDLE, close, single-request exclusivity, and resource coverage"
+    }
+    $solutionText = Get-Content -LiteralPath $solutionPath -Raw
+    if ($solutionText -notmatch 'QuickLook\.Next\.ShellBroker\.IntegrationTests\.csproj') {
+        Add-Failure "ShellBroker integration tests must remain in the solution"
+    }
+}
 $shellSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/ShellBrokerSupervisor.cs"
 if (Test-Path $shellSupervisorPath) {
     $shellSupervisorText = Get-Content -LiteralPath $shellSupervisorPath -Raw
