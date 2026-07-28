@@ -647,15 +647,23 @@ fn add_entry(listing: &mut RarListing, entry: RarListingEntry) -> Result<(), Rar
 
 fn decode_rar4_name(raw_name: &[u8], unicode: bool) -> String {
     if !unicode {
-        return String::from_utf8_lossy(raw_name).into_owned();
+        return decode_rar4_legacy_name(raw_name);
     }
     let Some(separator) = raw_name.iter().position(|byte| *byte == 0) else {
-        return String::from_utf8_lossy(raw_name).into_owned();
+        return decode_rar4_legacy_name(raw_name);
     };
     let ansi_name = &raw_name[..separator];
     let encoded = &raw_name[separator + 1..];
     decode_rar4_unicode(ansi_name, encoded)
-        .unwrap_or_else(|| String::from_utf8_lossy(ansi_name).into_owned())
+        .filter(|decoded| !decoded.is_empty() || ansi_name.is_empty())
+        .unwrap_or_else(|| decode_rar4_legacy_name(ansi_name))
+}
+
+fn decode_rar4_legacy_name(raw_name: &[u8]) -> String {
+    match std::str::from_utf8(raw_name) {
+        Ok(name) => name.to_owned(),
+        Err(_) => encoding_rs::WINDOWS_1252.decode(raw_name).0.into_owned(),
+    }
 }
 
 fn decode_rar4_unicode(ansi_name: &[u8], encoded: &[u8]) -> Option<String> {
@@ -960,6 +968,22 @@ mod tests {
             decode_rar4_unicode(b"file", &[0x4e, 0xc0, 0x02]).as_deref(),
             Some("file")
         );
+    }
+
+    #[test]
+    fn lists_rar4_legacy_windows_1252_name_without_replacement_characters() {
+        let mut archive = RAR4_SIGNATURE.to_vec();
+        archive.extend(rar4_main(0));
+        archive.extend(rar4_file(0, b"caf\xe9/price\x80.txt", 0, 5, 0));
+        archive.extend(rar4_end(0));
+
+        let listing = scan_bytes(&archive).expect("legacy RAR4 listing");
+        assert_eq!(listing.entries[0].path, "café/price€.txt");
+        assert!(!listing.entries[0].path.contains('\u{fffd}'));
+        assert!(!listing.is_partial);
+
+        assert_eq!(decode_rar4_name(b"caf\xe9\0broken", true), "café");
+        assert_eq!(decode_rar4_name(b"safe.txt\0\0", true), "safe.txt");
     }
 
     #[test]

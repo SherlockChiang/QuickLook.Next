@@ -53,6 +53,8 @@ left visible instead of hidden behind vague TODOs.
     2 MiB per-header, 10,000-header, four-second, and 5,000 represented-item bounds. It performs
     checked `u64` seeks; caps normalized paths at 1,024 UTF-8 bytes/128 components and aggregate
     represented path strings at 2 MiB; never decompresses payloads; and publishes a browse-only listing.
+    RAR4 legacy names preserve valid UTF-8 and use a deterministic Windows-1252 fallback when the
+    byte sequence is not UTF-8; the same fallback applies when the optional Unicode name tail is unusable.
     ZIP entry extraction retains 64 MiB compressed/uncompressed caps, a 1,000:1 expansion-ratio
     cap, and a four-second deadline; RAR entry extraction fails closed.
   - Ebook HANDLE inputs are capped at 256 MiB. EPUB processing limits central-directory work to
