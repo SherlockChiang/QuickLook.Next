@@ -110,7 +110,7 @@ Get-Content "$($zip.FullName).sha256"
 
 ### 反馈问题
 
-请[创建 Issue](https://github.com/SherlockChiang/QuickLook.Next/issues)，说明 Windows 和 QuickLook Next 版本、文件类型和大致大小、预期与实际结果、复现步骤及相关日志。请勿上传隐私文件。
+请[创建 Issue](https://github.com/SherlockChiang/QuickLook.Next/issues)，说明 Windows 和 QuickLook Next 版本、文件类型和大致大小、预期与实际结果、复现步骤及相关日志。请勿上传隐私文件。当前贡献状态和维护者工程流程参见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 <details>
 <summary><strong>从源码构建</strong></summary>
@@ -138,7 +138,7 @@ dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 - `QuickLook.Next.RasterHost`：通过共享 GPU 表面隔离处理图片、PDF 和系统解码器渲染。
 - App 与 Host 使用仅限当前用户、经过认证的命名管道，并通过取消和过期结果守卫确保请求隔离。
 
-Pull Request 会运行 CI。经过本地完整验证、标题以 `release:` 开头的提交会运行稳定版打包工作流。发布资产包含签名安装包、校验值、Release 元数据、更新元数据、构建清单和 SBOM。
+CI 已为所有者授权或未来的 Pull Request 配置；当前提交状态以 [`CONTRIBUTING.md`](CONTRIBUTING.md) 为准。经过本地完整验证、标题以 `release:` 开头的提交会运行稳定版打包工作流。发布资产包含签名安装包、校验值、Release 元数据、更新元数据、构建清单和 SBOM。
 
 工程边界和验证详情参见 [`docs/review-readiness.md`](docs/review-readiness.md)。
 
@@ -146,7 +146,7 @@ Pull Request 会运行 CI。经过本地完整验证、标题以 `release:` 开�
 
 ## 安全问题
 
-请勿通过公开 Issue 披露尚未修复的安全漏洞。在私有安全策略发布前，请通过仓库所有者的 GitHub 主页联系，并只提供最小描述，不要发送敏感样本文件。
+请勿通过公开 Issue 披露尚未修复的安全漏洞。私密报告流程和敏感样本处理要求参见 [`SECURITY.md`](SECURITY.md)。
 
 ## 许可证
 

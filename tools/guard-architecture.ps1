@@ -41,6 +41,48 @@ function Get-SourceFiles {
         Where-Object { (Get-RelativePath $_.FullName) -ne "tools/guard-architecture.ps1" }
 }
 
+# Governance documents must remain explicit while project license selection is still pending.
+$securityPolicyPath = Join-Path $Root "SECURITY.md"
+$contributingPath = Join-Path $Root "CONTRIBUTING.md"
+$readmePath = Join-Path $Root "README.md"
+$readmeChinesePath = Join-Path $Root "README_CN.md"
+if (-not (Test-Path -LiteralPath $securityPolicyPath) -or
+    -not (Test-Path -LiteralPath $contributingPath)) {
+    Add-Failure "SECURITY.md and CONTRIBUTING.md must be present before public contribution work"
+}
+else {
+    $securityPolicy = Get-Content -LiteralPath $securityPolicyPath -Raw
+    $contributing = Get-Content -LiteralPath $contributingPath -Raw
+    if ($securityPolicy -notmatch '## Reporting A Vulnerability' -or
+        $securityPolicy -notmatch '## Disclosure And Response' -or
+        $securityPolicy -notmatch 'report security problems privately' -or
+        $securityPolicy -notmatch 'Do not open a public issue' -or
+        $securityPolicy -notmatch '90 days' -or
+        $securityPolicy -notmatch 'signing keys') {
+        Add-Failure "Security policy must retain private reporting and sensitive-sample guidance"
+    }
+    if ($contributing -notmatch '## Current Contribution Status' -or
+        $contributing -notmatch 'Do not submit code' -or
+        $contributing -notmatch 'assets, translations, or other copyrightable changes' -or
+        $contributing -notmatch 'outbound license' -or
+        $contributing -notmatch 'inbound contribution' -or
+        $contributing -notmatch '## Engineering Expectations' -or
+        $contributing -notmatch '## Pull Requests') {
+        Add-Failure "Contribution policy must retain contribution-status, architecture, and rights boundaries"
+    }
+}
+foreach ($projectReadme in @($readmePath, $readmeChinesePath)) {
+    if (-not (Test-Path -LiteralPath $projectReadme)) {
+        Add-Failure "Missing project README: $projectReadme"
+        continue
+    }
+    $readmeText = Get-Content -LiteralPath $projectReadme -Raw
+    if ($readmeText -notmatch '\[`?SECURITY\.md`?\]\(SECURITY\.md\)' -or
+        $readmeText -notmatch '\[`?CONTRIBUTING\.md`?\]\(CONTRIBUTING\.md\)') {
+        Add-Failure "Project READMEs must link the security and contribution policies: $projectReadme"
+    }
+}
+
 Write-Host "== architecture guard ==" -ForegroundColor Cyan
 Write-Host "root: $Root"
 

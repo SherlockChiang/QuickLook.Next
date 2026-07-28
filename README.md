@@ -110,7 +110,7 @@ The package includes the required Windows App SDK runtime components. Optional i
 
 ### Report a problem
 
-[Open an issue](https://github.com/SherlockChiang/QuickLook.Next/issues) with your Windows and QuickLook Next versions, file type and approximate size, expected and actual behavior, reproduction steps, and relevant logs. Do not upload private sample files.
+[Open an issue](https://github.com/SherlockChiang/QuickLook.Next/issues) with your Windows and QuickLook Next versions, file type and approximate size, expected and actual behavior, reproduction steps, and relevant logs. Do not upload private sample files. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the current contribution status and maintainer engineering process.
 
 <details>
 <summary><strong>Build from source</strong></summary>
@@ -138,7 +138,7 @@ dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
 - `QuickLook.Next.RasterHost`: isolated image, PDF, and system-codec rendering through shared GPU surfaces.
 - App/host IPC uses authenticated current-user-only named pipes with cancellation and stale-result guards.
 
-Pull requests run CI. A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
+CI is configured for owner-authorized or future pull requests; the current submission status is defined in [`CONTRIBUTING.md`](CONTRIBUTING.md). A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
 
 See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries and verification details.
 
@@ -146,7 +146,7 @@ See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering bound
 
 ## Security
 
-Do not file a public issue for an undisclosed vulnerability. Until a private security policy is available, contact the repository owner through their GitHub profile with a minimal description and no sensitive sample files.
+Do not file a public issue for an undisclosed vulnerability. Follow [`SECURITY.md`](SECURITY.md) for private reporting and sensitive-sample handling.
 
 ## License
 

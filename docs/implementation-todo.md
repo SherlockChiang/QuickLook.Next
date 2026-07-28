@@ -32,13 +32,20 @@ and commit so changes remain independently reviewable and revertible.
 - [ ] Split the native preview implementation by format family.
 - [ ] Add App policy tests, fuzzing, ETW/WPA baselines, and long-cycle resource
   regression tests.
-- [ ] Publish LICENSE, SECURITY.md, and CONTRIBUTING.md before ecosystem work.
+- [ ] Publish a project LICENSE and owner-approved inbound contribution terms before ecosystem work.
+  `SECURITY.md` and `CONTRIBUTING.md` are now present, but code/asset/translation submissions remain
+  paused until both outbound and inbound rights are explicit owner decisions.
 - [ ] Design any future extension SDK as signed, bounded, out-of-process, and
   denied network access by default.
 
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Publish `SECURITY.md` and `CONTRIBUTING.md` with private vulnerability reporting, sensitive
+  sample handling, supported-version scope, pinned-toolchain setup, locked verification commands,
+  architectural expectations, dependency policy, and future pull-request requirements. The policy
+  does not invite copyrightable submissions before owner-approved license and inbound terms exist.
 
 - [x] Add explicit cloud hydration with localized consent, throttled byte/percentage progress,
   preview-generation cancellation, a 45-second open/read timeout, and a 256 MiB application-read
