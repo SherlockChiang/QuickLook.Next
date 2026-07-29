@@ -196,6 +196,16 @@
   <data name="SettingsProjectSource" xml:space="preserve"><value>QuickLook Next is an open-source project developed on GitHub. Builds published by this project originate from the repository below.</value></data>
   <data name="SettingsOpenGitHub" xml:space="preserve"><value>Open GitHub project</value></data>
   <data name="SettingsViewReleases" xml:space="preserve"><value>View releases</value></data>
+  <data name="SettingsCheckForUpdates" xml:space="preserve"><value>Check for updates</value></data>
+  <data name="SettingsCheckingForUpdates" xml:space="preserve"><value>Checking for updates...</value></data>
+  <data name="UpdateAvailableTitle" xml:space="preserve"><value>Update available</value></data>
+  <data name="UpdateAvailableMessageFormat" xml:space="preserve"><value>QuickLook Next {0} is available. You are using {1}. Use View releases to download it.</value></data>
+  <data name="UpdateUpToDateTitle" xml:space="preserve"><value>You're up to date</value></data>
+  <data name="UpdateUpToDateMessage" xml:space="preserve"><value>You're using the latest stable version.</value></data>
+  <data name="UpdateNewerBuildTitle" xml:space="preserve"><value>Development or newer build</value></data>
+  <data name="UpdateNewerBuildMessage" xml:space="preserve"><value>This build is newer than the latest stable release.</value></data>
+  <data name="UpdateCheckFailedTitle" xml:space="preserve"><value>Couldn't check for updates</value></data>
+  <data name="UpdateCheckFailedMessage" xml:space="preserve"><value>Check your internet connection and try again.</value></data>
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>QuickLook Next's original source code and assets are licensed under the MIT License. Third-party components retain their respective licenses and notices.</value></data>
   <data name="SettingsDiagnostics" xml:space="preserve"><value>Diagnostics</value></data>
   <data name="SettingsDiagnosticsDescription" xml:space="preserve"><value>Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.</value></data>

@@ -193,7 +193,12 @@
                                 <Button x:Name="ReleasesButton" Click="OnReleasesClick">
                                     <TextBlock x:Name="ReleasesButtonText" />
                                 </Button>
+                                <Button x:Name="CheckUpdatesButton" Click="OnCheckUpdatesClick">
+                                    <TextBlock x:Name="CheckUpdatesButtonText" />
+                                </Button>
                             </StackPanel>
+                            <InfoBar x:Name="UpdateInfo" IsOpen="False" IsClosable="True"
+                                     AutomationProperties.LiveSetting="Polite" />
                             <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                             <StackPanel Spacing="5">
                                 <TextBlock x:Name="DiagnosticsTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />

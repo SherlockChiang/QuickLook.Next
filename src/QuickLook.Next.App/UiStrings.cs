@@ -111,6 +111,16 @@ internal static class UiStrings
     public static string SettingsHelpShortcuts => Get(nameof(SettingsHelpShortcuts), "Help and shortcuts");
     public static string SettingsOpenGitHub => Get(nameof(SettingsOpenGitHub), "Open GitHub project");
     public static string SettingsViewReleases => Get(nameof(SettingsViewReleases), "View releases");
+    public static string SettingsCheckForUpdates => Get(nameof(SettingsCheckForUpdates), "Check for updates");
+    public static string SettingsCheckingForUpdates => Get(nameof(SettingsCheckingForUpdates), "Checking for updates...");
+    public static string UpdateAvailableTitle => Get(nameof(UpdateAvailableTitle), "Update available");
+    public static string UpdateAvailableMessageFormat => Get(nameof(UpdateAvailableMessageFormat), "QuickLook Next {0} is available. You are using {1}. Use View releases to download it.");
+    public static string UpdateUpToDateTitle => Get(nameof(UpdateUpToDateTitle), "You're up to date");
+    public static string UpdateUpToDateMessage => Get(nameof(UpdateUpToDateMessage), "You're using the latest stable version.");
+    public static string UpdateNewerBuildTitle => Get(nameof(UpdateNewerBuildTitle), "Development or newer build");
+    public static string UpdateNewerBuildMessage => Get(nameof(UpdateNewerBuildMessage), "This build is newer than the latest stable release.");
+    public static string UpdateCheckFailedTitle => Get(nameof(UpdateCheckFailedTitle), "Couldn't check for updates");
+    public static string UpdateCheckFailedMessage => Get(nameof(UpdateCheckFailedMessage), "Check your internet connection and try again.");
     public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "QuickLook Next's original source code and assets are licensed under the MIT License. Third-party components retain their respective licenses and notices.");
     public static string SettingsDiagnostics => Get(nameof(SettingsDiagnostics), "Diagnostics");
     public static string SettingsDiagnosticsDescription => Get(nameof(SettingsDiagnosticsDescription), "Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.");

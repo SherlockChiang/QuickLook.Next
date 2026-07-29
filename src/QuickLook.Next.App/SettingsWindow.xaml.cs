@@ -21,6 +21,7 @@ public sealed partial class SettingsWindow : Window
     private bool _initializing = true;
     private bool _resizePending;
     private bool _diagnosticsBusy;
+    private bool _updateCheckBusy;
 
     public SettingsWindow(Func<string> resolveIconPath, Action settingsChanged)
     {
@@ -101,6 +102,7 @@ public sealed partial class SettingsWindow : Window
         HelpButtonText.Text = UiStrings.SettingsHelpShortcuts;
         GitHubButtonText.Text = UiStrings.SettingsOpenGitHub;
         ReleasesButtonText.Text = UiStrings.SettingsViewReleases;
+        CheckUpdatesButtonText.Text = UiStrings.SettingsCheckForUpdates;
         DiagnosticsTitle.Text = UiStrings.SettingsDiagnostics;
         DiagnosticsDescription.Text = UiStrings.SettingsDiagnosticsDescription;
         CreateDiagnosticsButtonText.Text = UiStrings.SettingsCreateDiagnostics;
@@ -150,6 +152,7 @@ public sealed partial class SettingsWindow : Window
         ProjectLinksPanel.Orientation = compact ? Orientation.Vertical : Orientation.Horizontal;
         GitHubButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
         ReleasesButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
+        CheckUpdatesButton.HorizontalAlignment = compact ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
     }
 
     private static void SetSettingLayout(Grid grid, FrameworkElement control, bool compact)
@@ -305,6 +308,55 @@ public sealed partial class SettingsWindow : Window
     private void OnGitHubClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl);
     private void OnReleasesClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl + "/releases");
     private void OnHelpClick(object sender, RoutedEventArgs e) => WelcomeWindow.Show(_resolveIconPath);
+
+    private async void OnCheckUpdatesClick(object sender, RoutedEventArgs e)
+    {
+        if (_updateCheckBusy) return;
+        _updateCheckBusy = true;
+        CheckUpdatesButton.IsEnabled = false;
+        CheckUpdatesButtonText.Text = UiStrings.SettingsCheckingForUpdates;
+        UpdateInfo.IsOpen = false;
+        try
+        {
+            UpdateMetadata metadata = await UpdateChecker.CheckAsync(CancellationToken.None);
+            if (!ReleaseVersion.TryParse(GetVersion(), out ReleaseVersion? installed))
+                throw new FormatException("Invalid installed version.");
+            int comparison = installed!.CompareTo(metadata.Version);
+            UpdateInfo.Severity = InfoBarSeverity.Success;
+            if (comparison < 0)
+            {
+                UpdateInfo.Severity = InfoBarSeverity.Informational;
+                UpdateInfo.Title = UiStrings.UpdateAvailableTitle;
+                UpdateInfo.Message = UiStrings.Format(UiStrings.UpdateAvailableMessageFormat, metadata.VersionText, GetVersion());
+            }
+            else if (comparison == 0)
+            {
+                UpdateInfo.Title = UiStrings.UpdateUpToDateTitle;
+                UpdateInfo.Message = UiStrings.UpdateUpToDateMessage;
+            }
+            else
+            {
+                UpdateInfo.Title = UiStrings.UpdateNewerBuildTitle;
+                UpdateInfo.Message = UiStrings.UpdateNewerBuildMessage;
+            }
+            UpdateInfo.IsOpen = true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException or FormatException or System.Text.Json.JsonException)
+        {
+            DiagLog.Write("Settings", "update check failed: " + ex.GetType().Name);
+            UpdateInfo.Severity = InfoBarSeverity.Error;
+            UpdateInfo.Title = UiStrings.UpdateCheckFailedTitle;
+            UpdateInfo.Message = UiStrings.UpdateCheckFailedMessage;
+            UpdateInfo.IsOpen = true;
+        }
+        finally
+        {
+            _updateCheckBusy = false;
+            CheckUpdatesButton.IsEnabled = true;
+            CheckUpdatesButtonText.Text = UiStrings.SettingsCheckForUpdates;
+            QueueResizeToContent();
+        }
+    }
 
     private async void OnCreateDiagnosticsClick(object sender, RoutedEventArgs e)
     {

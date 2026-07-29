@@ -75,6 +75,16 @@
   <data name="SettingsProjectSource" xml:space="preserve"><value>QuickLook Next 是在 GitHub 上开发的开源项目。本项目发布的构建来源于下方代码仓库。</value></data>
   <data name="SettingsOpenGitHub" xml:space="preserve"><value>打开 GitHub 项目</value></data>
   <data name="SettingsViewReleases" xml:space="preserve"><value>查看发布版本</value></data>
+  <data name="SettingsCheckForUpdates" xml:space="preserve"><value>检查更新</value></data>
+  <data name="SettingsCheckingForUpdates" xml:space="preserve"><value>正在检查更新...</value></data>
+  <data name="UpdateAvailableTitle" xml:space="preserve"><value>有可用更新</value></data>
+  <data name="UpdateAvailableMessageFormat" xml:space="preserve"><value>QuickLook Next {0} 已发布。当前版本为 {1}。请使用“查看发布版本”下载。</value></data>
+  <data name="UpdateUpToDateTitle" xml:space="preserve"><value>已是最新版本</value></data>
+  <data name="UpdateUpToDateMessage" xml:space="preserve"><value>当前正在使用最新稳定版本。</value></data>
+  <data name="UpdateNewerBuildTitle" xml:space="preserve"><value>开发版本或较新版本</value></data>
+  <data name="UpdateNewerBuildMessage" xml:space="preserve"><value>当前版本比最新稳定版本更新。</value></data>
+  <data name="UpdateCheckFailedTitle" xml:space="preserve"><value>无法检查更新</value></data>
+  <data name="UpdateCheckFailedMessage" xml:space="preserve"><value>请检查网络连接后重试。</value></data>
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>QuickLook Next 的原创源代码和资产采用 MIT License。第三方组件仍适用其各自的许可证和声明。</value></data>
   <data name="SettingsDiagnostics" xml:space="preserve"><value>诊断</value></data>
   <data name="SettingsDiagnosticsDescription" xml:space="preserve"><value>创建不包含文件名、文件内容、路径、设置文件、缓存或日志内容的小型支持摘要。</value></data>
