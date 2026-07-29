@@ -80,6 +80,7 @@ public sealed partial class MainWindow : Window
     private readonly PreviewPanelController _panelController;
     private bool _isStarted;
     private bool _previewVisible;
+    private bool _isFullscreen;
     private bool? _backgroundEfficiencyEnabled;
     private CancellationTokenSource? _switchDebounceCts;
     private bool _previewRevealPending;
@@ -659,6 +660,21 @@ public sealed partial class MainWindow : Window
         {
             CancelSwitchDebounce();
             await ClosePreviewImmediatelyAsync();
+            return;
+        }
+
+        if (intent.Intent == PreviewIntent.Reload)
+        {
+            string? reloadPath = _previewSession.PendingPath ?? _previewSession.CurrentPath;
+            if ((_previewVisible || _previewRevealPending) && !string.IsNullOrWhiteSpace(reloadPath))
+                await PreviewPathAsync(reloadPath, _previewSession.Source, receivedAt: receivedAt);
+            return;
+        }
+
+        if (intent.Intent == PreviewIntent.Fullscreen)
+        {
+            if (_previewVisible || _previewRevealPending)
+                ToggleFullscreen();
             return;
         }
 
@@ -2902,6 +2918,9 @@ public sealed partial class MainWindow : Window
         double maxHeight,
         bool setTopmost = true)
     {
+        if (_isFullscreen)
+            return;
+
         SizeInt32 size = PreviewWindowSizer.GetWindowSizeForContent(
             GetWindowId(),
             contentWidth,
@@ -3651,6 +3670,7 @@ public sealed partial class MainWindow : Window
         PreviewContentHost.IsHitTestVisible = true;
         try { GetAppWindow().Hide(); }
         catch { _windowController.Hide(); }
+        ExitFullscreen();
         _windowController.ReleaseTopmost();
         _previewVisible = false;
         SetBackgroundEfficiency(enabled: true);
@@ -3670,6 +3690,42 @@ public sealed partial class MainWindow : Window
 
     private AppWindow GetAppWindow()
         => AppWindow.GetFromWindowId(GetWindowId());
+
+    private void ToggleFullscreen()
+    {
+        try
+        {
+            if (_isFullscreen)
+            {
+                ExitFullscreen();
+                return;
+            }
+
+            GetAppWindow().SetPresenter(AppWindowPresenterKind.FullScreen);
+            AppTitleBar.Visibility = Visibility.Collapsed;
+            _isFullscreen = true;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "fullscreen transition failed: " + ex.Message);
+        }
+    }
+
+    private void ExitFullscreen()
+    {
+        if (!_isFullscreen)
+            return;
+        try
+        {
+            GetAppWindow().SetPresenter(AppWindowPresenterKind.Default);
+            AppTitleBar.Visibility = Visibility.Visible;
+            _isFullscreen = false;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "fullscreen exit failed: " + ex.Message);
+        }
+    }
 
     private WindowId GetWindowId()
         => Win32Interop.GetWindowIdFromWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));

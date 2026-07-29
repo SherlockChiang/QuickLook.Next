@@ -40,6 +40,8 @@ The installer contains a signed MSIX and its project development certificate. Wi
 | --- | --- |
 | Open or close preview | `Space` |
 | Close preview | `Esc` |
+| Reload current preview | `F5` |
+| Enter or leave fullscreen | `F11` |
 | Follow the previous or next Explorer item | Arrow keys |
 | Zoom image | Mouse wheel or `+` / `-` |
 | Reset image view | `Home` or `Ctrl+0` |

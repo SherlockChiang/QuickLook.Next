@@ -46,6 +46,8 @@ const VK_OEM_PLUS_U32: u32 = 0xBB; // '=' / '+'
 const VK_OEM_MINUS_U32: u32 = 0xBD; // '-' / '_'
 const VK_ADD_U32: u32 = 0x6B; // numpad +
 const VK_SUBTRACT_U32: u32 = 0x6D; // numpad -
+const VK_F5_U32: u32 = 0x74;
+const VK_F11_U32: u32 = 0x7A;
 
 type Callback = unsafe extern "C" fn(*const u16);
 pub type CancelCallback = extern "C" fn() -> bool;
@@ -54,12 +56,16 @@ static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static SPACE_HELD: AtomicBool = AtomicBool::new(false);
+static F5_HELD: AtomicBool = AtomicBool::new(false);
+static F11_HELD: AtomicBool = AtomicBool::new(false);
 static PREVIEW_VISIBLE: AtomicBool = AtomicBool::new(false);
 const WM_QL_PREVIEW: u32 = WM_APP + 1;
 const WM_QL_CLOSE: u32 = WM_APP + 3;
 const WM_QL_ZOOM_IN: u32 = WM_APP + 4;
 const WM_QL_ZOOM_OUT: u32 = WM_APP + 5;
 const WM_QL_SWITCH_DELAYED: u32 = WM_APP + 6;
+const WM_QL_RELOAD: u32 = WM_APP + 7;
+const WM_QL_FULLSCREEN: u32 = WM_APP + 8;
 const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
@@ -247,6 +253,8 @@ pub extern "C" fn ql_stop() -> i32 {
     let _ = thread.join();
     HOOK_TID.store(0, Ordering::SeqCst);
     SPACE_HELD.store(false, Ordering::SeqCst);
+    F5_HELD.store(false, Ordering::SeqCst);
+    F11_HELD.store(false, Ordering::SeqCst);
     PREVIEW_VISIBLE.store(false, Ordering::SeqCst);
     SWITCH_TIMER_ARMED.store(0, Ordering::SeqCst);
     1
@@ -296,6 +304,8 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
                 WM_QL_CLOSE => emit("CLOSE"),
                 WM_QL_ZOOM_IN => emit("ZOOM_IN"),
                 WM_QL_ZOOM_OUT => emit("ZOOM_OUT"),
+                WM_QL_RELOAD => emit("RELOAD"),
+                WM_QL_FULLSCREEN => emit("FULLSCREEN"),
                 _ => {}
             }
             let _ = TranslateMessage(&msg);
@@ -371,6 +381,26 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         } else if matches!(kb.vkCode, VK_OEM_MINUS_U32 | VK_SUBTRACT_U32) {
             if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst) {
                 let _ = PostThreadMessageW(tid, WM_QL_ZOOM_OUT, WPARAM(0), LPARAM(0));
+            }
+        } else if kb.vkCode == VK_F5_U32 {
+            if is_down
+                && bare_key
+                && PREVIEW_VISIBLE.load(Ordering::SeqCst)
+                && !F5_HELD.swap(true, Ordering::SeqCst)
+            {
+                let _ = PostThreadMessageW(tid, WM_QL_RELOAD, WPARAM(0), LPARAM(0));
+            } else if is_up {
+                F5_HELD.store(false, Ordering::SeqCst);
+            }
+        } else if kb.vkCode == VK_F11_U32 {
+            if is_down
+                && bare_key
+                && PREVIEW_VISIBLE.load(Ordering::SeqCst)
+                && !F11_HELD.swap(true, Ordering::SeqCst)
+            {
+                let _ = PostThreadMessageW(tid, WM_QL_FULLSCREEN, WPARAM(0), LPARAM(0));
+            } else if is_up {
+                F11_HELD.store(false, Ordering::SeqCst);
             }
         }
     }

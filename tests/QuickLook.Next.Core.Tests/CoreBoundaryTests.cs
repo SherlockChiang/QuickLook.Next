@@ -190,6 +190,16 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Native_hook_status_rejects_malformed_messages(string line)
         => Assert.Null(NativeHookStatus.TryParse(line));
 
+    [Theory]
+    [InlineData("RELOAD", PreviewIntent.Reload)]
+    [InlineData("FULLSCREEN", PreviewIntent.Fullscreen)]
+    public void Native_intent_protocol_parses_preview_commands(string line, PreviewIntent expected)
+    {
+        NativeIntent intent = Assert.IsType<NativeIntent>(NativeIntent.TryParse(line));
+        Assert.Equal(expected, intent.Intent);
+        Assert.Null(intent.PrimaryPath);
+    }
+
     [Fact]
     public void Native_capabilities_reject_missing_features()
     {
