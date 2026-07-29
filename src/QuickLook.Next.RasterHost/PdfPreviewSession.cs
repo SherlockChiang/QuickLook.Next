@@ -17,6 +17,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
     private const double MaxRenderDimension = 2200.0;
     private static readonly TimeSpan PageRenderTimeout = TimeSpan.FromSeconds(12);
     private const long MaxDiskCacheBytes = 256L * 1024 * 1024;
+    private const long MaxPendingDiskCacheWriteBytes = 64L * 1024 * 1024;
     private static readonly WinColor White = new() { A = 255, R = 255, G = 255, B = 255 };
 
     // Cross-session rendered-page cache: re-previewing the same PDF at the same zoom skips the
@@ -49,6 +50,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
     private static readonly Task DiskCacheToucher = Task.Run(ProcessDiskCacheTouchesAsync);
     private static bool _diskCacheInitialized;
     private static long _diskCacheBytes;
+    private static long _pendingDiskCacheWriteBytes;
 
     private sealed record DiskCacheWrite(string Key, byte[] Bgra, int Width, int Height);
 
@@ -247,15 +249,33 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
                     _cacheBytes -= evicted.Bgra.LongLength;
             }
         }
-        if (writeDisk)
-            DiskCacheWrites.Writer.TryWrite(new DiskCacheWrite(key, bgra, w, h));
+        if (writeDisk && TryReserveDiskCacheWrite(bgra.LongLength))
+        {
+            if (!DiskCacheWrites.Writer.TryWrite(new DiskCacheWrite(key, bgra, w, h)))
+                Interlocked.Add(ref _pendingDiskCacheWriteBytes, -bgra.LongLength);
+        }
+    }
+
+    private static bool TryReserveDiskCacheWrite(long bytes)
+    {
+        while (true)
+        {
+            long current = Volatile.Read(ref _pendingDiskCacheWriteBytes);
+            if (bytes > MaxPendingDiskCacheWriteBytes - current)
+                return false;
+            if (Interlocked.CompareExchange(ref _pendingDiskCacheWriteBytes, current + bytes, current) == current)
+                return true;
+        }
     }
 
     private static async Task ProcessDiskCacheWritesAsync()
     {
         InitializeDiskCache();
         await foreach (DiskCacheWrite write in DiskCacheWrites.Reader.ReadAllAsync())
-            StoreDiskCached(write);
+        {
+            try { StoreDiskCached(write); }
+            finally { Interlocked.Add(ref _pendingDiskCacheWriteBytes, -write.Bgra.LongLength); }
+        }
     }
 
     private static async Task ProcessDiskCacheTouchesAsync()

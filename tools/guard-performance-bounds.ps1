@@ -202,6 +202,8 @@ $pdfPresenter = Join-Path $Root "src/QuickLook.Next.App/PdfPreviewPresenter.cs"
 Require-Pattern $pdfPresenter 'targetPageWidth\s*=\s*Math\.Max\(320,\s*maxContent\.Width\s*-\s*32\)' `
     "PDF pages must fit the available preview width instead of a fixed partial-width target."
 $pdfSession = Join-Path $Root "src/QuickLook.Next.RasterHost/PdfPreviewSession.cs"
+Require-Pattern $pdfSession 'MaxPendingDiskCacheWriteBytes\s*=\s*64L\s*\*\s*1024\s*\*\s*1024[\s\S]*TryReserveDiskCacheWrite[\s\S]*Interlocked\.Add\(ref _pendingDiskCacheWriteBytes, -write\.Bgra\.LongLength\)' `
+    "PDF disk-cache writes must remain bounded by pending BGRA bytes."
 Require-Pattern $pdfSession 'ScaledWidth\s*=\s*targetW[\s\S]*ScaledHeight\s*=\s*targetH' `
     "PDF stream decode must normalize high-DPI output to the requested surface size."
 Require-Pattern $pdfSession 'IsExpectedSize\(cached,\s*targetW,\s*targetH\)' `
