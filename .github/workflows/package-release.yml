@@ -49,7 +49,7 @@ jobs:
             ~/.nuget/packages
             ~/.cargo/registry
             ~/.cargo/git
-          key: release-deps-${{ runner.os }}-dotnet-10.0.302-rust-1.96.0-${{ hashFiles('**/packages.lock.json', 'native/quicklook_next_native/Cargo.lock') }}
+          key: release-deps-${{ runner.os }}-dotnet-10.0.302-rust-1.96.0-${{ hashFiles('**/packages.lock.json', 'native/Cargo.lock') }}
           restore-keys: |
             release-deps-${{ runner.os }}-dotnet-10.0.302-rust-1.96.0-
 
@@ -116,7 +116,7 @@ jobs:
           if (-not $audit -or (& cargo audit --version) -notmatch '^cargo-audit 0\.22\.2$') {
             cargo install cargo-audit --version 0.22.2 --locked --force
           }
-          cargo audit --file native/quicklook_next_native/Cargo.lock
+          cargo audit --file native/Cargo.lock
 
       - name: Restore release signing certificate
         shell: pwsh

@@ -38,11 +38,11 @@ dotnet restore (Join-Path $root "QuickLook.Next.slnx") --locked-mode
 if ($LASTEXITCODE -ne 0) { throw "Dependency restore failed." }
 
 Write-Host "== testing native library ==" -ForegroundColor Cyan
-cargo test --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+cargo test --workspace --locked --manifest-path (Join-Path $root "native\Cargo.toml")
 if ($LASTEXITCODE -ne 0) { throw "Native tests failed." }
 
 Write-Host "== building native release library ==" -ForegroundColor Cyan
-cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+cargo build --workspace --release --locked --manifest-path (Join-Path $root "native\Cargo.toml")
 if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
 Write-Host "== building and testing solution ==" -ForegroundColor Cyan

@@ -9,9 +9,6 @@ license = "MIT"
 name = "quicklook_next_native"
 crate-type = ["cdylib"]
 
-[profile.release]
-opt-level = 2
-
 [dependencies]
 quick-xml = "0.41"
 zip = "2.2"

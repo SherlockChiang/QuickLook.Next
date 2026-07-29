@@ -34,7 +34,7 @@ if ($VersionPrefix -and $VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
 
 if (-not $SkipBuild) {
     Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
-    cargo build --release --locked --manifest-path (Join-Path $root "native\quicklook_next_native\Cargo.toml")
+    cargo build --workspace --release --locked --manifest-path (Join-Path $root "native\Cargo.toml")
     if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
     Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan

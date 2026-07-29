@@ -75,7 +75,7 @@ foreach ($item in @($nugetPackages.Values | Sort-Object { $_[0].ToLowerInvariant
     Add-PackageNotice $notices "NuGet" $name $version $license $url $packageRoot
 }
 
-$cargoJson = & cargo metadata --locked --format-version 1 --manifest-path (Join-Path $Root "native\quicklook_next_native\Cargo.toml")
+$cargoJson = & cargo metadata --locked --format-version 1 --manifest-path (Join-Path $Root "native\Cargo.toml")
 if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed." }
 $cargo = ($cargoJson -join [Environment]::NewLine) | ConvertFrom-Json -Depth 100
 foreach ($package in @($cargo.packages | Where-Object { $_.name -ne 'quicklook_next_native' } | Sort-Object name, version)) {

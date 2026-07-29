@@ -42,7 +42,7 @@ jobs:
         shell: pwsh
         run: |
           cargo install cargo-audit --version 0.22.2 --locked --force
-          cargo audit --file native/quicklook_next_native/Cargo.lock
+          cargo audit --file native/Cargo.lock
 
   website:
     runs-on: ubuntu-24.04

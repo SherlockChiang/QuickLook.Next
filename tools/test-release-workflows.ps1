@@ -13,7 +13,7 @@ if ($ci -notmatch '(?ms)^on:\s*.*?push:\s*\r?\n\s+branches:\s*\[main\]') {
     throw "CI must verify every push to main independently from release publication."
 }
 if ($ci -notmatch 'tools/test-nuget-vulnerabilities\.ps1' -or
-    $ci -notmatch 'cargo install cargo-audit --version 0\.22\.2 --locked --force[\s\S]*cargo audit --file native/quicklook_next_native/Cargo\.lock' -or
+    $ci -notmatch 'cargo install cargo-audit --version 0\.22\.2 --locked --force[\s\S]*cargo audit --file native/Cargo\.lock' -or
     $ci -notmatch 'npm ci && npm audit' -or
     $ci -notmatch 'working-directory:\s+website[\s\S]*npm run build') {
     throw "Pull-request CI must audit NuGet, Cargo, and npm dependencies and build the website."
