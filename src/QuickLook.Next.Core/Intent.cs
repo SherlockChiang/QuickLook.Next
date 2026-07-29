@@ -13,6 +13,39 @@ public enum PreviewIntent
     ZoomOut,    // - / numpad-
 }
 
+public enum NativeHookState
+{
+    Ready,
+    Degraded,
+    Failed,
+    Stopped,
+}
+
+public sealed record NativeHookStatus(NativeHookState State, string? Component = null, int? ErrorCode = null)
+{
+    public static NativeHookStatus? TryParse(string line)
+    {
+        string[] parts = line.Split('\t');
+        if (parts.Length == 1)
+        {
+            return parts[0] switch
+            {
+                "HOOK_READY" => new NativeHookStatus(NativeHookState.Ready),
+                "HOOK_STOPPED" => new NativeHookStatus(NativeHookState.Stopped),
+                _ => null,
+            };
+        }
+        if (parts.Length != 3 || !int.TryParse(parts[2], out int errorCode)) return null;
+        if (parts[1] is not ("KEYBOARD" or "MOUSE" or "PUMP" or "START")) return null;
+        return parts[0] switch
+        {
+            "HOOK_FAILED" => new NativeHookStatus(NativeHookState.Failed, parts[1], errorCode),
+            "HOOK_DEGRADED" => new NativeHookStatus(NativeHookState.Degraded, parts[1], errorCode),
+            _ => null,
+        };
+    }
+}
+
 /// <summary>A decoded native intent. <see cref="Paths"/> carries the current shell selection for Open/Switch.</summary>
 public sealed record NativeIntent(PreviewIntent Intent, IReadOnlyList<string> Paths)
 {

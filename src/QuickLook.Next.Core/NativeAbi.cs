@@ -2,7 +2,7 @@ namespace QuickLook.Next.Core;
 
 public static class NativeAbi
 {
-    public const uint Version = 2;
+    public const uint Version = 3;
     public const ulong HandleText = 1UL << 0;
     public const ulong HandleExecutable = 1UL << 1;
     public const ulong HandleTorrent = 1UL << 2;

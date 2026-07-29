@@ -36,8 +36,20 @@ public static class DiagLog
     {
         try { Directory.CreateDirectory(LogDirectory); } catch { /* ignore */ }
         _path = Path.Combine(LogDirectory, Path.GetFileName(file));
-        try { File.Delete(_path); } catch { /* ignore */ }
+        PreservePreviousSession(_path);
         EnsureWriterStarted();
+    }
+
+    private static void PreservePreviousSession(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            string previous = path + ".previous";
+            File.Delete(previous);
+            File.Move(path, previous);
+        }
+        catch { /* diagnostics must never block startup */ }
     }
 
     public static void InitInDirectory(string directory, string fileName)

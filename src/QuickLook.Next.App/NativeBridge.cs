@@ -13,7 +13,7 @@ namespace QuickLook.Next.App;
 /// hook and reads the Explorer selection, then calls back with high-level intent lines, which we decode
 /// into <see cref="NativeIntent"/>. (Validated in Spike 3.)
 /// </summary>
-internal sealed class NativeBridge
+internal sealed class NativeBridge : IDisposable
 {
     private const string Dll = "quicklook_next_native";
 
@@ -28,9 +28,11 @@ internal sealed class NativeBridge
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern ulong ql_capabilities();
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void ql_set_callback(NativeCallback cb);
+    private static extern void ql_set_callback(NativeCallback? cb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_start();
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_stop();
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern void ql_set_preview_visible(int visible);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -87,6 +89,7 @@ internal sealed class NativeBridge
     private NativeCallback? _callback; // keep alive: native stores the function pointer
     private Action<NativeIntent>? _onIntent;
     private ulong _capabilities;
+    public NativeHookStatus? HookStatus { get; private set; }
 
     public void Start(Action<NativeIntent> onIntent)
     {
@@ -95,8 +98,30 @@ internal sealed class NativeBridge
         _onIntent = onIntent;
         _callback = OnNative;
         ql_set_callback(_callback);
-        ql_start();
+        int status = ql_start();
+        if (status <= 0 || HookStatus?.State == NativeHookState.Failed)
+        {
+            Stop();
+            throw new InvalidOperationException($"Native keyboard hook failed to start (status {status}).");
+        }
+        if (HookStatus?.State is not (NativeHookState.Ready or NativeHookState.Degraded))
+        {
+            Stop();
+            throw new InvalidOperationException("Native keyboard hook did not report readiness.");
+        }
     }
+
+    public void Stop()
+    {
+        _onIntent = null;
+        try { ql_set_preview_visible(0); } catch { }
+        try { ql_stop(); } catch { }
+        try { ql_set_callback(null); } catch { }
+        _callback = null;
+        HookStatus = new NativeHookStatus(NativeHookState.Stopped);
+    }
+
+    public void Dispose() => Stop();
 
     public void SetPreviewVisible(bool visible)
     {
@@ -108,6 +133,12 @@ internal sealed class NativeBridge
     {
         string? line = Marshal.PtrToStringUni(utf16);
         if (line is null) return;
+        NativeHookStatus? hookStatus = NativeHookStatus.TryParse(line);
+        if (hookStatus is not null)
+        {
+            HookStatus = hookStatus;
+            return;
+        }
         var intent = NativeIntent.TryParse(line);
         if (intent is not null) _onIntent?.Invoke(intent);
     }

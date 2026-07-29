@@ -164,6 +164,32 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => NativeAbi.EnsureCompatible(NativeAbi.Version + 1));
     }
 
+    [Theory]
+    [InlineData("HOOK_READY", NativeHookState.Ready, null, null)]
+    [InlineData("HOOK_STOPPED", NativeHookState.Stopped, null, null)]
+    [InlineData("HOOK_DEGRADED\tMOUSE\t5", NativeHookState.Degraded, "MOUSE", 5)]
+    [InlineData("HOOK_FAILED\tKEYBOARD\t-2147024891", NativeHookState.Failed, "KEYBOARD", -2147024891)]
+    public void Native_hook_status_protocol_is_bounded(
+        string line,
+        NativeHookState expectedState,
+        string? expectedComponent,
+        int? expectedError)
+    {
+        NativeHookStatus status = Assert.IsType<NativeHookStatus>(NativeHookStatus.TryParse(line));
+        Assert.Equal(expectedState, status.State);
+        Assert.Equal(expectedComponent, status.Component);
+        Assert.Equal(expectedError, status.ErrorCode);
+        Assert.Null(NativeIntent.TryParse(line));
+    }
+
+    [Theory]
+    [InlineData("HOOK_FAILED")]
+    [InlineData("HOOK_FAILED\tOTHER\t5")]
+    [InlineData("HOOK_FAILED\tKEYBOARD\tnot-a-number")]
+    [InlineData("HOOK_READY\textra")]
+    public void Native_hook_status_rejects_malformed_messages(string line)
+        => Assert.Null(NativeHookStatus.TryParse(line));
+
     [Fact]
     public void Native_capabilities_reject_missing_features()
     {

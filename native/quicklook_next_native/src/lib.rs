@@ -51,6 +51,7 @@ type Callback = unsafe extern "C" fn(*const u16);
 pub type CancelCallback = extern "C" fn() -> bool;
 
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
+static HOOK_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
 static HOOK_TID: AtomicU32 = AtomicU32::new(0);
 static SPACE_HELD: AtomicBool = AtomicBool::new(false);
 static PREVIEW_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -73,7 +74,7 @@ const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
 const MAX_ARCHIVE_ENTRY_NAME_BYTES: usize = u16::MAX as usize;
-const QL_NATIVE_ABI_VERSION: u32 = 2;
+const QL_NATIVE_ABI_VERSION: u32 = 3;
 const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
 const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
 const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
@@ -218,11 +219,40 @@ pub extern "C" fn ql_set_preview_visible(visible: i32) {
 /// Install the low-level keyboard hook on a dedicated thread with a message pump.
 #[no_mangle]
 pub extern "C" fn ql_start() -> i32 {
-    std::thread::spawn(hook_thread);
+    let Ok(mut runtime) = HOOK_THREAD.lock() else { return -8; };
+    if runtime.is_some() {
+        return 2;
+    }
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let thread = std::thread::spawn(move || hook_thread(ready_tx));
+    *runtime = Some(thread);
+    drop(runtime);
+    match ready_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(true) => 1,
+        _ => {
+            ql_stop();
+            -8
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ql_stop() -> i32 {
+    let thread = HOOK_THREAD.lock().ok().and_then(|mut runtime| runtime.take());
+    let Some(thread) = thread else { return 1; };
+    let tid = HOOK_TID.load(Ordering::SeqCst);
+    if tid != 0 {
+        unsafe { let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)); }
+    }
+    let _ = thread.join();
+    HOOK_TID.store(0, Ordering::SeqCst);
+    SPACE_HELD.store(false, Ordering::SeqCst);
+    PREVIEW_VISIBLE.store(false, Ordering::SeqCst);
+    SWITCH_TIMER_ARMED.store(0, Ordering::SeqCst);
     1
 }
 
-fn hook_thread() {
+fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         HOOK_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
@@ -230,21 +260,31 @@ fn hook_thread() {
         let keyboard_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), None, 0) {
             Ok(h) => h,
             Err(e) => {
-                emit(&format!("HOOK_ERR\t{e:?}"));
+                emit(&format!("HOOK_FAILED\tKEYBOARD\t{}", e.code().0));
+                let _ = ready_tx.send(false);
+                HOOK_TID.store(0, Ordering::SeqCst);
+                CoUninitialize();
                 return;
             }
         };
         let mouse_hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0) {
             Ok(h) => h,
             Err(e) => {
-                emit(&format!("MOUSE_HOOK_ERR\t{e:?}"));
+                emit(&format!("HOOK_DEGRADED\tMOUSE\t{}", e.code().0));
                 HHOOK(std::ptr::null_mut())
             }
         };
-        emit("HOOK_INSTALLED");
+        emit("HOOK_READY");
+        let _ = ready_tx.send(true);
 
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        loop {
+            let result = GetMessageW(&mut msg, None, 0, 0).0;
+            if result == 0 { break; }
+            if result == -1 {
+                emit("HOOK_FAILED\tPUMP\t-1");
+                break;
+            }
             match msg.message {
                 WM_QL_PREVIEW => do_selection_and_emit("OPEN"),
                 WM_QL_SWITCH_DELAYED => {
@@ -261,10 +301,15 @@ fn hook_thread() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        if SWITCH_TIMER_ARMED.swap(0, Ordering::SeqCst) != 0 {
+            let _ = KillTimer(None, SWITCH_TIMER_ID);
+        }
         let _ = UnhookWindowsHookEx(keyboard_hook);
         if mouse_hook.0 != std::ptr::null_mut() {
             let _ = UnhookWindowsHookEx(mouse_hook);
         }
+        HOOK_TID.store(0, Ordering::SeqCst);
+        emit("HOOK_STOPPED");
         CoUninitialize();
     }
 }
@@ -4131,7 +4176,7 @@ fn ffi_boundary(body: impl FnOnce() -> i32) -> i32 {
 
 #[test]
 fn native_abi_version_is_stable() {
-    assert_eq!(ql_abi_version(), 2);
+    assert_eq!(ql_abi_version(), 3);
     let required = QL_FEATURE_HANDLE_TEXT
         | QL_FEATURE_HANDLE_EXECUTABLE
         | QL_FEATURE_HANDLE_TORRENT

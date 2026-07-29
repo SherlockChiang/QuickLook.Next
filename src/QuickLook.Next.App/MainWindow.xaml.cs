@@ -355,6 +355,7 @@ public sealed partial class MainWindow : Window
             _lifetimeCts.Cancel();
             _uiWatchdog?.Dispose();
             _previewKeyboardHook?.Dispose();
+            _native.Stop();
             RemoveTrayIcon();
             _supervisor?.Stop();
             _parserSupervisor?.Stop();
@@ -413,6 +414,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
             StatusText.Text = UiStrings.StartupErrorPrefix + ex.Message;
+            StatusBar.Visibility = Visibility.Visible;
             ShowPreviewWindow(activate: true);
         }
     }
@@ -3729,6 +3731,8 @@ public sealed partial class MainWindow : Window
     {
         RemoveTrayIcon();
         _settingsWindow?.Close();
+        _previewKeyboardHook?.Dispose();
+        _native.Stop();
         _supervisor?.Stop();
         _parserSupervisor?.Stop();
         _shellBroker?.Stop();
