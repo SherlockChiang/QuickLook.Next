@@ -218,23 +218,36 @@ internal sealed class ShellBrokerChannel(Stream stream) : IDisposable
     private readonly StreamReader _reader = new(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
     private readonly StreamWriter _writer = new(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly char[] _readBuffer = new char[8192];
+    private int _readOffset;
+    private int _readCount;
 
     public async Task<string?> ReceiveAsync(CancellationToken cancellationToken = default)
     {
         var line = new System.Text.StringBuilder();
-        var buffer = new char[1];
         while (true)
         {
-            int read = await _reader.ReadAsync(buffer.AsMemory(), cancellationToken);
-            if (read == 0) return line.Length == 0 ? null : line.ToString();
-            if (buffer[0] == '\n')
+            if (_readOffset == _readCount)
+            {
+                _readCount = await _reader.ReadAsync(_readBuffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                _readOffset = 0;
+                if (_readCount == 0)
+                    return line.Length == 0 ? null : line.ToString();
+            }
+
+            int newline = Array.IndexOf(_readBuffer, '\n', _readOffset, _readCount - _readOffset);
+            int end = newline >= 0 ? newline : _readCount;
+            int length = end - _readOffset;
+            if (line.Length > PipeChannel.MaxControlLineChars - length)
+                throw new InvalidDataException("ShellBroker control message is too large.");
+            line.Append(_readBuffer, _readOffset, length);
+            _readOffset = newline >= 0 ? newline + 1 : end;
+
+            if (newline >= 0)
             {
                 if (line.Length > 0 && line[^1] == '\r') line.Length--;
                 return line.ToString();
             }
-            if (line.Length >= PipeChannel.MaxControlLineChars)
-                throw new InvalidDataException("ShellBroker control message is too large.");
-            line.Append(buffer[0]);
         }
     }
 
