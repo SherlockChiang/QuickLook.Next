@@ -91,6 +91,8 @@ if ($SkipBuild) {
 }
 
 Write-Host "== assembling dist ==" -ForegroundColor Cyan
+$noticePath = Join-Path $artifacts "THIRD-PARTY-NOTICES.txt"
+& (Join-Path $PSScriptRoot "new-third-party-notices.ps1") -Root $root -OutputPath $noticePath
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Force "$dist\RasterHost" | Out-Null
 New-Item -ItemType Directory -Force "$dist\ParserHost" | Out-Null
@@ -116,6 +118,7 @@ foreach ($name in @(
     Copy-Item -LiteralPath (Join-Path $shellBrokerOutput $name) -Destination $dist -Force
 }
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $dist -Force
+Copy-Item -LiteralPath $noticePath -Destination $dist -Force
 
 Write-Host "== pruning unused optional runtime payloads ==" -ForegroundColor Cyan
 $optionalPayloadPatterns = @(

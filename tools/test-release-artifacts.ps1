@@ -23,10 +23,10 @@ try {
     $entryNames = @($entries.FullName | ForEach-Object { $_.Replace('\', '/') })
     $msixEntries = @($entries | Where-Object { $_.FullName -like '*.msix' })
     if ($msixEntries.Count -ne 1) { throw "Installer must contain exactly one MSIX; found $($msixEntries.Count)." }
-    foreach ($required in @('Install.ps1', 'Install.cmd', 'Install-ZH-CN.cmd', 'QuickLook.Next-Release.cer', 'README.txt', 'LICENSE')) {
+    foreach ($required in @('Install.ps1', 'Install.cmd', 'Install-ZH-CN.cmd', 'QuickLook.Next-Release.cer', 'README.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt')) {
         if ($entryNames -notcontains $required) { throw "Installer is missing $required." }
     }
-    if ($entryNames.Count -ne 7) { throw "Installer contains unexpected files: $($entryNames -join ', ')." }
+    if ($entryNames.Count -ne 8) { throw "Installer contains unexpected files: $($entryNames -join ', ')." }
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("quicklook-release-artifacts-" + [guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($tempRoot) | Out-Null
@@ -83,6 +83,7 @@ try {
             $payload = @($msix.Entries.FullName)
             foreach ($required in @(
                 'QuickLook.Next.App.exe',
+                'THIRD-PARTY-NOTICES.txt',
                 'resources.pri',
                 'quicklook_next_native.dll',
                 'ParserHost/QuickLook.Next.ParserHost.exe',
@@ -97,6 +98,7 @@ try {
                 $dist = (Resolve-Path -LiteralPath $DistPath).Path
                 foreach ($relativePath in @(
                     'QuickLook.Next.App.dll',
+                    'THIRD-PARTY-NOTICES.txt',
                     'quicklook_next_native.dll',
                     'ParserHost/QuickLook.Next.ParserHost.dll',
                     'ParserHost/quicklook_next_native.dll',

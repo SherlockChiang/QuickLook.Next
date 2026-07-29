@@ -145,6 +145,7 @@ Get-ChildItem -LiteralPath (Join-Path $root "packaging") -Filter "*.cmd" |
     Copy-Item -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $root "packaging\README.txt") -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $installerRoot
+Copy-Item -LiteralPath (Join-Path $root "dist\THIRD-PARTY-NOTICES.txt") -Destination $installerRoot
 
 $installerPath = Join-Path $artifacts $installerName
 Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
