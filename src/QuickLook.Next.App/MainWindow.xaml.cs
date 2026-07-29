@@ -3746,10 +3746,31 @@ public sealed partial class MainWindow : Window
     {
         if (_settingsWindow is null)
         {
-            _settingsWindow = new SettingsWindow(ResolveAppIconPath, OnSettingsChanged);
+            _settingsWindow = new SettingsWindow(
+                ResolveAppIconPath,
+                OnSettingsChanged,
+                () => _native.LastHookFailure ?? _native.HookStatus,
+                RetryNativeHook);
             _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         }
         _settingsWindow.Activate();
+    }
+
+    private bool RetryNativeHook()
+    {
+        try
+        {
+            _native.Stop();
+            _native.Start(OnNativeIntent);
+            StatusText.Text = UiStrings.Ready.ToLowerInvariant();
+            DiagLog.Write("App", "native hook restarted from settings");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "native hook retry failed: " + ex.Message);
+            return false;
+        }
     }
 
     private void OnSettingsChanged()

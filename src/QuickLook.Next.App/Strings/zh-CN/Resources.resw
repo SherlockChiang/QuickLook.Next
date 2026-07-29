@@ -85,6 +85,12 @@
   <data name="UpdateNewerBuildMessage" xml:space="preserve"><value>当前版本比最新稳定版本更新。</value></data>
   <data name="UpdateCheckFailedTitle" xml:space="preserve"><value>无法检查更新</value></data>
   <data name="UpdateCheckFailedMessage" xml:space="preserve"><value>请检查网络连接后重试。</value></data>
+  <data name="SettingsHookStatus" xml:space="preserve"><value>资源管理器快捷键状态</value></data>
+  <data name="SettingsHookReady" xml:space="preserve"><value>已就绪。可以使用资源管理器预览快捷键。</value></data>
+  <data name="SettingsHookDegradedFormat" xml:space="preserve"><value>部分可用。{0} 报告错误 {1}。</value></data>
+  <data name="SettingsHookFailedFormat" xml:space="preserve"><value>不可用。{0} 报告错误 {1}。</value></data>
+  <data name="SettingsHookStopped" xml:space="preserve"><value>已停止。资源管理器预览快捷键不可用。</value></data>
+  <data name="SettingsRetryHook" xml:space="preserve"><value>重试快捷键</value></data>
   <data name="SettingsLicenseNotice" xml:space="preserve"><value>QuickLook Next 的原创源代码和资产采用 MIT License。第三方组件仍适用其各自的许可证和声明。</value></data>
   <data name="SettingsDiagnostics" xml:space="preserve"><value>诊断</value></data>
   <data name="SettingsDiagnosticsDescription" xml:space="preserve"><value>创建不包含文件名、文件内容、路径、设置文件、缓存或日志内容的小型支持摘要。</value></data>

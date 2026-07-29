@@ -90,17 +90,22 @@ internal sealed class NativeBridge : IDisposable
     private Action<NativeIntent>? _onIntent;
     private ulong _capabilities;
     public NativeHookStatus? HookStatus { get; private set; }
+    public NativeHookStatus? LastHookFailure { get; private set; }
 
     public void Start(Action<NativeIntent> onIntent)
     {
         NativeAbi.EnsureCompatible(ql_abi_version());
         _capabilities = ql_capabilities();
         _onIntent = onIntent;
+        LastHookFailure = null;
         _callback = OnNative;
         ql_set_callback(_callback);
         int status = ql_start();
         if (status <= 0 || HookStatus?.State == NativeHookState.Failed)
         {
+            LastHookFailure = HookStatus?.State == NativeHookState.Failed
+                ? HookStatus
+                : new NativeHookStatus(NativeHookState.Failed, "START", status);
             Stop();
             throw new InvalidOperationException($"Native keyboard hook failed to start (status {status}).");
         }
@@ -137,6 +142,8 @@ internal sealed class NativeBridge : IDisposable
         if (hookStatus is not null)
         {
             HookStatus = hookStatus;
+            if (hookStatus.State == NativeHookState.Failed)
+                LastHookFailure = hookStatus;
             return;
         }
         var intent = NativeIntent.TryParse(line);

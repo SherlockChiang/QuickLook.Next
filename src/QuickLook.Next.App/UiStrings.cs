@@ -121,6 +121,12 @@ internal static class UiStrings
     public static string UpdateNewerBuildMessage => Get(nameof(UpdateNewerBuildMessage), "This build is newer than the latest stable release.");
     public static string UpdateCheckFailedTitle => Get(nameof(UpdateCheckFailedTitle), "Couldn't check for updates");
     public static string UpdateCheckFailedMessage => Get(nameof(UpdateCheckFailedMessage), "Check your internet connection and try again.");
+    public static string SettingsHookStatus => Get(nameof(SettingsHookStatus), "Explorer shortcut status");
+    public static string SettingsHookReady => Get(nameof(SettingsHookReady), "Ready. Explorer preview shortcuts are available.");
+    public static string SettingsHookDegradedFormat => Get(nameof(SettingsHookDegradedFormat), "Partially available. {0} reported error {1}.");
+    public static string SettingsHookFailedFormat => Get(nameof(SettingsHookFailedFormat), "Unavailable. {0} reported error {1}.");
+    public static string SettingsHookStopped => Get(nameof(SettingsHookStopped), "Stopped. Explorer preview shortcuts are unavailable.");
+    public static string SettingsRetryHook => Get(nameof(SettingsRetryHook), "Retry shortcuts");
     public static string SettingsLicenseNotice => Get(nameof(SettingsLicenseNotice), "QuickLook Next's original source code and assets are licensed under the MIT License. Third-party components retain their respective licenses and notices.");
     public static string SettingsDiagnostics => Get(nameof(SettingsDiagnostics), "Diagnostics");
     public static string SettingsDiagnosticsDescription => Get(nameof(SettingsDiagnosticsDescription), "Create a small support summary without file names, file contents, paths, settings files, caches, or log contents.");

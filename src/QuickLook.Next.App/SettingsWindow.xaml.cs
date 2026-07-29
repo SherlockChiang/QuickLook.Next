@@ -18,15 +18,23 @@ public sealed partial class SettingsWindow : Window
     private const string RepositoryUrl = "https://github.com/SherlockChiang/QuickLook.Next";
     private readonly Func<string> _resolveIconPath;
     private readonly Action _settingsChanged;
+    private readonly Func<NativeHookStatus?> _getHookStatus;
+    private readonly Func<bool> _retryHook;
     private bool _initializing = true;
     private bool _resizePending;
     private bool _diagnosticsBusy;
     private bool _updateCheckBusy;
 
-    public SettingsWindow(Func<string> resolveIconPath, Action settingsChanged)
+    public SettingsWindow(
+        Func<string> resolveIconPath,
+        Action settingsChanged,
+        Func<NativeHookStatus?> getHookStatus,
+        Func<bool> retryHook)
     {
         _resolveIconPath = resolveIconPath;
         _settingsChanged = settingsChanged;
+        _getHookStatus = getHookStatus;
+        _retryHook = retryHook;
         InitializeComponent();
 
         ExtendsContentIntoTitleBar = true;
@@ -63,6 +71,7 @@ public sealed partial class SettingsWindow : Window
         };
         TextLineNumbersToggle.IsOn = AppSettings.Current.TextLineNumbers;
         _initializing = false;
+        RefreshHookStatus();
     }
 
     private void ApplyStrings()
@@ -103,6 +112,8 @@ public sealed partial class SettingsWindow : Window
         GitHubButtonText.Text = UiStrings.SettingsOpenGitHub;
         ReleasesButtonText.Text = UiStrings.SettingsViewReleases;
         CheckUpdatesButtonText.Text = UiStrings.SettingsCheckForUpdates;
+        HookStatusTitle.Text = UiStrings.SettingsHookStatus;
+        RetryHookButtonText.Text = UiStrings.SettingsRetryHook;
         DiagnosticsTitle.Text = UiStrings.SettingsDiagnostics;
         DiagnosticsDescription.Text = UiStrings.SettingsDiagnosticsDescription;
         CreateDiagnosticsButtonText.Text = UiStrings.SettingsCreateDiagnostics;
@@ -308,6 +319,32 @@ public sealed partial class SettingsWindow : Window
     private void OnGitHubClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl);
     private void OnReleasesClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl + "/releases");
     private void OnHelpClick(object sender, RoutedEventArgs e) => WelcomeWindow.Show(_resolveIconPath);
+
+    private void OnRetryHookClick(object sender, RoutedEventArgs e)
+    {
+        RetryHookButton.IsEnabled = false;
+        try { _retryHook(); }
+        finally
+        {
+            RetryHookButton.IsEnabled = true;
+            RefreshHookStatus();
+        }
+    }
+
+    private void RefreshHookStatus()
+    {
+        NativeHookStatus? status = _getHookStatus();
+        HookStatusText.Text = status?.State switch
+        {
+            NativeHookState.Ready => UiStrings.SettingsHookReady,
+            NativeHookState.Degraded => UiStrings.Format(UiStrings.SettingsHookDegradedFormat, status.Component ?? "MOUSE", status.ErrorCode ?? 0),
+            NativeHookState.Failed => UiStrings.Format(UiStrings.SettingsHookFailedFormat, status.Component ?? "START", status.ErrorCode ?? 0),
+            _ => UiStrings.SettingsHookStopped,
+        };
+        RetryHookButton.Visibility = status?.State is NativeHookState.Ready or NativeHookState.Degraded
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
 
     private async void OnCheckUpdatesClick(object sender, RoutedEventArgs e)
     {

@@ -199,6 +199,13 @@
                             </StackPanel>
                             <InfoBar x:Name="UpdateInfo" IsOpen="False" IsClosable="True"
                                      AutomationProperties.LiveSetting="Polite" />
+                            <StackPanel Spacing="6">
+                                <TextBlock x:Name="HookStatusTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="HookStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                <Button x:Name="RetryHookButton" HorizontalAlignment="Left" Click="OnRetryHookClick">
+                                    <TextBlock x:Name="RetryHookButtonText" />
+                                </Button>
+                            </StackPanel>
                             <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                             <StackPanel Spacing="5">
                                 <TextBlock x:Name="DiagnosticsTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
