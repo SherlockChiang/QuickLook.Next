@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use flate2::read::GzDecoder;
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba, RgbaImage};
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 use serde::Serialize;
 use tar::Archive as TarArchive;
 use zip::ZipArchive;
@@ -3132,6 +3132,10 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                     shape_paragraph_had_text = true;
                 }
             }
+            Ok(Event::GeneralRef(e)) if in_shape && in_text => {
+                text.push_str(&xml_general_ref(e.as_ref()));
+                shape_paragraph_had_text = true;
+            }
             Ok(Event::CData(e)) if in_shape && in_text => {
                 let value = String::from_utf8_lossy(e.as_ref());
                 if !value.is_empty() {
@@ -3227,6 +3231,10 @@ fn extract_ppt_text(context: &OfficeContext, xml: &str) -> OfficeResult<String> 
                     out.push_str(&value);
                     paragraph_had_text = true;
                 }
+            }
+            Ok(Event::GeneralRef(e)) if in_text => {
+                out.push_str(&xml_general_ref(e.as_ref()));
+                paragraph_had_text = true;
             }
             Ok(Event::CData(e)) if in_text => {
                 let value = String::from_utf8_lossy(e.as_ref());
@@ -3376,6 +3384,9 @@ fn parse_worksheet_layout_cells(
             }
             Ok(Event::Text(e)) if in_value || in_inline_text => {
                 cell_value.push_str(&xml_unescape_bytes(e.as_ref()))
+            }
+            Ok(Event::GeneralRef(e)) if in_value || in_inline_text => {
+                cell_value.push_str(&xml_general_ref(e.as_ref()))
             }
             Ok(Event::CData(e)) if in_value || in_inline_text => {
                 cell_value.push_str(&String::from_utf8_lossy(e.as_ref()))
@@ -4033,7 +4044,10 @@ fn parse_relationships(
 fn attr_value(e: &BytesStart<'_>, name: &str) -> Option<String> {
     for attr in e.attributes().flatten() {
         if local_xml_name(attr.key.as_ref()) == name {
-            return attr.unescape_value().ok().map(|v| v.to_string());
+            return attr
+                .normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|v| v.into_owned());
         }
     }
     None
@@ -4526,6 +4540,15 @@ fn extract_wordprocessing_text(context: &OfficeContext, xml: &str) -> OfficeResu
                     paragraph_had_text = true;
                 }
             }
+            Ok(Event::GeneralRef(e)) if in_text => {
+                let value = xml_general_ref(e.as_ref());
+                if in_cell {
+                    cell_text.push_str(&value);
+                } else {
+                    out.push_str(&value);
+                }
+                paragraph_had_text = true;
+            }
             Ok(Event::CData(e)) if in_text => {
                 let value = String::from_utf8_lossy(e.as_ref());
                 if !value.is_empty() {
@@ -4615,6 +4638,7 @@ fn parse_shared_strings(context: &OfficeContext, xml: &str) -> OfficeResult<Vec<
                 }
             }
             Ok(Event::Text(e)) if in_t => current.push_str(&xml_unescape_bytes(e.as_ref())),
+            Ok(Event::GeneralRef(e)) if in_t => current.push_str(&xml_general_ref(e.as_ref())),
             Ok(Event::CData(e)) if in_t => current.push_str(&String::from_utf8_lossy(e.as_ref())),
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -4663,13 +4687,13 @@ fn parse_worksheet_rows(
                             let key = local_xml_name(attr.key.as_ref());
                             if key == "t" {
                                 cell_type = attr
-                                    .unescape_value()
+                                    .normalized_value(XmlVersion::Implicit1_0)
                                     .ok()
                                     .map(|v| v.to_string())
                                     .unwrap_or_default();
                             } else if key == "r" {
                                 let reference = attr
-                                    .unescape_value()
+                                    .normalized_value(XmlVersion::Implicit1_0)
                                     .ok()
                                     .map(|v| v.to_string())
                                     .unwrap_or_default();
@@ -4724,6 +4748,9 @@ fn parse_worksheet_rows(
             }
             Ok(Event::Text(e)) if in_value || in_inline_text => {
                 cell_value.push_str(&xml_unescape_bytes(e.as_ref()))
+            }
+            Ok(Event::GeneralRef(e)) if in_value || in_inline_text => {
+                cell_value.push_str(&xml_general_ref(e.as_ref()))
             }
             Ok(Event::CData(e)) if in_value || in_inline_text => {
                 cell_value.push_str(&String::from_utf8_lossy(e.as_ref()))
@@ -4911,6 +4938,13 @@ fn local_xml_name(bytes: &[u8]) -> String {
 fn xml_unescape_bytes(bytes: &[u8]) -> String {
     let s = String::from_utf8_lossy(bytes);
     xml_unescape_str(&s)
+}
+
+fn xml_general_ref(bytes: &[u8]) -> String {
+    let entity = String::from_utf8_lossy(bytes);
+    decode_xml_entity(&entity)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| format!("&{entity};"))
 }
 
 fn xml_unescape_str(s: &str) -> String {
@@ -13434,6 +13468,7 @@ fn parse_epub_opf_with_context(
     let mut opf = EpubOpf::default();
     let mut in_metadata = false;
     let mut current_meta = String::new();
+    let mut current_meta_value = String::new();
     let mut event_count = 0usize;
 
     loop {
@@ -13450,7 +13485,10 @@ fn parse_epub_opf_with_context(
                             opf.spine.push(idref);
                         }
                     }
-                    _ if in_metadata => current_meta = name,
+                    _ if in_metadata => {
+                        current_meta = name;
+                        current_meta_value.clear();
+                    }
                     _ => {}
                 }
             }
@@ -13467,14 +13505,13 @@ fn parse_epub_opf_with_context(
                 }
             }
             Ok(Event::Text(e)) if in_metadata && !current_meta.is_empty() => {
-                set_epub_metadata(&mut opf, &current_meta, &xml_unescape_bytes(e.as_ref()));
+                current_meta_value.push_str(&xml_unescape_bytes(e.as_ref()));
+            }
+            Ok(Event::GeneralRef(e)) if in_metadata && !current_meta.is_empty() => {
+                current_meta_value.push_str(&xml_general_ref(e.as_ref()));
             }
             Ok(Event::CData(e)) if in_metadata && !current_meta.is_empty() => {
-                set_epub_metadata(
-                    &mut opf,
-                    &current_meta,
-                    &String::from_utf8_lossy(e.as_ref()),
-                );
+                current_meta_value.push_str(&String::from_utf8_lossy(e.as_ref()));
             }
             Ok(Event::End(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13482,7 +13519,9 @@ fn parse_epub_opf_with_context(
                     in_metadata = false;
                 }
                 if name == current_meta {
+                    set_epub_metadata(&mut opf, &current_meta, &current_meta_value);
                     current_meta.clear();
+                    current_meta_value.clear();
                 }
             }
             Ok(Event::Eof) => break,
@@ -13607,10 +13646,13 @@ fn extract_xhtml_markdown_with_context(
                 }
             }
             Ok(Event::Text(e)) if in_body && ignored_depth == 0 => {
-                append_text_word(&mut current_block, &xml_unescape_bytes(e.as_ref()));
+                current_block.push_str(&xml_unescape_bytes(e.as_ref()));
+            }
+            Ok(Event::GeneralRef(e)) if in_body && ignored_depth == 0 => {
+                current_block.push_str(&xml_general_ref(e.as_ref()));
             }
             Ok(Event::CData(e)) if in_body && ignored_depth == 0 => {
-                append_text_word(&mut current_block, &String::from_utf8_lossy(e.as_ref()));
+                current_block.push_str(&String::from_utf8_lossy(e.as_ref()));
             }
             Ok(Event::End(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13720,6 +13762,7 @@ fn render_fb2_reader<R: Read>(
     let mut lang = String::new();
     let mut author_parts = Vec::<String>::new();
     let mut current_meta = String::new();
+    let mut current_meta_value = String::new();
     let mut in_title_info = false;
     let mut in_body = false;
     let mut current_block = String::new();
@@ -13761,30 +13804,36 @@ fn render_fb2_reader<R: Read>(
                         &mut saw_body_heading,
                         &mut markdown_chars,
                     ),
-                    _ if in_title_info => current_meta = name,
+                    _ if in_title_info => {
+                        current_meta = name;
+                        current_meta_value.clear();
+                    }
                     _ => {}
                 }
             }
             Ok(Event::Text(e)) => {
                 let value = xml_unescape_bytes(e.as_ref());
                 if in_body {
-                    append_text_word(&mut current_block, &value);
+                    current_block.push_str(&value);
                 } else if in_title_info && !current_meta.is_empty() {
-                    match current_meta.as_str() {
-                        "book-title" if title.is_empty() => title = collapse_ws(&value),
-                        "lang" if lang.is_empty() => lang = collapse_ws(&value),
-                        "first-name" | "middle-name" | "last-name" | "nickname" => {
-                            let part = collapse_ws(&value);
-                            if !part.is_empty() {
-                                author_parts.push(part);
-                            }
-                        }
-                        _ => {}
-                    }
+                    current_meta_value.push_str(&value);
                 }
             }
-            Ok(Event::CData(e)) if in_body => {
-                append_text_word(&mut current_block, &String::from_utf8_lossy(e.as_ref()));
+            Ok(Event::GeneralRef(e)) => {
+                let value = xml_general_ref(e.as_ref());
+                if in_body {
+                    current_block.push_str(&value);
+                } else if in_title_info && !current_meta.is_empty() {
+                    current_meta_value.push_str(&value);
+                }
+            }
+            Ok(Event::CData(e)) => {
+                let value = String::from_utf8_lossy(e.as_ref());
+                if in_body {
+                    current_block.push_str(&value);
+                } else if in_title_info && !current_meta.is_empty() {
+                    current_meta_value.push_str(&value);
+                }
             }
             Ok(Event::End(e)) => {
                 let name = local_xml_name(e.name().as_ref());
@@ -13817,7 +13866,17 @@ fn render_fb2_reader<R: Read>(
                         &mut saw_body_heading,
                         &mut markdown_chars,
                     ),
-                    _ if name == current_meta => current_meta.clear(),
+                    _ if name == current_meta => {
+                        set_fb2_metadata(
+                            &mut title,
+                            &mut lang,
+                            &mut author_parts,
+                            &current_meta,
+                            &current_meta_value,
+                        );
+                        current_meta.clear();
+                        current_meta_value.clear();
+                    }
                     _ => {}
                 }
             }
@@ -13841,6 +13900,25 @@ fn render_fb2_reader<R: Read>(
     out.push('\n');
     push_markdown_limited(&mut out, markdown.trim(), MAX_EBOOK_TEXT_CHARS);
     Ok(ebook_markdown_json("fb2", &title, out))
+}
+
+fn set_fb2_metadata(
+    title: &mut String,
+    lang: &mut String,
+    author_parts: &mut Vec<String>,
+    name: &str,
+    value: &str,
+) {
+    let value = collapse_ws(value);
+    if value.is_empty() {
+        return;
+    }
+    match name {
+        "book-title" if title.is_empty() => *title = value,
+        "lang" if lang.is_empty() => *lang = value,
+        "first-name" | "middle-name" | "last-name" | "nickname" => author_parts.push(value),
+        _ => {}
+    }
 }
 
 fn render_binary_ebook_info(logical_name: &str, size: i64, modified_unix: i64) -> String {
@@ -13885,17 +13963,6 @@ fn append_metadata_line(markdown: &mut String, label: &str, value: &str) {
     if !value.is_empty() {
         markdown.push_str(&format!("**{label}:** {value}\n\n"));
     }
-}
-
-fn append_text_word(out: &mut String, value: &str) {
-    let value = collapse_ws(value);
-    if value.is_empty() {
-        return;
-    }
-    if !out.is_empty() && !out.ends_with([' ', '\n']) {
-        out.push(' ');
-    }
-    out.push_str(&value);
 }
 
 fn collapse_ws(value: &str) -> String {
@@ -15105,7 +15172,7 @@ fn parse_appx_manifest_summary(xml: &str) -> Option<AppxManifestSummary> {
                         .unwrap_or("")
                         .to_ascii_lowercase();
                     let value = attr
-                        .unescape_value()
+                        .normalized_value(XmlVersion::Implicit1_0)
                         .ok()
                         .map(|v| v.to_string())
                         .unwrap_or_default();
@@ -15520,7 +15587,7 @@ fn android_manifest_icon_reference(xml: &str) -> Option<String> {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"application" => {
                 for attr in e.attributes().flatten() {
                     let key = attr.key.as_ref();
-                    let Ok(value) = attr.unescape_value() else { continue; };
+                    let Ok(value) = attr.normalized_value(XmlVersion::Implicit1_0) else { continue; };
                     if key == b"android:icon" || key == b"icon" {
                         return Some(value.into_owned());
                     }
@@ -15900,7 +15967,15 @@ fn render_android_icon_xml<R: Read + Seek>(
         loop {
             match reader.read_event() {
                 Ok(Event::Text(text)) => {
-                    if let Some(color) = text.unescape().ok().and_then(|value| parse_android_color(&value)) {
+                    if let Some(color) = text
+                        .decode()
+                        .ok()
+                        .and_then(|value| {
+                            quick_xml::escape::unescape(&value)
+                                .ok()
+                                .and_then(|unescaped| parse_android_color(&unescaped))
+                        })
+                    {
                         return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color)));
                     }
                 }
@@ -15937,7 +16012,10 @@ fn android_xml_drawable_reference(xml: &str, element: &str) -> Option<String> {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == element.as_bytes() => {
                 for attr in e.attributes().flatten() {
                     if matches!(attr.key.as_ref(), b"android:drawable" | b"drawable" | b"android:color" | b"color") {
-                        return attr.unescape_value().ok().map(|value| value.into_owned());
+                        return attr
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .ok()
+                            .map(|value| value.into_owned());
                     }
                 }
             }
@@ -16042,7 +16120,11 @@ fn android_svg_group_start(element: &BytesStart<'_>) -> String {
 fn android_string_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
     element.attributes().flatten()
         .find(|attr| attr.key.as_ref() == name || attr.key.as_ref() == name.strip_prefix(b"android:").unwrap_or(name))
-        .and_then(|attr| attr.unescape_value().ok().map(|value| value.into_owned()))
+        .and_then(|attr| {
+            attr.normalized_value(XmlVersion::Implicit1_0)
+                .ok()
+                .map(|value| value.into_owned())
+        })
 }
 
 fn android_float_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<f32> {
@@ -19079,6 +19161,21 @@ mod tests {
         assert_eq!(opf.language, "zh-CN");
         assert_eq!(opf.spine, vec!["c1".to_string()]);
         assert!(opf.manifest.contains_key("c1"));
+    }
+
+    #[test]
+    fn ebook_entities_preserve_metadata_and_body_spacing() {
+        let opf = parse_epub_opf(
+            r#"<package><metadata><dc:title>Rock &amp; Roll</dc:title><dc:creator>A &amp; B</dc:creator></metadata></package>"#,
+        );
+        assert_eq!(opf.title, "Rock & Roll");
+        assert_eq!(opf.creator, "A & B");
+
+        let markdown = extract_xhtml_markdown(
+            r#"<html><body><p>Rock &amp; Roll</p></body></html>"#,
+            "chapter",
+        );
+        assert!(markdown.contains("Rock & Roll"));
     }
 
     #[test]
