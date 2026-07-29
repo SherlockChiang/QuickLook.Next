@@ -1197,6 +1197,7 @@ if (Test-Path $taskbarIconAssetTest) {
 $formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
 if (Test-Path $formatRegistryGuard) {
     & $formatRegistryGuard -Root $Root
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 $restrictedHostLaunchSmoke = Join-Path $PSScriptRoot "smoke-restricted-host-launch.ps1"
