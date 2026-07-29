@@ -49,6 +49,17 @@ public sealed class CoreBoundaryTests : IDisposable
     public void Text_search_matches_case_insensitively_without_overlap()
         => Assert.Equal([0, 4], TextSearchIndex.FindMatches("Testtest", "test"));
 
+    [Fact]
+    public void Text_search_caps_dense_match_results()
+    {
+        string text = new('a', TextSearchIndex.MaxMatches + 100);
+
+        List<int> matches = TextSearchIndex.FindMatches(text, "a");
+
+        Assert.Equal(TextSearchIndex.MaxMatches, matches.Count);
+        Assert.Equal(TextSearchIndex.MaxMatches - 1, matches[^1]);
+    }
+
     [Theory]
     [InlineData("automatic", "plain", false, true)]
     [InlineData("automatic", "code", false, false)]
@@ -128,6 +139,23 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("image")]
     public void Cloud_parser_host_policy_rejects_unbounded_or_raster_kinds(string kind)
         => Assert.False(PreviewFormatPolicy.UsesCloudParserHost(kind));
+
+    [Theory]
+    [InlineData("archive", false, false, PreviewRoute.ParserHost)]
+    [InlineData("text", true, false, PreviewRoute.ParserHost)]
+    [InlineData("archive", true, false, PreviewRoute.CloudMetadata)]
+    [InlineData("unknown", true, false, PreviewRoute.CloudMetadata)]
+    [InlineData("audio", true, false, PreviewRoute.CloudMetadata)]
+    [InlineData("video", false, false, PreviewRoute.Media)]
+    [InlineData("image", false, false, PreviewRoute.NativeThenRaster)]
+    [InlineData("image", false, true, PreviewRoute.RasterHost)]
+    [InlineData("pdf", true, false, PreviewRoute.NativeThenRaster)]
+    public void Preview_route_planner_preserves_host_and_cloud_boundaries(
+        string kind,
+        bool mayRequireHydration,
+        bool forceRaster,
+        PreviewRoute expected)
+        => Assert.Equal(expected, PreviewRoutePlanner.Plan(kind, mayRequireHydration, forceRaster));
 
     [Fact]
     public void Native_abi_rejects_mismatched_versions()

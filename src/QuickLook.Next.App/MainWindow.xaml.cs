@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
 
     private readonly NativeBridge _native = new();
     private readonly NativeThumbnailScheduler _thumbnailScheduler;
+    private readonly FolderListingCache _folderListingCache;
     private readonly PreviewWindowController _windowController;
     private TextPreviewPresenter? _textPresenter;
     private TablePreviewPresenter? _tablePresenter;
@@ -207,6 +208,7 @@ public sealed partial class MainWindow : Window
         ListingFilterBox.PlaceholderText = UiStrings.ListingFilterPlaceholder;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ListingFilterBox, UiStrings.ListingFilterAccessibleName);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
+        _folderListingCache = new FolderListingCache(_native.TryPreviewFolderListing);
         _panelController = new PreviewPanelController(
             PreviewRoot,
             AnimatedImagePreviewRoot,
@@ -256,7 +258,7 @@ public sealed partial class MainWindow : Window
             ImageFilmstripList,
             ImageFilmstrip,
             DispatcherQueue,
-            path => _native.TryPreviewFolderListing(path),
+            _folderListingCache.Get,
             IsImagePath,
             IsImageFilmstripLoadCurrent,
             (path, size, token) => _thumbnailScheduler.LoadAsync(path, size, NativeThumbnailPriority.Background, cacheOnly: true, token),
@@ -291,7 +293,7 @@ public sealed partial class MainWindow : Window
             ListingModifiedHeader,
             ListingTypeHeader,
             ListingSizeHeader,
-            path => _native.TryPreviewFolderListing(path),
+            _folderListingCache.Get,
             () => _previewSession.Generation,
             () => CurrentPreviewToken,
             IsPreviewGenerationCurrent,
@@ -380,7 +382,6 @@ public sealed partial class MainWindow : Window
         _uiWatchdog ??= new UiThreadWatchdog(DispatcherQueue);
         SetBackgroundEfficiency(enabled: true);
         StatusBar.Visibility = ShowStatusBar ? Visibility.Visible : Visibility.Collapsed;
-        AutoStart.RepairIfConfigured();
         ApplyWindowIcon();
         EnsureTrayIcon();
         _windowController.SetNoActivateStyle(enabled: false);
@@ -396,6 +397,7 @@ public sealed partial class MainWindow : Window
             AppStartupTiming.Mark("native-hook-ready");
             StatusText.Text = UiStrings.Ready.ToLowerInvariant();
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
+            _ = RepairAutoStartAsync(_lifetimeCts.Token);
             _ = PrewarmPreviewHostsAsync(_lifetimeCts.Token);
         }
         catch (Exception ex)
@@ -415,14 +417,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private static async Task RepairAutoStartAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(2000, cancellationToken).ConfigureAwait(false);
+            await Task.Run(AutoStart.RepairIfConfigured, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "deferred autostart repair failed: " + ex.Message);
+        }
+    }
+
     private async Task PrewarmPreviewHostsAsync(CancellationToken cancellationToken)
     {
         try
         {
             await Task.Delay(1500, cancellationToken);
-            await Task.WhenAll(
-                PrewarmHostAsync("ParserHost", 500, () => EnsureParserHostStartedAsync(cancellationToken)),
-                PrewarmHostAsync("RasterHost", 750, () => EnsureRasterHostStartedAsync(cancellationToken)));
+            await PrewarmHostAsync("RasterHost", 750, () => EnsureRasterHostStartedAsync(cancellationToken));
+            await Task.Delay(500, cancellationToken);
+            await PrewarmHostAsync("ParserHost", 500, () => EnsureParserHostStartedAsync(cancellationToken));
         }
         catch (OperationCanceledException)
         {
@@ -763,8 +781,14 @@ public sealed partial class MainWindow : Window
             MarkPreviewPhase(generation, "probe-complete", $"kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentProbe = probe;
+            bool forceAnimatedFirstFrameRaster = PrefersReducedMotion || mayRequireHydration;
+            PreviewRoute route = PreviewRoutePlanner.Plan(
+                probe.Kind,
+                mayRequireHydration,
+                forceAnimatedFirstFrameRaster);
 
-            if (mayRequireHydration && probe.Kind.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+            if (route == PreviewRoute.CloudMetadata
+                && probe.Kind.Equals("unknown", StringComparison.OrdinalIgnoreCase))
             {
                 var unknownCloudReady = CreateCloudMetadataPreview(
                     $"cloud-unknown-{generation}",
@@ -780,10 +804,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (mayRequireHydration
-                && !PreviewFormatPolicy.UsesCloudParserHost(probe.Kind)
-                && !probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
-                && !probe.Kind.Equals("pdf", StringComparison.OrdinalIgnoreCase)
+            if (route == PreviewRoute.CloudMetadata
                 && !MediaPreviewPresenter.IsMediaProbe(probe))
             {
                 var deferred = CreateCloudMetadataPreview(
@@ -798,7 +819,8 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            if (MediaPreviewPresenter.IsMediaProbe(probe))
+            if (route is PreviewRoute.Media or PreviewRoute.CloudMetadata
+                && MediaPreviewPresenter.IsMediaProbe(probe))
             {
                 MarkPreviewPhase(generation, "route-selected", "route=media");
                 if (mayRequireHydration)
@@ -838,8 +860,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            bool forceAnimatedFirstFrameRaster = PrefersReducedMotion || mayRequireHydration;
-            AnimatedImageRenderPlan? animatedPlan = forceAnimatedFirstFrameRaster
+            AnimatedImageRenderPlan? animatedPlan = route == PreviewRoute.RasterHost
                 ? null
                 : await Task.Run(() => AnimatedImagePreviewPresenter.CreateRenderPlan(path), previewToken);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
@@ -851,6 +872,7 @@ public sealed partial class MainWindow : Window
                 {
                     DiagLog.Write("App", $"preview animated image staging raster first frame gen={generation}; {plan.Width}x{plan.Height}");
                     forceAnimatedFirstFrameRaster = true;
+                    route = PreviewRoutePlanner.Plan(probe.Kind, mayRequireHydration, forceRaster: true);
                 }
                 else
                 {
@@ -870,8 +892,7 @@ public sealed partial class MainWindow : Window
 
 
             PreviewReady? nativeReady = null;
-            if (IsParserHostPreview(probe)
-                && (!mayRequireHydration || PreviewFormatPolicy.UsesCloudParserHost(probe.Kind)))
+            if (route == PreviewRoute.ParserHost)
             {
                 MarkPreviewPhase(generation, "route-selected", "route=parser-host");
                 await EnsureParserHostStartedAsync(previewToken);
@@ -896,7 +917,7 @@ public sealed partial class MainWindow : Window
                 }
                 nativeReady = parserResult as PreviewReady;
             }
-            else if (!forceAnimatedFirstFrameRaster)
+            else if (route == PreviewRoute.NativeThenRaster)
             {
                 MarkPreviewPhase(generation, "route-selected", "route=native");
                 nativeReady = await Task.Run(() => _native.TryPreview($"native-{generation}", path, probe, previewToken), previewToken);
@@ -2043,7 +2064,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<ImageSource?> LoadListingIconAsync(ListingRow row, int generation)
+    private async Task<ImageSource?> LoadListingIconAsync(
+        ListingRow row,
+        int generation,
+        CancellationToken cancellationToken)
     {
         string? path = row.NativePath;
         if (string.IsNullOrWhiteSpace(path))
@@ -2051,13 +2075,17 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            CancellationToken token = CurrentPreviewToken;
-            bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), token);
-            if (mayRequireHydration || !IsPreviewGenerationCurrent(generation, token))
+            bool mayRequireHydration = await Task.Run(() => CloudFileStatus.MayRequireHydration(path), cancellationToken);
+            if (mayRequireHydration || !IsPreviewGenerationCurrent(generation, cancellationToken))
                 return null;
-            NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(path, 32, NativeThumbnailPriority.Foreground, cacheOnly: true, token);
+            NativeRasterImage? raster = await _thumbnailScheduler.LoadAsync(
+                path,
+                32,
+                NativeThumbnailPriority.Foreground,
+                cacheOnly: true,
+                cancellationToken);
 
-            if (!IsPreviewGenerationCurrent(generation, token) || raster is null)
+            if (!IsPreviewGenerationCurrent(generation, cancellationToken) || raster is null)
                 return null;
 
             return CreateBitmapSource(raster);

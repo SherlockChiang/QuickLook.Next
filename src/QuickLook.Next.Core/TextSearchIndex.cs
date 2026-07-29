@@ -12,6 +12,7 @@ public static class TextSearchIndex
     public const int MaxMarkdownTableCells = 4096;
     public const int MaxMarkdownInlineDepth = 16;
     public const int MaxMarkdownBlocks = 2000;
+    public const int MaxMatches = 10_000;
 
     public static List<int> FindMatches(string text, string query)
     {
@@ -20,7 +21,8 @@ public static class TextSearchIndex
         if (query.Length == 0)
             return matches;
         int index = 0;
-        while ((index = text.IndexOf(query, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        while (matches.Count < MaxMatches
+            && (index = text.IndexOf(query, index, StringComparison.OrdinalIgnoreCase)) >= 0)
         {
             matches.Add(index);
             index += query.Length;

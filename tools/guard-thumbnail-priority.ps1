@@ -39,7 +39,7 @@ if (Test-Path $mainWindowPath) {
     if ($mainWindowText -notmatch 'NativeThumbnailPriority\.Background, cacheOnly: true') {
         Add-Failure "Automatic filmstrip thumbnails must use the Shell cache only"
     }
-    if ($mainWindowText -notmatch 'LoadAsync\(path, 32, NativeThumbnailPriority\.Foreground, cacheOnly: true') {
+    if ($mainWindowText -notmatch '(?s)LoadAsync\(\s*path,\s*32,\s*NativeThumbnailPriority\.Foreground,\s*cacheOnly:\s*true') {
         Add-Failure "Automatic listing thumbnails must use the Shell cache only"
     }
     if (($mainWindowText | Select-String -Pattern 'NativeThumbnailPriority\.Foreground, cacheOnly: false' -AllMatches).Matches.Count -lt 3) {

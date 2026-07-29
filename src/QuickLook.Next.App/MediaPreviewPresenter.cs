@@ -64,9 +64,7 @@ internal sealed class MediaPreviewPresenter
     }
 
     public static bool IsMediaProbe(FileProbe probe)
-        => probe.Kind.Equals("video", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("audio", StringComparison.OrdinalIgnoreCase)
-           || probe.Kind.Equals("media", StringComparison.OrdinalIgnoreCase);
+        => PreviewRoutePlanner.IsMedia(probe.Kind);
 }
 
 internal readonly record struct MediaPreviewResult(string Status, double Width, double Height);

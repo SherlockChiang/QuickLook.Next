@@ -10,6 +10,7 @@ namespace QuickLook.Next.App;
 internal sealed class ListingPreviewPresenter
 {
     private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush UiGrayBrush = new(Microsoft.UI.Colors.Gray);
+    private static readonly TimeSpan FilterDebounce = TimeSpan.FromMilliseconds(150);
 
     private readonly TextBlock _title;
     private readonly TextBlock _summary;
@@ -25,12 +26,15 @@ internal sealed class ListingPreviewPresenter
     private readonly Func<CancellationToken> _getCancellationToken;
     private readonly Func<int, bool> _isGenerationCurrent;
     private readonly Func<PreviewListing?, ListingRow, Task> _previewItem;
-    private readonly Func<ListingRow, int, Task<ImageSource?>> _loadIconAsync;
+    private readonly Func<ListingRow, int, CancellationToken, Task<ImageSource?>> _loadIconAsync;
 
     private PreviewListing? _currentListing;
     private string _currentPath = "";
     private string _sortColumn = "name";
     private bool _sortAscending = true;
+    private CancellationTokenSource? _filterDebounceCancellation;
+    private CancellationTokenSource? _iconLoadCancellation;
+    private bool _suppressFilterChange;
 
     public ListingPreviewPresenter(
         TextBlock title,
@@ -47,7 +51,7 @@ internal sealed class ListingPreviewPresenter
         Func<CancellationToken> getCancellationToken,
         Func<int, bool> isGenerationCurrent,
         Func<PreviewListing?, ListingRow, Task> previewItem,
-        Func<ListingRow, int, Task<ImageSource?>> loadIconAsync)
+        Func<ListingRow, int, CancellationToken, Task<ImageSource?>> loadIconAsync)
     {
         _title = title;
         _summary = summary;
@@ -64,12 +68,14 @@ internal sealed class ListingPreviewPresenter
         _isGenerationCurrent = isGenerationCurrent;
         _previewItem = previewItem;
         _loadIconAsync = loadIconAsync;
-        _filterBox.TextChanged += (_, _) => RenderListing();
+        _filterBox.TextChanged += (_, _) => ScheduleFilterRender();
         _filterBox.KeyDown += (_, e) =>
         {
             if (e.Key == Windows.System.VirtualKey.Escape)
             {
-                _filterBox.Text = "";
+                CancelAndDispose(ref _filterDebounceCancellation);
+                SetFilterText("");
+                RenderListing();
                 _listView.Focus(FocusState.Programmatic);
                 e.Handled = true;
             }
@@ -80,7 +86,7 @@ internal sealed class ListingPreviewPresenter
     {
         _currentListing = ready.Listing;
         _currentPath = "";
-        _filterBox.Text = "";
+        SetFilterText("");
         RenderListing();
         var size = EstimatePreviewSize(maxContent);
         return new ListingPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
@@ -90,9 +96,11 @@ internal sealed class ListingPreviewPresenter
     {
         _currentListing = null;
         _currentPath = "";
+        CancelAndDispose(ref _filterDebounceCancellation);
+        CancelAndDispose(ref _iconLoadCancellation);
         _listView.ItemsSource = null;
         _breadcrumbPanel.Children.Clear();
-        _filterBox.Text = "";
+        SetFilterText("");
     }
 
     public void UpdateSortHeaders()
@@ -208,21 +216,67 @@ internal sealed class ListingPreviewPresenter
 
     private void StartIconLoads(IReadOnlyList<ListingRow> rows)
     {
+        CancelAndDispose(ref _iconLoadCancellation);
+        _iconLoadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_getCancellationToken());
+        CancellationToken cancellationToken = _iconLoadCancellation.Token;
         int generation = _getGeneration();
         foreach (ListingRow row in rows.Take(240))
         {
             if (string.IsNullOrWhiteSpace(row.NativePath))
                 continue;
 
-            _ = LoadRowIconAsync(row, generation);
+            _ = LoadRowIconAsync(row, generation, cancellationToken);
         }
     }
 
-    private async Task LoadRowIconAsync(ListingRow row, int generation)
+    private async Task LoadRowIconAsync(ListingRow row, int generation, CancellationToken cancellationToken)
     {
-        ImageSource? source = await _loadIconAsync(row, generation);
-        if (source is not null && _isGenerationCurrent(generation))
-            row.IconSource = source;
+        try
+        {
+            ImageSource? source = await _loadIconAsync(row, generation, cancellationToken);
+            if (source is not null && !cancellationToken.IsCancellationRequested && _isGenerationCurrent(generation))
+                row.IconSource = source;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void ScheduleFilterRender()
+    {
+        if (_suppressFilterChange)
+            return;
+
+        CancelAndDispose(ref _filterDebounceCancellation);
+        _filterDebounceCancellation = CancellationTokenSource.CreateLinkedTokenSource(_getCancellationToken());
+        _ = RenderFilterAfterDelayAsync(_filterDebounceCancellation.Token);
+    }
+
+    private async Task RenderFilterAfterDelayAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(FilterDebounce, cancellationToken);
+            if (!cancellationToken.IsCancellationRequested)
+                RenderListing();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void SetFilterText(string text)
+    {
+        _suppressFilterChange = true;
+        try { _filterBox.Text = text; }
+        finally { _suppressFilterChange = false; }
+    }
+
+    private static void CancelAndDispose(ref CancellationTokenSource? cancellation)
+    {
+        cancellation?.Cancel();
+        cancellation?.Dispose();
+        cancellation = null;
     }
 
     private int CompareItems(PreviewListingItem left, PreviewListingItem right)
