@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -31,3 +33,34 @@ jobs:
       - name: Run release checks
         shell: pwsh
         run: ./tools/release.ps1 -SkipPackage -SkipSystemImageSmoke
+
+      - name: Check NuGet vulnerabilities
+        shell: pwsh
+        run: ./tools/test-nuget-vulnerabilities.ps1
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked --force
+          cargo audit --file native/quicklook_next_native/Cargo.lock
+
+  website:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install and audit website dependencies
+        working-directory: website
+        run: npm ci && npm audit
+
+      - name: Build website
+        working-directory: website
+        run: npm run build

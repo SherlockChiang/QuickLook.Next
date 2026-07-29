@@ -7,8 +7,23 @@ $ci = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\ci.yml") -Raw
 $stable = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\release.yml") -Raw
 $beta = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\beta-release.yml") -Raw
 $shared = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\package-release.yml") -Raw
+$pages = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\pages.yml") -Raw
 
-if ($ci -match '(?m)^\s+push:\s*$') { throw "CI must not duplicate stable release work on main push." }
+if ($ci -notmatch '(?ms)^on:\s*.*?push:\s*\r?\n\s+branches:\s*\[main\]') {
+    throw "CI must verify every push to main independently from release publication."
+}
+if ($ci -notmatch 'tools/test-nuget-vulnerabilities\.ps1' -or
+    $ci -notmatch 'cargo install cargo-audit --version 0\.22\.2 --locked --force[\s\S]*cargo audit --file native/quicklook_next_native/Cargo\.lock' -or
+    $ci -notmatch 'npm ci && npm audit' -or
+    $ci -notmatch 'working-directory:\s+website[\s\S]*npm run build') {
+    throw "Pull-request CI must audit NuGet, Cargo, and npm dependencies and build the website."
+}
+if ($shared -notmatch "cargo-audit 0\\\.22\\\.2" -or
+    $shared -notmatch 'cargo install cargo-audit --version 0\.22\.2 --locked --force' -or
+    $shared -notmatch 'cargo-audit-\$\{\{ runner\.os \}\}-0\.22\.2' -or
+    $shared -notmatch 'tools/test-nuget-vulnerabilities\.ps1') {
+    throw "Release dependency auditing must use the pinned CVSS 4.0-compatible cargo-audit version."
+}
 if ($stable -notmatch "startsWith\(github\.event\.head_commit\.message, 'release:'\)") {
     throw "Stable releases must require an explicit release: commit."
 }
@@ -34,8 +49,8 @@ foreach ($workflow in @($stable, $beta)) {
         throw "Stable and beta releases must attest and publish release metadata."
     }
 }
-foreach ($workflow in @($ci, $stable, $beta, $shared)) {
-    if ($workflow -match 'actions/(checkout|setup-dotnet|upload-artifact|download-artifact|cache)@v\d') {
+foreach ($workflow in @($ci, $stable, $beta, $shared, $pages)) {
+    if ($workflow -match 'uses:\s+actions/[^@\s]+@v\d') {
         throw "Official actions must remain pinned to immutable commit SHAs."
     }
 }
