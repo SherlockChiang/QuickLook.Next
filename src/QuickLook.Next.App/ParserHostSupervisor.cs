@@ -13,7 +13,7 @@ namespace QuickLook.Next.App;
 internal sealed class ParserHostSupervisor
 {
     private static readonly TimeSpan PreviewTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan HostConnectTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HostConnectTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ResourceTelemetryInterval = TimeSpan.FromMinutes(1);
     private readonly string _hostExePath;
     private readonly PendingRequests _pending = new();
@@ -96,6 +96,7 @@ internal sealed class ParserHostSupervisor
             await _server.WaitForConnectionAsync(connectCts.Token);
             if (!GetNamedPipeClientProcessId(_server.SafePipeHandle.DangerousGetHandle(), out uint clientPid) || clientPid != _host.Id)
                 throw new InvalidOperationException("ParserHost pipe client did not match the launched process");
+            DiagLog.Write("App", $"ParserHost pipe connected gen={generation}; pid={_host.Id}");
         }
         catch
         {
@@ -104,6 +105,7 @@ internal sealed class ParserHostSupervisor
             _server = null;
             try { _host?.Dispose(); } catch { }
             _host = null;
+            PreserveHostLog(writableRoot, generation);
             CleanupWritableRoot(writableRoot);
             throw;
         }
@@ -116,6 +118,7 @@ internal sealed class ParserHostSupervisor
             using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             readyCts.CancelAfter(HostConnectTimeout);
             await _ready.Task.WaitAsync(readyCts.Token);
+            DiagLog.Write("App", $"ParserHost ready gen={generation}; pid={_host.Id}");
         }
         catch
         {
@@ -126,6 +129,7 @@ internal sealed class ParserHostSupervisor
             _server = null;
             try { _host?.Dispose(); } catch { }
             _host = null;
+            PreserveHostLog(writableRoot, generation);
             CleanupWritableRoot(writableRoot);
             throw;
         }
@@ -513,6 +517,7 @@ internal sealed class ParserHostSupervisor
         }
         finally
         {
+            PreserveHostLog(writableRoot, generation);
             CleanupWritableRoot(writableRoot);
         }
     }
@@ -629,6 +634,19 @@ internal sealed class ParserHostSupervisor
         {
             if (Directory.Exists(root) && (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0)
                 Directory.Delete(root, recursive: true);
+        }
+        catch { }
+    }
+
+    private static void PreserveHostLog(string writableRoot, int generation)
+    {
+        try
+        {
+            string source = Path.Combine(writableRoot, "logs", "parser-host.log");
+            if (!File.Exists(source))
+                return;
+            Directory.CreateDirectory(DiagLog.LogDirectory);
+            File.Copy(source, Path.Combine(DiagLog.LogDirectory, $"parser-host-{generation}.log"), overwrite: true);
         }
         catch { }
     }

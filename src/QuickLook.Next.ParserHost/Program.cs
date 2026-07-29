@@ -17,17 +17,14 @@ Environment.SetEnvironmentVariable("QUICKLOOK_NEXT_ARCHIVE_ROOT", archiveRoot);
 
 DiagLog.InitInDirectory(logRoot, "parser-host.log");
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
-try { ParserNativePreview.EnsureCompatible(); }
-catch (Exception ex) { DiagLog.Write("ParserHost", "native ABI check failed: " + ex.Message); return; }
-ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
-CleanupStaleHeroRasters(rasterRoot);
 
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 PipeChannel channel;
 try
 {
-    await pipe.ConnectAsync(5000);
+    await pipe.ConnectAsync(15_000);
     channel = new PipeChannel(pipe);
+    DiagLog.Write("ParserHost", "pipe connected");
 }
 catch (Exception ex)
 {
@@ -36,6 +33,16 @@ catch (Exception ex)
 }
 
 using var channelLifetime = channel;
+try { ParserNativePreview.EnsureCompatible(); }
+catch (Exception ex)
+{
+    DiagLog.Write("ParserHost", "native ABI check failed: " + ex.Message);
+    return;
+}
+DiagLog.Write("ParserHost", "native ABI ready");
+ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
+CleanupStaleHeroRasters(rasterRoot);
+
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
 var archiveEntries = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
@@ -73,6 +80,7 @@ while (true)
             }
             authenticated = true;
             await channel.SendAsync(new ParserReady());
+            DiagLog.Write("ParserHost", "authenticated; sent parser.ready");
             break;
 
         case var _ when !authenticated:
