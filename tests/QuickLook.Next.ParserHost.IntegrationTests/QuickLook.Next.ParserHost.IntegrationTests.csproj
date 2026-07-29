@@ -4,7 +4,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IsPackable>false</IsPackable>
     <ParserHostOutput>$(MSBuildThisFileDirectory)..\..\src\QuickLook.Next.ParserHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\win-x64\</ParserHostOutput>
-    <NativeDll>$(MSBuildThisFileDirectory)..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll</NativeDll>
+    <NativeDll>$(MSBuildThisFileDirectory)..\..\native\target\release\quicklook_next_native.dll</NativeDll>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />

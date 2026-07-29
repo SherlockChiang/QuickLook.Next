@@ -55,7 +55,7 @@ if ($LASTEXITCODE -ne 0) { throw "Solution tests failed." }
 
 $tfm = "net10.0-windows10.0.19041.0\win-x64"
 $testedOutputs = @(
-    "native\quicklook_next_native\target\release\quicklook_next_native.dll",
+    "native\target\release\quicklook_next_native.dll",
     "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe",
     "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.dll",
     "src\QuickLook.Next.App\bin\Release\$tfm\quicklook_next_native.dll",

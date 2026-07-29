@@ -58,7 +58,7 @@ if (-not $SkipBuild) {
 }
 
 $requiredOutputs = @(
-    (Join-Path $root "native\quicklook_next_native\target\release\quicklook_next_native.dll"),
+    (Join-Path $root "native\target\release\quicklook_next_native.dll"),
     (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe"),
     (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe"),
     (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe"),

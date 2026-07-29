@@ -24,7 +24,7 @@ Write-Host "== native smoke ==" -ForegroundColor Cyan
 Write-Host "root: $Root"
 
 $nativeManifest = Join-Path $Root "native\quicklook_next_native\Cargo.toml"
-$nativeDll = Join-Path $Root "native\quicklook_next_native\target\release\quicklook_next_native.dll"
+$nativeDll = Join-Path $Root "native\target\release\quicklook_next_native.dll"
 if ($BuildNative -or -not (Test-Path $nativeDll)) {
     cargo build --release --manifest-path $nativeManifest
 }

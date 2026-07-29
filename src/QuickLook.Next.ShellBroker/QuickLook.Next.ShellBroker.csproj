@@ -10,9 +10,9 @@
     <ProjectReference Include="..\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll"
+    <None Include="..\..\native\target\release\quicklook_next_native.dll"
           Link="quicklook_next_native.dll"
           CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\native\quicklook_next_native\target\release\quicklook_next_native.dll')" />
+          Condition="Exists('..\..\native\target\release\quicklook_next_native.dll')" />
   </ItemGroup>
 </Project>
