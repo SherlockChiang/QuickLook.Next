@@ -242,6 +242,7 @@ while (true)
                         {
                             activeRequestId = null;
                             activeOpen = null;
+                            idleTrimmer.SetPreviewActive(false);
                             CancelAnimationsForParent(close.RequestId);
                             producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                         }
@@ -298,6 +299,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     }
     activeRequestId = open.RequestId;
     activeOpen = sourceHandle is null ? open : null;
+    idleTrimmer.SetPreviewActive(true);
     string[] existing;
     lock (openCtsLock)
         existing = openCts.Keys.ToArray();

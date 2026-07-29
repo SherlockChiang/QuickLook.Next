@@ -102,6 +102,8 @@ Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."
 Require-Pattern $idleTrimmer 'GC\.Collect\([\s\S]*GC\.WaitForPendingFinalizers\(\)[\s\S]*GC\.Collect\(' `
     "RasterHost idle trim must complete finalizers before its post-finalization collection."
+Require-Pattern $idleTrimmer 'SetPreviewActive\(bool active\)[\s\S]*Volatile\.Read\(ref _previewActive\)\s*!=\s*0' `
+    "RasterHost must not force compacting GC while a preview remains active."
 Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_resources_after_idle_trim[\s\S]*privateByteRecoveryBudget\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*QL_IDLE_TRIM_SECONDS[\s\S]*QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*peakHandles\s*>\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
     "RasterHost must verify that repeated system-codec HANDLE usage recovers after idle trim."
 $pdfHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostPdfTests.cs"
@@ -170,8 +172,8 @@ Require-Pattern $mainWindow 'ApplyAccessibilityVisuals\(\)[\s\S]*?TrySetBackdrop
     "Image letterboxing must refresh when transparency or high-contrast settings change."
 Require-Pattern $mainWindow '(?s)^(?!.*PreviewRoot\.Background\s*=\s*new\s+SolidColorBrush\([^)]*(?:Colors\.)?Black)(?!.*AnimatedImagePreviewRoot\.Background\s*=\s*new\s+SolidColorBrush\([^)]*(?:Colors\.)?Black).*$' `
     "Image preview roots must not restore an opaque black letterbox at runtime."
-Require-Pattern $mainWindow 'Task\.WhenAll\([\s\S]*PrewarmHostAsync\("ParserHost"[\s\S]*PrewarmHostAsync\("RasterHost"' `
-    "ParserHost and RasterHost idle prewarming must run concurrently."
+Require-Pattern $mainWindow 'PrewarmHostAsync\("RasterHost"[\s\S]*Task\.Delay\(500,[\s\S]*PrewarmHostAsync\("ParserHost"' `
+    "ParserHost and RasterHost idle prewarming must remain staggered to avoid a startup resource burst."
 Require-Pattern $mainWindow '_officePresenter\?\.Clear\(\)' `
     "Preview reset must release retained Office layout state."
 Require-Pattern $mainWindow 'PreviewRoot\.PointerCanceled\s*\+=' `
@@ -208,8 +210,10 @@ Require-Pattern $pdfSession 'BitmapEncoderId\s*=\s*BitmapEncoder\.BmpEncoderId' 
     "PDF rendering must avoid the default PNG encode/decode round trip."
 Require-Pattern $pdfSession '_pageSizes\[0\]\s*=\s*firstPageSize' `
     "PDF sessions must reuse the page geometry already read during open."
-Require-Pattern $pdfSession 'TrackRenderTask\(renderTask\)[\s\S]*renderTask\.WaitAsync\(PageRenderTimeout,\s*token\)' `
+Require-Pattern $pdfSession 'RenderPageCoreAsync\(pageIndex,\s*targetW,\s*targetH,\s*_disposeCts\.Token\)[\s\S]*TrackRenderTask\(renderTask\)[\s\S]*renderTask\.WaitAsync\(PageRenderTimeout,\s*token\)' `
     "PDF sessions must retain the underlying WinRT render after a cancelable waiter exits."
+Require-Pattern $pdfHostIntegration 'Canceling_first_waiter_does_not_cancel_shared_pdf_render[\s\S]*PreviewPageOpen\(requestId,\s*0,\s*1,\s*4\)[\s\S]*PreviewPageOpen\(requestId,\s*0,\s*2,\s*4\)[\s\S]*PreviewPageClose\(requestId,\s*0,\s*1\)[\s\S]*ReceiveSurfaceAsync\(channel,\s*requestId,\s*2' `
+    "PDF integration coverage must prove one canceled waiter cannot cancel a shared render."
 Require-Pattern $pdfSession '_renderTasks\.ToArray\(\)[\s\S]*Task\.WhenAll\(renderTasks\)\.WaitAsync\(PageRenderTimeout\)[\s\S]*_document\s*=\s*null' `
     "PDF session disposal must drain underlying renders before releasing document-owned resources."
 Require-Pattern $pdfSession 'DiskCacheTouches\.Writer\.TryWrite\(path\)' `
@@ -239,12 +243,16 @@ Require-Pattern $mainWindow 'nativeReady is null\s*&&\s*probe\.Kind\.Equals\("da
 Require-Pattern $mainWindow 'BuildDimensionsText\(PreviewReady ready\)[\s\S]*ready\.Kind\s*==\s*"database"[\s\S]*UiStrings\.EmptyValue' `
     "Database previews must not expose preferred window dimensions as file dimensions."
 $parserPolicy = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
+$routePlanner = Join-Path $Root "src/QuickLook.Next.Core/PreviewRoutePlanner.cs"
+$coreBoundaryTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/CoreBoundaryTests.cs"
 Require-Pattern $parserPolicy 'ParserHostKinds[\s\S]*"database"' `
     "Database parsing must remain isolated in ParserHost."
 Require-Pattern $parserPolicy 'CloudParserHostKinds[\s\S]*"database"' `
     "Hydrated cloud databases must remain eligible for ParserHost parsing."
-Require-Pattern $mainWindow 'IsParserHostPreview\(probe\)[\s\S]*!mayRequireHydration\s*\|\|\s*PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)' `
-    "Cloud ParserHost routing must not be blocked by animated-image raster staging."
+Require-Pattern $routePlanner 'mayRequireHydration[\s\S]*PreviewFormatPolicy\.UsesCloudParserHost\(kind\)[\s\S]*PreviewFormatPolicy\.UsesParserHost\(kind\)[\s\S]*PreviewRoute\.ParserHost' `
+    "Cloud ParserHost routing must remain independent of animated-image raster staging."
+Require-Pattern $coreBoundaryTests '"text",\s*true,\s*false,\s*PreviewRoute\.ParserHost[\s\S]*"archive",\s*true,\s*false,\s*PreviewRoute\.CloudMetadata' `
+    "Preview routing tests must retain bounded cloud ParserHost and deferred archive cases."
 $parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
 Require-Pattern $parserNativePreview 'TryPreviewSqliteHandles\([\s\S]*mainLength\s*>\s*NativeAbi\.MaxParserHandleInputBytes[\s\S]*walLength\s*>\s*NativeAbi\.MaxSqliteWalBytes[\s\S]*shmLength\s*>\s*NativeAbi\.MaxSqliteShmBytes[\s\S]*ql_preview_sqlite_handles\([\s\S]*checked\(\(ulong\)mainLength\)[\s\S]*checked\(\(ulong\)walLength\)[\s\S]*checked\(\(ulong\)shmLength\)[\s\S]*cancel' `
     "ParserHost database previews must preserve bounded main/WAL/SHM HANDLE metadata."
@@ -276,10 +284,12 @@ Require-Pattern $mainWindow 'availability\s*!=\s*CloudFileAvailability\.Local[\s
 $cloudHydrationTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/CloudHydrationPolicyTests.cs"
 Require-Pattern $cloudHydrationTests '268435456,\s*true[\s\S]*268435457,\s*false[\s\S]*268435456,\s*65536,\s*1[\s\S]*268435457,\s*65536,\s*0' `
     "Cloud hydration tests must retain exact-limit and overflow-read boundaries."
-Require-Pattern $mainWindow 'mayRequireHydration[\s\S]*!PreviewFormatPolicy\.UsesCloudParserHost\(probe\.Kind\)[\s\S]*!probe\.Kind\.Equals\("image"[\s\S]*CreateCloudMetadataPreview' `
+Require-Pattern $routePlanner 'string\.Equals\(kind,\s*"unknown"[\s\S]*!PreviewFormatPolicy\.UsesCloudParserHost\(kind\)[\s\S]*!string\.Equals\(kind,\s*"image"[\s\S]*PreviewRoute\.CloudMetadata' `
     "Unknown cloud availability must keep non-raster formats out of Shell thumbnail fallback."
 
 $textSearchIndex = Join-Path $Root "src/QuickLook.Next.Core/TextSearchIndex.cs"
+Require-Pattern $textSearchIndex 'MaxMatches\s*=\s*10_000[\s\S]*matches\.Count\s*<\s*MaxMatches' `
+    "Text search must retain a bounded match-result budget."
 Require-Pattern $textSearchIndex 'MaxMarkdownTableColumns\s*=\s*64' `
     "Markdown table rendering must remain capped at 64 columns."
 Require-Pattern $textSearchIndex 'MaxMarkdownTableCells\s*=\s*4096' `

@@ -263,6 +263,61 @@ public sealed class RasterHostPdfTests
         }
     }
 
+    [Fact]
+    public async Task Canceling_first_waiter_does_not_cancel_shared_pdf_render()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        string pipeName = $"quicklook_next_raster_pdf_waiter_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-pdf-waiter-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-pdf-waiter-{Guid.NewGuid():N}.pdf");
+
+        try
+        {
+            await File.WriteAllBytesAsync(physicalPath, CreateOnePagePdf(pageWidth: 2200, pageHeight: 2200), timeout.Token);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = await OpenPinnedPdfAsync(channel, host, physicalPath, logicalPath, timeout.Token);
+            host.Refresh();
+            int preRenderHandles = host.HandleCount;
+            await channel.SendAsync(new PreviewPageOpen(requestId, 0, 1, 4), timeout.Token);
+            await WaitUntilAsync(() =>
+            {
+                host.Refresh();
+                return host.HandleCount > preRenderHandles;
+            }, timeout.Token);
+            await channel.SendAsync(new PreviewPageOpen(requestId, 0, 2, 4), timeout.Token);
+            await channel.SendAsync(new PreviewPageClose(requestId, 0, 1), timeout.Token);
+
+            PreviewSurface secondSurface = await ReceiveSurfaceAsync(channel, requestId, 2, timeout.Token);
+            Assert.Equal((requestId, 0, 2L),
+                (secondSurface.RequestId, secondSurface.PageIndex, secondSurface.PageGeneration));
+            await channel.SendAsync(new PreviewSurfaceRelease(secondSurface.TransferId), timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+            Assert.False(host.HasExited);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            try { File.Delete(physicalPath); } catch { }
+        }
+    }
+
     private static async Task<string> OpenPinnedPdfAsync(
         PipeChannel channel,
         Process host,
@@ -299,6 +354,29 @@ public sealed class RasterHostPdfTests
                 throw new Xunit.Sdk.XunitException(error.Message);
             if (message is T)
                 return message;
+        }
+    }
+
+    private static async Task<PreviewSurface> ReceiveSurfaceAsync(
+        PipeChannel channel,
+        string requestId,
+        long pageGeneration,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            ControlMessage message = await channel.ReceiveAsync(cancellationToken)
+                ?? throw new EndOfStreamException("RasterHost closed before completing the PDF page request.");
+            if (message is PreviewError error)
+                throw new Xunit.Sdk.XunitException(error.Message);
+            if (message is PreviewPageError pageError && pageError.PageGeneration == pageGeneration)
+                throw new Xunit.Sdk.XunitException(pageError.Message);
+            if (message is PreviewSurface surface)
+            {
+                if (surface.RequestId == requestId && surface.PageGeneration == pageGeneration)
+                    return surface;
+                await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), cancellationToken);
+            }
         }
     }
 

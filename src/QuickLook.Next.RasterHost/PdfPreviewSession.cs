@@ -455,7 +455,7 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
 
         var waitWatch = Stopwatch.StartNew();
         Task<(byte[] Bgra, int Width, int Height)> renderTask = GetOrStartInflight(
-            cacheKey, () => RenderPageCoreAsync(pageIndex, targetW, targetH, token));
+            cacheKey, () => RenderPageCoreAsync(pageIndex, targetW, targetH, _disposeCts.Token));
         TrackRenderTask(renderTask);
         var rendered = await renderTask.WaitAsync(PageRenderTimeout, token);
         waitWatch.Stop();

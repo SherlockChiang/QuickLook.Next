@@ -24,6 +24,7 @@ internal sealed class IdleTrimmer : IDisposable
     private readonly Timer _timer;
     private long _lastTicks;
     private int _trimmed; // 0 = active since last trim, 1 = already trimmed this idle period
+    private int _previewActive;
 
     public IdleTrimmer(CompositionProducer producer)
     {
@@ -39,14 +40,19 @@ internal sealed class IdleTrimmer : IDisposable
         Interlocked.Exchange(ref _trimmed, 0);
     }
 
+    public void SetPreviewActive(bool active)
+    {
+        Interlocked.Exchange(ref _previewActive, active ? 1 : 0);
+        Touch();
+    }
+
     private void Tick()
     {
+        if (Volatile.Read(ref _previewActive) != 0) return;
         var idle = DateTime.UtcNow - new DateTime(Interlocked.Read(ref _lastTicks), DateTimeKind.Utc);
         if (idle < IdleThreshold) return;
         if (Interlocked.Exchange(ref _trimmed, 1) == 1) return; // trim once per idle stretch
 
-        // Safe even while a preview is still shown: clearing the page cache only forces a re-render on the
-        // next scroll, and ReleaseRetired only frees surfaces from already-closed previews.
         try
         {
             PdfPreviewSession.ClearCache();
