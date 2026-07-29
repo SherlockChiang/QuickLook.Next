@@ -70,6 +70,11 @@ body {
   mask-composite: intersect;
 }
 
+.hero-poster-frame picture {
+  display: block;
+  width: 100%;
+}
+
 .hero-shell {
   padding-bottom: 9rem;
 }

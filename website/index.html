@@ -98,9 +98,12 @@
     <main id="content">
       <section id="top" class="relative isolate min-h-[100svh] overflow-hidden bg-[#071027]">
         <img
-          src="./hero.png"
+          src="./hero-backdrop.webp"
+          width="320"
+          height="180"
           alt=""
           aria-hidden="true"
+          decoding="async"
           class="hero-backdrop absolute"
         />
         <div class="absolute inset-0 bg-[#071027]/45"></div>
@@ -115,12 +118,22 @@
           <h1 class="sr-only">QuickLook Next</h1>
 
           <div class="hero-poster-frame">
-            <img
-              src="./hero.png"
-              alt="QuickLook Next previewing its application artwork"
-              class="hero-poster"
-              data-i18n-alt="heroAlt"
-            />
+            <picture>
+              <source
+                type="image/webp"
+                srcset="./hero-960.webp 960w, ./hero-1536.webp 1536w"
+                sizes="(max-width: 640px) 94vw, min(62vw, 976px)"
+              />
+              <img
+                src="./hero.png"
+                width="1536"
+                height="864"
+                alt="QuickLook Next previewing its application artwork"
+                class="hero-poster"
+                fetchpriority="high"
+                data-i18n-alt="heroAlt"
+              />
+            </picture>
           </div>
 
           <div
@@ -376,7 +389,7 @@
       </section>
     </main>
 
-    <footer class="border-t border-slate-200/80 px-5 py-8 text-sm text-slate-500 sm:px-8 dark:border-white/10 dark:text-white/45">
+    <footer class="border-t border-slate-200/80 px-5 py-8 text-sm text-slate-600 sm:px-8 dark:border-white/10 dark:text-white/55">
       <div class="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <p>© <span id="year"></span> QuickLook Next. <span data-i18n="footerBuilt">Built in the open for Windows.</span></p>
         <div class="flex flex-wrap gap-5">

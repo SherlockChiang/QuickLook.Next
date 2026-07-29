@@ -1,0 +1,8 @@
+# QuickLook Next
+
+QuickLook Next is an open-source Windows file preview application built with WinUI 3, Rust, and isolated helper processes.
+
+- [Project website](https://sherlockchiang.github.io/QuickLook.Next/)
+- [Source repository](https://github.com/SherlockChiang/QuickLook.Next)
+- [Latest releases](https://github.com/SherlockChiang/QuickLook.Next/releases/latest)
+- [Security policy](https://github.com/SherlockChiang/QuickLook.Next/blob/main/SECURITY.md)
