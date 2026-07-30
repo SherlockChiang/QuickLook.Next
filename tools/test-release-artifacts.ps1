@@ -40,18 +40,21 @@ try {
 
         $expectedCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
             (Resolve-Path -LiteralPath $ExpectedCertificatePath).Path)
-        $trustedStore = [Security.Cryptography.X509Certificates.X509Store]::new(
-            [Security.Cryptography.X509Certificates.StoreName]::TrustedPeople,
+        # The release certificate is self-signed. TrustedPeople identifies the signer but
+        # does not establish its certificate chain, so Authenticode still reports it as
+        # untrusted. Trust it only in the current user's Root store for this validation.
+        $rootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+            [Security.Cryptography.X509Certificates.StoreName]::Root,
             [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-        $addedTrust = $false
+        $addedRootTrust = $false
         try {
-            $trustedStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            if (-not @($trustedStore.Certificates.Find(
+            $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            if (-not @($rootStore.Certificates.Find(
                 [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
                 $expectedCertificate.Thumbprint,
                 $false)).Count) {
-                $trustedStore.Add($expectedCertificate)
-                $addedTrust = $true
+                $rootStore.Add($expectedCertificate)
+                $addedRootTrust = $true
             }
             $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
             if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
@@ -62,8 +65,8 @@ try {
             }
         }
         finally {
-            if ($addedTrust) { $trustedStore.Remove($expectedCertificate) }
-            $trustedStore.Dispose()
+            if ($addedRootTrust) { $rootStore.Remove($expectedCertificate) }
+            $rootStore.Dispose()
         }
 
         $msix = [IO.Compression.ZipFile]::OpenRead($msixPath)
