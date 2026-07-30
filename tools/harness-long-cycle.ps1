@@ -35,6 +35,9 @@ Write-Host "mode: $Mode"
 if ($Focus) { Write-Host "focus: $Focus" }
 
 Invoke-Step "preflight" {
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        throw "PowerShell 7 or newer is required. Run this harness with pwsh."
+    }
     if (-not (Test-Path -LiteralPath $Root)) {
         throw "Root not found: $Root"
     }
@@ -64,7 +67,7 @@ if (-not $SkipBuild) {
 
 if (-not $SkipGuard) {
     Invoke-Step "architecture guard" {
-        powershell -ExecutionPolicy Bypass -File (Join-Path $Root "tools\guard-architecture.ps1") -SkipDist
+        & (Join-Path $Root "tools\guard-architecture.ps1") -Root $Root -SkipDist
     }
 }
 
@@ -73,7 +76,7 @@ if ($Mode -eq "full") {
         cargo build --release --manifest-path (Join-Path $Root "native\quicklook_next_native\Cargo.toml")
     }
     Invoke-Step "native smoke" {
-        powershell -ExecutionPolicy Bypass -File (Join-Path $Root "tools\smoke-native.ps1")
+        & (Join-Path $Root "tools\smoke-native.ps1") -Root $Root
     }
 }
 

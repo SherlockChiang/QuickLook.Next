@@ -21,7 +21,7 @@ preview coverage work.
 Quick mode is the default per-commit loop:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\harness-long-cycle.ps1 -AllowDirty
+pwsh -NoProfile -File tools\harness-long-cycle.ps1 -AllowDirty
 ```
 
 It runs:
@@ -39,7 +39,7 @@ review-ready verification.
 Full mode is the phase-boundary loop:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\harness-long-cycle.ps1 -Mode full -AllowDirty
+pwsh -NoProfile -File tools\harness-long-cycle.ps1 -Mode full -AllowDirty
 ```
 
 Full mode includes quick mode and adds:
@@ -63,7 +63,7 @@ During an active edit, pass `-AllowDirty`. After committing, rerun without
 `-Focus` is a lightweight label for logs. It does not filter tests.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\harness-long-cycle.ps1 -Focus "ELF notes" -AllowDirty
+pwsh -NoProfile -File tools\harness-long-cycle.ps1 -Focus "ELF notes" -AllowDirty
 ```
 
 Keep filtering inside focused test commands while developing, then use the

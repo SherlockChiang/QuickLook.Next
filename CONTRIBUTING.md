@@ -17,6 +17,7 @@ Use Windows x64 with the Desktop C++/MSVC toolchain and the pinned toolchains:
 - .NET SDK from [`global.json`](global.json).
 - Rust MSVC toolchain from
   [`native/rust-toolchain.toml`](native/rust-toolchain.toml).
+- PowerShell 7 or newer, invoked as `pwsh`.
 
 Use the focused local entry point from the repository root:
 
