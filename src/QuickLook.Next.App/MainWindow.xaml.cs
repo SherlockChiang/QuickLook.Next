@@ -424,7 +424,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await Task.Delay(2000, cancellationToken).ConfigureAwait(false);
-            await Task.Run(AutoStart.RepairIfConfigured, cancellationToken).ConfigureAwait(false);
+            await AutoStart.RepairIfConfiguredAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -24,49 +24,44 @@ internal static class AutoStart
 
     // ───────────────────────────────────────────── public API ─────────────────────────────────────────────
 
-    public static bool IsEnabled()
-    {
-        if (_isPackaged)
-            return IsStartupTaskEnabled();
-
-        string exe = CurrentExePath();
-        if (exe.Length == 0) return false;
-        return IsRunValueEnabled(exe) || IsShortcutEnabled(exe);
-    }
-
-    public static bool SetEnabled(bool enabled)
+    public static async Task<bool> IsEnabledAsync(CancellationToken cancellationToken = default)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (_isPackaged)
-                return SetStartupTaskEnabled(enabled);
+                return await IsStartupTaskEnabledAsync();
 
-            if (enabled)
-            {
-                string exe = CurrentExePath();
-                if (exe.Length == 0 || !File.Exists(exe))
-                    return false;
+            return await Task.Run(IsEnabledUnpackaged, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "autostart query FAILED: " + ex);
+            return false;
+        }
+    }
 
-                if (TrySetRunValue(exe))
-                {
-                    TryDeleteStartupShortcut();
-                    DiagLog.Write("App", "autostart enabled via HKCU Run");
-                    return true;
-                }
+    public static async Task<bool> SetEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_isPackaged)
+                return await SetStartupTaskEnabledAsync(enabled);
 
-                if (TryCreateStartupShortcut(exe))
-                {
-                    DiagLog.Write("App", $"autostart enabled via Startup shortcut fallback: {ShortcutPath}");
-                    return true;
-                }
-
-                return false;
-            }
-
-            TryDeleteStartupShortcut();
-            DeleteRunValue();
-            DiagLog.Write("App", "autostart disabled");
-            return true;
+            return await Task.Run(
+                () => SetEnabledUnpackaged(enabled),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -75,18 +70,18 @@ internal static class AutoStart
         }
     }
 
-    public static void RepairIfConfigured()
+    public static async Task RepairIfConfiguredAsync(CancellationToken cancellationToken = default)
     {
+        // Packaged apps manage their own state via the StartupTask API — no repair needed.
+        if (_isPackaged)
+            return;
+
         try
         {
-            // Packaged apps manage their own state via the StartupTask API — no repair needed.
-            if (_isPackaged) return;
-
-            if (!HasAnyEntry() || IsEnabled())
-                return;
-
-            DiagLog.Write("App", "autostart entry exists but points elsewhere; repairing");
-            SetEnabled(enabled: true);
+            await Task.Run(RepairIfConfiguredUnpackaged, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -110,11 +105,11 @@ internal static class AutoStart
         }
     }
 
-    private static bool IsStartupTaskEnabled()
+    private static async Task<bool> IsStartupTaskEnabledAsync()
     {
         try
         {
-            var task = StartupTask.GetAsync(StartupTaskId).AsTask().GetAwaiter().GetResult();
+            var task = await StartupTask.GetAsync(StartupTaskId);
             return task.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy;
         }
         catch (Exception ex)
@@ -124,11 +119,11 @@ internal static class AutoStart
         }
     }
 
-    private static bool SetStartupTaskEnabled(bool enabled)
+    private static async Task<bool> SetStartupTaskEnabledAsync(bool enabled)
     {
         try
         {
-            var task = StartupTask.GetAsync(StartupTaskId).AsTask().GetAwaiter().GetResult();
+            var task = await StartupTask.GetAsync(StartupTaskId);
 
             if (enabled)
             {
@@ -144,7 +139,7 @@ internal static class AutoStart
                     return true;
                 }
 
-                var result = task.RequestEnableAsync().AsTask().GetAwaiter().GetResult();
+                var result = await task.RequestEnableAsync();
                 bool ok = result is StartupTaskState.Enabled;
                 DiagLog.Write("App", ok
                     ? "autostart enabled via StartupTask API"
@@ -172,6 +167,52 @@ internal static class AutoStart
     }
 
     // ─────────────────────────────── Unpackaged implementation (HKCU Run + Shortcut) ───────────────────────────────
+
+    private static bool IsEnabledUnpackaged()
+    {
+        string exe = CurrentExePath();
+        return exe.Length != 0
+            && (IsRunValueEnabled(exe) || IsShortcutEnabled(exe));
+    }
+
+    private static bool SetEnabledUnpackaged(bool enabled)
+    {
+        if (enabled)
+        {
+            string exe = CurrentExePath();
+            if (exe.Length == 0 || !File.Exists(exe))
+                return false;
+
+            if (TrySetRunValue(exe))
+            {
+                TryDeleteStartupShortcut();
+                DiagLog.Write("App", "autostart enabled via HKCU Run");
+                return true;
+            }
+
+            if (TryCreateStartupShortcut(exe))
+            {
+                DiagLog.Write("App", $"autostart enabled via Startup shortcut fallback: {ShortcutPath}");
+                return true;
+            }
+
+            return false;
+        }
+
+        TryDeleteStartupShortcut();
+        DeleteRunValue();
+        DiagLog.Write("App", "autostart disabled");
+        return true;
+    }
+
+    private static void RepairIfConfiguredUnpackaged()
+    {
+        if (!HasAnyEntry() || IsEnabledUnpackaged())
+            return;
+
+        DiagLog.Write("App", "autostart entry exists but points elsewhere; repairing");
+        SetEnabledUnpackaged(enabled: true);
+    }
 
     private static string ShortcutPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.Startup),

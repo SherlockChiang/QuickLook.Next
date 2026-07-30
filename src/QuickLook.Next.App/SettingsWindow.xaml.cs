@@ -24,6 +24,7 @@ public sealed partial class SettingsWindow : Window
     private bool _resizePending;
     private bool _diagnosticsBusy;
     private bool _updateCheckBusy;
+    private bool _autoStartBusy = true;
 
     public SettingsWindow(
         Func<string> resolveIconPath,
@@ -44,7 +45,7 @@ public sealed partial class SettingsWindow : Window
         ApplyWindowAppearance();
         Activated += OnActivated;
 
-        AutoStartToggle.IsOn = AutoStart.IsEnabled();
+        AutoStartToggle.IsEnabled = false;
         LanguageCombo.SelectedIndex = AppSettings.Current.Language switch
         {
             "en-US" => 1,
@@ -71,7 +72,24 @@ public sealed partial class SettingsWindow : Window
         };
         TextLineNumbersToggle.IsOn = AppSettings.Current.TextLineNumbers;
         _initializing = false;
+        _ = InitializeAutoStartAsync();
         RefreshHookStatus();
+    }
+
+    private async Task InitializeAutoStartAsync()
+    {
+        bool enabled = await AutoStart.IsEnabledAsync();
+        _initializing = true;
+        try
+        {
+            AutoStartToggle.IsOn = enabled;
+        }
+        finally
+        {
+            _initializing = false;
+            _autoStartBusy = false;
+            AutoStartToggle.IsEnabled = true;
+        }
     }
 
     private void ApplyStrings()
@@ -211,21 +229,34 @@ public sealed partial class SettingsWindow : Window
         });
     }
 
-    private void OnAutoStartToggled(object sender, RoutedEventArgs e)
+    private async void OnAutoStartToggled(object sender, RoutedEventArgs e)
     {
-        if (_initializing)
+        if (_initializing || _autoStartBusy)
             return;
+
         bool requested = AutoStartToggle.IsOn;
-        if (AutoStart.SetEnabled(requested))
-            return;
-        _initializing = true;
-        AutoStartToggle.IsOn = !requested;
-        _initializing = false;
-        RestartInfo.Severity = InfoBarSeverity.Error;
-        RestartInfo.Title = UiStrings.SettingsSaveFailed;
-        RestartInfo.Message = requested ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
-        RestartInfo.IsOpen = true;
-        QueueResizeToContent();
+        _autoStartBusy = true;
+        AutoStartToggle.IsEnabled = false;
+        try
+        {
+            if (await AutoStart.SetEnabledAsync(requested))
+                return;
+
+            _initializing = true;
+            AutoStartToggle.IsOn = !requested;
+            _initializing = false;
+            RestartInfo.Severity = InfoBarSeverity.Error;
+            RestartInfo.Title = UiStrings.SettingsSaveFailed;
+            RestartInfo.Message = requested ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
+            RestartInfo.IsOpen = true;
+            QueueResizeToContent();
+        }
+        finally
+        {
+            _initializing = false;
+            _autoStartBusy = false;
+            AutoStartToggle.IsEnabled = true;
+        }
     }
 
     private void OnLanguageSelectionChanged(object sender, SelectionChangedEventArgs e)

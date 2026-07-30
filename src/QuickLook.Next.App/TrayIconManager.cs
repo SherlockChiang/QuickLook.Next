@@ -19,6 +19,8 @@ internal sealed class TrayIconManager
     private uint _taskbarCreatedMessage;
     private bool _ownsTrayIconHandle;
     private string? _trayIconPath;
+    private bool _trayMenuBusy;
+    private bool _autoStartBusy;
 
     public TrayIconManager(
         nint hwnd,
@@ -153,25 +155,43 @@ internal sealed class TrayIconManager
             if (lParam == WM_LBUTTONDBLCLK)
                 _showSettings();
             else if (lParam == WM_RBUTTONUP)
-                ShowTrayMenu();
+                _ = ShowTrayMenuAsync();
             return nint.Zero;
         }
 
         return CallWindowProc(_oldWndProc, hwnd, msg, wParam, lParam);
     }
 
-    private void ShowTrayMenu()
+    private async Task ShowTrayMenuAsync()
     {
+        if (_trayMenuBusy)
+            return;
+
+        _trayMenuBusy = true;
+        bool autoStartEnabled;
+        try
+        {
+            autoStartEnabled = await AutoStart.IsEnabledAsync();
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "tray autostart query failed: " + ex.Message);
+            autoStartEnabled = false;
+        }
+
         GetCursorPos(out POINT pt);
         nint menu = CreatePopupMenu();
         if (menu == nint.Zero)
+        {
+            _trayMenuBusy = false;
             return;
+        }
 
         try
         {
             AppendMenu(menu, MF_STRING, TrayCommandShowPreview, UiStrings.TrayShowPreview);
             AppendMenu(menu, MF_STRING, TrayCommandSettings, UiStrings.TraySettings);
-            AppendMenu(menu, MF_STRING | (AutoStart.IsEnabled() ? MF_CHECKED : MF_UNCHECKED), TrayCommandAutoStart, UiStrings.TrayAutoStart);
+            AppendMenu(menu, MF_STRING | (autoStartEnabled ? MF_CHECKED : MF_UNCHECKED), TrayCommandAutoStart, UiStrings.TrayAutoStart);
             AppendMenu(menu, MF_SEPARATOR, UIntPtr.Zero, string.Empty);
             AppendMenu(menu, MF_STRING, TrayCommandExit, UiStrings.TrayExit);
 
@@ -192,7 +212,7 @@ internal sealed class TrayIconManager
                     _showPreview();
                     break;
                 case TrayCommandAutoStartValue:
-                    ToggleAutoStart();
+                    await SetAutoStartAsync(!autoStartEnabled);
                     break;
                 case TrayCommandSettingsValue:
                     _showSettings();
@@ -205,19 +225,30 @@ internal sealed class TrayIconManager
         finally
         {
             DestroyMenu(menu);
+            _trayMenuBusy = false;
         }
     }
 
-    public void ToggleAutoStart()
+    private async Task SetAutoStartAsync(bool enable)
     {
-        bool enable = !AutoStart.IsEnabled();
-        if (AutoStart.SetEnabled(enable))
+        if (_autoStartBusy)
             return;
 
-        string message = enable ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
-        _setStatus(message);
-        DiagLog.Write("App", message);
-        ShowBalloon(UiStrings.AppName, message);
+        _autoStartBusy = true;
+        try
+        {
+            if (await AutoStart.SetEnabledAsync(enable))
+                return;
+
+            string message = enable ? UiStrings.AutoStartEnableFailed : UiStrings.AutoStartDisableFailed;
+            _setStatus(message);
+            DiagLog.Write("App", message);
+            ShowBalloon(UiStrings.AppName, message);
+        }
+        finally
+        {
+            _autoStartBusy = false;
+        }
     }
 
     private delegate nint WndProcDelegate(nint hwnd, uint msg, nint wParam, nint lParam);
