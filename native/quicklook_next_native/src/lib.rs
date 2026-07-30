@@ -5514,15 +5514,21 @@ mod handle_v2_tests {
     use std::io::{Cursor, Seek, SeekFrom, Write};
     use std::os::windows::io::AsRawHandle;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // SystemTime's observable precision can be lower than nanoseconds on Windows. The
+    // counter keeps parallel tests from writing to the same temporary input file.
+    static HANDLE_TEST_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn create_input(extension: &str, bytes: &[u8]) -> (PathBuf, fs::File) {
         let path = std::env::temp_dir().join(format!(
-            "quicklook-next-handle-v2-{}-{}.{}",
+            "quicklook-next-handle-v2-{}-{}-{}.{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
+            HANDLE_TEST_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             extension
         ));
         fs::write(&path, bytes).expect("write handle input");
@@ -5532,12 +5538,13 @@ mod handle_v2_tests {
 
     fn create_output(extension: &str, bytes: &[u8]) -> (PathBuf, fs::File) {
         let path = std::env::temp_dir().join(format!(
-            "quicklook-next-handle-v2-output-{}-{}.{}",
+            "quicklook-next-handle-v2-output-{}-{}-{}.{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos(),
+            HANDLE_TEST_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
             extension
         ));
         let mut file = fs::OpenOptions::new()
