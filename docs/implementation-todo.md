@@ -4,8 +4,24 @@ This file tracks the ordered hardening and product-improvement work identified
 by the July 2026 repository review. Each completed item records its verification
 and commit so changes remain independently reviewable and revertible.
 
+## 0.3.1 optimization batches
+
+- [ ] Batch 1: make packaged and unpackaged auto-start queries and updates asynchronous so the
+  Settings window and tray window procedure never wait synchronously for WinRT, registry, file, or
+  shortcut work.
+- [ ] Batch 2: keep the long-cycle harness in its current PowerShell host and document PowerShell 7
+  commands consistently, instead of launching Windows PowerShell 5.1 for nested checks.
+- [ ] Batch 3: synchronize review-facing PDF cache documentation with the implemented bounded
+  five-page offscreen surface cache.
+- [ ] Release batch: synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.1,
+  then run the version guards and complete build/test suite.
+
 ## P0: Immediate safety and usability
 
+- [ ] Establish a staged formatting and static-analysis baseline: block new `dotnet format`,
+  `cargo fmt`, and Clippy regressions in CI before paying down the existing backlog by module.
+- [ ] Make every public native FFI function that dereferences caller-owned raw pointers expose and
+  document an explicit Rust `unsafe` contract.
 - [ ] Generate and ship complete third-party license notices for bundled .NET, Windows App SDK, and
   statically linked Rust dependencies before the next public release. The root MIT License covers
   QuickLook Next's original work and does not replace dependency licenses or required notices.
@@ -15,6 +31,12 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P1: Performance and accessibility
 
+- [ ] Push cancellation/epoch checks into native image and listing loops so stale previews stop
+  consuming CPU before a synchronous FFI call returns.
+- [ ] Persist first-paint p50/p95 latency, resident memory, HANDLE count, and host recycle timing for
+  a bounded preview-switch corpus, with lightweight pull-request and fuller nightly budgets.
+- [ ] Replace fixed custom-title-bar caption padding with `AppWindow.TitleBar` insets and add visual
+  checks at compact width, 200% scaling, Simplified Chinese, and high contrast.
 - [ ] Replace the remaining `PdfDocument` projection with an API that exposes a native close
   contract. Until Windows provides that boundary, RasterHost now deterministically tracks and drains
   every underlying render task before releasing session-owned HANDLE streams; a 12-second drain
@@ -25,9 +47,14 @@ and commit so changes remain independently reviewable and revertible.
 ## P2: Product capabilities
 
 - [ ] Add bounded PDF text search and copy.
+- [ ] Add user-visible cache usage/clear controls, shortcut conflict diagnostics, and a bounded
+  diagnostics export that redacts local paths by default.
+- [ ] Add an ARM64 build/test lane while keeping x86 out of scope until user demand justifies it.
 
 ## P3: Strategic architecture
 
+- [ ] Move durable architecture and contribution guardrails out of the ignored local `agent.md` and
+  into tracked documentation with focused ADRs for process, HANDLE, and cancellation contracts.
 - [ ] Replace the final CPU shared-section-to-`WriteableBitmap` animation upload with
   renderer-consumable GPU shared surfaces if profiling justifies the additional D3D synchronization
   contract. Per-frame managed arrays and packet copies have already been removed.
