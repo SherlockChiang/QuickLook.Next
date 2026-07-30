@@ -183,7 +183,7 @@ Expected impact: faster common-path previews and easier performance diagnosis.
 
 ### P1: PDF Render Cache And Scroll Stability
 
-- Add bounded page surface LRU.
+- Keep the implemented five-page offscreen surface cache bounded.
 - Coalesce rapid page requests.
 - Cancel obsolete renders.
 
@@ -191,9 +191,9 @@ Expected impact: smoother PDF scroll and fewer wasted renders.
 
 ### P2: Shell Thumbnail Queue Discipline
 
-- Prioritize current/nearby thumbnails.
-- Cap concurrent shell thumbnail work.
-- Avoid STA queue buildup with stale generations.
+- Keep current/nearby thumbnails ahead of background work.
+- Preserve bounded concurrency and foreground/background fairness.
+- Continue dropping stale requests before they build up in the STA queue.
 
 Expected impact: better folder/image browsing responsiveness.
 

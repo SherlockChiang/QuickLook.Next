@@ -145,7 +145,8 @@ These are good candidates for bounded native summaries:
 
 ### PDF Path
 
-- Add a small LRU for recently rendered PDF page surfaces.
+- Keep the implemented five-page offscreen surface cache bounded while improving
+  request coalescing and eviction telemetry.
 - Keep requested/rendering/rendered/released page state explicit.
 - Cancel in-flight renders for pages no longer visible or when preview closes.
 - Avoid churn during rapid scroll by coalescing page requests.
@@ -190,7 +191,7 @@ Office fidelity:
 
 1. Image and raster first-paint latency.
 2. Preview cancellation and Space key responsiveness.
-3. PDF page render cache and scroll churn reduction.
+3. PDF request coalescing and scroll churn reduction around the bounded cache.
 4. Shell thumbnail generation cancellation and prioritization.
 5. Broader native metadata for media, fonts, archives, and professional formats.
 

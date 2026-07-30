@@ -21,11 +21,11 @@ acceptance criteria.
 
 ## Highest Priority
 
-1. Cancelable native image decode
-   - Add a cancel-aware image decode ABI instead of relying only on App-side
-     generation checks before and after synchronous FFI calls.
-   - Check cancellation before decode, before resize/color conversion, and before
-     copying the final BGRA buffer.
+1. Deeper native image decode cancellation
+   - Keep the existing cancel-aware ABI and generation callback checks at decode,
+     resize/color-conversion, and final-copy boundaries.
+   - Reduce or isolate remaining non-interruptible spans inside third-party codec
+     calls so quick selection changes stop consuming CPU sooner.
 
 2. Image sidecar scheduling
    - Keep first paint isolated from slower side work.

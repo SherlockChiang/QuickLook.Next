@@ -227,19 +227,19 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   APK/MSIX manifests, mixed-encoding text files, and complex Office files.
   Current smoke coverage includes UTF-16 text and corrupt ZIP fail-closed checks,
   but still needs more externally sourced real-world files.
-- Push cancellation deeper into Rust/native decode/listing loops. The App now
-  prevents stale merge/update work, but native FFI calls are still synchronous
-  once entered.
+- Push cancellation deeper into Rust/native decode/listing loops. The App passes
+  a native cancellation callback and prevents stale merge/update work, but some
+  third-party codec calls still contain non-interruptible spans once entered.
 - Keep improving the primary image path:
   - Thumbnail filmstrip loading should keep prioritizing the current image and
     nearby siblings, with LRU eviction to bound memory in large folders.
   - Adjacent image prefetch should remain cancellation-aware so quick Explorer
     selection changes do not keep decoding old images.
-  - Large image decode should eventually accept a native cancellation/epoch
-    signal, not just an App-side generation guard.
-- PDF surface caching is intentionally small today. A bounded 3-5 page LRU for
-  recently rendered pages would make scroll-back smoother without returning to
-  unbounded GPU surface retention.
+  - Large image decode should keep checking the native cancellation callback
+    around codec, resize, color-conversion, and final-copy boundaries.
+- PDF surface caching intentionally keeps the visible range plus at most five
+  offscreen page surfaces. Continue improving request coalescing and cancellation
+  without returning to unbounded GPU surface retention.
 - Continue Shell icon coverage for virtual archive entries if a stable file type
   icon can be resolved without pretending the virtual item is a real path.
 - Deep professional parsers remain intentionally staged: full MediaInfo tracks,

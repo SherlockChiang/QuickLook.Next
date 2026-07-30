@@ -22,9 +22,6 @@ and commit so changes remain independently reviewable and revertible.
   `cargo fmt`, and Clippy regressions in CI before paying down the existing backlog by module.
 - [ ] Make every public native FFI function that dereferences caller-owned raw pointers expose and
   document an explicit Rust `unsafe` contract.
-- [ ] Generate and ship complete third-party license notices for bundled .NET, Windows App SDK, and
-  statically linked Rust dependencies before the next public release. The root MIT License covers
-  QuickLook Next's original work and does not replace dependency licenses or required notices.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
@@ -69,6 +66,13 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Generate and package complete third-party dependency notices for the .NET publish graph,
+  Windows App SDK redistribution, and statically linked Rust dependencies. Release payload guards
+  require the notice in both the MSIX and installer archive.
+  - Verification: `pwsh -NoProfile -File tools/test-pack-release-failfast.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-release-payload-proof.ps1`
+  - Commit: `101adf0`
 
 - [x] Add a focused manual version/build/update workflow. Root `build.ps1` treats `VERSION` as the
   authoritative semantic version, transactionally synchronizes the Rust manifest and lock package,
