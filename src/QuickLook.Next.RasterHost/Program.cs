@@ -211,40 +211,40 @@ while (true)
                 producer.ReleaseSurfaceTransfer(release.TransferId);
                 break;
 
-        case PreviewResize resize:
-            if (!string.Equals(resize.RequestId, activeRequestId, StringComparison.Ordinal)
-                || resize.Width == 0 || resize.Height == 0
-                || resize.Width > MaxSurfaceDimension || resize.Height > MaxSurfaceDimension
-                || (ulong)resize.Width * resize.Height > MaxSurfacePixels
-                || !double.IsFinite(resize.Dpi) || resize.Dpi <= 0 || resize.Dpi > 960)
-            {
-                DiagLog.Write("RasterHost", $"rejected invalid resize: request={resize.RequestId} size={resize.Width}x{resize.Height} dpi={resize.Dpi}");
+            case PreviewResize resize:
+                if (!string.Equals(resize.RequestId, activeRequestId, StringComparison.Ordinal)
+                    || resize.Width == 0 || resize.Height == 0
+                    || resize.Width > MaxSurfaceDimension || resize.Height > MaxSurfaceDimension
+                    || (ulong)resize.Width * resize.Height > MaxSurfacePixels
+                    || !double.IsFinite(resize.Dpi) || resize.Dpi <= 0 || resize.Dpi > 960)
+                {
+                    DiagLog.Write("RasterHost", $"rejected invalid resize: request={resize.RequestId} size={resize.Width}x{resize.Height} dpi={resize.Dpi}");
+                    break;
+                }
+                SurfaceTransfer rh = producer.CreateSurface(resize.Width, resize.Height);
+                await channel.SendAsync(new PreviewSurface(
+                    resize.RequestId, rh.HostHandle, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM")
+                {
+                    TransferId = rh.TransferId,
+                });
                 break;
-            }
-            SurfaceTransfer rh = producer.CreateSurface(resize.Width, resize.Height);
-            await channel.SendAsync(new PreviewSurface(
-                resize.RequestId, rh.HostHandle, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM")
-            {
-                TransferId = rh.TransferId,
-            });
-            break;
 
-        case PreviewPageOpen page when IsValidRequestId(page.RequestId)
+            case PreviewPageOpen page when IsValidRequestId(page.RequestId)
                                        && page.PageIndex >= 0
                                        && page.PageGeneration > 0
                                        && double.IsFinite(page.Scale)
                                        && page.Scale > 0:
-            _ = HandlePageOpenAsync(page);
-            break;
+                _ = HandlePageOpenAsync(page);
+                break;
 
-        case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
+            case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
                                              && pageClose.PageIndex >= 0
                                              && pageClose.PageGeneration > 0:
-            CancelPageRender(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration);
-            _ = Task.Delay(250).ContinueWith(
-                _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration),
-                TaskContinuationOptions.OnlyOnRanToCompletion);
-            break;
+                CancelPageRender(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration);
+                _ = Task.Delay(250).ContinueWith(
+                    _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration),
+                    TaskContinuationOptions.OnlyOnRanToCompletion);
+                break;
 
             case PreviewClose close when IsValidRequestId(close.RequestId):
                 bool isActiveRequest = string.Equals(close.RequestId, activeRequestId, StringComparison.Ordinal);

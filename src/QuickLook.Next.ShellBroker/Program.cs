@@ -70,62 +70,62 @@ try
                     }
                     activeRequest = request;
                 }
-            await request.HandoffGate.WaitAsync();
-            string? packetPath = null;
-            try
-            {
-                byte[]? packet = NativeThumbnail.TryGetPacket(path, size, request.Cancellation.Token);
-                if (packet is null)
+                await request.HandoffGate.WaitAsync();
+                string? packetPath = null;
+                try
                 {
-                    channel.SendError(requestId, "Shell thumbnail provider returned no image.");
-                    request.HandoffGate.Release();
-                    break;
+                    byte[]? packet = NativeThumbnail.TryGetPacket(path, size, request.Cancellation.Token);
+                    if (packet is null)
+                    {
+                        channel.SendError(requestId, "Shell thumbnail provider returned no image.");
+                        request.HandoffGate.Release();
+                        break;
+                    }
+                    string directory = Path.Combine(writableRoot, "thumbnail-" + requestId);
+                    Directory.CreateDirectory(directory);
+                    packetPath = Path.Combine(directory, "thumbnail.bgra");
+                    File.WriteAllBytes(packetPath, packet);
+                    var transferred = WindowsHandleTransfer.OpenReadOnlyFile(packetPath);
+                    request.PacketPath = packetPath;
+                    request.PacketHandle = transferred.Handle;
+                    packetPath = null;
+                    channel.Send($"THUMB\t{requestId}\t{transferred.Handle.DangerousGetHandle().ToInt64()}\t{transferred.Length}\t{BitConverter.ToInt32(packet, 0)}\t{BitConverter.ToInt32(packet, 4)}");
                 }
-                string directory = Path.Combine(writableRoot, "thumbnail-" + requestId);
-                Directory.CreateDirectory(directory);
-                packetPath = Path.Combine(directory, "thumbnail.bgra");
-                File.WriteAllBytes(packetPath, packet);
-                var transferred = WindowsHandleTransfer.OpenReadOnlyFile(packetPath);
-                request.PacketPath = packetPath;
-                request.PacketHandle = transferred.Handle;
-                packetPath = null;
-                channel.Send($"THUMB\t{requestId}\t{transferred.Handle.DangerousGetHandle().ToInt64()}\t{transferred.Length}\t{BitConverter.ToInt32(packet, 0)}\t{BitConverter.ToInt32(packet, 4)}");
-            }
-            catch (Exception ex)
-            {
-                try { channel.SendError(requestId, ex.Message); } catch { }
-            }
-            finally
-            {
-                if (packetPath is not null) DeletePacket(packetPath);
-                if (request.HandoffGate.CurrentCount == 0) request.HandoffGate.Release();
-            }
+                catch (Exception ex)
+                {
+                    try { channel.SendError(requestId, ex.Message); } catch { }
+                }
+                finally
+                {
+                    if (packetPath is not null) DeletePacket(packetPath);
+                    if (request.HandoffGate.CurrentCount == 0) request.HandoffGate.Release();
+                }
                 break;
             case ["CLOSE", var requestId] when IsValidRequestId(requestId):
-            ShellRequest? closing;
-            lock (requestLock)
-                closing = activeRequest is not null
-                          && string.Equals(activeRequest.RequestId, requestId, StringComparison.Ordinal)
-                    ? activeRequest
-                    : null;
-            if (closing is null) break;
-            closing.Cancellation.Cancel();
-            await closing.HandoffGate.WaitAsync();
-            try
-            {
-                if (closing.PacketHandle is not null)
-                {
-                    closing.PacketHandle.Dispose();
-                    if (closing.PacketPath is not null) DeletePacket(closing.PacketPath);
-                }
-            }
-            finally
-            {
+                ShellRequest? closing;
                 lock (requestLock)
-                    if (ReferenceEquals(activeRequest, closing)) activeRequest = null;
-                closing.HandoffGate.Release();
-                closing.Dispose();
-            }
+                    closing = activeRequest is not null
+                              && string.Equals(activeRequest.RequestId, requestId, StringComparison.Ordinal)
+                        ? activeRequest
+                        : null;
+                if (closing is null) break;
+                closing.Cancellation.Cancel();
+                await closing.HandoffGate.WaitAsync();
+                try
+                {
+                    if (closing.PacketHandle is not null)
+                    {
+                        closing.PacketHandle.Dispose();
+                        if (closing.PacketPath is not null) DeletePacket(closing.PacketPath);
+                    }
+                }
+                finally
+                {
+                    lock (requestLock)
+                        if (ReferenceEquals(activeRequest, closing)) activeRequest = null;
+                    closing.HandoffGate.Release();
+                    closing.Dispose();
+                }
                 break;
             default:
                 throw new InvalidDataException("ShellBroker received an invalid control message.");
@@ -171,7 +171,8 @@ sealed class BrokerChannel(Stream stream) : IDisposable
     private readonly StreamReader _reader = new(
         stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
     private readonly StreamWriter _writer = new(
-        stream, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        stream, new System.Text.UTF8Encoding(false), leaveOpen: true)
+    { AutoFlush = true };
     private readonly object _writeLock = new();
 
     public string? Receive()

@@ -407,14 +407,14 @@ internal sealed class TablePreviewPresenter
                     ? _highContrast.Foreground
                     : _highContrast.Background
                 : kind switch
-            {
-                TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner => _dark ? ColorHelper.FromArgb(255, 45, 45, 48) : ColorHelper.FromArgb(255, 246, 247, 249),
-                TableCellKind.AlternateCell => _dark ? ColorHelper.FromArgb(22, 255, 255, 255) : ColorHelper.FromArgb(255, 250, 251, 252),
-                TableCellKind.GridLine => _dark ? ColorHelper.FromArgb(255, 62, 62, 66) : ColorHelper.FromArgb(255, 226, 230, 235),
-                TableCellKind.HeaderText => _dark ? ColorHelper.FromArgb(255, 218, 222, 230) : ColorHelper.FromArgb(255, 76, 83, 96),
-                TableCellKind.Text => _dark ? ColorHelper.FromArgb(255, 244, 244, 244) : ColorHelper.FromArgb(255, 28, 31, 36),
-                _ => _dark ? ColorHelper.FromArgb(255, 32, 32, 32) : Colors.White,
-            });
+                {
+                    TableCellKind.Header or TableCellKind.RowHeader or TableCellKind.Corner => _dark ? ColorHelper.FromArgb(255, 45, 45, 48) : ColorHelper.FromArgb(255, 246, 247, 249),
+                    TableCellKind.AlternateCell => _dark ? ColorHelper.FromArgb(22, 255, 255, 255) : ColorHelper.FromArgb(255, 250, 251, 252),
+                    TableCellKind.GridLine => _dark ? ColorHelper.FromArgb(255, 62, 62, 66) : ColorHelper.FromArgb(255, 226, 230, 235),
+                    TableCellKind.HeaderText => _dark ? ColorHelper.FromArgb(255, 218, 222, 230) : ColorHelper.FromArgb(255, 76, 83, 96),
+                    TableCellKind.Text => _dark ? ColorHelper.FromArgb(255, 244, 244, 244) : ColorHelper.FromArgb(255, 28, 31, 36),
+                    _ => _dark ? ColorHelper.FromArgb(255, 32, 32, 32) : Colors.White,
+                });
     }
 
     private enum TableCellKind

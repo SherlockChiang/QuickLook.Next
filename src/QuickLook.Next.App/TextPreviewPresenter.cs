@@ -149,7 +149,7 @@ internal sealed class TextPreviewPresenter
         _scrollViewer.Visibility = !isStructuredMarkdown && !useLineList ? Visibility.Visible : Visibility.Collapsed;
         _textListView.Visibility = useLineList ? Visibility.Visible : Visibility.Collapsed;
         _markdownListView.Visibility = isStructuredMarkdown ? Visibility.Visible : Visibility.Collapsed;
-        
+
         _scrollViewer.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _textBlock.FontFamily = FontFamilyFor(ready.TextFormat == "markdown" ? "Segoe UI" : "Cascadia Mono, Consolas");
         _textBlock.FontSize = isMarkdown ? 14 : 14 * _textScale;
@@ -1473,13 +1473,13 @@ internal sealed class TextPreviewPresenter
     private async Task RenderCodeOrPlainTextAsync(string text, string language, int renderVersion)
     {
         _textListView.ItemsSource = null;
-        
+
         if (text.Length == 0) return;
 
         string code = text.TrimEnd('\r', '\n');
         bool noHighlight = language is "text" or "log" || code.Length > MaxHighlightedChars;
         var paragraph = CreateParagraph(13 * _textScale, "Cascadia Mono, Consolas", 0, 0);
-        
+
         if (noHighlight)
         {
             paragraph.Foreground = BrushFor(TokenKind.Default);
@@ -1568,13 +1568,13 @@ internal sealed class TextPreviewPresenter
             VerticalAlignment = VerticalAlignment.Center,
             CornerRadius = new CornerRadius(4)
         };
-        
+
         copyBtn.Click += async (s, e) =>
         {
             var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
             package.SetText(code);
             Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
-            
+
             var sp = (StackPanel)copyBtn.Content;
             ((FontIcon)sp.Children[0]).Glyph = "\uE73E"; // Checkmark
             ((TextBlock)sp.Children[1]).Text = UiStrings.CopiedAction;
@@ -1588,7 +1588,7 @@ internal sealed class TextPreviewPresenter
 
         Grid.SetColumn(copyBtn, 2);
         header.Children.Add(copyBtn);
-        
+
         Grid.SetRow(header, 0);
         grid.Children.Add(header);
 
@@ -1598,7 +1598,7 @@ internal sealed class TextPreviewPresenter
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Padding = new Thickness(16)
         };
-        
+
         var bodyText = new TextBlock
         {
             FontFamily = FontFamilyFor("Cascadia Mono, Consolas"),
@@ -1606,7 +1606,7 @@ internal sealed class TextPreviewPresenter
             IsTextSelectionEnabled = true,
             TextWrapping = TextWrapping.NoWrap
         };
-        
+
         if (code.Length == 0)
         {
             bodyText.Inlines.Add(new Run { Text = " " });
@@ -1647,11 +1647,11 @@ internal sealed class TextPreviewPresenter
                 }
             }
         }
-        
+
         bodyScroller.Content = bodyText;
         Grid.SetRow(bodyScroller, 1);
         grid.Children.Add(bodyScroller);
-        
+
         container.Child = grid;
 
         if (_lastReady?.Markdown is not null)
