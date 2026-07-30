@@ -1,37 +1,32 @@
 name: Package Release
+description: Build, test, sign, and stage one QuickLook Next release channel.
 
-on:
-  workflow_call:
-    inputs:
-      channel:
-        required: true
-        type: string
-    outputs:
-      version:
-        value: ${{ jobs.package.outputs.version }}
-      tag:
-        value: ${{ jobs.package.outputs.tag }}
-      artifact-name:
-        value: ${{ jobs.package.outputs.artifact-name }}
-      msix-version:
-        value: ${{ jobs.package.outputs.msix-version }}
-permissions:
-  contents: read
-
-jobs:
-  package:
-    runs-on: windows-2025
-    environment: ${{ inputs.channel == 'stable' && 'release' || 'beta' }}
-    timeout-minutes: 40
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      artifact-name: ${{ steps.version.outputs.artifact_name }}
-      msix-version: ${{ steps.version.outputs.msix_version }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          fetch-depth: 0
+inputs:
+  channel:
+    description: Release channel, either stable or beta.
+    required: true
+  release-pfx-base64:
+    description: Base64-encoded release signing PFX.
+    required: true
+  release-pfx-password:
+    description: Password for the release signing PFX.
+    required: true
+outputs:
+  version:
+    description: Resolved package version.
+    value: ${{ steps.version.outputs.version }}
+  tag:
+    description: Resolved release tag.
+    value: ${{ steps.version.outputs.tag }}
+  artifact-name:
+    description: Uploaded artifact name.
+    value: ${{ steps.version.outputs.artifact_name }}
+  msix-version:
+    description: Resolved four-part MSIX version.
+    value: ${{ steps.version.outputs.msix_version }}
+runs:
+  using: composite
+  steps:
 
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -111,8 +106,8 @@ jobs:
       - name: Check release signing configuration
         shell: pwsh
         env:
-          RELEASE_PFX_BASE64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
-          RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
+          RELEASE_PFX_BASE64: ${{ inputs.release-pfx-base64 }}
+          RELEASE_PFX_PASSWORD: ${{ inputs.release-pfx-password }}
         run: |
           if (-not $env:RELEASE_PFX_BASE64) {
             throw "QUICKLOOK_RELEASE_PFX_BASE64 is not configured."
@@ -137,7 +132,7 @@ jobs:
       - name: Restore release signing certificate
         shell: pwsh
         env:
-          RELEASE_PFX_BASE64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+          RELEASE_PFX_BASE64: ${{ inputs.release-pfx-base64 }}
         run: |
           if (-not $env:RELEASE_PFX_BASE64) { throw "QUICKLOOK_RELEASE_PFX_BASE64 is not configured." }
           New-Item -ItemType Directory -Path .signing -Force | Out-Null
@@ -146,7 +141,7 @@ jobs:
       - name: Test and package signed release
         shell: pwsh
         env:
-          RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
+          RELEASE_PFX_PASSWORD: ${{ inputs.release-pfx-password }}
         run: |
           ./tools/release.ps1 `
             -ExpectedVersion "${{ steps.version.outputs.base_version }}" `

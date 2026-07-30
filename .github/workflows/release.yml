@@ -13,9 +13,28 @@ jobs:
   package:
     # Accumulate normal feat/fix commits locally, then push one release: commit to publish them.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release:')
-    uses: ./.github/workflows/package-release.yml
-    with:
-      channel: stable
+    runs-on: windows-2025
+    environment: release
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      tag: ${{ steps.package.outputs.tag }}
+      artifact-name: ${{ steps.package.outputs.artifact-name }}
+      msix-version: ${{ steps.package.outputs.msix-version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Package stable release
+        id: package
+        uses: ./.github/actions/package-release
+        with:
+          channel: stable
+          release-pfx-base64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+          release-pfx-password: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
 
   publish:
     needs: package

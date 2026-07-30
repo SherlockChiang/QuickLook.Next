@@ -9,9 +9,28 @@ concurrency:
 
 jobs:
   package:
-    uses: ./.github/workflows/package-release.yml
-    with:
-      channel: beta
+    runs-on: windows-2025
+    environment: beta
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      tag: ${{ steps.package.outputs.tag }}
+      artifact-name: ${{ steps.package.outputs.artifact-name }}
+      msix-version: ${{ steps.package.outputs.msix-version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Package beta release
+        id: package
+        uses: ./.github/actions/package-release
+        with:
+          channel: beta
+          release-pfx-base64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+          release-pfx-password: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
 
   publish:
     needs: package
