@@ -47,6 +47,10 @@ if ($shared -notmatch 'environment:\s+\$\{\{ inputs\.channel' -or
     $shared -notmatch 'Stable release has no user-visible changes') {
     throw "Release caching, environment isolation, metadata, and visible-change guards are required."
 }
+if ($shared -notmatch
+        'Check release signing configuration[\s\S]*QUICKLOOK_RELEASE_PFX_BASE64[\s\S]*QUICKLOOK_RELEASE_PFX_PASSWORD[\s\S]*Check NuGet vulnerabilities') {
+    throw "Release signing secrets must fail fast before dependency audits."
+}
 if ($shared -notmatch 'resolve-formal-msix-version\.ps1[\s\S]*msix_version=\$msixVersion' -or
     $shared -match 'msix_version=\$version\.0') {
     throw "Formal beta and stable packages must use strictly ordered MSIX revisions."

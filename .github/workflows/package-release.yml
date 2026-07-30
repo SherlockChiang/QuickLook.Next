@@ -108,6 +108,19 @@ jobs:
             throw "Stable release has no user-visible changes. Add feat/fix/perf, Release-Note, or Release-Allow-Empty: true."
           }
 
+      - name: Check release signing configuration
+        shell: pwsh
+        env:
+          RELEASE_PFX_BASE64: ${{ secrets.QUICKLOOK_RELEASE_PFX_BASE64 }}
+          RELEASE_PFX_PASSWORD: ${{ secrets.QUICKLOOK_RELEASE_PFX_PASSWORD }}
+        run: |
+          if (-not $env:RELEASE_PFX_BASE64) {
+            throw "QUICKLOOK_RELEASE_PFX_BASE64 is not configured."
+          }
+          if (-not $env:RELEASE_PFX_PASSWORD) {
+            throw "QUICKLOOK_RELEASE_PFX_PASSWORD is not configured."
+          }
+
       - name: Check NuGet vulnerabilities
         shell: pwsh
         run: ./tools/test-nuget-vulnerabilities.ps1
