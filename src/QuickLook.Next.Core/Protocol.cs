@@ -21,6 +21,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewOpenSqliteHandles), "preview.open.sqlite-handles")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewImageWaveform), "preview.image.waveform")]
+[JsonDerivedType(typeof(PreviewImageMetadataOpen), "preview.image.metadata.open")]
+[JsonDerivedType(typeof(PreviewImageMetadataReady), "preview.image.metadata.ready")]
+[JsonDerivedType(typeof(PreviewImageMetadataClose), "preview.image.metadata.close")]
 [JsonDerivedType(typeof(PreviewSurfaceRelease), "preview.surface.release")]
 [JsonDerivedType(typeof(PreviewReady), "preview.ready")]
 [JsonDerivedType(typeof(PreviewError), "preview.error")]
@@ -35,6 +38,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(HeroRasterExtract), "hero.raster.extract")]
 [JsonDerivedType(typeof(HeroRasterExtracted), "hero.raster.extracted")]
 [JsonDerivedType(typeof(HeroRasterExtractClose), "hero.raster.extract.close")]
+[JsonDerivedType(typeof(OfficeImageOpen), "office.image.open")]
+[JsonDerivedType(typeof(OfficeImageReady), "office.image.ready")]
+[JsonDerivedType(typeof(OfficeImageClose), "office.image.close")]
 [JsonDerivedType(typeof(PreviewAnimationFramesOpen), "preview.animation.open")]
 [JsonDerivedType(typeof(PreviewAnimationFramesReady), "preview.animation.ready")]
 [JsonDerivedType(typeof(PreviewAnimationFramesClose), "preview.animation.close")]
@@ -106,6 +112,23 @@ public sealed record ImageWaveform(int Width, int Height, byte[] RgbDensity);
 /// <summary>RasterHost → App: optional image analysis computed after the first surface is published.</summary>
 public sealed record PreviewImageWaveform(string RequestId, ImageWaveform Waveform) : ControlMessage;
 
+/// <summary>
+/// App → RasterHost: read optional metadata from an already-open exact image HANDLE. The child
+/// request carries no path and fails closed when the retained parent is unavailable.
+/// </summary>
+public sealed record PreviewImageMetadataOpen(
+    string RequestId,
+    string PreviewRequestId) : ControlMessage;
+
+/// <summary>RasterHost → App: bounded metadata from the exact retained parent image object.</summary>
+public sealed record PreviewImageMetadataReady(
+    string RequestId,
+    string PreviewRequestId,
+    ImageMetadata Metadata) : ControlMessage;
+
+/// <summary>App → RasterHost: cancel or release an image-metadata child request.</summary>
+public sealed record PreviewImageMetadataClose(string RequestId) : ControlMessage;
+
 /// <summary>App → RasterHost: the host-local surface handle was copied or rejected and can be closed.</summary>
 public sealed record PreviewSurfaceRelease(string TransferId) : ControlMessage;
 
@@ -153,8 +176,16 @@ public sealed record PreviewPageError(
 /// <summary>App → Host: tear down a preview.</summary>
 public sealed record PreviewClose(string RequestId) : ControlMessage;
 
-/// <summary>App → ParserHost: extract one archive listing entry into the native bounded temp cache.</summary>
-public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, string EntryPath) : ControlMessage
+/// <summary>
+/// App → ParserHost: extract one archive listing entry directly into an App-owned bounded output
+/// file HANDLE. OutputHandle is transferred to ParserHost, which must adopt it before validation.
+/// </summary>
+public sealed record ArchiveEntryExtract(
+    string RequestId,
+    string ArchivePath,
+    string EntryPath,
+    long OutputHandle,
+    long OutputCapacity) : ControlMessage
 {
     /// <summary>
     /// For a local HANDLE preview, identifies the parent source retained by ParserHost. When present,
@@ -163,9 +194,12 @@ public sealed record ArchiveEntryExtract(string RequestId, string ArchivePath, s
     public string? ParentPreviewRequestId { get; init; }
 }
 
-/// <summary>ParserHost → App: terminal successful archive entry extraction.</summary>
+/// <summary>
+/// ParserHost → App: terminal successful archive entry extraction. The bytes already reside in the
+/// App-owned output object supplied by <see cref="ArchiveEntryExtract"/>.
+/// </summary>
 public sealed record ArchiveEntryExtracted(
-    string RequestId, long FileHandle, long FileLength, string LogicalName) : ControlMessage;
+    string RequestId, long FileLength, string LogicalName) : ControlMessage;
 
 /// <summary>App → ParserHost: cancel an archive entry extraction.</summary>
 public sealed record ArchiveEntryExtractClose(string RequestId) : ControlMessage;
@@ -176,21 +210,52 @@ public sealed record HeroRasterExtract(string RequestId, string Path, string Kin
     public string? ParentPreviewRequestId { get; init; }
 }
 
-/// <summary>ParserHost → App: a bounded BGRA raster is ready at TempPath; pixels never use the control pipe.</summary>
-public sealed record HeroRasterExtracted(string RequestId, long FileHandle, long PacketLength, int Width, int Height) : ControlMessage;
+/// <summary>
+/// ParserHost → App: a bounded BGRA raster is ready in a host-owned anonymous section.
+/// The App duplicates a read-only section handle and acknowledges consumption with close.
+/// </summary>
+public sealed record HeroRasterExtracted(string RequestId, long SectionHandle, long PacketLength, int Width, int Height) : ControlMessage;
 
-/// <summary>App → ParserHost: release a hero-raster temp handoff after the App has consumed it.</summary>
+/// <summary>App → ParserHost: release a hero-raster section after the App has consumed it.</summary>
 public sealed record HeroRasterExtractClose(string RequestId) : ControlMessage;
+
+/// <summary>
+/// App → ParserHost: decode one image referenced by an already-open Office preview. The parent
+/// request binds ImageRef to the exact retained package HANDLE and prevents path fallback.
+/// </summary>
+public sealed record OfficeImageOpen(
+    string RequestId,
+    string ParentPreviewRequestId,
+    string ImageRef,
+    uint TargetWidth,
+    uint TargetHeight) : ControlMessage;
+
+/// <summary>
+/// ParserHost → App: a bounded BGRA raster is ready in a host-owned anonymous section.
+/// The App duplicates a read-only section handle and acknowledges consumption with close.
+/// </summary>
+public sealed record OfficeImageReady(
+    string RequestId,
+    long SectionHandle,
+    long PacketLength,
+    int Width,
+    int Height) : ControlMessage;
+
+/// <summary>App → ParserHost: release or cancel an Office-image section request.</summary>
+public sealed record OfficeImageClose(string RequestId) : ControlMessage;
 
 /// <summary>App → RasterHost: decode animation frames for the currently open parent preview.</summary>
 public sealed record PreviewAnimationFramesOpen(
     string RequestId, string PreviewRequestId, uint TargetWidth, uint TargetHeight) : ControlMessage;
 
-/// <summary>RasterHost → App: a bounded animation frame packet is ready in host-owned temporary storage.</summary>
+/// <summary>
+/// RasterHost → App: a bounded animation frame packet is ready in a host-owned anonymous section.
+/// The App duplicates a read-only section handle and acknowledges consumption with close.
+/// </summary>
 public sealed record PreviewAnimationFramesReady(
-    string RequestId, string PreviewRequestId, long FileHandle, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
+    string RequestId, string PreviewRequestId, long SectionHandle, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
 
-/// <summary>App → RasterHost: release an animation frame packet after consumption.</summary>
+/// <summary>App → RasterHost: release an animation section after consumption.</summary>
 public sealed record PreviewAnimationFramesClose(string RequestId) : ControlMessage;
 
 /// <summary>App → ShellBroker: request one bounded thumbnail for an explicit compatibility path.</summary>

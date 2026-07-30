@@ -195,14 +195,17 @@ $apiRules = @(
             "src/QuickLook.Next.Core/DiagnosticsBundle.cs",
             "plugins/QuickLook.Next.Plugin.Archive/ArchiveProvider.cs",
             "tests/QuickLook.Next.Core.Tests/DiagnosticsBundleTests.cs",
-            "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs"
+            "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs",
+            "tests/QuickLook.Next.ParserHost.IntegrationTests/OfficeImageSharedSectionTests.cs",
+            "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostAnimationTests.cs"
         )
     },
     @{
         Name = "Directory.EnumerateFiles"
         Pattern = '(System\.IO\.)?Directory\.EnumerateFiles'
         Allowed = @(
-            "plugins/QuickLook.Next.Plugin.Archive/FolderProvider.cs"
+            "plugins/QuickLook.Next.Plugin.Archive/FolderProvider.cs",
+            "tests/QuickLook.Next.ParserHost.IntegrationTests/OfficeImageSharedSectionTests.cs"
         )
     },
     @{
@@ -210,7 +213,6 @@ $apiRules = @(
         Pattern = '(?<![A-Za-z0-9_])(?:System\.IO\.)?File\.OpenRead'
         Allowed = @(
             "src/QuickLook.Next.App/MainWindow.xaml.cs",
-            "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs",
             "src/QuickLook.Next.RasterHost/NativeImageDecoder.cs",
             "src/QuickLook.Next.RasterHost/SystemImageDecoder.cs",
             "plugins/QuickLook.Next.Plugin.Text/TextProvider.cs",
@@ -331,8 +333,10 @@ if (Test-Path $appProgramPath) {
         $appProgramText -notmatch 'ParserHostSupervisor' -or
         $appProgramText -notmatch 'EnsureStartedAsync' -or
         $appProgramText -notmatch 'BeginOpenHandle' -or
-        $appProgramText -notmatch 'TextContent') {
-        Add-Failure "Restricted ParserHost smoke must launch the real host and verify HANDLE parsing"
+        $appProgramText -notmatch 'missing-parser-smoke-[^"]*\.json' -or
+        $appProgramText -notmatch 'TextContent' -or
+        $appProgramText -notmatch 'TextLanguage,\s*"json"') {
+        Add-Failure "Restricted ParserHost smoke must launch the real host and verify path-free JSON HANDLE parsing"
     }
     if ($appProgramText -notmatch 'CurrentProcessHasWorldWriteRestriction[\s\S]*deniedProfileRoot[\s\S]*UnauthorizedAccessException') {
         Add-Failure "Write-restricted launch probe must verify both restricting SIDs and deny profile writes"
@@ -351,6 +355,13 @@ if (Test-Path $hostJob) {
 $parserHostProgram = Join-Path $Root "src/QuickLook.Next.ParserHost/Program.cs"
 if (Test-Path $parserHostProgram) {
     $parserHostText = Get-Content -LiteralPath $parserHostProgram -Raw
+    $parserPipeConnect = $parserHostText.IndexOf('pipe.ConnectAsync(15_000)', [StringComparison]::Ordinal)
+    $parserNativeHandshake = $parserHostText.IndexOf('ParserNativePreview.EnsureCompatible()', [StringComparison]::Ordinal)
+    if ($parserPipeConnect -lt 0 -or
+        $parserNativeHandshake -lt 0 -or
+        $parserPipeConnect -ge $parserNativeHandshake) {
+        Add-Failure "ParserHost must connect its control pipe before native initialization and retain the 15-second cold-start budget"
+    }
     if ($parserHostText -match 'OpenAuthenticatedPipeServerProcess|PROCESS_DUP_HANDLE') {
         Add-Failure "ParserHost must not receive a handle to the App process"
     }
@@ -359,23 +370,93 @@ if (Test-Path $parserHostProgram) {
 $protocolPath = Join-Path $Root "src/QuickLook.Next.Core/Protocol.cs"
 if (Test-Path $protocolPath) {
     $protocolText = Get-Content -LiteralPath $protocolPath -Raw
-    if ($protocolText -match 'ArchiveEntryExtracted\([^\)]*TempPath') {
-        Add-Failure "Archive entry handoffs must not expose a temporary path"
-    }
-    if ($protocolText -notmatch 'record\s+ArchiveEntryExtract\([^;]*ArchivePath,[^;]*EntryPath\)\s*:\s*ControlMessage\s*\{[\s\S]*?string\?\s+ParentPreviewRequestId\s*\{\s*get;\s*init;\s*\}') {
-        Add-Failure "Archive entry requests must carry an optional parent preview request ID before the legacy path fallback"
+    $archiveExtractContract = [regex]::Match(
+        $protocolText,
+        'record\s+ArchiveEntryExtract\([\s\S]*?\)\s*:\s*ControlMessage\s*\{[\s\S]*?(?=\r?\n\})').Value
+    $archiveExtractedContract = [regex]::Match(
+        $protocolText,
+        'record\s+ArchiveEntryExtracted\([\s\S]*?\)\s*:\s*ControlMessage;').Value
+    if ($archiveExtractContract -notmatch 'string\s+RequestId,[\s\S]*string\s+ArchivePath,[\s\S]*string\s+EntryPath,[\s\S]*long\s+OutputHandle,[\s\S]*long\s+OutputCapacity' -or
+        $archiveExtractContract -notmatch 'string\?\s+ParentPreviewRequestId\s*\{\s*get;\s*init;\s*\}' -or
+        $archiveExtractedContract -notmatch 'string\s+RequestId,[\s\S]*long\s+FileLength,[\s\S]*string\s+LogicalName' -or
+        $archiveExtractedContract -match '\b(?:FileHandle|OutputHandle|TempPath)\b') {
+        Add-Failure "Archive entry IPC must transfer a caller-owned bounded output HANDLE and return only length/name metadata"
     }
     if ($protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewOpenSqliteHandles\),\s*"preview\.open\.sqlite-handles"\)' -or
         $protocolText -notmatch 'record PreviewOpenSqliteHandles\([^;]*MainHandle,[^;]*MainLength,[^;]*WalHandle,[^;]*WalLength,[^;]*ShmHandle,[^;]*ShmLength,[^;]*LogicalPath,[^;]*FileProbe Probe\)\s*:\s*ControlMessage;') {
         Add-Failure "SQLite snapshots must use a dedicated main/WAL/SHM handle IPC envelope"
     }
+    if ($protocolText -notmatch 'record\s+HeroRasterExtracted\([^;]*SectionHandle,[^;]*PacketLength,[^;]*Width,[^;]*Height\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+PreviewAnimationFramesReady\([^;]*SectionHandle,[^;]*FrameCount,[^;]*Width,[^;]*Height,[^;]*PacketLength\)\s*:\s*ControlMessage;' -or
+        $protocolText -match 'record\s+(HeroRasterExtracted|PreviewAnimationFramesReady)\([^;]*FileHandle') {
+        Add-Failure "Animation and hero raster packets must cross as anonymous section handles, never temporary files"
+    }
+    if ($protocolText -notmatch 'JsonDerivedType\(typeof\(OfficeImageOpen\),\s*"office\.image\.open"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(OfficeImageReady\),\s*"office\.image\.ready"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(OfficeImageClose\),\s*"office\.image\.close"\)' -or
+        $protocolText -notmatch 'record\s+OfficeImageOpen\([^;]*ParentPreviewRequestId,[^;]*ImageRef,[^;]*TargetWidth,[^;]*TargetHeight\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+OfficeImageReady\([^;]*SectionHandle,[^;]*PacketLength,[^;]*Width,[^;]*Height\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+OfficeImageClose\(string RequestId\)\s*:\s*ControlMessage;' -or
+        $protocolText -match 'record\s+OfficeImage(?:Open|Ready)\([^;]*(?:Path|FileHandle)') {
+        Add-Failure "Office layout images must use parent-bound refs and anonymous section handles without path or file-HANDLE authority"
+    }
+    $imageMetadataOpenContract = [regex]::Match(
+        $protocolText,
+        'record\s+PreviewImageMetadataOpen\([^;]*\)\s*:\s*ControlMessage;').Value
+    $imageMetadataReadyContract = [regex]::Match(
+        $protocolText,
+        'record\s+PreviewImageMetadataReady\([^;]*\)\s*:\s*ControlMessage;').Value
+    if ($protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewImageMetadataOpen\),\s*"preview\.image\.metadata\.open"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewImageMetadataReady\),\s*"preview\.image\.metadata\.ready"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(PreviewImageMetadataClose\),\s*"preview\.image\.metadata\.close"\)' -or
+        $imageMetadataOpenContract -notmatch 'string\s+RequestId,[^;]*string\s+PreviewRequestId' -or
+        $imageMetadataReadyContract -notmatch 'string\s+RequestId,[^;]*string\s+PreviewRequestId,[^;]*ImageMetadata\s+Metadata' -or
+        $protocolText -notmatch 'record\s+PreviewImageMetadataClose\(string RequestId\)\s*:\s*ControlMessage;' -or
+        $imageMetadataOpenContract -match '\b(?:Path|FileHandle|SourceHandle)\b' -or
+        $imageMetadataReadyContract -match '\b(?:Path|FileHandle|SourceHandle)\b') {
+        Add-Failure "Image metadata IPC must be a path-free child request bound to an exact retained raster parent"
+    }
+}
+
+$contractsPath = Join-Path $Root "src/QuickLook.Next.Contracts/Contracts.cs"
+if (Test-Path $contractsPath) {
+    $contractsText = Get-Content -LiteralPath $contractsPath -Raw
+    $officeItem = [regex]::Match(
+        $contractsText,
+        'record\s+OfficeLayoutItem\(string Kind\)[\s\S]*?(?=\r?\n\})').Value
+    if ($officeItem -notmatch 'string\?\s+ImageRef\s*\{\s*get;\s*init;\s*\}' -or
+        $officeItem -notmatch 'long\s+ImageByteLength\s*\{\s*get;\s*init;\s*\}' -or
+        $officeItem -notmatch 'string\?\s+ImageBase64\s*\{\s*get;\s*init;\s*\}') {
+        Add-Failure "Office layout contracts must publish imageRef/length while retaining one-version ImageBase64 deserialization compatibility"
+    }
+}
+
+$sharedSectionPath = Join-Path $Root "src/QuickLook.Next.Core/SharedSection.cs"
+if (Test-Path $sharedSectionPath) {
+    $sharedSectionText = Get-Content -LiteralPath $sharedSectionPath -Raw
+    if ($sharedSectionText -notmatch 'CreateFileMapping\(\s*new\s+nint\(-1\)' -or
+        $sharedSectionText -notmatch 'SectionMapRead\s*=\s*0x0004' -or
+        $sharedSectionText -notmatch 'DuplicateHandle\([\s\S]{0,400}NativeMethods\.SectionMapRead,[\s\S]{0,100}false,\s*0\)' -or
+        $sharedSectionText -notmatch 'MapViewOfFile\([\s\S]{0,200}NativeMethods\.FileMapRead' -or
+        $sharedSectionText -notmatch 'UnmapViewOfFile\(') {
+        Add-Failure "CPU blob handoffs must use unnamed page-file sections duplicated with SECTION_MAP_READ only"
+    }
+}
+else {
+    Add-Failure "Shared section handoff implementation is missing"
 }
 
 $parserSupervisor = Join-Path $Root "src/QuickLook.Next.App/ParserHostSupervisor.cs"
 if (Test-Path $parserSupervisor) {
     $parserSupervisorText = Get-Content -LiteralPath $parserSupervisor -Raw
-    if ($parserSupervisorText -notmatch 'new FileStream\(path, FileMode\.CreateNew, FileAccess\.ReadWrite, FileShare\.Read\)') {
-        Add-Failure "Archive App handoff must retain a read-shared anchor that blocks writes and deletion"
+    $archiveOutputFactory = [regex]::Match(
+        $parserSupervisorText,
+        'private\s+static\s+ArchiveEntryHandoff\s+CreateArchiveEntryOutput\([\s\S]*?(?=\r?\n\s*public\s+async\s+Task)').Value
+    if ($archiveOutputFactory -notmatch 'FileMode\.CreateNew' -or
+        $archiveOutputFactory -notmatch 'FileAccess\.ReadWrite' -or
+        $archiveOutputFactory -notmatch 'FileShare\.ReadWrite\s*\|\s*FileShare\.Delete' -or
+        $archiveOutputFactory -notmatch 'new\s+ArchiveEntryHandoff\(') {
+        Add-Failure "Archive extraction must begin with a new App-owned output object that can be duplicated for bounded Host writes"
     }
     if ($parserSupervisorText -notmatch '"--writable-root", writableRoot') {
         Add-Failure "ParserHost must receive a per-launch writable root"
@@ -388,6 +469,39 @@ if (Test-Path $parserSupervisor) {
     if ($parserSupervisorText -notmatch 'BeginOpenSqliteHandles\(' -or
         $parserSupervisorText -notmatch 'new PreviewOpenSqliteHandles\(') {
         Add-Failure "ParserHostSupervisor must send SQLite snapshots through the dedicated handle message"
+    }
+    $heroExtractMethod = [regex]::Match(
+        $parserSupervisorText,
+        'ExtractHeroRasterAsync\([\s\S]*?(?=\r?\n\s*private\s+async\s+Task\s+StopOnTimeoutAsync)').Value
+    $heroReadMethod = [regex]::Match(
+        $parserSupervisorText,
+        'private\s+static\s+NativeRasterImage\?\s+ReadHeroRaster\([\s\S]*?(?=\r?\n\s*private\s+static\s+NativeRasterImage\?\s+ReadOfficeImageRaster)').Value
+    $heroSectionReadMethod = [regex]::Match(
+        $parserSupervisorText,
+        'private\s+static\s+NativeRasterImage\?\s+ReadRasterSection\([\s\S]*?(?=\r?\n\s*private\s+static\s+bool\s+IsValidRequestId)').Value
+    if ($heroExtractMethod -notmatch 'Process\s+sourceHost\s*=\s*_host' -or
+        $heroExtractMethod -notmatch 'int\s+sourceGeneration\s*=\s*_generation' -or
+        $heroExtractMethod -notmatch 'ReadHeroRaster\(extracted,\s*sourceHost\)' -or
+        $heroReadMethod -notmatch 'ReadRasterSection\(' -or
+        $heroSectionReadMethod -notmatch 'SharedSectionView\.DuplicateAndMapReadOnly\(' -or
+        $heroSectionReadMethod -match 'DuplicateFileFromProcess\(|FileStream\(|Buffer\.BlockCopy\(') {
+        Add-Failure "Hero raster responses must bind to the request Host generation and read a shared section without a packet-file copy"
+    }
+    $officeImageExtractMethod = [regex]::Match(
+        $parserSupervisorText,
+        'ExtractOfficeImageAsync\([\s\S]*?(?=\r?\n\s*private\s+async\s+Task\s+StopOnTimeoutAsync)').Value
+    $sharedRasterReadMethod = [regex]::Match(
+        $parserSupervisorText,
+        'ReadRasterSection\([\s\S]*?(?=\r?\n\s*private\s+static\s+bool\s+IsValidRequestId)').Value
+    if ($officeImageExtractMethod -notmatch 'Process\s+sourceHost\s*=\s*_host' -or
+        $officeImageExtractMethod -notmatch 'int\s+sourceGeneration\s*=\s*_generation' -or
+        $officeImageExtractMethod -notmatch 'new\s+OfficeImageOpen\(' -or
+        $officeImageExtractMethod -notmatch 'sourceGeneration\s*==\s*_generation' -or
+        $officeImageExtractMethod -notmatch 'ReadOfficeImageRaster\(ready,\s*sourceHost\)' -or
+        $officeImageExtractMethod -notmatch 'finally[\s\S]*OfficeImageClose\(requestId\)' -or
+        $sharedRasterReadMethod -notmatch 'SharedSectionView\.DuplicateAndMapReadOnly\(' -or
+        $sharedRasterReadMethod -match 'DuplicateFileFromProcess\(|FileStream\(') {
+        Add-Failure "Office image responses must bind to the captured ParserHost generation, map an exact read-only section, and always close the remote owner"
     }
     $singleHandleBegin = [regex]::Match(
         $parserSupervisorText,
@@ -436,6 +550,52 @@ if (Test-Path $rasterSupervisorPath) {
     if ($rasterSupervisorText -match 'restrictWrites:\s*true' -or
         $rasterSupervisorText -match 'CreateWriteRestrictedPipe\(') {
         Add-Failure "RasterHost must not inherit the ParserHost write-restricted profile before WinRT and Shell paths are prepared"
+    }
+    $pinnedHandleBegin = [regex]::Match(
+        $rasterSupervisorText,
+        'public\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginPinnedOpen\([\s\S]*?(?=\r?\n\s*private async Task SendOpenHandleAsync\()').Value
+    $rasterCloseStart = $rasterSupervisorText.IndexOf(
+        "public async Task CloseAsync(",
+        [StringComparison]::Ordinal)
+    $rasterCloseEnd = if ($rasterCloseStart -ge 0) {
+        $rasterSupervisorText.IndexOf(
+            "public void SetBackgroundEfficiency(",
+            $rasterCloseStart,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $rasterCloseText = if ($rasterCloseStart -ge 0 -and $rasterCloseEnd -gt $rasterCloseStart) {
+        $rasterSupervisorText.Substring($rasterCloseStart, $rasterCloseEnd - $rasterCloseStart)
+    } else {
+        ""
+    }
+    $rasterOpenSendLookup = $rasterCloseText.IndexOf("_handleOpenSends.TryGetValue(", [StringComparison]::Ordinal)
+    $rasterOpenSendAwait = if ($rasterOpenSendLookup -ge 0) {
+        $rasterCloseText.IndexOf("await ", $rasterOpenSendLookup, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $rasterPreviewCloseSend = $rasterCloseText.IndexOf("new PreviewClose(", [StringComparison]::Ordinal)
+    if ($pinnedHandleBegin -notmatch 'Task sendTask\s*=\s*SendOpenHandleAsync\([\s\S]*RegisterHandleOpenSend\(requestId,\s*sendTask\);' -or
+        $rasterSupervisorText -notmatch '_handleOpenSends' -or
+        $rasterSupervisorText -notmatch 'RegisterHandleOpenSend\(' -or
+        $rasterOpenSendLookup -lt 0 -or
+        $rasterOpenSendAwait -le $rasterOpenSendLookup -or
+        $rasterPreviewCloseSend -le $rasterOpenSendAwait) {
+        Add-Failure "RasterHost preview close must wait for an in-flight HANDLE open send before sending PreviewClose"
+    }
+    $imageMetadataMethod = [regex]::Match(
+        $rasterSupervisorText,
+        'public\s+async\s+Task<ImageMetadata\?>\s+GetImageMetadataAsync\([\s\S]*?(?=\r?\n\s*private\s+static\s+NativeAnimationFrames\?)').Value
+    if ($rasterSupervisorText -notmatch 'ImageMetadataTimeout\s*=\s*TimeSpan\.FromMilliseconds\(1500\)' -or
+        $imageMetadataMethod -notmatch '_pending\.Begin\(ImageMetadataTimeout\)' -or
+        $imageMetadataMethod -notmatch 'new\s+PreviewImageMetadataOpen\(requestId,\s*previewRequestId\)' -or
+        $imageMetadataMethod -notmatch 'ready\.PreviewRequestId,\s*previewRequestId' -or
+        $imageMetadataMethod -notmatch 'sourceGeneration\s*!=\s*_generation' -or
+        $imageMetadataMethod -notmatch 'finally[\s\S]*PreviewImageMetadataClose\(requestId\)' -or
+        $imageMetadataMethod -match 'RecycleHost\(') {
+        Add-Failure "Optional image metadata must use a bounded parent-bound child request, validate Host generation, and always close without recycling a usable preview"
     }
 }
 
@@ -497,8 +657,8 @@ if (Test-Path $parserHostProgram) {
     if ($parserHostProgramText -match 'Path\.GetTempPath\(') {
         Add-Failure "ParserHost runtime writes must remain inside its per-launch writable root"
     }
-    if ($parserHostProgramText -notmatch 'QUICKLOOK_NEXT_ARCHIVE_ROOT') {
-        Add-Failure "ParserHost archive extraction must use its per-launch writable root"
+    if ($parserHostProgramText -match 'QUICKLOOK_NEXT_ARCHIVE_ROOT|archive-preview') {
+        Add-Failure "ParserHost archive extraction must not create a writable temp root"
     }
     $sqliteCaseMatch = [regex]::Match(
         $parserHostProgramText,
@@ -640,14 +800,52 @@ if (Test-Path $parserHostProgram) {
     $archiveExtractCase = [regex]::Match(
         $parserHostProgramText,
         'case\s+ArchiveEntryExtract\s+extract[\s\S]*?(?=\r?\n\s*case\s+ArchiveEntryExtractClose)').Value
-    if ($archiveExtractCase -notmatch 'if\s*\(extract\.ParentPreviewRequestId\s+is\s+\{\s*\}\s+parentRequestId\)\s*\{[\s\S]*retainedPreviewSources\.TryGetValue\(parentRequestId,[\s\S]*retainedArchiveSource\.TryAcquire\(\s*RetainedPreviewFollowUps\.ArchiveEntry,\s*out retainedArchiveLease\)[\s\S]*break;\s*\}' -or
-        $archiveExtractCase -notmatch 'if\s*\(retainedArchiveLease\s+is\s+not\s+null\)\s*\{[\s\S]*ParserNativePreview\.TryExtractArchiveEntryHandle\([\s\S]*\}\s*else\s*\{[\s\S]*ParserNativePreview\.TryExtractArchiveEntry\(\s*extract\.ArchivePath,' -or
-        $archiveExtractCase -notmatch 'finally\s*\{[\s\S]*retainedArchiveLease\?\.Dispose\(\)[\s\S]*if\s*\(!handoffDelivered[\s\S]*archiveEntries\.TryRemove\(extract\.RequestId,\s*out var failedEntry\)') {
-        Add-Failure "Archive entry extraction must resolve and validate an optional retained parent before an else-only legacy path fallback"
+    $archiveOutputAdopt = $archiveExtractCase.IndexOf(
+        "WindowsHandleTransfer.TakeLocalFileHandle(extract.OutputHandle, 0)",
+        [StringComparison]::Ordinal)
+    $archiveEnvelopeValidation = $archiveExtractCase.IndexOf(
+        "if (!IsValidRequestId(extract.RequestId)",
+        [StringComparison]::Ordinal)
+    $archiveNativeOutputCall = $archiveExtractCase.IndexOf(
+        "ParserNativePreview.TryExtractArchiveEntryToOutputHandle(",
+        [StringComparison]::Ordinal)
+    $archiveWritableClose = if ($archiveNativeOutputCall -ge 0) {
+        $archiveExtractCase.IndexOf(
+            "outputHandle.Dispose();",
+            $archiveNativeOutputCall,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $archiveSuccessResponse = if ($archiveNativeOutputCall -ge 0) {
+        $archiveExtractCase.IndexOf(
+            "new ArchiveEntryExtracted(",
+            $archiveNativeOutputCall,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    if ($archiveOutputAdopt -lt 0 -or
+        $archiveEnvelopeValidation -le $archiveOutputAdopt -or
+        $archiveExtractCase -notmatch 'extract\.OutputCapacity\s+is\s+<=\s*0\s+or\s+>\s+NativeAbi\.MaxArchiveEntryOutputBytes' -or
+        $archiveExtractCase -notmatch 'if\s*\(extract\.ParentPreviewRequestId\s+is\s+\{\s*\}\s+parentRequestId\)\s*\{[\s\S]*retainedPreviewSources\.TryGetValue\(parentRequestId,[\s\S]*retainedArchiveSource\.TryAcquire\(\s*RetainedPreviewFollowUps\.ArchiveEntry,\s*out retainedArchiveLease\)[\s\S]*break;\s*\}' -or
+        $archiveNativeOutputCall -lt 0 -or
+        $archiveWritableClose -le $archiveNativeOutputCall -or
+        $archiveSuccessResponse -le $archiveWritableClose -or
+        $archiveExtractCase -notmatch 'finally\s*\{[\s\S]*outputHandle\.Dispose\(\)[\s\S]*retainedArchiveLease\?\.Dispose\(\)') {
+        Add-Failure "ParserHost archive extraction must adopt the output HANDLE before validation, stream into it, and close its writable duplicate before replying"
     }
 
     $parserNativePreviewPath = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
     $parserNativePreviewText = Get-Content -LiteralPath $parserNativePreviewPath -Raw
+    $parserHostArchiveBoundaryText = $parserHostProgramText + "`n" + $parserNativePreviewText
+    if ($parserHostArchiveBoundaryText -match 'archive-preview|QUICKLOOK_NEXT_ARCHIVE_ROOT|TempHandoffPaths|Path\.GetTempPath\(' -or
+        $parserHostArchiveBoundaryText -match '\bTryExtractArchiveEntry\(' -or
+        $parserHostArchiveBoundaryText -match '\bTryExtractArchiveEntryHandle\(' -or
+        $archiveExtractCase -match '\b(?:CopyTo|Flush)\(' -or
+        $archiveExtractCase -match 'DuplicateFile(?:To|From)Process\(|(?<![A-Za-z0-9_])archiveEntries\b|DeleteArchiveEntry') {
+        Add-Failure "ParserHost archive extraction must not recreate temp-path or Host-owned file-handoff compatibility layers"
+    }
     $handleMappings = @{
         text = "ql_preview_text_handle"
         executable = "ql_preview_executable_handle"
@@ -683,13 +881,22 @@ if (Test-Path $parserHostProgram) {
         $parserNativePreviewText -notmatch 'TryPreviewSqliteHandles\([\s\S]*ql_preview_sqlite_handles\(') {
         Add-Failure "ParserHost SQLite snapshots must call the dedicated native HANDLE entry point"
     }
-    if ($parserNativePreviewText -notmatch 'ql_extract_archive_entry_handle\(' -or
-        $parserNativePreviewText -notmatch 'TryExtractArchiveEntryHandle\([\s\S]*ql_extract_archive_entry_handle\(') {
-        Add-Failure "ParserHost archive entry extraction must call the dedicated native HANDLE entry point"
+    if ($parserNativePreviewText -notmatch 'ql_extract_archive_entry_to_output_handle\(' -or
+        $parserNativePreviewText -notmatch 'TryExtractArchiveEntryToOutputHandle\([\s\S]*ql_extract_archive_entry_to_output_handle\(' -or
+        $parserNativePreviewText -notmatch 'outputCapacity\s+is\s+<=\s*0\s+or\s+>\s+NativeAbi\.MaxArchiveEntryOutputBytes' -or
+        $parserNativePreviewText -notmatch 'outputHandle\.DangerousAddRef\(' -or
+        $parserNativePreviewText -notmatch 'if\s*\(outputAddRef\)\s+outputHandle\.DangerousRelease\(\)') {
+        Add-Failure "ParserHost archive entry extraction must call the bounded caller-output HANDLE P/Invoke"
     }
     if ($parserNativePreviewText -notmatch 'ql_extract_office_image_handle\(' -or
         $parserNativePreviewText -notmatch 'TryExtractOfficeHeroRasterHandle\([\s\S]*ql_extract_office_image_handle') {
         Add-Failure "ParserHost Office hero extraction must call the dedicated native HANDLE entry point"
+    }
+    if ($parserNativePreviewText -notmatch 'ql_extract_office_layout_image_handle\(' -or
+        $parserNativePreviewText -notmatch 'TryExtractOfficeLayoutImageHandle\([\s\S]*ql_extract_office_layout_image_handle' -or
+        $parserNativePreviewText -notmatch 'SharedSectionOwner\.Create\(capacity\)' -or
+        $parserNativePreviewText -notmatch 'width\s*>\s*targetWidth[\s\S]*height\s*>\s*targetHeight') {
+        Add-Failure "ParserHost Office layout image decoding must write through the bounded HANDLE ABI into a caller-owned anonymous section"
     }
     if ($parserNativePreviewText -notmatch 'ql_extract_package_icon_handle\(' -or
         $parserNativePreviewText -notmatch 'TryExtractPackageHeroRasterHandle\([\s\S]*ql_extract_package_icon_handle') {
@@ -702,8 +909,30 @@ if (Test-Path $parserHostProgram) {
         $heroExtractCase -notmatch '"package"\s*=>\s*RetainedPreviewFollowUps\.PackageHero' -or
         $heroExtractCase -notmatch 'retainedHeroSource\.TryAcquire\([\s\S]*retainedHeroOperation,[\s\S]*out retainedHeroLease' -or
         $heroExtractCase -notmatch 'TryExtractPackageHeroRasterHandle\(' -or
+        $heroExtractCase -notmatch 'NativeRasterSection\?\s+raster' -or
+        $heroExtractCase -notmatch 'raster\.Section\.Handle\.DangerousGetHandle\(\)' -or
+        $heroExtractCase -match 'WriteHeroRaster|parser-raster|FileStream\(' -or
         $heroExtractCase -match 'previewInputs\.TryGetValue') {
-        Add-Failure "Parent-bound Office/package hero extraction must fail closed and use independent HANDLE leases"
+        Add-Failure "Parent-bound Office/package hero extraction must use independent input leases and shared-section output"
+    }
+    $officeImageCase = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+OfficeImageOpen\s+open[\s\S]*?(?=\r?\n\s*case\s+OfficeImageClose)').Value
+    $officeImageCloseCase = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+OfficeImageClose\s+close[\s\S]*?(?=\r?\n\s*case\s+HeroRasterExtract)').Value
+    if ($handleCaseText -notmatch 'TryCollectOfficeLayoutImages\(' -or
+        $handleCaseText -notmatch 'RetainedPreviewFollowUps\.OfficeLayoutImage' -or
+        $retainedSourceText -notmatch 'TryAcquireOfficeLayoutImage\([\s\S]*_officeLayoutImages\.TryGetValue\(imageRef' -or
+        $officeImageCase -notmatch 'TryAcquireOfficeLayoutImage\(\s*open\.ImageRef' -or
+        $officeImageCase -notmatch 'TryExtractOfficeLayoutImageHandle\(' -or
+        $officeImageCase -notmatch 'SharedSectionOwner|NativeRasterSection' -or
+        $officeImageCase -notmatch 'new\s+OfficeImageReady\(' -or
+        $officeImageCase -notmatch 'officeImageRasters\[open\.RequestId\]\s*=\s*raster' -or
+        $officeImageCloseCase -notmatch 'officeImageRasters\.TryRemove\(' -or
+        $parserHostProgramText -notmatch 'CloseOfficeImagesForParentAsync\(close\.RequestId\)' -or
+        $parserHostProgramText -match 'parser-office-image|office-image(?:s)?[\\/]' ) {
+        Add-Failure "ParserHost Office image refs must be exact parent whitelists with independent leases, shared-section ownership, and close/parent cleanup"
     }
 
     $nativeAbiPath = Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs"
@@ -729,6 +958,11 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandlePackageIcon\s*=\s*1UL\s*<<\s*12' -or
         $nativeAbiText -notmatch 'HandleProbe\s*=\s*1UL\s*<<\s*13' -or
         $nativeAbiText -notmatch 'HandleRasterImage\s*=\s*1UL\s*<<\s*14' -or
+        $nativeAbiText -notmatch 'HandleAnimation\s*=\s*1UL\s*<<\s*15' -or
+        $nativeAbiText -notmatch 'HandleOfficeLayoutImage\s*=\s*1UL\s*<<\s*16' -or
+        $nativeAbiText -notmatch 'HandleImageWaveform\s*=\s*1UL\s*<<\s*17' -or
+        $nativeAbiText -notmatch 'HandleArchiveEntryOutput\s*=\s*1UL\s*<<\s*18' -or
+        $nativeAbiText -notmatch 'HandleImageMetadata\s*=\s*1UL\s*<<\s*19' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -737,14 +971,18 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandleOffice\b' -or
         $parserHandleInputs -notmatch '\bHandleEbook\b' -or
         $parserHandleInputs -notmatch '\bHandleArchiveEntry\b' -or
+        $parserHandleInputs -notmatch '\bHandleArchiveEntryOutput\b' -or
         $parserHandleInputs -notmatch '\bHandlePackage\b' -or
         $parserHandleInputs -notmatch '\bHandlePackageIcon\b' -or
+        $parserHandleInputs -notmatch '\bHandleOfficeLayoutImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
         $rasterHandleInputs -notmatch '\bHandleRasterImage\b' -or
+        $rasterHandleInputs -match '\bHandleAnimation\b' -or
+        $rasterHandleInputs -match '\bHandleImageMetadata\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-14 and LIMIT_EXCEEDED status must remain stable"
+        Add-Failure "Native ABI HANDLE capability bits 0-19 and LIMIT_EXCEEDED status must remain stable; animation and metadata sidebands remain optional"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -761,9 +999,65 @@ if (Test-Path $parserHostProgram) {
         $ownReopenedFile -le $reopenFile) {
         Add-Failure "Rust HANDLE input must validate with Win32, ReOpenFile, then own only the reopened handle"
     }
+    $nativeOutputAdapter = [regex]::Match(
+        $nativeInputText,
+        'pub fn\s+reopen_borrowed_disk_file_for_output\([\s\S]*?(?=\r?\n\})').Value
+    if ($nativeOutputAdapter -notmatch 'GetFileType\(source\)' -or
+        $nativeOutputAdapter -notmatch 'GetFileSizeEx\(source' -or
+        $nativeOutputAdapter -notmatch 'ReOpenFile\([\s\S]*GENERIC_WRITE\.0,[\s\S]*FILE_SHARE_READ\s*\|\s*FILE_SHARE_WRITE\s*\|\s*FILE_SHARE_DELETE' -or
+        $nativeOutputAdapter -notmatch 'fs::File::from_raw_handle\(') {
+        Add-Failure "Rust archive output HANDLEs must be validated, independently reopened writable, and owned only through the reopened handle"
+    }
 
     $nativeLibPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
+    $panicBoundaryExemptions = @{
+        "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
+        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_HANDLE_IMAGE_METADATA\s*\}'
+        "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
+        "ql_set_preview_visible" = '\{\s*PREVIEW_VISIBLE\.store\(visible\s*!=\s*0,\s*Ordering::SeqCst\);\s*\}'
+    }
+    $voidBoundaryExports = @("ql_get_selection")
+    $nativeExports = [regex]::Matches(
+        $nativeLibText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    for ($exportIndex = 0; $exportIndex -lt $nativeExports.Count; $exportIndex++) {
+        $entryPointMatch = $nativeExports[$exportIndex]
+        $entryPoint = $entryPointMatch.Groups["name"].Value
+        $entryStart = $entryPointMatch.Index
+        $entryEnd = if ($exportIndex + 1 -lt $nativeExports.Count) {
+            $nativeExports[$exportIndex + 1].Index
+        } else {
+            $nativeLibText.Length
+        }
+        $entryBody = $nativeLibText.Substring($entryStart, $entryEnd - $entryStart)
+
+        if ($panicBoundaryExemptions.ContainsKey($entryPoint)) {
+            $exemptBody = [regex]::Match(
+                $entryBody,
+                $panicBoundaryExemptions[$entryPoint]).Value
+            if ([string]::IsNullOrEmpty($exemptBody) -or
+                $exemptBody -match '\b(?:unwrap|expect)\s*\(|panic!\s*\(|thread::spawn|Vec::|String::|format!\s*\(') {
+                Add-Failure "$entryPoint may remain unwrapped only while it is a non-allocating, mechanically infallible constant/getter/hook control"
+            }
+            continue
+        }
+
+        if ($voidBoundaryExports -contains $entryPoint) {
+            if ($entryBody -notmatch '(?s)\)\s*\{\s*ffi_void_boundary\(\|\|') {
+                Add-Failure "$entryPoint must contain panics with the void Rust FFI boundary"
+            }
+            continue
+        }
+
+        if ($entryBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            Add-Failure "$entryPoint must contain panics before returning across the Rust FFI boundary"
+        }
+    }
+    if ($nativeLibText -notmatch 'fn\s+ffi_boundary\(body:\s*impl\s+FnOnce\(\)\s*->\s*i32\)\s*->\s*i32\s*\{\s*catch_unwind\(AssertUnwindSafe\(body\)\)\.unwrap_or\(QL_ERROR_INTERNAL\)\s*\}' -or
+        $nativeLibText -notmatch 'fn\s+ffi_void_boundary\(body:\s*impl\s+FnOnce\(\)\)\s*\{\s*let\s+_\s*=\s*catch_unwind\(AssertUnwindSafe\(body\)\);\s*\}') {
+        Add-Failure "Rust FFI panic boundaries must map i32 exports to INTERNAL and contain void-export panics"
+    }
     foreach ($entryPoint in @(
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
@@ -772,6 +1066,7 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_archive_handle",
         "ql_preview_office_handle",
         "ql_preview_ebook_handle"
+        "ql_preview_image_metadata_handle"
         "ql_probe_file_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
@@ -791,7 +1086,37 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
         }
     }
-    $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_handle('
+    foreach ($entryPoint in @(
+        "ql_extract_office_image_handle",
+        "ql_extract_office_layout_image_handle",
+        "ql_extract_package_icon_handle"
+    )) {
+        $signature = "pub unsafe extern `"C`" fn $entryPoint("
+        $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
+        $entryEnd = if ($entryStart -ge 0) {
+            $nativeLibText.IndexOf("#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+        } else {
+            -1
+        }
+        $entryBody = if ($entryStart -ge 0 -and $entryEnd -gt $entryStart) {
+            $nativeLibText.Substring($entryStart, $entryEnd - $entryStart)
+        } else {
+            ""
+        }
+        if ($entryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $entryBody -notmatch 'reopen_handle_input_v2\(' -or
+            $entryBody -notmatch 'write_raster_packet_v2\(' -or
+            $entryBody -match 'Vec::with_capacity\(\s*8\s*\+\s*bgra\.len\(\)\s*\)') {
+            Add-Failure "$entryPoint must write checked raster bytes directly into the caller section without an aggregate packet Vec"
+        }
+    }
+    if ($nativeLibText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
+        $nativeLibText -notmatch 'fn\s+write_raster_packet_v2\([\s\S]*QL_ERROR_INTERNAL' -or
+        $nativeLibText -notmatch 'enum\s+AnimationPacketError\s*\{[\s\S]*Internal,[\s\S]*LimitExceeded' -or
+        $nativeLibText -notmatch 'Err\(AnimationPacketError::Internal\)\s*=>\s*return\s+QL_ERROR_INTERNAL') {
+        Add-Failure "Native animation and Hero packet writers must distinguish internal layout failures and validate exact BGRA geometry"
+    }
+    $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle('
     $archiveEntryStart = $nativeLibText.IndexOf($archiveEntrySignature, [StringComparison]::Ordinal)
     $archiveEntryEnd = if ($archiveEntryStart -ge 0) {
         $nativeLibText.IndexOf("#[no_mangle]", $archiveEntryStart + $archiveEntrySignature.Length, [StringComparison]::Ordinal)
@@ -805,8 +1130,98 @@ if (Test-Path $parserHostProgram) {
     }
     if ($archiveEntryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
         $archiveEntryBody -notmatch 'reopen_handle_input_v2\(' -or
-        $archiveEntryBody -notmatch 'write_v2_out\(') {
-        Add-Failure "ql_extract_archive_entry_handle must contain panics and use the shared validated ABI 2 HANDLE/output contract"
+        $archiveEntryBody -notmatch 'reopen_borrowed_disk_file_for_output\(output_handle,\s*0\)' -or
+        $archiveEntryBody -notmatch 'extract_archive_entry_to_writer_reader\(' -or
+        $archiveEntryBody -notmatch 'output_capacity' -or
+        $archiveEntryBody -notmatch 'output\.metadata\(\)[\s\S]*metadata\.len\(\)\s*==\s*written' -or
+        $archiveEntryBody -notmatch '\*out_written\s*=\s*written' -or
+        $archiveEntryBody -notmatch 'QL_OK') {
+        Add-Failure "ql_extract_archive_entry_to_output_handle must contain panics and stream into the validated caller output HANDLE"
+    }
+    $nativePreviewPath = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+    $nativePreviewText = Get-Content -LiteralPath $nativePreviewPath -Raw
+    $nativeAnimationProbePath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
+    $nativeAnimationProbeText = if (Test-Path -LiteralPath $nativeAnimationProbePath) {
+        Get-Content -LiteralPath $nativeAnimationProbePath -Raw
+    } else {
+        ""
+    }
+    $nativeTorrentPreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
+    $nativeTorrentPreviewText = if (Test-Path -LiteralPath $nativeTorrentPreviewPath) {
+        Get-Content -LiteralPath $nativeTorrentPreviewPath -Raw
+    } else {
+        ""
+    }
+    $nativeExecutablePreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
+    $nativeExecutablePreviewText = if (Test-Path -LiteralPath $nativeExecutablePreviewPath) {
+        Get-Content -LiteralPath $nativeExecutablePreviewPath -Raw
+    } else {
+        ""
+    }
+    $nativeEbookPreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
+    $nativeEbookPreviewText = if (Test-Path -LiteralPath $nativeEbookPreviewPath) {
+        Get-Content -LiteralPath $nativeEbookPreviewPath -Raw
+    } else {
+        ""
+    }
+    if ($nativePreviewText -notmatch 'mod\s+animation_probe\s*;' -or
+        $nativePreviewText -notmatch 'mod\s+torrent\s*;' -or
+        $nativePreviewText -notmatch 'use\s+animation_probe::probe_image_animation_reader' -or
+        $nativePreviewText -notmatch '#\[cfg\(test\)\]\s*use\s+animation_probe::ImageAnimationProbe' -or
+        $nativePreviewText -notmatch 'pub\s+use\s+torrent::\{render_torrent,\s*render_torrent_reader\}' -or
+        $nativePreviewText -match '(?:struct\s+ImageAnimationProbe|fn\s+probe_image_animation_reader|enum\s+BValue|fn\s+render_torrent_reader|fn\s+parse_bencode_at)' -or
+        $nativeAnimationProbeText -notmatch '"gif"\s*\|\s*"webp"\s*\|\s*"png"' -or
+        $nativeAnimationProbeText -notmatch 'MAX_IMAGE_ANIMATION_PROBE_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' -or
+        $nativeAnimationProbeText -notmatch 'source_size\s*<=\s*bytes\.len\(\)\s+as\s+u64' -or
+        $nativeTorrentPreviewText -notmatch 'read_reader_exact_bounded_cancelable\(' -or
+        $nativeTorrentPreviewText -notmatch 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' -or
+        $nativeTorrentPreviewText -notmatch 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000') {
+        Add-Failure "Animation classification and Torrent parsing must remain in focused bounded Rust child modules"
+    }
+    if ($nativePreviewText -notmatch 'mod\s+executable\s*;' -or
+        $nativePreviewText -notmatch 'mod\s+ebook\s*;' -or
+        $nativePreviewText -notmatch 'pub\s+use\s+executable::\{render_executable,\s*render_executable_reader\}' -or
+        $nativePreviewText -notmatch 'pub\s+use\s+ebook::\{render_ebook,\s*render_ebook_reader\}' -or
+        $nativePreviewText -match '(?:struct\s+PeSummary|fn\s+parse_pe_headers|fn\s+render_executable_reader|struct\s+EbookContext|fn\s+render_ebook_reader|fn\s+render_epub_from_zip)' -or
+        $nativeExecutablePreviewText -notmatch 'pub\s+fn\s+render_executable_reader<R:\s*Read>' -or
+        $nativeExecutablePreviewText -notmatch 'read_reader_prefix_cancelable\(\s*reader,\s*MAX_EXECUTABLE_HEADER_BYTES' -or
+        $nativeExecutablePreviewText -notmatch 'fn\s+parse_authenticode_signers' -or
+        $nativeExecutablePreviewText -notmatch 'fn\s+parse_pe_clr_header' -or
+        $nativeEbookPreviewText -notmatch 'pub\s+fn\s+render_ebook_reader<R:\s*Read\s*\+\s*Seek>' -or
+        $nativeEbookPreviewText -notmatch 'source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES' -or
+        $nativeEbookPreviewText -notmatch 'struct\s+EbookContext' -or
+        $nativeEbookPreviewText -notmatch 'fn\s+render_epub_from_zip<R:\s*Read\s*\+\s*Seek>') {
+        Add-Failure "Executable/PE/CLR and Ebook parsing must remain in focused bounded Rust child modules"
+    }
+    $archiveWriterSignature = 'pub fn extract_archive_entry_to_writer_reader'
+    $archiveWriterStart = $nativePreviewText.IndexOf(
+        $archiveWriterSignature,
+        [StringComparison]::Ordinal)
+    $archiveWriterEnd = if ($archiveWriterStart -ge 0) {
+        $nativePreviewText.IndexOf(
+            "pub(crate) fn discard_archive_extract_path",
+            $archiveWriterStart,
+            [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $archiveWriterBody = if ($archiveWriterStart -ge 0 -and $archiveWriterEnd -gt $archiveWriterStart) {
+        $nativePreviewText.Substring($archiveWriterStart, $archiveWriterEnd - $archiveWriterStart)
+    } else {
+        ""
+    }
+    if ($archiveWriterBody -notmatch 'output_capacity\s*>\s*MAX_ARCHIVE_EXTRACT_BYTES' -or
+        $archiveWriterBody -notmatch 'entry\.size\(\)\s*>\s*output_capacity' -or
+        $archiveWriterBody -notmatch 'written\.checked_add\(read\s+as\s+u64\)' -or
+        $archiveWriterBody -notmatch 'next_written\s*>\s*output_capacity' -or
+        $archiveWriterBody -notmatch 'output[\s\S]*\.write_all\(&buffer\[\.\.read\]\)' -or
+        $archiveWriterBody -notmatch 'output\.flush\(\)' -or
+        $archiveWriterBody -notmatch 'Ok\(written\)') {
+        Add-Failure "Rust archive extraction must retain a bounded checked reader-to-writer pipeline"
     }
 
     $capabilitiesBody = [regex]::Match(
@@ -824,6 +1239,11 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PACKAGE_ICON:\s*u64\s*=\s*1\s*<<\s*12' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PROBE:\s*u64\s*=\s*1\s*<<\s*13' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_RASTER_IMAGE:\s*u64\s*=\s*1\s*<<\s*14' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ANIMATION:\s*u64\s*=\s*1\s*<<\s*15' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE:\s*u64\s*=\s*1\s*<<\s*16' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_WAVEFORM:\s*u64\s*=\s*1\s*<<\s*17' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT:\s*u64\s*=\s*1\s*<<\s*18' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_METADATA:\s*u64\s*=\s*1\s*<<\s*19' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -835,33 +1255,86 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE_ICON\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PROBE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_RASTER_IMAGE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ANIMATION\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_IMAGE_METADATA\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-14 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-19 and retain LIMIT_EXCEEDED"
+    }
+    $nativeOfficeTypesPath = Join-Path $Root "native/quicklook_next_native/src/preview/types.rs"
+    $nativeOfficeTypesText = Get-Content -LiteralPath $nativeOfficeTypesPath -Raw
+    if ($nativeOfficeTypesText -notmatch 'image_ref:\s*Option<String>' -or
+        $nativeOfficeTypesText -notmatch 'image_byte_length:\s*Option<u64>' -or
+        $nativeOfficeTypesText -match 'image_base64') {
+        Add-Failure "Current Rust Office layout JSON must contain image refs and lengths, never inline Base64 payloads"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
         Add-Failure "Native HANDLE logical names must be reduced to basenames and never opened as paths"
+    }
+    if (([regex]::Matches($nativeLibText, 'probe_image_animation_reader\(')).Count -lt 2 -or
+        ([regex]::Matches($nativeLibText, '\\"isAnimated\\"')).Count -lt 2) {
+        Add-Failure "Rust path and HANDLE probes must share bounded GIF/WebP/APNG animation metadata"
     }
 }
 
 $mainWindowPath = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 if (Test-Path $mainWindowPath) {
     $mainWindowText = Get-Content -LiteralPath $mainWindowPath -Raw
-    if ($mainWindowText -notmatch 'BeginPinnedParserOpen\(path, probe\)') {
-        Add-Failure "Local ParserHost previews must enter through a pinned source handle"
+    $preparePreviewProbe = [regex]::Match(
+        $mainWindowText,
+        'private\s+\(\s*FileProbe\s+Probe,[\s\S]*?\)\s+PreparePreviewProbe\([\s\S]*?(?=\r?\n\s*private static FileProbe BuildProbe\()').Value
+    if ([string]::IsNullOrWhiteSpace($preparePreviewProbe) -or
+        $preparePreviewProbe -notmatch 'if\s*\(metadataOnly\)[\s\S]*FallbackFileProbe\.CreateMetadataOnlyProbe\(path\)[\s\S]*"cloud-metadata"' -or
+        $preparePreviewProbe -notmatch 'if\s*\(Directory\.Exists\(path\)\)[\s\S]*_native\.ProbeFile\(path\)[\s\S]*"path-directory"' -or
+        $preparePreviewProbe -notmatch 'if\s*\(!_native\.SupportsHandleProbe\)[\s\S]*_native\.ProbeFile\(path\)[\s\S]*"path-compatibility"' -or
+        $preparePreviewProbe -notmatch 'WindowsHandleTransfer\.OpenPinnedReadOnlyFile\(path\)' -or
+        $preparePreviewProbe -notmatch 'reason=pin-failed[\s\S]*_native\.ProbeFile\(path\)[\s\S]*"path-compatibility"' -or
+        $preparePreviewProbe -notmatch '_native\.ProbeFileHandle\(\s*pinned\.Handle,\s*pinned\.Length,\s*path\)' -or
+        $preparePreviewProbe -notmatch 'probe\.Size\s*!=\s*pinned\.Length' -or
+        $preparePreviewProbe -notmatch 'return\s*\(probe,\s*pinned\.Handle,\s*pinned\.Length,\s*"pinned-handle"\)' -or
+        $preparePreviewProbe -notmatch 'catch\s*\{\s*pinned\.Handle\.Dispose\(\);\s*throw;') {
+        Add-Failure "Ordinary local files must pin once, use HANDLE probing as authority, and reserve path probing for explicit cloud, directory, capability, or pin-failure fallbacks"
     }
-    if ($mainWindowText -notmatch 'BeginPinnedRasterOpen\(path, probe, targetSize\.Width, targetSize\.Height\)') {
-        Add-Failure "Local RasterHost previews must enter through a pinned source handle"
+    if (([regex]::Matches($mainWindowText, '_native\.ProbeFileHandle\(')).Count -ne 1 -or
+        ([regex]::Matches($mainWindowText, 'WindowsHandleTransfer\.OpenPinnedReadOnlyFile\(path\)')).Count -ne 1 -or
+        $mainWindowText -notmatch 'preparedProbe\s*=\s*await Task\.Run\([\s\S]{0,180}PreparePreviewProbe\(path,\s*mayRequireHydration\)[\s\S]{0,220}pinnedPreviewHandle\s*=\s*preparedProbe\.Handle' -or
+        $mainWindowText -notmatch 'finally\s*\{\s*pinnedPreviewHandle\?\.Dispose\(\);') {
+        Add-Failure "App preview routing must consume one authoritative early HANDLE probe and release any source not transferred to a host"
     }
-    if (([regex]::Matches($mainWindowText, '_native\.SupportsHandleProbe\s*\?\s*_native\.ProbeFileHandle\(pinned\.Handle, pinned\.Length, path\)[\s\S]{0,180}:\s*_native\.ProbeFile\(path\)')).Count -ne 2) {
-        Add-Failure "Pinned ParserHost/RasterHost probes must use HANDLE capability gating and reserve path fallback for old native builds"
+    if ($mainWindowText -notmatch 'parserSource\s*=\s*pinnedPreviewHandle;\s*pinnedPreviewHandle\s*=\s*null;[\s\S]{0,180}BeginPinnedParserOpen\(\s*path,\s*probe,\s*parserSource,\s*pinnedPreviewLength\)' -or
+        $mainWindowText -notmatch 'rasterSource\s*=\s*pinnedPreviewHandle;\s*pinnedPreviewHandle\s*=\s*null;[\s\S]{0,180}BeginPinnedRasterOpen\(\s*path,\s*probe,\s*rasterSource,\s*pinnedPreviewLength,') {
+        Add-Failure "ParserHost and RasterHost must receive the same pinned identity used by the authoritative HANDLE probe"
+    }
+    if ($mainWindowText -notmatch 'else if\s*\(pinnedPreviewHandle\s+is\s+not\s+null\)[\s\S]{0,500}BeginPinnedParserOpen' -or
+        $mainWindowText -notmatch 'else\s*\{\s*\(parserRequestId,\s*parserCompletion\)\s*=\s*_parserSupervisor!\.BeginOpen\(path,\s*probe\);' -or
+        $mainWindowText -notmatch 'else if\s*\(pinnedPreviewHandle\s+is\s+null\)\s*\{\s*\(requestId,\s*completion\)\s*=\s*_supervisor!\.BeginOpen\(') {
+        Add-Failure "Local path-based host opens must remain an explicit compatibility fallback only when no pinned source exists"
+    }
+    if ($mainWindowText -notmatch 'PreviewRoute\s+route\s*=\s*PreviewRoutePlanner\.Plan\(\s*probe\.Kind' -or
+        $mainWindowText -notmatch 'AnimatedImagePreviewPresenter\.CreateRenderPlan\(probe\)' -or
+        $mainWindowText -notmatch 'route\s*=\s*PreviewRoutePlanner\.Plan\(probe\.Kind') {
+        Add-Failure "Local animation routing must be finalized from the authoritative early HANDLE probe"
     }
     $pinnedParserOpen = [regex]::Match(
         $mainWindowText,
         'private\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginPinnedParserOpen\([\s\S]*?(?=\r?\n\s*private static bool IsSqliteMainDatabase\()').Value
-    if ($pinnedParserOpen -notmatch 'if\s*\(IsSqliteMainDatabase\(path,\s*verifiedProbe\)\)\s*\{\s*wal\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-wal"\s*\);\s*shm\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-shm"\s*\);\s*\}' -or
-        $pinnedParserOpen -notmatch 'return _parserSupervisor!\.BeginOpenSqliteHandles\(') {
+    if ($pinnedParserOpen -notmatch 'SafeFileHandle\s+pinnedHandle,\s*long\s+pinnedLength' -or
+        $pinnedParserOpen -match '_native\.ProbeFile(?:Handle)?\(|OpenPinnedReadOnlyFile\(path\)' -or
+        $pinnedParserOpen -notmatch 'if\s*\(IsSqliteMainDatabase\(path,\s*verifiedProbe\)\)\s*\{\s*wal\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-wal"\s*\);\s*shm\s*=\s*WindowsHandleTransfer\.TryOpenPinnedReadOnlyFile\(\s*path\s*\+\s*"-shm"\s*\);\s*\}' -or
+        $pinnedParserOpen -notmatch 'return _parserSupervisor!\.BeginOpenSqliteHandles\(' -or
+        $pinnedParserOpen -notmatch 'finally[\s\S]*pinnedHandle\.Dispose\(\)') {
         Add-Failure "Only the App may derive pinned -wal/-shm companions and send the dedicated SQLite snapshot"
+    }
+    $pinnedRasterOpen = [regex]::Match(
+        $mainWindowText,
+        'private\s+\(string RequestId,\s*Task<ControlMessage> Completion\)\s+BeginPinnedRasterOpen\([\s\S]*?(?=\r?\n\s*private string ResolveAppIconPath\()').Value
+    if ($pinnedRasterOpen -notmatch 'SafeFileHandle\s+pinnedHandle,\s*long\s+pinnedLength' -or
+        $pinnedRasterOpen -match '_native\.ProbeFile(?:Handle)?\(|OpenPinnedReadOnlyFile\(path\)' -or
+        $pinnedRasterOpen -notmatch 'return _supervisor!\.BeginPinnedOpen\(\s*path,\s*verifiedProbe,\s*pinnedHandle,' -or
+        $pinnedRasterOpen -notmatch 'finally[\s\S]*pinnedHandle\.Dispose\(\)') {
+        Add-Failure "RasterHost must consume the already-probed pinned source without reopening or reprobeing its path"
     }
     if ($mainWindowText -notmatch 'bool\s+isParentBoundArchiveListing\s*=\s*listing\s+is\s+not\s+null\s*&&\s*string\.IsNullOrWhiteSpace\(listing\.RootPath\)[\s\S]*string\.Equals\(_currentProbe\?\.Kind,\s*"archive",\s*StringComparison\.OrdinalIgnoreCase\)[\s\S]*string\.Equals\(_currentProbe\?\.Kind,\s*"ebook",\s*StringComparison\.OrdinalIgnoreCase\)' -or
         $mainWindowText -notmatch 'string\?\s+archiveParentRequestId\s*=\s*isParentBoundArchiveListing\s*\?\s*currentParserPreviewRequestId\s*:\s*null' -or
@@ -877,6 +1350,95 @@ if (Test-Path $mainWindowPath) {
         $listingPreviewMethod -notmatch 'ReleaseArchiveEntryAsync\(archiveHandoff\)') {
         Add-Failure "Archive listing clicks must retain their generation/token and release stale handoffs"
     }
+    if ($mainWindowText -notmatch 'new\s+OfficePreviewPresenter\([\s\S]{0,500}LoadOfficeLayoutImageAsync\)' -or
+        $mainWindowText -notmatch 'LoadOfficeLayoutImageAsync\([\s\S]*_previewSession\.IsCurrentRequest\(parentPreviewRequestId\)[\s\S]*ExtractOfficeImageAsync\(') {
+        Add-Failure "MainWindow must bind lazy Office layout images to the current retained ParserHost preview"
+    }
+    if ($mainWindowText -notmatch 'LoadImageMetadataAsync\([\s\S]*_supervisor!\.GetImageMetadataAsync\(\s*previewRequestId,[\s\S]*IsPreviewGenerationCurrent\(generation,\s*token\)[\s\S]*_previewSession\.IsCurrentPath\(path\)' -or
+        $mainWindowText -match 'GetImagePropertiesAsync\(' -or
+        $mainWindowText -match 'RetrieveImagePropertiesAsync\(' -or
+        $mainWindowText -match 'ShouldSupplementNativeImageMetadata\(' -or
+        $mainWindowText -match 'TryPreviewImageMetadata\(' -or
+        $mainWindowText -match 'System\.(?:Image|Photo|GPS)\.') {
+        Add-Failure "App image metadata must come from the retained RasterHost child request, never a path-based Windows Property Handler"
+    }
+}
+
+$appSourceRoot = Join-Path $Root "src/QuickLook.Next.App"
+if (Test-Path -LiteralPath $appSourceRoot) {
+    $appSourceText = (Get-ChildItem -LiteralPath $appSourceRoot -File -Filter "*.cs" |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    if ($appSourceText -match 'GetImagePropertiesAsync\(' -or
+        $appSourceText -match 'RetrieveImagePropertiesAsync\(' -or
+        $appSourceText -match 'TryPreviewImageMetadata\(' -or
+        $appSourceText -match 'ql_preview_image_metadata(?:\s|\()') {
+        Add-Failure "The App process must not restore path-based image Property Handler/native metadata entry points"
+    }
+}
+
+$officePresenterPath = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
+if (Test-Path $officePresenterPath) {
+    $officePresenterText = Get-Content -LiteralPath $officePresenterPath -Raw
+    if ($officePresenterText -notmatch 'BuildImageDecodeTargets\(' -or
+        $officePresenterText -notmatch 'PopulateLayoutImageAsync\(' -or
+        $officePresenterText -notmatch 'Dictionary<string,\s*Task<ImageSource\?>>\s+_loads' -or
+        $officePresenterText -notmatch 'SemaphoreSlim\s+DecodeGate\s*\{\s*get;\s*\}\s*=\s*new\(2,\s*2\)' -or
+        ([regex]::Matches($officePresenterText, 'CancelImageLoads\(\);')).Count -lt 2 -or
+        $officePresenterText -notmatch 'ReferenceEquals\(Volatile\.Read\(ref _imageLoadSession\),\s*session\)' -or
+        $officePresenterText -notmatch 'CreateImageSourceFromBgra\([\s\S]*new\s+WriteableBitmap\([\s\S]*PixelBuffer\.AsStream\(\)' -or
+        $officePresenterText -notmatch 'CreateImageSourceFromBase64\(' -or
+        $officePresenterText -notmatch 'ImageBase64') {
+        Add-Failure "Office pages must lazily deduplicate imageRef loads, cap concurrency at two, cancel stale sessions, and upload Rust BGRA directly"
+    }
+}
+
+$animatedPresenterPath = Join-Path $Root "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs"
+if (Test-Path $animatedPresenterPath) {
+    $animatedPresenterText = Get-Content -LiteralPath $animatedPresenterPath -Raw
+    if ($animatedPresenterText -match 'File\.OpenRead\(' -or
+        $animatedPresenterText -match 'TryReadAnimated(Size|PngSize|WebPSize)' -or
+        $animatedPresenterText -notmatch 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]{0,500}probe\.IsAnimated' -or
+        $animatedPresenterText -notmatch 'frames\.TryReadFrame\(index,\s*bgra\s*=>\s*stream\.Write\(bgra\)\)' -or
+        $animatedPresenterText -notmatch 'Stopwatch\.StartNew\(\)[\s\S]*new\s+DispatcherTimer\(\)[\s\S]*AdvanceNativeFrame\(\)[\s\S]*ElapsedMilliseconds\s*%\s*_nativeAnimationDurationMs[\s\S]*FindFrameIndex\([\s\S]*ScheduleNextNativeFrame\(\)') {
+        Add-Failure "App animation presenter must consume Rust metadata, advance a monotonic frame timeline, and avoid container re-parsing"
+    }
+}
+
+$nativeAnimationFramesPath = Join-Path $Root "src/QuickLook.Next.App/NativeAnimationFrames.cs"
+if (Test-Path $nativeAnimationFramesPath) {
+    $nativeAnimationFramesText = Get-Content -LiteralPath $nativeAnimationFramesPath -Raw
+    if ($nativeAnimationFramesText -notmatch 'SharedSectionView\?\s+_view' -or
+        $nativeAnimationFramesText -notmatch 'TryReadFrame\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*view\.Bytes\.Slice\(' -or
+        $nativeAnimationFramesText -notmatch 'CreateWaveform\([\s\S]*lock\s*\(_lifetimeGate\)' -or
+        $nativeAnimationFramesText -notmatch 'Dispose\(\)[\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*_view\?\.Dispose\(\)' -or
+        $nativeAnimationFramesText -match 'byte\[\]\s+(?:Bgra|Pixels|Frame)') {
+        Add-Failure "App animation playback must retain one read-only shared-section view with synchronized frame reads and disposal"
+    }
+}
+else {
+    Add-Failure "App animation shared-section lifetime owner is missing"
+}
+
+$rasterSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
+if (Test-Path $rasterSupervisorPath) {
+    $rasterSupervisorText = Get-Content -LiteralPath $rasterSupervisorPath -Raw
+    $animationExtractMethod = [regex]::Match(
+        $rasterSupervisorText,
+        'ExtractAnimationFramesAsync\([\s\S]*?(?=\r?\n\s*private\s+(?:static\s+)?NativeAnimationFrames\?)').Value
+    $animationReadMethod = [regex]::Match(
+        $rasterSupervisorText,
+        'ReadAnimationFrames\([\s\S]*?(?=\r?\n\s*public\s+async\s+Task\s+CloseAsync)').Value
+    if ($rasterSupervisorText -notmatch 'IsConnected[\s\S]{0,450}_ready\.Task\.IsCompletedSuccessfully' -or
+        $rasterSupervisorText -notmatch 'AnimationDecodeTimeout\s*=\s*TimeSpan\.FromSeconds\(20\)' -or
+        $animationExtractMethod -notmatch '_pending\.Begin\(AnimationDecodeTimeout\)' -or
+        $animationExtractMethod -match 'RecycleHost\(' -or
+        $animationExtractMethod -notmatch 'PreviewAnimationFramesClose\(requestId\)' -or
+        $animationExtractMethod -notmatch 'Process\s+sourceHost\s*=\s*_host' -or
+        $animationExtractMethod -notmatch 'int\s+sourceGeneration\s*=\s*_generation' -or
+        $animationReadMethod -notmatch 'SharedSectionView\.DuplicateAndMapReadOnly\(' -or
+        $animationReadMethod -match 'DuplicateFileFromProcess\(|FileStream\(') {
+        Add-Failure "Optional animation upgrades must use their own bounded timeout and cancel without recycling the static parent preview"
+    }
 }
 
 $parserSupervisorPath = Join-Path $Root "src/QuickLook.Next.App/ParserHostSupervisor.cs"
@@ -885,9 +1447,11 @@ if (Test-Path $parserSupervisorPath) {
     $archiveExtractMethod = [regex]::Match(
         $parserSupervisorText,
         'ExtractArchiveEntryAsync\([\s\S]*?(?=\r?\n\s*public\s+async\s+Task)').Value
-    if ($archiveExtractMethod -notmatch 'string\?\s+parentPreviewRequestId' -or
+    if ($parserSupervisorText -notmatch 'HostConnectTimeout\s*=\s*TimeSpan\.FromSeconds\(15\)' -or
+        $parserSupervisorText -notmatch 'IsConnected[\s\S]{0,450}_ready\.Task\.IsCompletedSuccessfully' -or
+        $archiveExtractMethod -notmatch 'string\?\s+parentPreviewRequestId' -or
         $archiveExtractMethod -notmatch 'new\s+ArchiveEntryExtract\([^)]*\)\s*\{\s*ParentPreviewRequestId\s*=\s*parentPreviewRequestId') {
-        Add-Failure "The App must forward the optional archive parent request ID to ParserHost"
+        Add-Failure "ParserHost supervision must retain its cold-start budget and forward archive parent request IDs"
     }
 }
 
@@ -909,19 +1473,95 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -match 'previewInputs') {
         Add-Failure "RasterHost HANDLE requests must never materialize path-based input anchors"
     }
+    if ($rasterHostText -notmatch 'SharedSectionOwner\.Create\(' -or
+        $rasterHostText -notmatch 'NativeAnimationPacket' -or
+        $rasterHostText -notmatch 'Section\.Handle\.DangerousGetHandle\(\)' -or
+        $rasterHostText -match 'WriteAnimationPacket|raster-animation') {
+        Add-Failure "RasterHost animation packets must be written directly into anonymous shared sections"
+    }
+    $rasterCapabilityHandshake = $rasterHostText -match 'ulong\s+capabilities\s*=\s*ql_capabilities\(\);[\s\S]{0,250}EnsureCapabilities\([\s\S]{0,100}capabilities,[\s\S]{0,100}NativeAbi\.RasterHandleInputs\s*&\s*~NativeAbi\.HandleImageMetadata\);[\s\S]{0,100}_capabilities\s*=\s*capabilities;'
     if ($rasterHostText -notmatch 'UsesHandleInput\(open\.Path, open\.Probe\)' -or
         $rasterHostText -notmatch 'TryDecodeHandleAsync\(' -or
         $rasterHostText -notmatch 'ql_decode_image_handle\(' -or
-        $rasterHostText -notmatch 'EnsureCapabilities\(ql_capabilities\(\), NativeAbi\.RasterHandleInputs\)' -or
+        -not $rasterCapabilityHandshake -or
         $rasterHostText -notmatch 'probe\.Kind\.Equals\("image"[\s\S]{0,300}Path\.GetExtension\(logicalPath\)\.Equals\(probe\.Extension' -or
         $rasterHostText -notmatch 'SystemImageDecoder\.TryDecodeHandleAsync\(' -or
         $rasterHostText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
         $rasterHostText -notmatch 'fileStream\.AsRandomAccessStream\(\)' -or
         $rasterHostText -notmatch 'ql_decode_gif_frames_handle\(' -or
+        $rasterHostText -notmatch 'ql_decode_animation_frames_handle\(' -or
+        $rasterHostText -notmatch 'SupportsGeneralHandleAnimation' -or
+        $rasterHostText -notmatch 'probe\.IsAnimated\s+is\s+false' -or
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.Animation' -or
         $rasterHostText -notmatch 'RetainedRasterSource' -or
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.StaticImage') {
         Add-Failure "RasterHost local images must use retained leases with HANDLE-backed system/native decoders"
+    }
+    $metadataReaderPath = Join-Path $rasterHostRoot "NativeImageMetadataReader.cs"
+    $metadataReaderText = if (Test-Path -LiteralPath $metadataReaderPath) {
+        Get-Content -LiteralPath $metadataReaderPath -Raw
+    } else {
+        ""
+    }
+    $systemMetadataReaderPath = Join-Path $rasterHostRoot "SystemImageMetadataReader.cs"
+    $systemMetadataReaderText = if (Test-Path -LiteralPath $systemMetadataReaderPath) {
+        Get-Content -LiteralPath $systemMetadataReaderPath -Raw
+    } else {
+        ""
+    }
+    $propertyMetadataReaderPath =
+        Join-Path $rasterHostRoot "WindowsPropertyHandlerMetadataReader.cs"
+    $propertyMetadataReaderText = if (Test-Path -LiteralPath $propertyMetadataReaderPath) {
+        Get-Content -LiteralPath $propertyMetadataReaderPath -Raw
+    } else {
+        ""
+    }
+    if ($metadataReaderText -notmatch 'ql_preview_image_metadata_handle\(' -or
+        $metadataReaderText -notmatch 'NativeImageDecoder\.SupportsHandleImageMetadata' -or
+        $metadataReaderText -notmatch 'DangerousAddRef\(' -or
+        $metadataReaderText -notmatch 'MaxMetadataJsonBytes\s*=\s*1024\s*\*\s*1024' -or
+        ($metadataReaderText + $systemMetadataReaderText + $propertyMetadataReaderText) -match 'StorageFile\.GetFileFromPathAsync|SHGetPropertyStoreFromParsingName|IInitializeWithFile' -or
+        $systemMetadataReaderText -notmatch 'WindowsHandleTransfer\.ReopenReadOnlyFile\(sourceHandle,\s*sourceLength\)' -or
+        $systemMetadataReaderText -notmatch 'fileStream\.AsRandomAccessStream\(\)' -or
+        $systemMetadataReaderText -notmatch 'BitmapDecoder[\s\S]{0,80}\.CreateAsync\(stream\)' -or
+        $systemMetadataReaderText -notmatch 'MaxInputImageBytes\s*=\s*512L\s*\*\s*1024\s*\*\s*1024' -or
+        $systemMetadataReaderText -notmatch 'MetadataGate\s*=\s*new\(1,\s*1\)' -or
+        $systemMetadataReaderText -notmatch 'SystemMetadataTimeoutExitCode\s*=\s*33' -or
+        $systemMetadataReaderText -notmatch 'DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)' -or
+        $systemMetadataReaderText -notmatch 'DrainsWithinGraceAsync\(worker,\s*DrainGrace\)' -or
+        $systemMetadataReaderText -notmatch 'Environment\.Exit\(SystemMetadataTimeoutExitCode\)' -or
+        $propertyMetadataReaderText -notmatch 'Task\.Run\([\s\S]*ReadHandle\(' -or
+        $propertyMetadataReaderText -notmatch 'ReadHandle\([\s\S]*PropertyHandlerResolver\.TryResolve\(logicalName\)' -or
+        $propertyMetadataReaderText -notmatch 'WindowsHandleTransfer\.ReopenReadOnlyFile\(sourceHandle,\s*sourceLength\)' -or
+        $propertyMetadataReaderText -notmatch 'Path\.GetFileName\(logicalName\)' -or
+        $propertyMetadataReaderText -notmatch 'Encoding\.UTF8\.GetByteCount\(fileName\)' -or
+        $propertyMetadataReaderText -notmatch 'PhotoMetadataHandler\.dll' -or
+        $propertyMetadataReaderText -notmatch 'a38b883c-1682-497e-97b0-0a3a9e801682' -or
+        $propertyMetadataReaderText -notmatch 'Environment\.SystemDirectory' -or
+        $propertyMetadataReaderText -notmatch 'LoadLibrarySearchSystem32' -or
+        $propertyMetadataReaderText -notmatch 'DllGetClassObject' -or
+        $propertyMetadataReaderText -notmatch 'IClassFactory' -or
+        $propertyMetadataReaderText -notmatch 'IInitializeWithStream' -or
+        $propertyMetadataReaderText -notmatch 'IPropertyStore' -or
+        $propertyMetadataReaderText -notmatch '\[Guid\("0000000C-0000-0000-C000-000000000046"\)\][\s\S]{0,180}interface\s+IRawComStream' -or
+        $propertyMetadataReaderText -notmatch 'class\s+ReadOnlyComStream\([\s\S]{0,180}\)\s*:\s*IRawComStream' -or
+        $propertyMetadataReaderText -notmatch 'int\s+Read\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesRead\)' -or
+        $propertyMetadataReaderText -notmatch 'int\s+Write\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesWritten\)' -or
+        $propertyMetadataReaderText -match '(?:Read|Write)\(\s*byte\[\]' -or
+        $propertyMetadataReaderText -notmatch 'Initialize\(\s*\[In,\s*MarshalAs\(UnmanagedType\.Interface\)\]\s*IRawComStream\s+stream' -or
+        $propertyMetadataReaderText -notmatch 'initializer\.Initialize\(stream,\s*PropertyNative\.StgmRead\)' -or
+        $propertyMetadataReaderText -notmatch 'finally[\s\S]{0,180}PropVariantClear\(ref value\)' -or
+        $propertyMetadataReaderText -notmatch 'static\s+nint\s+_handlerModule' -or
+        $propertyMetadataReaderText -match 'CoCreateInstance|FreeLibrary|RegistryHive|RegistryKey' -or
+        $rasterHostText -notmatch 'SystemImageMetadataReader\.TryReadHandleAsync\(' -or
+        $rasterHostText -notmatch 'WindowsPropertyHandlerMetadataReader\.TryReadHandleAsync\(' -or
+        $rasterHostText -notmatch 'SystemImageMetadataReader\.Merge\(\s*WindowsPropertyHandlerMetadataReader\.Merge\(\s*result\.Metadata,\s*await propertyHandlerTask\),\s*await systemTask\)' -or
+        $rasterHostText -notmatch 'SystemImageMetadataReader\.Merge\(' -or
+        $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.Metadata' -or
+        $rasterHostText -notmatch 'PreviewImageMetadataReady\(' -or
+        $rasterHostText -notmatch 'imageMetadataTimeout\s*=\s*TimeSpan\.FromMilliseconds\(1500\)' -or
+        $rasterHostText -notmatch 'remainingMetadataRequests[\s\S]*request\.Cancel\(\)[\s\S]*Task\.WhenAll\(remainingMetadataRequests') {
+        Add-Failure "RasterHost image metadata must combine bounded native and Windows-codec HANDLE readers, remain path-free/cancellable, and drain on disconnect"
     }
     $pdfSessionPath = Join-Path $rasterHostRoot "PdfPreviewSession.cs"
     $pdfSessionText = Get-Content -LiteralPath $pdfSessionPath -Raw
@@ -1054,14 +1694,19 @@ if (-not (Test-Path -LiteralPath $mainWindowXamlPath) -or
 }
 if (Test-Path -LiteralPath $mainWindowXamlPath) {
     $listingIconXaml = Get-Content -LiteralPath $mainWindowXamlPath -Raw
-    if ($listingIconXaml -notmatch 'x:Key="ListingFolderIconBrush"' -or
-        $listingIconXaml -notmatch 'x:Key="ListingArchiveIconBrush"' -or
-        $listingIconXaml -notmatch 'Foreground="\{ThemeResource ListingFolderIconBrush\}"[\s\S]*Visibility="\{Binding FolderGlyphVisibility\}"' -or
-        $listingIconXaml -notmatch 'Foreground="\{ThemeResource ListingArchiveIconBrush\}"[\s\S]*Visibility="\{Binding ArchiveGlyphVisibility\}"' -or
+    if (([regex]::Matches($listingIconXaml, 'x:Key="ListingFolderBackIconBrush"')).Count -lt 3 -or
+        ([regex]::Matches($listingIconXaml, 'x:Key="ListingFolderHighlightIconBrush"')).Count -lt 3 -or
+        ([regex]::Matches($listingIconXaml, 'x:Key="ListingArchiveLidIconBrush"')).Count -lt 3 -or
+        ([regex]::Matches($listingIconXaml, 'x:Key="ListingArchiveBandIconBrush"')).Count -lt 3 -or
+        $listingIconXaml -notmatch 'x:Key="ListingFolderColorIconTemplate"[\s\S]*Fill="\{ThemeResource ListingFolderBackIconBrush\}"[\s\S]*Fill="\{ThemeResource ListingFolderIconBrush\}"[\s\S]*Fill="\{ThemeResource ListingFolderHighlightIconBrush\}"' -or
+        $listingIconXaml -notmatch 'x:Key="ListingArchiveColorIconTemplate"[\s\S]*Fill="\{ThemeResource ListingArchiveIconBrush\}"[\s\S]*Fill="\{ThemeResource ListingArchiveLidIconBrush\}"[\s\S]*Fill="\{ThemeResource ListingArchiveBandIconBrush\}"' -or
+        $listingIconXaml -notmatch 'Template="\{StaticResource ListingFolderColorIconTemplate\}"[\s\S]{0,500}Visibility="\{Binding FolderGlyphVisibility\}"' -or
+        $listingIconXaml -notmatch 'Template="\{StaticResource ListingArchiveColorIconTemplate\}"[\s\S]{0,500}Visibility="\{Binding ArchiveGlyphVisibility\}"' -or
         $listingIconXaml -notmatch 'Source="\{Binding IconSource,\s*Mode=OneWay\}"[\s\S]*Visibility="\{Binding RasterIconVisibility\}"' -or
-        $listingIconXaml -notmatch 'x:Name="ListingFolderHeroIcon"' -or
-        $listingIconXaml -notmatch 'x:Name="ListingArchiveHeroIcon"') {
-        Add-Failure "Folder and archive listings must retain theme-aware colored fallback and hero icons"
+        $listingIconXaml -notmatch 'x:Name="ListingFolderHeroIcon"[\s\S]{0,300}Template="\{StaticResource ListingFolderColorIconTemplate\}"' -or
+        $listingIconXaml -notmatch 'x:Name="ListingArchiveHeroIcon"[\s\S]{0,300}Template="\{StaticResource ListingArchiveColorIconTemplate\}"' -or
+        $listingIconXaml -match '<FontIcon[^>]+x:Name="Listing(?:Folder|Archive)HeroIcon"') {
+        Add-Failure "Folder and archive listings must retain theme-aware multi-color vector fallback and hero icons"
     }
 }
 $listingRowPath = Join-Path $Root "src/QuickLook.Next.App/ListingRow.cs"
@@ -1184,9 +1829,46 @@ if (Test-Path $packReleaseFailFastTest) {
     & $packReleaseFailFastTest -Root $Root
 }
 
+$releasePayloadProofTest = Join-Path (
+    $PSScriptRoot) "test-release-payload-proof.ps1"
+if (Test-Path $releasePayloadProofTest) {
+    & $releasePayloadProofTest -Root $Root
+}
+
 $releaseWorkflowTest = Join-Path $PSScriptRoot "test-release-workflows.ps1"
 if (Test-Path $releaseWorkflowTest) {
     & $releaseWorkflowTest -Root $Root
+}
+
+$setVersionWorkflowTest = Join-Path $PSScriptRoot "test-set-version.ps1"
+if (Test-Path $setVersionWorkflowTest) {
+    & $setVersionWorkflowTest -Root $Root
+}
+
+$releaseVersionStructureTest = Join-Path (
+    $PSScriptRoot) "test-release-version-structure.ps1"
+if (Test-Path $releaseVersionStructureTest) {
+    & $releaseVersionStructureTest -Root $Root
+}
+
+$localBuildWorkflowTest = Join-Path $PSScriptRoot "test-build-local.ps1"
+if (Test-Path $localBuildWorkflowTest) {
+    & $localBuildWorkflowTest -Root $Root
+}
+
+$localMsixVersionTest = Join-Path $PSScriptRoot "test-local-msix-version.ps1"
+if (Test-Path $localMsixVersionTest) {
+    & $localMsixVersionTest -Root $Root
+}
+
+$formalMsixVersionTest = Join-Path $PSScriptRoot "test-formal-msix-version.ps1"
+if (Test-Path $formalMsixVersionTest) {
+    & $formalMsixVersionTest -Root $Root
+}
+
+$localMsixUpdateTest = Join-Path $PSScriptRoot "test-local-msix-update.ps1"
+if (Test-Path $localMsixUpdateTest) {
+    & $localMsixUpdateTest -Root $Root
 }
 
 $taskbarIconAssetTest = Join-Path $PSScriptRoot "test-taskbar-icon-assets.ps1"

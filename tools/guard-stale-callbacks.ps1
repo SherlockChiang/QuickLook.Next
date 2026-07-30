@@ -59,6 +59,28 @@ foreach ($file in $files) {
     }
 }
 
+$parserHostSupervisor = Join-Path $appRoot "ParserHostSupervisor.cs"
+if (-not (Test-Path -LiteralPath $parserHostSupervisor -PathType Leaf)) {
+    Add-Failure "ParserHost supervisor is missing."
+}
+else {
+    $parserHostSupervisorText =
+        Get-Content -LiteralPath $parserHostSupervisor -Raw
+    if ($parserHostSupervisorText -notmatch
+            'generationReady[\s\S]*ReadLoopAsync\(\s*_channel,\s*generation,\s*generationReady\)' -or
+        $parserHostSupervisorText -notmatch
+            'ReadLoopAsync\([\s\S]{0,160}TaskCompletionSource\s+generationReady\)' -or
+        $parserHostSupervisorText -notmatch
+            'ControlMessage\?\s+message\s*=\s*await\s+channel\.ReceiveAsync\(\);[\s\S]{0,160}generation\s*!=\s*_generation' -or
+        $parserHostSupervisorText -notmatch
+            'case\s+ParserReady:[\s\S]{0,160}generationReady\.TrySetResult\(\)')
+    {
+        Add-Failure (
+            "ParserHost must capture generation readiness and reject messages " +
+            "that arrive after its generation is retired.")
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Stale callback guard failed:" -ForegroundColor Red

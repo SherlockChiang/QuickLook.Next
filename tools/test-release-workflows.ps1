@@ -35,11 +35,21 @@ if ($shared -notmatch 'Test and package signed release[\s\S]*tools/release\.ps1'
     $shared -match '(?m)^\s*run:\s*(cargo|dotnet)\s+(build|test)') {
     throw "The shared workflow must delegate its single build/test/package sequence to release.ps1."
 }
+$releaseScript = Get-Content -LiteralPath (
+    Join-Path $Root "tools\release.ps1") -Raw
+if ($releaseScript -notmatch
+        'dotnet\s+test[\s\S]{0,260}--maxcpucount:1') {
+    throw "Formal release integration test projects must run serially."
+}
 if ($shared -notmatch 'environment:\s+\$\{\{ inputs\.channel' -or
     $shared -notmatch 'actions/cache@[0-9a-f]{40}' -or
     $shared -notmatch 'new-release-metadata\.ps1' -or
     $shared -notmatch 'Stable release has no user-visible changes') {
     throw "Release caching, environment isolation, metadata, and visible-change guards are required."
+}
+if ($shared -notmatch 'resolve-formal-msix-version\.ps1[\s\S]*msix_version=\$msixVersion' -or
+    $shared -match 'msix_version=\$version\.0') {
+    throw "Formal beta and stable packages must use strictly ordered MSIX revisions."
 }
 if ($stable -match '(?m)^\s*secrets:\s*inherit\s*$' -or $beta -match '(?m)^\s*secrets:\s*inherit\s*$') {
     throw "Release signing secrets must come from channel-specific GitHub Environments."

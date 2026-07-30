@@ -131,6 +131,8 @@
   <data name="ListingEncryptedSummaryFormat" xml:space="preserve"><value> - {0:N0} encrypted</value></data>
   <data name="ListingEncryptedPartialSummaryFormat" xml:space="preserve"><value> - at least {0:N0} encrypted</value></data>
   <data name="ListingEncryptedCannotPreview" xml:space="preserve"><value>Encrypted archive entries cannot be previewed.</value></data>
+  <data name="ListingBrowseOnlySuffix" xml:space="preserve"><value> - list only</value></data>
+  <data name="ListingEntriesCannotBePreviewed" xml:space="preserve"><value>This listing is browse-only; its entries cannot be opened here.</value></data>
   <data name="ListingEncryptedRowAccessibleNameFormat" xml:space="preserve"><value>{0}, encrypted, {1}</value></data>
   <data name="ListingOpenBreadcrumbFormat" xml:space="preserve">
     <value>Open {0} in listing</value>

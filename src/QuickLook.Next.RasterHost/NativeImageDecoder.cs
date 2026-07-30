@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -16,21 +17,31 @@ internal sealed record NativeDecodedImage(
     public int DecodeMilliseconds { get; init; }
     public int ResizeMilliseconds { get; init; }
     public int ConvertMilliseconds { get; init; }
+    public ImageWaveform? Waveform { get; init; }
 }
 
 internal static class NativeImageDecoder
 {
     private const string Dll = "quicklook_next_native";
     private const int HeaderBytes = 28;
+    private const int WaveformHeaderBytes = 40;
+    private const int WaveformChannelCount = 3;
+    private const int WaveformDensityBytes =
+        ImageWaveformBuilder.ScopeWidth * ImageWaveformBuilder.ScopeHeight * WaveformChannelCount;
     private const int MaxPreviewRasterDimension = 2048;
     private const int MaxSystemFailureNativeFallbackDimension = 1600;
     private const int MaxDecodedImageBytes = HeaderBytes + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4);
+    private const int MaxDecodedImageWithWaveformBytes =
+        WaveformHeaderBytes
+        + (MaxPreviewRasterDimension * MaxPreviewRasterDimension * 4)
+        + WaveformDensityBytes;
     private const long MaxInputImageBytes = 256L * 1024 * 1024;
     private const long MaxNativeFallbackAfterSystemFailureBytes = 16L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
     private static readonly NativeCancelCallback DecodeCancelCallback = IsDecodeCanceled;
     private static readonly IntPtr DecodeCancelCallbackPtr = Marshal.GetFunctionPointerForDelegate(DecodeCancelCallback);
     private static CancellationToken _decodeCancellationToken;
+    private static ulong _capabilities;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
@@ -47,7 +58,13 @@ internal static class NativeImageDecoder
     public static void EnsureCompatible()
     {
         NativeAbi.EnsureCompatible(ql_abi_version());
-        NativeAbi.EnsureCapabilities(ql_capabilities(), NativeAbi.RasterHandleInputs);
+        ulong capabilities = ql_capabilities();
+        // Image metadata is an optional ABI 3 sidecar. A host with the original ABI 3 raster
+        // capabilities must still start and serve the first surface without it.
+        NativeAbi.EnsureCapabilities(
+            capabilities,
+            NativeAbi.RasterHandleInputs & ~NativeAbi.HandleImageMetadata);
+        _capabilities = capabilities;
     }
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
@@ -76,17 +93,48 @@ internal static class NativeImageDecoder
         out nuint outRequired,
         IntPtr cancelCb);
 
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_image_with_waveform_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        uint targetWidth,
+        uint targetHeight,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        IntPtr cancelCb);
+
     public static bool UsesHandleInput(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
         => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
             && string.Equals(probe.Path, logicalPath, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(probe.Extension)
             && Path.GetExtension(logicalPath).Equals(probe.Extension, StringComparison.OrdinalIgnoreCase);
 
+    internal static bool SupportsGeneralHandleAnimation
+        => (_capabilities & NativeAbi.HandleAnimation) != 0;
+
+    internal static bool SupportsHandleImageWaveform
+        => (_capabilities & NativeAbi.HandleImageWaveform) != 0;
+
+    internal static bool SupportsHandleImageMetadata
+        => (_capabilities & NativeAbi.HandleImageMetadata) != 0;
+
     public static bool SupportsHandleAnimation(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
-        => Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase)
-            && probe.Extension.Equals(".gif", StringComparison.OrdinalIgnoreCase)
-            && (probe.MagicPrefix.AsSpan().StartsWith("GIF87a"u8)
-                || probe.MagicPrefix.AsSpan().StartsWith("GIF89a"u8));
+    {
+        string extension = Path.GetExtension(logicalPath).ToLowerInvariant();
+        if (!UsesHandleInput(logicalPath, probe)
+            || probe.IsAnimated is false)
+            return false;
+
+        return extension switch
+        {
+            ".gif" => true,
+            ".webp" or ".png" => SupportsGeneralHandleAnimation,
+            _ => false,
+        };
+    }
 
     public static bool RequiresSystemDecoderHandle(
         SafeFileHandle sourceHandle,
@@ -174,35 +222,62 @@ internal static class NativeImageDecoder
         if (logicalNameBytes.Length is 0 or > NativeAbi.MaxLogicalNameUtf8Bytes)
             return null;
 
+        bool includeWaveform = SupportsHandleImageWaveform;
+        int maximumPacketBytes = includeWaveform
+            ? MaxDecodedImageWithWaveformBytes
+            : MaxDecodedImageBytes;
         bool addRef = false;
         int capacity = 8 * 1024 * 1024;
         try
         {
             sourceHandle.DangerousAddRef(ref addRef);
-            while (capacity <= MaxDecodedImageBytes)
+            while (capacity <= maximumPacketBytes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
                     _decodeCancellationToken = cancellationToken;
-                    int status = ql_decode_image_handle(
-                        sourceHandle.DangerousGetHandle(),
-                        checked((ulong)sourceLength),
-                        logicalNameBytes,
-                        (nuint)logicalNameBytes.Length,
-                        targetWidth,
-                        targetHeight,
-                        buffer,
-                        (nuint)capacity,
-                        out nuint required,
-                        DecodeCancelCallbackPtr);
+                    int status;
+                    nuint required;
+                    if (includeWaveform)
+                    {
+                        status = ql_decode_image_with_waveform_handle(
+                            sourceHandle.DangerousGetHandle(),
+                            checked((ulong)sourceLength),
+                            logicalNameBytes,
+                            (nuint)logicalNameBytes.Length,
+                            targetWidth,
+                            targetHeight,
+                            buffer,
+                            (nuint)capacity,
+                            out required,
+                            DecodeCancelCallbackPtr);
+                    }
+                    else
+                    {
+                        status = ql_decode_image_handle(
+                            sourceHandle.DangerousGetHandle(),
+                            checked((ulong)sourceLength),
+                            logicalNameBytes,
+                            (nuint)logicalNameBytes.Length,
+                            targetWidth,
+                            targetHeight,
+                            buffer,
+                            (nuint)capacity,
+                            out required,
+                            DecodeCancelCallbackPtr);
+                    }
                     if (status == NativeAbi.StatusOk
                         && required <= (nuint)capacity)
-                        return ParseDecodedImage(buffer, checked((int)required));
+                    {
+                        return includeWaveform
+                            ? ParseDecodedImageWithWaveform(buffer, checked((int)required))
+                            : ParseDecodedImage(buffer, checked((int)required));
+                    }
                     if (status != NativeAbi.StatusBufferTooSmall
                         || required <= (nuint)capacity
-                        || required > (nuint)MaxDecodedImageBytes)
+                        || required > (nuint)maximumPacketBytes)
                         return null;
                     capacity = checked((int)required);
                 }
@@ -375,30 +450,82 @@ internal static class NativeImageDecoder
         => _decodeCancellationToken.IsCancellationRequested;
 
     private static NativeDecodedImage? ParseDecodedImage(byte[] buffer, int length)
+        => ParseDecodedImagePacket(buffer, length, includesWaveform: false);
+
+    private static NativeDecodedImage? ParseDecodedImageWithWaveform(byte[] buffer, int length)
+        => ParseDecodedImagePacket(buffer, length, includesWaveform: true);
+
+    private static NativeDecodedImage? ParseDecodedImagePacket(
+        byte[] buffer,
+        int length,
+        bool includesWaveform)
     {
-        if (length <= HeaderBytes)
+        int headerBytes = includesWaveform ? WaveformHeaderBytes : HeaderBytes;
+        if (length <= headerBytes || length > buffer.Length)
             return null;
-        int width = checked((int)BitConverter.ToUInt32(buffer, 0));
-        int height = checked((int)BitConverter.ToUInt32(buffer, 4));
-        int originalWidth = checked((int)BitConverter.ToUInt32(buffer, 8));
-        int originalHeight = checked((int)BitConverter.ToUInt32(buffer, 12));
-        int decodeMs = checked((int)BitConverter.ToUInt32(buffer, 16));
-        int resizeMs = checked((int)BitConverter.ToUInt32(buffer, 20));
-        int convertMs = checked((int)BitConverter.ToUInt32(buffer, 24));
-        int pixelBytes = length - HeaderBytes;
-        if (width is <= 0 or > MaxPreviewRasterDimension
-            || height is <= 0 or > MaxPreviewRasterDimension
-            || originalWidth <= 0
-            || originalHeight <= 0
-            || pixelBytes != (long)width * height * 4)
+
+        uint widthRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(0, 4));
+        uint heightRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(4, 4));
+        uint originalWidthRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(8, 4));
+        uint originalHeightRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(12, 4));
+        uint decodeMsRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(16, 4));
+        uint resizeMsRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(20, 4));
+        uint convertMsRaw = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(24, 4));
+        if (widthRaw is 0 or > MaxPreviewRasterDimension
+            || heightRaw is 0 or > MaxPreviewRasterDimension
+            || originalWidthRaw is 0 or > int.MaxValue
+            || originalHeightRaw is 0 or > int.MaxValue
+            || decodeMsRaw > int.MaxValue
+            || resizeMsRaw > int.MaxValue
+            || convertMsRaw > int.MaxValue)
             return null;
-        var bgra = new byte[pixelBytes];
-        Buffer.BlockCopy(buffer, HeaderBytes, bgra, 0, pixelBytes);
-        return new NativeDecodedImage(bgra, width, height, originalWidth, originalHeight)
+
+        int waveformDensityBytes = 0;
+        if (includesWaveform)
         {
-            DecodeMilliseconds = decodeMs,
-            ResizeMilliseconds = resizeMs,
-            ConvertMilliseconds = convertMs,
+            uint waveformWidth = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(28, 4));
+            uint waveformHeight = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(32, 4));
+            uint densityLength = BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(36, 4));
+            if (waveformWidth != ImageWaveformBuilder.ScopeWidth
+                || waveformHeight != ImageWaveformBuilder.ScopeHeight
+                || densityLength != WaveformDensityBytes)
+                return null;
+            waveformDensityBytes = WaveformDensityBytes;
+        }
+
+        int width = (int)widthRaw;
+        int height = (int)heightRaw;
+        long pixelBytesLong = (long)width * height * 4;
+        long expectedLength = headerBytes + pixelBytesLong + waveformDensityBytes;
+        if (expectedLength != length)
+            return null;
+
+        int pixelBytes = checked((int)pixelBytesLong);
+        var bgra = new byte[pixelBytes];
+        Buffer.BlockCopy(buffer, headerBytes, bgra, 0, pixelBytes);
+
+        ImageWaveform? waveform = null;
+        if (includesWaveform)
+        {
+            var density = new byte[WaveformDensityBytes];
+            Buffer.BlockCopy(buffer, headerBytes + pixelBytes, density, 0, density.Length);
+            waveform = new ImageWaveform(
+                ImageWaveformBuilder.ScopeWidth,
+                ImageWaveformBuilder.ScopeHeight,
+                density);
+        }
+
+        return new NativeDecodedImage(
+            bgra,
+            width,
+            height,
+            (int)originalWidthRaw,
+            (int)originalHeightRaw)
+        {
+            DecodeMilliseconds = (int)decodeMsRaw,
+            ResizeMilliseconds = (int)resizeMsRaw,
+            ConvertMilliseconds = (int)convertMsRaw,
+            Waveform = waveform,
         };
     }
 

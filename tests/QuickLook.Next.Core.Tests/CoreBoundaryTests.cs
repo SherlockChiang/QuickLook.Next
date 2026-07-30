@@ -215,6 +215,11 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1UL << 12, NativeAbi.HandlePackageIcon);
         Assert.Equal(1UL << 13, NativeAbi.HandleProbe);
         Assert.Equal(1UL << 14, NativeAbi.HandleRasterImage);
+        Assert.Equal(1UL << 15, NativeAbi.HandleAnimation);
+        Assert.Equal(1UL << 16, NativeAbi.HandleOfficeLayoutImage);
+        Assert.Equal(1UL << 17, NativeAbi.HandleImageWaveform);
+        Assert.Equal(1UL << 18, NativeAbi.HandleArchiveEntryOutput);
+        Assert.Equal(1UL << 19, NativeAbi.HandleImageMetadata);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
@@ -224,11 +229,20 @@ public sealed class CoreBoundaryTests : IDisposable
                 | NativeAbi.HandleOffice
                 | NativeAbi.HandleEbook
                 | NativeAbi.HandleArchiveEntry
+                | NativeAbi.HandleArchiveEntryOutput
                 | NativeAbi.HandlePackage
-                | NativeAbi.HandlePackageIcon,
+                | NativeAbi.HandlePackageIcon
+                | NativeAbi.HandleOfficeLayoutImage,
             NativeAbi.ParserHandleInputs);
         Assert.Equal(
             NativeAbi.HandleStaticImage | NativeAbi.HandleSvg | NativeAbi.HandleGif | NativeAbi.HandleRasterImage,
+            NativeAbi.RasterHandleInputs);
+        Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleAnimation);
+        Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleImageWaveform);
+        Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleImageMetadata);
+        NativeAbi.EnsureCapabilities(NativeAbi.RasterHandleInputs, NativeAbi.RasterHandleInputs);
+        NativeAbi.EnsureCapabilities(
+            NativeAbi.RasterHandleInputs | NativeAbi.HandleImageWaveform,
             NativeAbi.RasterHandleInputs);
         NativeAbi.EnsureCapabilities(NativeAbi.ParserHandleInputs, NativeAbi.ParserHandleInputs);
         NativeAbi.EnsureCapabilities(
@@ -236,6 +250,17 @@ public sealed class CoreBoundaryTests : IDisposable
             NativeAbi.ParserHandleInputs);
         Assert.Throws<InvalidOperationException>(
             () => NativeAbi.EnsureCapabilities(NativeAbi.HandleText, NativeAbi.ParserHandleInputs));
+    }
+
+    [Fact]
+    public void Office_image_abi_bounds_control_and_pixel_payloads()
+    {
+        Assert.Equal(2048, NativeAbi.MaxOfficeImageRefUtf8Bytes);
+        Assert.Equal(768L * 1024, NativeAbi.MaxOfficeImageSourceBytes);
+        Assert.Equal(1024, NativeAbi.MaxOfficeImageDimension);
+        Assert.Equal(
+            8L + 1024L * 1024 * 4,
+            NativeAbi.MaxOfficeImagePacketBytes);
     }
 
     [Fact]
@@ -298,6 +323,34 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(["users", "orders"], ready!.Table!.Sheets.Select(sheet => sheet.Name));
         Assert.Equal(["id", "total"], ready.Table.Sheets[1].Table.Headers);
         Assert.Equal("9.5", ready.Table.Sheets[1].Table.Rows[0].Cells[1]);
+    }
+
+    [Fact]
+    public void Preview_office_layout_json_preserves_lazy_image_reference_metadata()
+    {
+        const string json = """
+            {"kind":"office","title":"slides.pptx","officeLayout":{"layoutKind":"presentation","width":960,"height":540,"pages":[{"title":"Slide 1","index":0,"width":960,"height":540,"cells":[],"items":[{"kind":"image","x":10,"y":20,"width":320,"height":180,"zIndex":2,"imageName":"photo.png","mimeType":"image/png","imageRef":"ppt/media/photo.png","imageByteLength":123456}]}]}}
+            """;
+
+        Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
+        OfficeLayoutItem image = Assert.Single(Assert.Single(ready!.OfficeLayout!.Pages).Items);
+        Assert.Equal("ppt/media/photo.png", image.ImageRef);
+        Assert.Equal(123456, image.ImageByteLength);
+        Assert.Null(image.ImageBase64);
+    }
+
+    [Fact]
+    public void Preview_office_layout_json_accepts_legacy_inline_image_payload()
+    {
+        const string json = """
+            {"kind":"office","title":"legacy.docx","officeLayout":{"layoutKind":"document","width":720,"height":960,"pages":[{"title":"Page 1","index":0,"width":720,"height":960,"cells":[],"items":[{"kind":"image","imageName":"legacy.png","mimeType":"image/png","imageBase64":"AQID"}]}]}}
+            """;
+
+        Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
+        OfficeLayoutItem image = Assert.Single(Assert.Single(ready!.OfficeLayout!.Pages).Items);
+        Assert.Null(image.ImageRef);
+        Assert.Equal(0, image.ImageByteLength);
+        Assert.Equal("AQID", image.ImageBase64);
     }
 
     [Theory]
@@ -613,6 +666,27 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void ProtocolJson_round_trips_office_image_shared_section_messages()
+    {
+        string requestId = "0".PadLeft(32, '0');
+        string parentRequestId = "1".PadLeft(32, '1');
+        var open = new OfficeImageOpen(requestId, parentRequestId, "ppt/media/photo.png", 640, 480);
+        var ready = new OfficeImageReady(requestId, 1234, 1_228_808, 640, 480);
+        var close = new OfficeImageClose(requestId);
+
+        string openJson = ProtocolJson.Serialize(open);
+        string readyJson = ProtocolJson.Serialize(ready);
+        string closeJson = ProtocolJson.Serialize(close);
+
+        Assert.Contains("\"type\":\"office.image.open\"", openJson);
+        Assert.Equal(open, Assert.IsType<OfficeImageOpen>(ProtocolJson.Deserialize(openJson)));
+        Assert.Contains("\"type\":\"office.image.ready\"", readyJson);
+        Assert.Equal(ready, Assert.IsType<OfficeImageReady>(ProtocolJson.Deserialize(readyJson)));
+        Assert.Contains("\"type\":\"office.image.close\"", closeJson);
+        Assert.Equal(close, Assert.IsType<OfficeImageClose>(ProtocolJson.Deserialize(closeJson)));
+    }
+
+    [Fact]
     public void ProtocolJson_round_trips_animation_handoff_message()
     {
         var message = new PreviewAnimationFramesReady(
@@ -621,6 +695,36 @@ public sealed class CoreBoundaryTests : IDisposable
 
         Assert.Contains("\"type\":\"preview.animation.ready\"", json);
         Assert.Equal(message, Assert.IsType<PreviewAnimationFramesReady>(ProtocolJson.Deserialize(json)));
+    }
+
+    [Fact]
+    public void ProtocolJson_round_trips_handle_bound_image_metadata_messages_without_a_path()
+    {
+        string requestId = "2".PadLeft(32, '2');
+        string parentRequestId = "3".PadLeft(32, '3');
+        var metadata = new ImageMetadata
+        {
+            Format = "JPEG",
+            Width = 640,
+            Height = 480,
+            HorizontalResolution = 96,
+            VerticalResolution = 96,
+        };
+        var open = new PreviewImageMetadataOpen(requestId, parentRequestId);
+        var ready = new PreviewImageMetadataReady(requestId, parentRequestId, metadata);
+        var close = new PreviewImageMetadataClose(requestId);
+
+        string openJson = ProtocolJson.Serialize(open);
+        string readyJson = ProtocolJson.Serialize(ready);
+        string closeJson = ProtocolJson.Serialize(close);
+
+        Assert.Contains("\"type\":\"preview.image.metadata.open\"", openJson);
+        Assert.DoesNotContain("\"path\"", openJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(open, Assert.IsType<PreviewImageMetadataOpen>(ProtocolJson.Deserialize(openJson)));
+        Assert.Contains("\"type\":\"preview.image.metadata.ready\"", readyJson);
+        Assert.Equal(ready, Assert.IsType<PreviewImageMetadataReady>(ProtocolJson.Deserialize(readyJson)));
+        Assert.Contains("\"type\":\"preview.image.metadata.close\"", closeJson);
+        Assert.Equal(close, Assert.IsType<PreviewImageMetadataClose>(ProtocolJson.Deserialize(closeJson)));
     }
 
     [Fact]
@@ -670,7 +774,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [Fact]
     public void ProtocolJson_round_trips_archive_handle_message()
     {
-        var message = new ArchiveEntryExtracted("2".PadLeft(32, '2'), 1234, 4096, "folder/report.pdf");
+        var message = new ArchiveEntryExtracted("2".PadLeft(32, '2'), 4096, "folder/report.pdf");
         string json = ProtocolJson.Serialize(message);
 
         Assert.Contains("\"type\":\"archive.entry.extracted\"", json);
@@ -684,7 +788,9 @@ public sealed class CoreBoundaryTests : IDisposable
         var message = new ArchiveEntryExtract(
             "3".PadLeft(32, '3'),
             "",
-            "folder/report.pdf")
+            "folder/report.pdf",
+            1234,
+            NativeAbi.MaxArchiveEntryOutputBytes)
         {
             ParentPreviewRequestId = "2".PadLeft(32, '2'),
         };
@@ -702,6 +808,7 @@ public sealed class CoreBoundaryTests : IDisposable
         {
             Kind = "text",
             Size = 4,
+            IsAnimated = true,
         };
         var message = new PreviewOpenHandle("3".PadLeft(32, '3'), 1234, 4, probe.Path, probe)
         {
@@ -720,6 +827,19 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(message.TargetHeight, roundTrip.TargetHeight);
         Assert.Equal(message.Probe.Kind, roundTrip.Probe.Kind);
         Assert.Equal(message.Probe.MagicPrefix, roundTrip.Probe.MagicPrefix);
+        Assert.Equal(message.Probe.IsAnimated, roundTrip.Probe.IsAnimated);
+    }
+
+    [Fact]
+    public void ProtocolJson_accepts_legacy_file_probe_without_animation_metadata()
+    {
+        const string json = """
+            {"type":"preview.open.handle","requestId":"33333333333333333333333333333333","sourceHandle":1234,"sourceLength":6,"logicalPath":"C:\\logical.gif","probe":{"path":"C:\\logical.gif","extension":".gif","magicPrefix":"R0lGODlh","kind":"image","size":6,"modifiedUnix":0},"targetWidth":800,"targetHeight":600}
+            """;
+
+        PreviewOpenHandle open = Assert.IsType<PreviewOpenHandle>(ProtocolJson.Deserialize(json));
+
+        Assert.Null(open.Probe.IsAnimated);
     }
 
     [Fact]
@@ -765,53 +885,6 @@ public sealed class CoreBoundaryTests : IDisposable
 
         await Assert.ThrowsAsync<TimeoutException>(() => completion);
         Assert.False(pending.TryComplete(id, new PreviewError(id, "late")));
-    }
-
-    [Fact]
-    public void Archive_handoff_requires_direct_extract_child_and_entry_name()
-    {
-        string directory = Path.Combine(_tempRoot, "QuickLookNext", "archive-preview", "extract-abc");
-        Directory.CreateDirectory(directory);
-        string valid = Path.Combine(directory, "entry-file.txt");
-        string invalid = Path.Combine(directory, "file.txt");
-        File.WriteAllText(valid, "x");
-        File.WriteAllText(invalid, "x");
-
-        Assert.True(TempHandoffPaths.IsArchiveExtractPath(valid, _tempRoot));
-        Assert.False(TempHandoffPaths.IsArchiveExtractPath(invalid, _tempRoot));
-    }
-
-    [Fact]
-    public void Hero_handoff_requires_matching_request_directory()
-    {
-        const string requestId = "0123456789abcdef0123456789abcdef";
-        string directory = Path.Combine(_tempRoot, "QuickLookNext", "parser-raster", "raster-" + requestId);
-        Directory.CreateDirectory(directory);
-        string valid = Path.Combine(directory, "hero.bgra");
-        File.WriteAllText(valid, "x");
-
-        Assert.True(TempHandoffPaths.IsHeroRasterPath(valid, requestId, _tempRoot));
-        Assert.False(TempHandoffPaths.IsHeroRasterPath(valid, "f".PadLeft(32, 'f'), _tempRoot));
-    }
-
-    [Fact]
-    public void Animation_handoff_requires_matching_request_directory()
-    {
-        const string requestId = "0123456789abcdef0123456789abcdef";
-        string directory = Path.Combine(_tempRoot, "QuickLookNext", "raster-animation", "frames-" + requestId);
-        Directory.CreateDirectory(directory);
-        string valid = Path.Combine(directory, "frames.bin");
-        File.WriteAllText(valid, "x");
-
-        Assert.True(TempHandoffPaths.IsRasterAnimationPath(valid, requestId, _tempRoot));
-        Assert.False(TempHandoffPaths.IsRasterAnimationPath(valid, "f".PadLeft(32, 'f'), _tempRoot));
-        Assert.False(TempHandoffPaths.IsRasterAnimationPath(valid, "not-hex", _tempRoot));
-
-        string nested = Path.Combine(directory, "nested");
-        Directory.CreateDirectory(nested);
-        string nestedFile = Path.Combine(nested, "frames.bin");
-        File.WriteAllText(nestedFile, "x");
-        Assert.False(TempHandoffPaths.IsRasterAnimationPath(nestedFile, requestId, _tempRoot));
     }
 
     [Fact]
@@ -967,55 +1040,6 @@ public sealed class CoreBoundaryTests : IDisposable
         using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var text = new StreamReader(reader);
         Assert.Equal("anchored", text.ReadToEnd());
-    }
-
-    [Fact]
-    public void Handoffs_reject_outside_and_nested_paths()
-    {
-        string archiveRoot = Path.Combine(_tempRoot, "QuickLookNext", "archive-preview");
-        string nested = Path.Combine(archiveRoot, "extract-abc", "nested");
-        Directory.CreateDirectory(nested);
-        string nestedFile = Path.Combine(nested, "entry-file.txt");
-        File.WriteAllText(nestedFile, "x");
-        string outside = Path.Combine(_tempRoot, "entry-outside.txt");
-        File.WriteAllText(outside, "x");
-
-        Assert.False(TempHandoffPaths.IsArchiveExtractPath(nestedFile, _tempRoot));
-        Assert.False(TempHandoffPaths.IsArchiveExtractPath(outside, _tempRoot));
-    }
-
-    [Fact]
-    public void Hero_handoff_rejects_invalid_request_id_and_nested_file()
-    {
-        const string requestId = "0123456789abcdef0123456789abcdef";
-        string nested = Path.Combine(_tempRoot, "QuickLookNext", "parser-raster", "raster-" + requestId, "nested");
-        Directory.CreateDirectory(nested);
-        string path = Path.Combine(nested, "hero.bgra");
-        File.WriteAllText(path, "x");
-
-        Assert.False(TempHandoffPaths.IsHeroRasterPath(path, requestId, _tempRoot));
-        Assert.False(TempHandoffPaths.IsHeroRasterPath(path, "not-hex", _tempRoot));
-    }
-
-    [Fact]
-    public void Archive_handoff_rejects_symbolic_link_when_supported()
-    {
-        string root = Path.Combine(_tempRoot, "QuickLookNext", "archive-preview");
-        string target = Path.Combine(_tempRoot, "target");
-        Directory.CreateDirectory(root);
-        Directory.CreateDirectory(target);
-        File.WriteAllText(Path.Combine(target, "entry-file.txt"), "x");
-        string link = Path.Combine(root, "extract-link");
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
-        {
-            return;
-        }
-
-        Assert.False(TempHandoffPaths.IsArchiveExtractPath(Path.Combine(link, "entry-file.txt"), _tempRoot));
     }
 
     public void Dispose()

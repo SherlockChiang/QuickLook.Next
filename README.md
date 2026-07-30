@@ -117,17 +117,26 @@ The package includes the required Windows App SDK runtime components. Optional i
 <details>
 <summary><strong>Build from source</strong></summary>
 
-You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected by [`global.json`](global.json), and the Rust MSVC toolchain selected by [`rust-toolchain.toml`](native/quicklook_next_native/rust-toolchain.toml).
+You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected by [`global.json`](global.json), and the Rust MSVC toolchain selected by [`rust-toolchain.toml`](native/rust-toolchain.toml).
 
 ```powershell
-dotnet restore QuickLook.Next.slnx --locked-mode
-cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
-cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
-dotnet build QuickLook.Next.slnx -c Release --no-restore
-dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+.\build.ps1                       # Sync VERSION and make a Release build
+.\build.ps1 0.3.1                 # Set/sync a version, then build
+.\build.ps1 -Bump Patch -Test     # Increment the patch version and run all tests
+.\build.ps1 -NoRestore            # Fast repeat after dependencies are restored
+.\build.ps1 -Bump Patch -Install  # Test, sign, and update the current-user MSIX
 ```
 
-`tools/release.ps1` is the authoritative local restore, test, build, signing, and packaging entry point. Release artifacts are written to `artifacts/`.
+`VERSION` is authoritative. The build entry synchronizes it with the native crate manifest and
+lock file before compiling, and prints the resulting App executable path. It creates local binaries
+only by default. The explicit `-Install` path enables all tests, requires the initialized fixed
+certificate in `.signing/`, stops the running App, and updates the current user's package. Repeated
+installs of the same semantic version receive increasing MSIX revisions (`X.Y.Z.N`) without changing
+`VERSION`. Revisions are ordered by channel: local builds use `1..32767`, beta packages use
+`32768..65534`, and the stable package uses `65535`. A later beta or stable package can therefore
+upgrade a same-base local build; after installing a beta or stable package, bump the patch version
+before installing another local build. `tools/release.ps1` remains the authoritative formal signing
+and packaging entry point; release artifacts are written to `artifacts/`.
 
 </details>
 

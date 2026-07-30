@@ -130,6 +130,8 @@
   <data name="ListingEncryptedSummaryFormat" xml:space="preserve"><value> - {0:N0} 个已加密</value></data>
   <data name="ListingEncryptedPartialSummaryFormat" xml:space="preserve"><value> - 至少 {0:N0} 个已加密</value></data>
   <data name="ListingEncryptedCannotPreview" xml:space="preserve"><value>无法预览加密的归档项目。</value></data>
+  <data name="ListingBrowseOnlySuffix" xml:space="preserve"><value> - 仅浏览列表</value></data>
+  <data name="ListingEntriesCannotBePreviewed" xml:space="preserve"><value>此列表仅供浏览，暂不能在此打开其中的文件。</value></data>
   <data name="ListingEncryptedRowAccessibleNameFormat" xml:space="preserve"><value>{0}，已加密，{1}</value></data>
   <data name="ListingOpenBreadcrumbFormat" xml:space="preserve"><value>在列表中打开 {0}</value></data>
   <data name="PdfPageIndicatorFormat" xml:space="preserve"><value>{0:N0} / {1:N0}</value></data>

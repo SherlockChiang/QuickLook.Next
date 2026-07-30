@@ -6,28 +6,33 @@ the current architecture boundary. The newer product-level PRD is
 `docs/prd-next-preview-optimization.md`; use that document for priority and
 acceptance criteria.
 
-## Highest Priority
+## Completed Foundation
 
 1. Rust-native image metadata
-   - Move JPEG EXIF/XMP/IPTC reads out of the App-side Windows property handler
-     path.
-   - Return structured metadata from Rust for dimensions, camera, lens, date,
-     orientation, exposure, ISO, focal length, GPS, altitude, and direction.
-   - Keep Windows property handlers as a delayed fallback only when Rust cannot
-     provide a field.
+   - JPEG/PNG/GIF/WebP/TIFF metadata now comes from bounded Rust HANDLE readers.
+   - RasterHost concurrently supplements only missing fields through a fixed System32
+     `IInitializeWithStream` Property Handler and a HANDLE-backed WIC stream.
+   - Field precedence is `native > Property Handler > WIC`; first paint never waits for the sidecar.
 
-2. Cancelable native image decode
+2. HANDLE handoff data movement
+   - Local ParserHost and RasterHost inputs now retain/reopen exact file HANDLEs instead of copying
+     complete input anchors.
+   - `tools/benchmark-handle-handoff.ps1` keeps the reopen-versus-anchor-copy comparison reproducible.
+
+## Highest Priority
+
+1. Cancelable native image decode
    - Add a cancel-aware image decode ABI instead of relying only on App-side
      generation checks before and after synchronous FFI calls.
    - Check cancellation before decode, before resize/color conversion, and before
      copying the final BGRA buffer.
 
-3. Image sidecar scheduling
+2. Image sidecar scheduling
    - Keep first paint isolated from slower side work.
    - Delay EXIF metadata and filmstrip work slightly after the raster is shown.
    - Prioritize current/nearby thumbnails before far folder entries.
 
-4. Space key responsiveness
+3. Space key responsiveness
    - Treat pending preview transitions as an active preview so Space can cancel
      slow opens before the window is fully revealed.
    - Keep delayed Explorer switch work canceled when a close arrives.

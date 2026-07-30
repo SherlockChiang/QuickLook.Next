@@ -12,6 +12,8 @@ public sealed record FileProbe(string Path, string Extension, byte[] MagicPrefix
     public string Kind { get; init; } = "unknown";
     public long Size { get; init; }
     public long ModifiedUnix { get; init; }
+    /// <summary>True/false when the native probe knows; null for old native builds or an unknown scan.</summary>
+    public bool? IsAnimated { get; init; }
 }
 
 /// <summary>
@@ -113,6 +115,14 @@ public sealed record OfficeLayoutItem(string Kind)
     public string? StrokeColor { get; init; }
     public string? ImageName { get; init; }
     public string? MimeType { get; init; }
+    /// <summary>
+    /// Normalized package-relative image identifier. New native parsers emit this instead of
+    /// embedding image bytes in the control-channel JSON.
+    /// </summary>
+    public string? ImageRef { get; init; }
+    /// <summary>Compressed byte length of the referenced package entry, or zero when unavailable.</summary>
+    public long ImageByteLength { get; init; }
+    /// <summary>Legacy inline payload retained for compatibility with older native parsers.</summary>
     public string? ImageBase64 { get; init; }
 }
 
@@ -176,6 +186,9 @@ public sealed record ImageMetadata
     public double? Longitude { get; init; }
     public double? Altitude { get; init; }
     public double? Direction { get; init; }
+    public double? HorizontalResolution { get; init; }
+    public double? VerticalResolution { get; init; }
+    public string? PhotometricInterpretation { get; init; }
     public byte? BitDepth { get; init; }
     public string? ColorType { get; init; }
     public string? Compression { get; init; }

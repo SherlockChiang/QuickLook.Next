@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.IO.Pipes;
 using System.Security.Cryptography;
 using QuickLook.Next.Contracts;
@@ -11,15 +13,18 @@ public sealed class RasterHostAnimationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
-    [Fact]
-    public async Task Gif_frames_are_handed_off_and_removed_on_close()
+    [Theory]
+    [InlineData("gif")]
+    [InlineData("webp")]
+    [InlineData("png")]
+    public async Task Animated_frames_are_section_backed_and_released_on_close(string extension)
     {
         string pipeName = $"quicklook_next_raster_animation_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
-        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.gif");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.{extension}");
         string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
         using Process host = Process.Start(new ProcessStartInfo(hostPath)
         {
@@ -36,13 +41,18 @@ public sealed class RasterHostAnimationTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
-            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif"), physicalPath);
+            if (extension == "png")
+                File.WriteAllBytes(physicalPath, CreateAnimatedPng());
+            else
+                File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", $"animated.{extension}"), physicalPath);
             var pinnedInput = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
             string previewRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
-            var probe = new FileProbe(logicalPath, ".gif", File.ReadAllBytes(physicalPath)[..6])
+            byte[] content = File.ReadAllBytes(physicalPath);
+            var probe = new FileProbe(logicalPath, $".{extension}", content[..Math.Min(content.Length, 64)])
             {
                 Kind = "image",
                 Size = new FileInfo(physicalPath).Length,
+                IsAnimated = true,
             };
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinnedInput.Handle, host.SafeHandle);
             pinnedInput.Handle.Dispose();
@@ -97,22 +107,43 @@ public sealed class RasterHostAnimationTests
             Assert.InRange(frames.FrameCount, 2, 120);
             Assert.InRange(frames.Width, 1, 1024);
             Assert.InRange(frames.Height, 1, 1024);
-            using var frameHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                host.SafeHandle, frames.FileHandle, frames.PacketLength);
-            using var frameStream = new FileStream(frameHandle, FileAccess.Read);
-            Assert.Equal(frames.PacketLength, frameStream.Length);
-            Span<byte> header = stackalloc byte[12];
-            frameStream.ReadExactly(header);
-            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(header[..4]));
+            Assert.InRange(frames.PacketLength, 13, 64L * 1024 * 1024 + 12);
+            using SharedSectionView frameView = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                frames.SectionHandle,
+                checked((int)frames.PacketLength));
+            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(frameView.Bytes[..4]));
+            int frameBytes = checked(frames.Width * frames.Height * 4);
+            long expectedPacketLength = checked(
+                12L + frames.FrameCount * (4L + frameBytes));
+            Assert.Equal(expectedPacketLength, frames.PacketLength);
+            byte[] firstFrame = frameView.Bytes.Slice(16, frameBytes).ToArray();
+            int lastFrameOffset = checked(
+                12 + (frames.FrameCount - 1) * (4 + frameBytes) + 4);
+            byte[] lastFrame = frameView.Bytes.Slice(lastFrameOffset, frameBytes).ToArray();
+            Assert.False(
+                firstFrame.AsSpan().SequenceEqual(lastFrame),
+                $"{extension} animation packet returned identical first and last frames.");
 
-            string packetPath = Path.Combine(
-                Path.GetTempPath(), "QuickLookNext", "raster-animation", "frames-" + animationRequestId, "frames.bin");
-            await channel.SendAsync(new PreviewAnimationFramesClose(animationRequestId), timeout.Token);
-            while (File.Exists(packetPath))
-                await Task.Delay(25, timeout.Token);
-            Assert.True(frameStream.CanRead);
-            await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
-            await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+            string packetDirectory = Path.Combine(
+                Path.GetTempPath(), "QuickLookNext", "raster-animation", "frames-" + animationRequestId);
+            Assert.False(Directory.Exists(packetDirectory));
+            using var closeTimeout =
+                new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await channel.SendAsync(
+                new PreviewAnimationFramesClose(animationRequestId),
+                closeTimeout.Token);
+            await WaitUntilAsync(
+                () => !CanDuplicateSection(host, frames.SectionHandle, checked((int)frames.PacketLength)),
+                closeTimeout.Token);
+            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(frameView.Bytes[..4]));
+            Assert.False(Directory.Exists(packetDirectory));
+            await channel.SendAsync(
+                new PreviewClose(previewRequestId),
+                closeTimeout.Token);
+            await WaitUntilAsync(
+                () => TryOverwriteFile(physicalPath),
+                closeTimeout.Token);
         }
         finally
         {
@@ -140,6 +171,101 @@ public sealed class RasterHostAnimationTests
     {
         while (!condition())
             await Task.Delay(20, cancellationToken);
+    }
+
+    private static bool CanDuplicateSection(Process host, long remoteHandle, int length)
+    {
+        try
+        {
+            using SharedSectionView view = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                remoteHandle,
+                length);
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static byte[] CreateAnimatedPng()
+    {
+        using var output = new MemoryStream();
+        output.Write([0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        Span<byte> ihdr = stackalloc byte[13];
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr[..4], 2);
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr[4..8], 1);
+        ihdr[8] = 8;
+        ihdr[9] = 6;
+        WritePngChunk(output, "IHDR"u8, ihdr);
+
+        Span<byte> animationControl = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt32BigEndian(animationControl[..4], 2);
+        WritePngChunk(output, "acTL"u8, animationControl);
+
+        WriteFrameControl(output, sequence: 0, delayNumerator: 1);
+        WritePngChunk(output, "IDAT"u8, CompressPngFrame(
+            [255, 0, 0, 255, 255, 0, 0, 255]));
+
+        WriteFrameControl(output, sequence: 1, delayNumerator: 2);
+        byte[] secondFrame = CompressPngFrame(
+            [0, 255, 0, 255, 0, 255, 0, 255]);
+        byte[] frameData = new byte[4 + secondFrame.Length];
+        BinaryPrimitives.WriteUInt32BigEndian(frameData.AsSpan(0, 4), 2);
+        secondFrame.CopyTo(frameData, 4);
+        WritePngChunk(output, "fdAT"u8, frameData);
+        WritePngChunk(output, "IEND"u8, []);
+        return output.ToArray();
+    }
+
+    private static void WriteFrameControl(Stream output, uint sequence, ushort delayNumerator)
+    {
+        Span<byte> control = stackalloc byte[26];
+        BinaryPrimitives.WriteUInt32BigEndian(control[..4], sequence);
+        BinaryPrimitives.WriteUInt32BigEndian(control[4..8], 2);
+        BinaryPrimitives.WriteUInt32BigEndian(control[8..12], 1);
+        BinaryPrimitives.WriteUInt16BigEndian(control[20..22], delayNumerator);
+        BinaryPrimitives.WriteUInt16BigEndian(control[22..24], 10);
+        WritePngChunk(output, "fcTL"u8, control);
+    }
+
+    private static byte[] CompressPngFrame(ReadOnlySpan<byte> rgba)
+    {
+        using var output = new MemoryStream();
+        using (var zlib = new ZLibStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            zlib.WriteByte(0);
+            zlib.Write(rgba);
+        }
+        return output.ToArray();
+    }
+
+    private static void WritePngChunk(Stream output, ReadOnlySpan<byte> type, ReadOnlySpan<byte> data)
+    {
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)data.Length));
+        output.Write(length);
+        output.Write(type);
+        output.Write(data);
+
+        uint crc = 0xFFFF_FFFF;
+        foreach (byte value in type)
+            crc = UpdateCrc32(crc, value);
+        foreach (byte value in data)
+            crc = UpdateCrc32(crc, value);
+        Span<byte> checksum = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(checksum, ~crc);
+        output.Write(checksum);
+    }
+
+    private static uint UpdateCrc32(uint crc, byte value)
+    {
+        crc ^= value;
+        for (int bit = 0; bit < 8; bit++)
+            crc = (crc >> 1) ^ (0xEDB8_8320u & (uint)-(int)(crc & 1));
+        return crc;
     }
 
 }

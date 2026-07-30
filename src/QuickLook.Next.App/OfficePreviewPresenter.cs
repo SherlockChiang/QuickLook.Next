@@ -17,6 +17,8 @@ internal sealed class OfficePreviewPresenter
 {
     private const int MaxCellsPerPage = 2048;
     private const int MaxLayoutItemsPerPage = 2048;
+    private const int MaxOfficeImageReferences = 18;
+    private const int MaxLegacyImageBase64Chars = 1024 * 1024;
     private static readonly SolidColorBrush OfficeWhiteBrush = new(Colors.White);
     private static readonly SolidColorBrush OfficeBlackBrush = new(Colors.Black);
     private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
@@ -29,7 +31,9 @@ internal sealed class OfficePreviewPresenter
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
+    private readonly Func<string, string, int, int, CancellationToken, Task<NativeRasterImage?>>? _loadOfficeImage;
     private readonly List<PageSlot> _pageSlots = [];
+    private OfficeImageLoadSession? _imageLoadSession;
     private OfficeLayout? _layout;
     private double _maxPageWidth;
     private PreviewReady? _lastReady;
@@ -39,17 +43,20 @@ internal sealed class OfficePreviewPresenter
     public OfficePreviewPresenter(
         ScrollViewer scrollViewer,
         StackPanel pagesPanel,
-        Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast)
+        Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast,
+        Func<string, string, int, int, CancellationToken, Task<NativeRasterImage?>>? loadOfficeImage = null)
     {
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
         _getHighContrast = getHighContrast;
+        _loadOfficeImage = loadOfficeImage;
         _scrollViewer.ViewChanged += (_, _) => QueueVirtualPageUpdate();
         _scrollViewer.SizeChanged += (_, _) => QueueVirtualPageUpdate();
     }
 
     public OfficePreviewResult Render(PreviewReady ready, (double Width, double Height) maxContent)
     {
+        CancelImageLoads();
         _lastReady = ready;
         _lastMaxContent = maxContent;
         OfficeLayout layout = ready.OfficeLayout!;
@@ -61,6 +68,12 @@ internal sealed class OfficePreviewPresenter
 
         double maxPageWidth = Math.Max(360, maxContent.Width - 72);
         _maxPageWidth = maxPageWidth;
+        if (_loadOfficeImage is not null && !string.IsNullOrWhiteSpace(ready.RequestId))
+        {
+            _imageLoadSession = new OfficeImageLoadSession(
+                ready.RequestId,
+                BuildImageDecodeTargets(layout, maxPageWidth));
+        }
         int renderedPageCount = Math.Min(layout.Pages.Length, 16);
         foreach ((OfficePage page, int index) in layout.Pages.Take(16).Select((page, index) => (page, index)))
         {
@@ -93,6 +106,7 @@ internal sealed class OfficePreviewPresenter
 
     public void Clear()
     {
+        CancelImageLoads();
         _layout = null;
         _lastReady = null;
         _lastMaxContent = default;
@@ -467,22 +481,32 @@ internal sealed class OfficePreviewPresenter
         double width = Math.Max(12, item.Width * scale);
         double height = Math.Max(12, item.Height * scale);
 
-        if (item.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(item.ImageBase64)
-            && CreateImageSourceFromBase64(item.ImageBase64) is { } source)
+        if (item.Kind.Equals("image", StringComparison.OrdinalIgnoreCase))
         {
-            var image = new Image
+            if (_imageLoadSession is { } session
+                && TryGetOfficeImageReference(item, out string imageRef)
+                && session.Targets.TryGetValue(imageRef, out ImageDecodeTarget target))
             {
-                Source = source,
-                Width = width,
-                Height = height,
-                Stretch = Stretch.Uniform,
-            };
-            AutomationProperties.SetName(image, string.IsNullOrWhiteSpace(item.ImageName) ? UiStrings.OfficeEmbeddedImageAccessibleName : item.ImageName);
-            Canvas.SetLeft(image, x);
-            Canvas.SetTop(image, y);
-            canvas.Children.Add(image);
-            return;
+                Image image = CreateLayoutImage(item, width, height);
+                Canvas.SetLeft(image, x);
+                Canvas.SetTop(image, y);
+                canvas.Children.Add(image);
+                _ = PopulateLayoutImageAsync(image, imageRef, target, session);
+                return;
+            }
+
+            // Compatibility only for PreviewReady JSON produced by the previous protocol version.
+            // New native Office layouts carry imageRef and are decoded out-of-process into BGRA.
+            if (!string.IsNullOrWhiteSpace(item.ImageBase64)
+                && CreateImageSourceFromBase64(item.ImageBase64) is { } legacySource)
+            {
+                Image image = CreateLayoutImage(item, width, height);
+                image.Source = legacySource;
+                Canvas.SetLeft(image, x);
+                Canvas.SetTop(image, y);
+                canvas.Children.Add(image);
+                return;
+            }
         }
 
         if (item.Kind.Equals("shape", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(item.Text))
@@ -522,6 +546,22 @@ internal sealed class OfficePreviewPresenter
             Canvas.SetTop(textBox, y);
             canvas.Children.Add(textBox);
         }
+    }
+
+    private static Image CreateLayoutImage(OfficeLayoutItem item, double width, double height)
+    {
+        var image = new Image
+        {
+            Width = width,
+            Height = height,
+            Stretch = Stretch.Uniform,
+        };
+        AutomationProperties.SetName(
+            image,
+            string.IsNullOrWhiteSpace(item.ImageName)
+                ? UiStrings.OfficeEmbeddedImageAccessibleName
+                : item.ImageName);
+        return image;
     }
 
     private void AddShape(Canvas canvas, OfficeLayoutItem item, double x, double y, double width, double height)
@@ -579,11 +619,236 @@ internal sealed class OfficePreviewPresenter
         };
     }
 
+    private static IReadOnlyDictionary<string, ImageDecodeTarget> BuildImageDecodeTargets(
+        OfficeLayout layout,
+        double maxPageWidth)
+    {
+        var targets = new Dictionary<string, ImageDecodeTarget>(StringComparer.Ordinal);
+        foreach (OfficePage page in layout.Pages.Take(16))
+        {
+            double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
+            double scale = LayoutScale(layout, pageWidth, maxPageWidth);
+            foreach (OfficeLayoutItem item in page.Items
+                         .OrderBy(candidate => candidate.ZIndex)
+                         .Take(MaxLayoutItemsPerPage))
+            {
+                if (!item.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+                    || !TryGetOfficeImageReference(item, out string imageRef))
+                {
+                    continue;
+                }
+
+                int targetWidth = Math.Clamp(
+                    (int)Math.Ceiling(Math.Max(12, item.Width * scale)),
+                    1,
+                    NativeAbi.MaxOfficeImageDimension);
+                int targetHeight = Math.Clamp(
+                    (int)Math.Ceiling(Math.Max(12, item.Height * scale)),
+                    1,
+                    NativeAbi.MaxOfficeImageDimension);
+                if (targets.TryGetValue(imageRef, out ImageDecodeTarget existing))
+                {
+                    targets[imageRef] = new ImageDecodeTarget(
+                        Math.Max(existing.Width, targetWidth),
+                        Math.Max(existing.Height, targetHeight));
+                }
+                else if (targets.Count < MaxOfficeImageReferences)
+                {
+                    targets.Add(imageRef, new ImageDecodeTarget(targetWidth, targetHeight));
+                }
+            }
+        }
+        return targets;
+    }
+
+    private static bool TryGetOfficeImageReference(OfficeLayoutItem item, out string imageRef)
+    {
+        imageRef = item.ImageRef ?? "";
+        if (imageRef.Length == 0
+            || item.ImageByteLength <= 0
+            || item.ImageByteLength > NativeAbi.MaxOfficeImageSourceBytes
+            || imageRef.IndexOf('\0') >= 0
+            || imageRef.IndexOf('\\') >= 0
+            || imageRef.IndexOf(':') >= 0
+            || imageRef.StartsWith("/", StringComparison.Ordinal)
+            || System.Text.Encoding.UTF8.GetByteCount(imageRef) > NativeAbi.MaxOfficeImageRefUtf8Bytes)
+        {
+            imageRef = "";
+            return false;
+        }
+
+        string[] segments = imageRef.Split('/');
+        if (segments.Length < 3
+            || segments[1] != "media"
+            || segments.Any(segment => segment.Length == 0 || segment is "." or "..")
+            || segments[0] is not ("word" or "ppt" or "xl"))
+        {
+            imageRef = "";
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task PopulateLayoutImageAsync(
+        Image image,
+        string imageRef,
+        ImageDecodeTarget target,
+        OfficeImageLoadSession session)
+    {
+        if (_loadOfficeImage is null || session.Token.IsCancellationRequested)
+            return;
+
+        try
+        {
+            ImageSource? source = await session.GetOrAdd(
+                imageRef,
+                () => LoadOfficeImageSourceAsync(session, imageRef, target));
+            if (source is null || !IsCurrentImageSession(session))
+                return;
+            AssignImageSource(image, source, session);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Office layout image load failed: " + ex.Message);
+        }
+    }
+
+    private async Task<ImageSource?> LoadOfficeImageSourceAsync(
+        OfficeImageLoadSession session,
+        string imageRef,
+        ImageDecodeTarget target)
+    {
+        if (_loadOfficeImage is null)
+            return null;
+
+        CancellationToken token = session.Token;
+        await session.DecodeGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            NativeRasterImage? raster = await _loadOfficeImage(
+                session.ParentPreviewRequestId,
+                imageRef,
+                target.Width,
+                target.Height,
+                token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            if (raster is null || !IsCurrentImageSession(session))
+                return null;
+            return await CreateBgraImageSourceAsync(raster, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Office imageRef decode failed: " + ex.Message);
+            return null;
+        }
+        finally
+        {
+            session.DecodeGate.Release();
+        }
+    }
+
+    private async Task<ImageSource?> CreateBgraImageSourceAsync(
+        NativeRasterImage raster,
+        CancellationToken token)
+    {
+        if (_pagesPanel.DispatcherQueue.HasThreadAccess)
+            return CreateImageSourceFromBgra(raster);
+
+        var completion = new TaskCompletionSource<ImageSource?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pagesPanel.DispatcherQueue.TryEnqueue(() =>
+        {
+            completion.TrySetResult(token.IsCancellationRequested
+                ? null
+                : CreateImageSourceFromBgra(raster));
+        }))
+        {
+            return null;
+        }
+
+        using CancellationTokenRegistration registration =
+            token.Register(() => completion.TrySetCanceled(token));
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    private void AssignImageSource(
+        Image image,
+        ImageSource source,
+        OfficeImageLoadSession session)
+    {
+        void Assign()
+        {
+            if (IsCurrentImageSession(session))
+                image.Source = source;
+        }
+
+        if (_pagesPanel.DispatcherQueue.HasThreadAccess)
+            Assign();
+        else
+            _pagesPanel.DispatcherQueue.TryEnqueue(Assign);
+    }
+
+    private bool IsCurrentImageSession(OfficeImageLoadSession session)
+        => ReferenceEquals(Volatile.Read(ref _imageLoadSession), session)
+           && !session.Token.IsCancellationRequested;
+
+    private void CancelImageLoads()
+        => Interlocked.Exchange(ref _imageLoadSession, null)?.Cancel();
+
+    private static ImageSource? CreateImageSourceFromBgra(NativeRasterImage raster)
+    {
+        if (raster.Width is <= 0 or > NativeAbi.MaxOfficeImageDimension
+            || raster.Height is <= 0 or > NativeAbi.MaxOfficeImageDimension)
+        {
+            return null;
+        }
+
+        int expectedLength;
+        try
+        {
+            expectedLength = checked(raster.Width * raster.Height * 4);
+        }
+        catch (OverflowException)
+        {
+            return null;
+        }
+        if (raster.Bgra.Length != expectedLength)
+            return null;
+
+        try
+        {
+            var bitmap = new WriteableBitmap(raster.Width, raster.Height);
+            using (Stream stream = bitmap.PixelBuffer.AsStream())
+                stream.Write(raster.Bgra, 0, expectedLength);
+            bitmap.Invalidate();
+            return bitmap;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Office BGRA bitmap creation failed: " + ex.Message);
+            return null;
+        }
+    }
+
     private static ImageSource? CreateImageSourceFromBase64(string base64)
     {
+        if (base64.Length > MaxLegacyImageBase64Chars)
+            return null;
+
         try
         {
             byte[] bytes = Convert.FromBase64String(base64);
+            if (bytes.LongLength > NativeAbi.MaxOfficeImageSourceBytes)
+                return null;
             var bitmap = new BitmapImage();
             using var memory = new MemoryStream(bytes);
             bitmap.SetSource(memory.AsRandomAccessStream());
@@ -611,6 +876,85 @@ internal sealed class OfficePreviewPresenter
     {
         var highContrast = _getHighContrast();
         return highContrast.Enabled ? new SolidColorBrush(highContrast.Foreground) : fallback;
+    }
+
+    private readonly record struct ImageDecodeTarget(int Width, int Height);
+
+    private sealed class OfficeImageLoadSession
+    {
+        private readonly object _sync = new();
+        private readonly Dictionary<string, Task<ImageSource?>> _loads = new(StringComparer.Ordinal);
+        private readonly CancellationTokenSource _cancellation = new();
+        private readonly CancellationToken _token;
+        private bool _canceled;
+
+        public OfficeImageLoadSession(
+            string parentPreviewRequestId,
+            IReadOnlyDictionary<string, ImageDecodeTarget> targets)
+        {
+            ParentPreviewRequestId = parentPreviewRequestId;
+            Targets = targets;
+            _token = _cancellation.Token;
+        }
+
+        public string ParentPreviewRequestId { get; }
+        public IReadOnlyDictionary<string, ImageDecodeTarget> Targets { get; }
+        public SemaphoreSlim DecodeGate { get; } = new(2, 2);
+        public CancellationToken Token => _token;
+
+        public Task<ImageSource?> GetOrAdd(
+            string imageRef,
+            Func<Task<ImageSource?>> factory)
+        {
+            lock (_sync)
+            {
+                if (_canceled)
+                    return Task.FromResult<ImageSource?>(null);
+                if (_loads.TryGetValue(imageRef, out Task<ImageSource?>? existing))
+                    return existing;
+
+                Task<ImageSource?> created = factory();
+                _loads.Add(imageRef, created);
+                return created;
+            }
+        }
+
+        public void Cancel()
+        {
+            Task<ImageSource?>[] loads;
+            lock (_sync)
+            {
+                if (_canceled)
+                    return;
+                _canceled = true;
+                try
+                {
+                    _cancellation.Cancel();
+                }
+                catch
+                {
+                }
+                loads = _loads.Values.ToArray();
+            }
+
+            if (loads.Length == 0)
+            {
+                DisposeResources();
+                return;
+            }
+
+            _ = Task.WhenAll(loads).ContinueWith(
+                _ => DisposeResources(),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private void DisposeResources()
+        {
+            DecodeGate.Dispose();
+            _cancellation.Dispose();
+        }
     }
 
     private sealed record PageSlot(OfficePage Page, Border Host);

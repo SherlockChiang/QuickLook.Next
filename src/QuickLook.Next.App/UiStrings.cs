@@ -171,6 +171,8 @@ internal static class UiStrings
     public static string ListingEncryptedSummaryFormat => Get(nameof(ListingEncryptedSummaryFormat), " - {0:N0} encrypted");
     public static string ListingEncryptedPartialSummaryFormat => Get(nameof(ListingEncryptedPartialSummaryFormat), " - at least {0:N0} encrypted");
     public static string ListingEncryptedCannotPreview => Get(nameof(ListingEncryptedCannotPreview), "Encrypted archive entries cannot be previewed.");
+    public static string ListingBrowseOnlySuffix => Get(nameof(ListingBrowseOnlySuffix), " - list only");
+    public static string ListingEntriesCannotBePreviewed => Get(nameof(ListingEntriesCannotBePreviewed), "This listing is browse-only; its entries cannot be opened here.");
     public static string ListingEncryptedRowAccessibleNameFormat => Get(nameof(ListingEncryptedRowAccessibleNameFormat), "{0}, encrypted, {1}");
     public static string ListingOpenBreadcrumbFormat => Get(nameof(ListingOpenBreadcrumbFormat), "Open {0} in listing");
     public static string PdfPageIndicatorFormat => Get(nameof(PdfPageIndicatorFormat), "{0:N0} / {1:N0}");

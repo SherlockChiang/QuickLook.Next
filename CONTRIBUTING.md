@@ -16,17 +16,22 @@ Use Windows x64 with the Desktop C++/MSVC toolchain and the pinned toolchains:
 
 - .NET SDK from [`global.json`](global.json).
 - Rust MSVC toolchain from
-  [`native/quicklook_next_native/rust-toolchain.toml`](native/quicklook_next_native/rust-toolchain.toml).
+  [`native/rust-toolchain.toml`](native/rust-toolchain.toml).
 
-Restore locked dependencies and build from the repository root:
+Use the focused local entry point from the repository root:
 
 ```powershell
-dotnet restore QuickLook.Next.slnx --locked-mode
-cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
-cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
-dotnet build QuickLook.Next.slnx -c Release --no-restore
-dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+.\build.ps1
+.\build.ps1 -NoRestore
+.\build.ps1 -Bump Patch -Test
 ```
+
+`VERSION` is authoritative; `tools/set-version.ps1` synchronizes the native crate manifest and
+`native/Cargo.lock`. `build.ps1` creates local binaries only and does not update an installed MSIX.
+Maintainers with the initialized fixed signing identity may explicitly pass `-Install`; this enables
+all tests and updates only the current user's package with an increasing four-part MSIX revision.
+Local revisions occupy `1..32767`; beta and stable packages use higher reserved revisions so a
+formal same-base package can update a local installation.
 
 The closest local equivalent to pull-request CI is:
 

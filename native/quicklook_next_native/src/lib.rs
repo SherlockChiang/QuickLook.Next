@@ -79,6 +79,7 @@ thread_local! {
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
 const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
+const MAX_OFFICE_IMAGE_REF_BYTES: usize = 2048;
 const MAX_ARCHIVE_ENTRY_NAME_BYTES: usize = u16::MAX as usize;
 const QL_NATIVE_ABI_VERSION: u32 = 3;
 const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
@@ -96,6 +97,11 @@ const QL_FEATURE_HANDLE_PACKAGE: u64 = 1 << 11;
 const QL_FEATURE_HANDLE_PACKAGE_ICON: u64 = 1 << 12;
 const QL_FEATURE_HANDLE_PROBE: u64 = 1 << 13;
 const QL_FEATURE_HANDLE_RASTER_IMAGE: u64 = 1 << 14;
+const QL_FEATURE_HANDLE_ANIMATION: u64 = 1 << 15;
+const QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE: u64 = 1 << 16;
+const QL_FEATURE_HANDLE_IMAGE_WAVEFORM: u64 = 1 << 17;
+const QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT: u64 = 1 << 18;
+const QL_FEATURE_HANDLE_IMAGE_METADATA: u64 = 1 << 19;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -130,12 +136,18 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_PACKAGE_ICON
         | QL_FEATURE_HANDLE_PROBE
         | QL_FEATURE_HANDLE_RASTER_IMAGE
+        | QL_FEATURE_HANDLE_ANIMATION
+        | QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE
+        | QL_FEATURE_HANDLE_IMAGE_WAVEFORM
+        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT
+        | QL_FEATURE_HANDLE_IMAGE_METADATA
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ANIMATION_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
 const QL_THUMBNAIL_FLAG_BOUNDED_SIZE: u32 = 2;
 const QL_THUMBNAIL_KNOWN_FLAGS: u32 =
@@ -204,7 +216,7 @@ fn emit(msg: &str) {
 /// Trivial probe — confirms the cdylib loads and the C ABI works.
 #[no_mangle]
 pub extern "C" fn ql_probe(a: i32, b: i32) -> i32 {
-    a + b
+    ffi_boundary(|| a + b)
 }
 
 /// Register the managed callback (a function pointer obtained from a kept-alive delegate).
@@ -225,39 +237,49 @@ pub extern "C" fn ql_set_preview_visible(visible: i32) {
 /// Install the low-level keyboard hook on a dedicated thread with a message pump.
 #[no_mangle]
 pub extern "C" fn ql_start() -> i32 {
-    let Ok(mut runtime) = HOOK_THREAD.lock() else { return -8; };
-    if runtime.is_some() {
-        return 2;
-    }
-    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-    let thread = std::thread::spawn(move || hook_thread(ready_tx));
-    *runtime = Some(thread);
-    drop(runtime);
-    match ready_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(true) => 1,
-        _ => {
-            ql_stop();
-            -8
+    ffi_boundary(|| {
+        let Ok(mut runtime) = HOOK_THREAD.lock() else {
+            return -8;
+        };
+        if runtime.is_some() {
+            return 2;
         }
-    }
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread = std::thread::spawn(move || hook_thread(ready_tx));
+        *runtime = Some(thread);
+        drop(runtime);
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(true) => 1,
+            _ => {
+                ql_stop();
+                -8
+            }
+        }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn ql_stop() -> i32 {
-    let thread = HOOK_THREAD.lock().ok().and_then(|mut runtime| runtime.take());
-    let Some(thread) = thread else { return 1; };
-    let tid = HOOK_TID.load(Ordering::SeqCst);
-    if tid != 0 {
-        unsafe { let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)); }
-    }
-    let _ = thread.join();
-    HOOK_TID.store(0, Ordering::SeqCst);
-    SPACE_HELD.store(false, Ordering::SeqCst);
-    F5_HELD.store(false, Ordering::SeqCst);
-    F11_HELD.store(false, Ordering::SeqCst);
-    PREVIEW_VISIBLE.store(false, Ordering::SeqCst);
-    SWITCH_TIMER_ARMED.store(0, Ordering::SeqCst);
-    1
+    ffi_boundary(|| {
+        let thread = HOOK_THREAD.lock().ok().and_then(|mut runtime| runtime.take());
+        let Some(thread) = thread else {
+            return 1;
+        };
+        let tid = HOOK_TID.load(Ordering::SeqCst);
+        if tid != 0 {
+            unsafe {
+                let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
+        }
+        let _ = thread.join();
+        HOOK_TID.store(0, Ordering::SeqCst);
+        SPACE_HELD.store(false, Ordering::SeqCst);
+        F5_HELD.store(false, Ordering::SeqCst);
+        F11_HELD.store(false, Ordering::SeqCst);
+        PREVIEW_VISIBLE.store(false, Ordering::SeqCst);
+        SWITCH_TIMER_ARMED.store(0, Ordering::SeqCst);
+        1
+    })
 }
 
 fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
@@ -479,26 +501,30 @@ fn is_explorer_window_class_name(name: &str) -> bool {
 /// Test-only ABI used by smoke-native.ps1 to lock the Explorer rename guard's class filter.
 #[no_mangle]
 pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: usize) -> i32 {
-    let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
-        return 0;
-    };
-    if is_text_input_class_name(class_name) {
-        1
-    } else {
-        0
-    }
+    ffi_boundary(|| {
+        let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+            return 0;
+        };
+        if is_text_input_class_name(class_name) {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn ql_test_is_explorer_window_class(class_utf8: *const u8, class_len: usize) -> i32 {
-    let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
-        return 0;
-    };
-    if is_explorer_window_class_name(class_name) {
-        1
-    } else {
-        0
-    }
+    ffi_boundary(|| {
+        let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+            return 0;
+        };
+        if is_explorer_window_class_name(class_name) {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -544,12 +570,14 @@ unsafe fn root_window_is_explorer(root: HWND) -> bool {
 /// managed caller). Emits the result through the callback.
 #[no_mangle]
 pub extern "C" fn ql_get_selection() {
-    let h = std::thread::spawn(|| unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        do_selection_and_emit("SELECTION");
-        CoUninitialize();
+    ffi_void_boundary(|| {
+        let h = std::thread::spawn(|| unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            do_selection_and_emit("SELECTION");
+            CoUninitialize();
+        });
+        let _ = h.join();
     });
-    let _ = h.join();
 }
 
 fn do_selection_and_emit(tag: &str) {
@@ -673,20 +701,22 @@ pub extern "C" fn ql_probe_file(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    let json = match probe_json(path) {
-        Some(j) => j,
-        None => return -2,
-    };
-    let bytes = json.as_bytes();
-    if out.is_null() || out_cap < bytes.len() {
-        return -(bytes.len() as i32);
-    }
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
-    bytes.len() as i32
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        let json = match probe_json(path) {
+            Some(j) => j,
+            None => return -2,
+        };
+        let bytes = json.as_bytes();
+        if out.is_null() || out_cap < bytes.len() {
+            return -(bytes.len() as i32);
+        }
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+        bytes.len() as i32
+    })
 }
 
 fn probe_json(path: &str) -> Option<String> {
@@ -733,15 +763,29 @@ fn probe_json(path: &str) -> Option<String> {
         classify(file_name, &ext, magic, size == 0)
     };
     let magic_hex: String = magic.iter().map(|b| format!("{b:02X}")).collect();
+    let animation = if kind == "image" {
+        fs::File::open(path).ok().and_then(|mut file| {
+            preview::probe_image_animation_reader(&mut file, file_name, size)
+        })
+    } else {
+        None
+    }
+    .unwrap_or_default();
+    let is_animated = match animation.is_animated {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    };
 
     let json = format!(
-        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{}}}",
+        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{},\"isAnimated\":{}}}",
         json_escape(path),
         json_escape(&ext),
         magic_hex,
         kind,
         size,
-        modified
+        modified,
+        is_animated
     );
 
     {
@@ -922,6 +966,126 @@ fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'stati
 // [decode_ms:u32 LE][resize_ms:u32 LE][convert_ms:u32 LE][premultiplied BGRA bytes].
 
 const MAX_IMAGE_RASTER_DIMENSION: u32 = 2048;
+const IMAGE_WAVEFORM_WIDTH: u32 = 192;
+const IMAGE_WAVEFORM_HEIGHT: u32 = 96;
+const IMAGE_WAVEFORM_CHANNELS: usize = 3;
+const IMAGE_WAVEFORM_SAMPLE_LIMIT: f64 = 1_000_000.0;
+const IMAGE_WAVEFORM_PLANE_BYTES: usize =
+    IMAGE_WAVEFORM_WIDTH as usize * IMAGE_WAVEFORM_HEIGHT as usize;
+const IMAGE_WAVEFORM_DENSITY_BYTES: usize =
+    IMAGE_WAVEFORM_PLANE_BYTES * IMAGE_WAVEFORM_CHANNELS;
+const IMAGE_WAVEFORM_PACKET_HEADER_BYTES: usize = 40;
+const MAX_IMAGE_WAVEFORM_PACKET_BYTES: usize = IMAGE_WAVEFORM_PACKET_HEADER_BYTES
+    + MAX_IMAGE_RASTER_DIMENSION as usize * MAX_IMAGE_RASTER_DIMENSION as usize * 4
+    + IMAGE_WAVEFORM_DENSITY_BYTES;
+
+struct ImageWaveformAccumulator {
+    image_width: usize,
+    sample_step: usize,
+    counts: Vec<u32>,
+}
+
+impl ImageWaveformAccumulator {
+    fn new(width: u32, height: u32) -> Self {
+        let pixel_count = u64::from(width) * u64::from(height);
+        // Keep sampling identical to ImageWaveformBuilder: a square-grid stride derived from the
+        // one-million-sample budget. The final raster is bounded to 2048x2048 independently.
+        let sample_step = ((pixel_count as f64 / IMAGE_WAVEFORM_SAMPLE_LIMIT)
+            .sqrt()
+            .ceil() as usize)
+            .max(1);
+        Self {
+            image_width: width as usize,
+            sample_step,
+            counts: vec![0; IMAGE_WAVEFORM_DENSITY_BYTES],
+        }
+    }
+
+    fn add_straight_rgba(&mut self, pixel_index: usize, rgba: &[u8]) {
+        self.add_rgb(
+            pixel_index,
+            rgba[0],
+            rgba[1],
+            rgba[2],
+            rgba[3],
+        );
+    }
+
+    fn add_premultiplied_rgba(&mut self, pixel_index: usize, rgba: &[u8]) {
+        let alpha = rgba[3];
+        if alpha == 0 {
+            return;
+        }
+        self.add_rgb(
+            pixel_index,
+            unpremultiply_channel(rgba[0], alpha),
+            unpremultiply_channel(rgba[1], alpha),
+            unpremultiply_channel(rgba[2], alpha),
+            alpha,
+        );
+    }
+
+    fn add_rgb(
+        &mut self,
+        pixel_index: usize,
+        red: u8,
+        green: u8,
+        blue: u8,
+        alpha: u8,
+    ) {
+        if alpha == 0 || self.image_width == 0 {
+            return;
+        }
+        let x = pixel_index % self.image_width;
+        let y = pixel_index / self.image_width;
+        if x % self.sample_step != 0 || y % self.sample_step != 0 {
+            return;
+        }
+
+        let column = (x * IMAGE_WAVEFORM_WIDTH as usize / self.image_width)
+            .min(IMAGE_WAVEFORM_WIDTH as usize - 1);
+        self.add_channel(0, column, red);
+        self.add_channel(1, column, green);
+        self.add_channel(2, column, blue);
+    }
+
+    fn add_channel(&mut self, channel: usize, column: usize, value: u8) {
+        let row = IMAGE_WAVEFORM_HEIGHT as usize
+            - 1
+            - value as usize * (IMAGE_WAVEFORM_HEIGHT as usize - 1) / 255;
+        let index = channel * IMAGE_WAVEFORM_PLANE_BYTES
+            + row * IMAGE_WAVEFORM_WIDTH as usize
+            + column;
+        self.counts[index] = self.counts[index].saturating_add(1);
+    }
+
+    fn finish(self, cancel_cb: Option<CancelCallback>) -> Option<Vec<u8>> {
+        let maximum = self.counts.iter().copied().max().unwrap_or(0);
+        let mut density = vec![0u8; IMAGE_WAVEFORM_DENSITY_BYTES];
+        if maximum == 0 {
+            return Some(density);
+        }
+
+        let denominator = f64::from(maximum + 1).log2();
+        for (index, count) in self.counts.into_iter().enumerate() {
+            if index % 16_384 == 0 && cancel_requested(cancel_cb) {
+                return None;
+            }
+            density[index] = (255.0 * f64::from(count + 1).log2() / denominator)
+                .round_ties_even()
+                .clamp(0.0, 255.0) as u8;
+        }
+        Some(density)
+    }
+}
+
+fn unpremultiply_channel(value: u8, alpha: u8) -> u8 {
+    if alpha == 255 {
+        value
+    } else {
+        (((u32::from(value) * 255 + u32::from(alpha) / 2) / u32::from(alpha)).min(255)) as u8
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn ql_decode_image(
@@ -930,7 +1094,7 @@ pub extern "C" fn ql_decode_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None)
+    ffi_boundary(|| ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None))
 }
 
 #[no_mangle]
@@ -941,7 +1105,17 @@ pub extern "C" fn ql_decode_image_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    ql_decode_image_sized_cancelable(path_utf8, path_len, 0, 0, out, out_cap, cancel_cb)
+    ffi_boundary(|| {
+        ql_decode_image_sized_cancelable(
+            path_utf8,
+            path_len,
+            0,
+            0,
+            out,
+            out_cap,
+            cancel_cb,
+        )
+    })
 }
 
 #[no_mangle]
@@ -954,36 +1128,46 @@ pub extern "C" fn ql_decode_image_sized_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
 
-    let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
-        match decode_image_bgra(path, target_width, target_height, cancel_cb) {
+        let (
+            width,
+            height,
+            original_width,
+            original_height,
+            decode_ms,
+            resize_ms,
+            convert_ms,
+            bgra,
+        ) = match decode_image_bgra(path, target_width, target_height, cancel_cb) {
             Some(decoded) => decoded,
             None => return -2,
         };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
 
-    let total = 28 + bgra.len();
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
+        let total = 28 + bgra.len();
+        if out.is_null() || out_cap < total {
+            return -(total as i32);
+        }
 
-    unsafe {
-        std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(original_width.to_le_bytes().as_ptr(), out.add(8), 4);
-        std::ptr::copy_nonoverlapping(original_height.to_le_bytes().as_ptr(), out.add(12), 4);
-        std::ptr::copy_nonoverlapping(decode_ms.to_le_bytes().as_ptr(), out.add(16), 4);
-        std::ptr::copy_nonoverlapping(resize_ms.to_le_bytes().as_ptr(), out.add(20), 4);
-        std::ptr::copy_nonoverlapping(convert_ms.to_le_bytes().as_ptr(), out.add(24), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(28), bgra.len());
-    }
-    total as i32
+        unsafe {
+            std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out, 4);
+            std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(4), 4);
+            std::ptr::copy_nonoverlapping(original_width.to_le_bytes().as_ptr(), out.add(8), 4);
+            std::ptr::copy_nonoverlapping(original_height.to_le_bytes().as_ptr(), out.add(12), 4);
+            std::ptr::copy_nonoverlapping(decode_ms.to_le_bytes().as_ptr(), out.add(16), 4);
+            std::ptr::copy_nonoverlapping(resize_ms.to_le_bytes().as_ptr(), out.add(20), 4);
+            std::ptr::copy_nonoverlapping(convert_ms.to_le_bytes().as_ptr(), out.add(24), 4);
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(28), bgra.len());
+        }
+        total as i32
+    })
 }
 
 fn probe_reader_json(
@@ -1002,14 +1186,25 @@ fn probe_reader_json(
     let magic = &prefix[..read];
     let kind = classify(logical_name, &ext, magic, size == 0);
     let magic_hex: String = magic.iter().map(|value| format!("{value:02X}")).collect();
+    let animation = if kind == "image" {
+        preview::probe_image_animation_reader(file, logical_name, size).unwrap_or_default()
+    } else {
+        Default::default()
+    };
+    let is_animated = match animation.is_animated {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    };
     Ok(format!(
-        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{}}}",
+        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{},\"isAnimated\":{}}}",
         json_escape(logical_name),
         json_escape(&ext),
         magic_hex,
         kind,
         size,
-        modified_unix
+        modified_unix,
+        is_animated
     ))
 }
 
@@ -1132,13 +1327,17 @@ pub unsafe extern "C" fn ql_decode_image_handle(
     })
 }
 
-/// Decode bounded GIF animation frames from a borrowed Windows file handle.
-/// Output layout matches `ql_decode_gif_frames_sized_cancelable`.
+/// Decode a native-safe static image and derive its bounded RGB density scope during the final
+/// pixel-conversion pass.
+///
+/// Output layout is ten little-endian `u32` values followed by two exact payloads:
+/// `[w, h, original_w, original_h, decode_ms, resize_ms, convert_ms, 192, 96, density_len]`,
+/// then `w*h*4` premultiplied BGRA bytes, then planar row-major R/G/B density bytes.
 ///
 /// # Safety
 /// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
 #[no_mangle]
-pub unsafe extern "C" fn ql_decode_gif_frames_handle(
+pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
     source_handle: isize,
     expected_length: u64,
     logical_name_utf8: *const u8,
@@ -1161,6 +1360,7 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
         if expected_length > 256 * 1024 * 1024 {
             return QL_ERROR_LIMIT_EXCEEDED;
         }
+
         let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
             source_handle,
             expected_length,
@@ -1171,26 +1371,80 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
             Ok(input) => input,
             Err(status) => return status,
         };
-        if !Path::new(&logical_name)
+        let extension = Path::new(&logical_name)
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"))
-        {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        if let Err(status) = validate_handle_image_dimensions(
-            &mut file,
-            ImageFormat::Gif,
-            MAX_ANIMATED_SOURCE_PIXELS,
-        ) {
-            return status;
-        }
-        let (width, height, frames) = match decode_gif_frames_bgra_reader(
-            file,
-            target_width,
-            target_height,
-            cancel_cb,
-        ) {
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let decoded = if extension == "svg" {
+            if expected_length > MAX_SVG_INPUT_BYTES {
+                return QL_ERROR_LIMIT_EXCEEDED;
+            }
+            let mut data = Vec::with_capacity(expected_length as usize);
+            let mut chunk = [0u8; 64 * 1024];
+            loop {
+                if cancel_requested(cancel_cb) {
+                    return QL_ERROR_CANCELLED;
+                }
+                let read = match file.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(_) => return QL_ERROR_IO,
+                };
+                if data.len().saturating_add(read) > expected_length as usize {
+                    return QL_ERROR_LENGTH_MISMATCH;
+                }
+                data.extend_from_slice(&chunk[..read]);
+            }
+            if data.len() as u64 != expected_length {
+                return QL_ERROR_LENGTH_MISMATCH;
+            }
+            decode_svg_bgra_bytes_with_waveform(
+                &data,
+                target_width,
+                target_height,
+                cancel_cb,
+            )
+        } else {
+            let required_format = match extension.as_str() {
+                "png" => ImageFormat::Png,
+                "jpg" | "jpeg" | "jpe" => ImageFormat::Jpeg,
+                "gif" => ImageFormat::Gif,
+                "bmp" => ImageFormat::Bmp,
+                "ico" => ImageFormat::Ico,
+                "tif" | "tiff" => ImageFormat::Tiff,
+                "webp" => ImageFormat::WebP,
+                _ => return QL_ERROR_INVALID_ARGUMENT,
+            };
+            if let Err(status) = validate_handle_image_dimensions(
+                &mut file,
+                required_format,
+                MAX_NATIVE_IMAGE_DECODE_PIXELS,
+            ) {
+                return status;
+            }
+            decode_image_bgra_reader_with_waveform(
+                &mut file,
+                &logical_name,
+                target_width,
+                target_height,
+                cancel_cb,
+                Some(required_format),
+            )
+        };
+        let (
+            (
+                width,
+                height,
+                original_width,
+                original_height,
+                decode_ms,
+                resize_ms,
+                convert_ms,
+                bgra,
+            ),
+            density,
+        ) = match decoded {
             Some(decoded) => decoded,
             None => {
                 return if cancel_requested(cancel_cb) {
@@ -1200,14 +1454,289 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
                 }
             }
         };
-        if frames.is_empty() {
-            return QL_ERROR_MALFORMED;
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
         }
-        let packet = match animation_frames_packet(width, height, frames) {
-            Some(packet) => packet,
-            None => return QL_ERROR_LIMIT_EXCEEDED,
-        };
-        write_v2_out(&packet, out_buf, out_cap, out_required)
+        write_image_waveform_packet(
+            width,
+            height,
+            original_width,
+            original_height,
+            decode_ms,
+            resize_ms,
+            convert_ms,
+            &bgra,
+            &density,
+            out_buf,
+            out_cap,
+            out_required,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn write_image_waveform_packet(
+    width: u32,
+    height: u32,
+    original_width: u32,
+    original_height: u32,
+    decode_ms: u32,
+    resize_ms: u32,
+    convert_ms: u32,
+    bgra: &[u8],
+    density: &[u8],
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+) -> i32 {
+    let raster_bytes = match (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    {
+        Some(bytes) => bytes,
+        None => return QL_ERROR_INTERNAL,
+    };
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_RASTER_DIMENSION
+        || height > MAX_IMAGE_RASTER_DIMENSION
+        || bgra.len() != raster_bytes
+        || density.len() != IMAGE_WAVEFORM_DENSITY_BYTES
+    {
+        return QL_ERROR_INTERNAL;
+    }
+    let total = match IMAGE_WAVEFORM_PACKET_HEADER_BYTES
+        .checked_add(raster_bytes)
+        .and_then(|bytes| bytes.checked_add(density.len()))
+    {
+        Some(total) if total <= MAX_IMAGE_WAVEFORM_PACKET_BYTES => total,
+        _ => return QL_ERROR_LIMIT_EXCEEDED,
+    };
+
+    unsafe { *out_required = total };
+    if total > out_cap {
+        return QL_ERROR_BUFFER_TOO_SMALL;
+    }
+    if out_buf.is_null() {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+
+    let header = [
+        width,
+        height,
+        original_width,
+        original_height,
+        decode_ms,
+        resize_ms,
+        convert_ms,
+        IMAGE_WAVEFORM_WIDTH,
+        IMAGE_WAVEFORM_HEIGHT,
+        IMAGE_WAVEFORM_DENSITY_BYTES as u32,
+    ];
+    for (index, value) in header.into_iter().enumerate() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                out_buf.add(index * 4),
+                4,
+            );
+        }
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bgra.as_ptr(),
+            out_buf.add(IMAGE_WAVEFORM_PACKET_HEADER_BYTES),
+            raster_bytes,
+        );
+        std::ptr::copy_nonoverlapping(
+            density.as_ptr(),
+            out_buf.add(IMAGE_WAVEFORM_PACKET_HEADER_BYTES + raster_bytes),
+            density.len(),
+        );
+    }
+    QL_OK
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum HandleAnimationFormat {
+    Gif,
+    WebP,
+    Png,
+}
+
+impl HandleAnimationFormat {
+    fn from_logical_name(logical_name: &str) -> Option<Self> {
+        match Path::new(logical_name)
+            .extension()
+            .and_then(|extension| extension.to_str())?
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "gif" => Some(Self::Gif),
+            "webp" => Some(Self::WebP),
+            "png" => Some(Self::Png),
+            _ => None,
+        }
+    }
+
+    fn image_format(self) -> ImageFormat {
+        match self {
+            Self::Gif => ImageFormat::Gif,
+            Self::WebP => ImageFormat::WebP,
+            Self::Png => ImageFormat::Png,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn decode_animation_frames_handle_v2(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+    gif_only: bool,
+) -> i32 {
+    if out_required.is_null() {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    unsafe { *out_required = 0 };
+    if out_buf.is_null() && out_cap != 0 {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    if expected_length > MAX_ANIMATION_HANDLE_INPUT_BYTES {
+        return QL_ERROR_LIMIT_EXCEEDED;
+    }
+
+    let (mut file, logical_name, _, _) = match unsafe {
+        reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        )
+    } {
+        Ok(input) => input,
+        Err(status) => return status,
+    };
+    let Some(format) = HandleAnimationFormat::from_logical_name(&logical_name) else {
+        return QL_ERROR_INVALID_ARGUMENT;
+    };
+    if gif_only && format != HandleAnimationFormat::Gif {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    if let Err(status) =
+        validate_handle_image_dimensions(&mut file, format.image_format(), MAX_ANIMATED_SOURCE_PIXELS)
+    {
+        return status;
+    }
+
+    let decoded = match format {
+        HandleAnimationFormat::Gif => {
+            decode_gif_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+        }
+        HandleAnimationFormat::WebP => {
+            decode_webp_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+        }
+        HandleAnimationFormat::Png => {
+            decode_png_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+        }
+    };
+    let (width, height, frames) = match decoded {
+        Some(decoded) if !decoded.2.is_empty() => decoded,
+        _ => {
+            return if cancel_requested(cancel_cb) {
+                QL_ERROR_CANCELLED
+            } else {
+                QL_ERROR_MALFORMED
+            }
+        }
+    };
+    unsafe {
+        write_animation_frames_v2(
+            width,
+            height,
+            &frames,
+            out_buf,
+            out_cap,
+            out_required,
+        )
+    }
+}
+
+/// Decode bounded GIF animation frames from a borrowed Windows file handle.
+/// Output layout matches `ql_decode_gif_frames_sized_cancelable`.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_gif_frames_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        decode_animation_frames_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            target_width,
+            target_height,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            true,
+        )
+    })
+}
+
+/// Decode bounded GIF, animated WebP, or APNG frames from a borrowed Windows file handle.
+/// Output layout matches the existing path-based animation packet exports.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_animation_frames_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        decode_animation_frames_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            target_width,
+            target_height,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            false,
+        )
     })
 }
 
@@ -1248,7 +1777,17 @@ pub extern "C" fn ql_decode_gif_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_decode_gif_frames_sized_cancelable(path_utf8, path_len, target_width, target_height, out, out_cap, None)
+    ffi_boundary(|| {
+        ql_decode_gif_frames_sized_cancelable(
+            path_utf8,
+            path_len,
+            target_width,
+            target_height,
+            out,
+            out_cap,
+            None,
+        )
+    })
 }
 
 #[no_mangle]
@@ -1261,21 +1800,24 @@ pub extern "C" fn ql_decode_gif_frames_sized_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let (width, height, frames) = match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
-        Some(decoded) => decoded,
-        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-    };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_animation_frames(width, height, frames, out, out_cap)
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let (width, height, frames) =
+            match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
+                Some(decoded) => decoded,
+                None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+            };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_animation_frames(width, height, frames, out, out_cap)
+    })
 }
 
 #[no_mangle]
@@ -1287,7 +1829,17 @@ pub extern "C" fn ql_decode_webp_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_decode_webp_frames_sized_cancelable(path_utf8, path_len, target_width, target_height, out, out_cap, None)
+    ffi_boundary(|| {
+        ql_decode_webp_frames_sized_cancelable(
+            path_utf8,
+            path_len,
+            target_width,
+            target_height,
+            out,
+            out_cap,
+            None,
+        )
+    })
 }
 
 #[no_mangle]
@@ -1300,21 +1852,24 @@ pub extern "C" fn ql_decode_webp_frames_sized_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let (width, height, frames) = match decode_webp_frames_bgra(path, target_width, target_height, cancel_cb) {
-        Some(decoded) => decoded,
-        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-    };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_animation_frames(width, height, frames, out, out_cap)
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let (width, height, frames) =
+            match decode_webp_frames_bgra(path, target_width, target_height, cancel_cb) {
+                Some(decoded) => decoded,
+                None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+            };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_animation_frames(width, height, frames, out, out_cap)
+    })
 }
 
 #[no_mangle]
@@ -1327,24 +1882,31 @@ pub extern "C" fn ql_decode_png_frames_sized_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    if cancel_requested(cancel_cb) { return -3; }
-    let (width, height, frames) = match decode_png_frames_bgra(path, target_width, target_height, cancel_cb) {
-        Some(decoded) => decoded,
-        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-    };
-    write_animation_frames(width, height, frames, out, out_cap)
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let (width, height, frames) =
+            match decode_png_frames_bgra(path, target_width, target_height, cancel_cb) {
+                Some(decoded) => decoded,
+                None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+            };
+        write_animation_frames(width, height, frames, out, out_cap)
+    })
 }
+
+type DecodedImageBgra = (u32, u32, u32, u32, u32, u32, u32, Vec<u8>);
 
 fn decode_image_bgra(
     path: &str,
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+) -> Option<DecodedImageBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -1362,13 +1924,55 @@ fn decode_image_bgra(
 }
 
 fn decode_image_bgra_reader<R: Read + Seek>(
+    reader: R,
+    logical_name: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    required_format: Option<ImageFormat>,
+) -> Option<DecodedImageBgra> {
+    decode_image_bgra_reader_internal(
+        reader,
+        logical_name,
+        target_width,
+        target_height,
+        cancel_cb,
+        required_format,
+        false,
+    )
+    .map(|(decoded, _)| decoded)
+}
+
+fn decode_image_bgra_reader_with_waveform<R: Read + Seek>(
+    reader: R,
+    logical_name: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    required_format: Option<ImageFormat>,
+) -> Option<(DecodedImageBgra, Vec<u8>)> {
+    let (decoded, waveform) = decode_image_bgra_reader_internal(
+        reader,
+        logical_name,
+        target_width,
+        target_height,
+        cancel_cb,
+        required_format,
+        true,
+    )?;
+    Some((decoded, waveform?))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_image_bgra_reader_internal<R: Read + Seek>(
     mut reader: R,
     logical_name: &str,
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
     required_format: Option<ImageFormat>,
-) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+    include_waveform: bool,
+) -> Option<(DecodedImageBgra, Option<Vec<u8>>)> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -1456,9 +2060,15 @@ fn decode_image_bgra_reader<R: Read + Seek>(
         }
     }
     let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    let mut waveform = include_waveform.then(|| ImageWaveformAccumulator::new(width, height));
     for (index, px) in rgba.chunks_exact(4).enumerate() {
         if index % 65_536 == 0 && cancel_requested(cancel_cb) {
             return None;
+        }
+        // Density accumulation deliberately shares the final RGBA -> premultiplied BGRA pass.
+        // The completed BGRA raster is never scanned again by the native waveform path.
+        if let Some(accumulator) = waveform.as_mut() {
+            accumulator.add_straight_rgba(index, px);
         }
         let r = px[0] as u32;
         let g = px[1] as u32;
@@ -1472,9 +2082,25 @@ fn decode_image_bgra_reader<R: Read + Seek>(
     if cancel_requested(cancel_cb) {
         return None;
     }
+    let waveform = match waveform {
+        Some(accumulator) => Some(accumulator.finish(cancel_cb)?),
+        None => None,
+    };
     let convert_ms = elapsed_ms_u32(convert_start);
 
-    Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+    Some((
+        (
+            width,
+            height,
+            original_width,
+            original_height,
+            decode_ms,
+            resize_ms,
+            convert_ms,
+            bgra,
+        ),
+        waveform,
+    ))
 }
 
 fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
@@ -1570,7 +2196,7 @@ fn decode_svg_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+) -> Option<DecodedImageBgra> {
     if fs::metadata(path).ok()?.len() > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
         return None;
     }
@@ -1585,7 +2211,7 @@ fn decode_svg_bgra_bytes(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+) -> Option<DecodedImageBgra> {
     if data.len() as u64 > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
         return None;
     }
@@ -1598,7 +2224,46 @@ fn decode_svg_bgra_bytes_timed(
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
     decode_start: Instant,
-) -> Option<(u32, u32, u32, u32, u32, u32, u32, Vec<u8>)> {
+) -> Option<DecodedImageBgra> {
+    decode_svg_bgra_bytes_timed_internal(
+        data,
+        target_width,
+        target_height,
+        cancel_cb,
+        decode_start,
+        false,
+    )
+    .map(|(decoded, _)| decoded)
+}
+
+fn decode_svg_bgra_bytes_with_waveform(
+    data: &[u8],
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(DecodedImageBgra, Vec<u8>)> {
+    if data.len() as u64 > MAX_SVG_INPUT_BYTES || cancel_requested(cancel_cb) {
+        return None;
+    }
+    let (decoded, waveform) = decode_svg_bgra_bytes_timed_internal(
+        data,
+        target_width,
+        target_height,
+        cancel_cb,
+        Instant::now(),
+        true,
+    )?;
+    Some((decoded, waveform?))
+}
+
+fn decode_svg_bgra_bytes_timed_internal(
+    data: &[u8],
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    decode_start: Instant,
+    include_waveform: bool,
+) -> Option<(DecodedImageBgra, Option<Vec<u8>>)> {
     if !svg_markup_budget_ok(data, cancel_cb) {
         return None;
     }
@@ -1642,11 +2307,36 @@ fn decode_svg_bgra_bytes_timed(
 
     let convert_start = Instant::now();
     let mut bgra = pixmap.take();
-    for pixel in bgra.chunks_exact_mut(4) {
+    let mut waveform = include_waveform.then(|| ImageWaveformAccumulator::new(width, height));
+    for (index, pixel) in bgra.chunks_exact_mut(4).enumerate() {
+        if index % 65_536 == 0 && cancel_requested(cancel_cb) {
+            return None;
+        }
+        // tiny-skia exposes premultiplied RGBA. Accumulate straight channel values while this same
+        // pass swaps R/B into the final premultiplied BGRA layout.
+        if let Some(accumulator) = waveform.as_mut() {
+            accumulator.add_premultiplied_rgba(index, pixel);
+        }
         pixel.swap(0, 2);
     }
+    let waveform = match waveform {
+        Some(accumulator) => Some(accumulator.finish(cancel_cb)?),
+        None => None,
+    };
     let convert_ms = elapsed_ms_u32(convert_start);
-    Some((width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra))
+    Some((
+        (
+            width,
+            height,
+            original_width,
+            original_height,
+            decode_ms,
+            resize_ms,
+            convert_ms,
+            bgra,
+        ),
+        waveform,
+    ))
 }
 
 fn svg_markup_budget_ok(data: &[u8], cancel_cb: Option<CancelCallback>) -> bool {
@@ -1668,23 +2358,56 @@ fn svg_markup_budget_ok(data: &[u8], cancel_cb: Option<CancelCallback>) -> bool 
 fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
-    let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(file)).ok()?;
-    let mut frames = decoder.into_frames();
-    let first = match frames.next() {
-        Some(Ok(frame)) => frame,
-        _ => {
-            let (width, height, _, _, _, _, _, bgra) = decode_image_bgra(path, target_width, target_height, cancel_cb)?;
-            return Some((width, height, vec![(100, bgra)]));
-        }
-    };
+    if let Some(frames) =
+        decode_webp_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+    {
+        return Some(frames);
+    }
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    let (width, height, _, _, _, _, _, bgra) =
+        decode_image_bgra(path, target_width, target_height, cancel_cb)?;
+    Some((width, height, vec![(100, bgra)]))
+}
+
+fn decode_webp_frames_bgra_reader<R: Read + Seek>(
+    reader: R,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(reader)).ok()?;
+    if !decoder.has_animation() {
+        return None;
+    }
     decode_animation_frames_bgra(
-        std::iter::once(Ok(first)).chain(frames), target_width, target_height, cancel_cb)
+        decoder.into_frames(),
+        target_width,
+        target_height,
+        cancel_cb,
+    )
 }
 
 fn decode_png_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
     if cancel_requested(cancel_cb) { return None; }
     let file = std::fs::File::open(path).ok()?;
-    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(file)).ok()?;
+    decode_png_frames_bgra_reader(file, target_width, target_height, cancel_cb)
+}
+
+fn decode_png_frames_bgra_reader<R: Read + Seek>(
+    reader: R,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(reader)).ok()?;
     let (original_width, original_height) = decoder.dimensions();
     if !decoder.is_apng().ok()?
         || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
@@ -1693,11 +2416,17 @@ fn decode_png_frames_bgra(path: &str, target_width: u32, target_height: u32, can
     decode_animation_frames_bgra(decoder.apng().ok()?.into_frames(), target_width, target_height, cancel_cb)
 }
 
-fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, out: *mut u8, out_cap: usize) -> i32 {
-    let Some(packet) = animation_frames_packet(width, height, frames) else {
-        return -2;
+fn write_animation_frames(
+    width: u32,
+    height: u32,
+    frames: Vec<(u32, Vec<u8>)>,
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    let total = match animation_frames_packet_length(width, height, &frames) {
+        Ok(total) => total,
+        Err(_) => return -2,
     };
-    let total = packet.len();
     if total > i32::MAX as usize {
         return -2;
     }
@@ -1706,32 +2435,107 @@ fn write_animation_frames(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>, 
     }
 
     unsafe {
-        std::ptr::copy_nonoverlapping(packet.as_ptr(), out, total);
+        let output = std::slice::from_raw_parts_mut(out, total);
+        if write_animation_frames_packet(width, height, &frames, output).is_err() {
+            return -2;
+        }
     }
     total as i32
 }
 
-fn animation_frames_packet(width: u32, height: u32, frames: Vec<(u32, Vec<u8>)>) -> Option<Vec<u8>> {
-    if frames.is_empty() {
-        return None;
+unsafe fn write_animation_frames_v2(
+    width: u32,
+    height: u32,
+    frames: &[(u32, Vec<u8>)],
+    out: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+) -> i32 {
+    unsafe { *out_required = 0 };
+    let total = match animation_frames_packet_length(width, height, frames) {
+        Ok(total) => total,
+        Err(AnimationPacketError::Internal) => return QL_ERROR_INTERNAL,
+        Err(AnimationPacketError::LimitExceeded) => return QL_ERROR_LIMIT_EXCEEDED,
+    };
+    unsafe { *out_required = total };
+    if out.is_null() || out_cap < total {
+        return QL_ERROR_BUFFER_TOO_SMALL;
     }
-    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
-    let total = 12usize.checked_add(frames.len().checked_mul(4usize.checked_add(frame_bytes)?)?)?;
-    if total > MAX_ANIMATED_FRAME_BYTES + 12 || frames.len() > u32::MAX as usize {
-        return None;
+
+    let output = unsafe { std::slice::from_raw_parts_mut(out, total) };
+    match write_animation_frames_packet(width, height, frames, output) {
+        Ok(()) => QL_OK,
+        Err(AnimationPacketError::Internal) => QL_ERROR_INTERNAL,
+        Err(AnimationPacketError::LimitExceeded) => QL_ERROR_LIMIT_EXCEEDED,
     }
-    let mut packet = Vec::with_capacity(total);
-    packet.extend_from_slice(&(frames.len() as u32).to_le_bytes());
-    packet.extend_from_slice(&width.to_le_bytes());
-    packet.extend_from_slice(&height.to_le_bytes());
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnimationPacketError {
+    Internal,
+    LimitExceeded,
+}
+
+fn animation_frames_packet_length(
+    width: u32,
+    height: u32,
+    frames: &[(u32, Vec<u8>)],
+) -> std::result::Result<usize, AnimationPacketError> {
+    if width == 0 || height == 0 || frames.is_empty() {
+        return Err(AnimationPacketError::Internal);
+    }
+    let frame_bytes = usize::try_from(width)
+        .map_err(|_| AnimationPacketError::LimitExceeded)?
+        .checked_mul(
+            usize::try_from(height).map_err(|_| AnimationPacketError::LimitExceeded)?,
+        )
+        .and_then(|bytes| bytes.checked_mul(4))
+        .ok_or(AnimationPacketError::LimitExceeded)?;
+    if frames.iter().any(|(_, bgra)| bgra.len() != frame_bytes) {
+        return Err(AnimationPacketError::Internal);
+    }
+    if frames.len() > u32::MAX as usize {
+        return Err(AnimationPacketError::LimitExceeded);
+    }
+    let frame_packet_bytes = 4usize
+        .checked_add(frame_bytes)
+        .ok_or(AnimationPacketError::LimitExceeded)?;
+    let total = frames
+        .len()
+        .checked_mul(frame_packet_bytes)
+        .and_then(|bytes| 12usize.checked_add(bytes))
+        .ok_or(AnimationPacketError::LimitExceeded)?;
+    if total > MAX_ANIMATED_FRAME_BYTES + 12 {
+        return Err(AnimationPacketError::LimitExceeded);
+    }
+    Ok(total)
+}
+
+fn write_animation_frames_packet(
+    width: u32,
+    height: u32,
+    frames: &[(u32, Vec<u8>)],
+    output: &mut [u8],
+) -> std::result::Result<(), AnimationPacketError> {
+    let total = animation_frames_packet_length(width, height, frames)?;
+    if output.len() != total {
+        return Err(AnimationPacketError::Internal);
+    }
+
+    output[0..4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
+    output[4..8].copy_from_slice(&width.to_le_bytes());
+    output[8..12].copy_from_slice(&height.to_le_bytes());
+    let mut offset = 12;
     for (delay_ms, bgra) in frames {
-        if bgra.len() != frame_bytes {
-            return None;
-        }
-        packet.extend_from_slice(&delay_ms.to_le_bytes());
-        packet.extend_from_slice(&bgra);
+        output[offset..offset + 4].copy_from_slice(&delay_ms.to_le_bytes());
+        offset += 4;
+        output[offset..offset + bgra.len()].copy_from_slice(bgra);
+        offset += bgra.len();
     }
-    Some(packet)
+    if offset != total {
+        return Err(AnimationPacketError::Internal);
+    }
+    Ok(())
 }
 
 fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::ImageResult<image::Frame>>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
@@ -2251,6 +3055,7 @@ mod tests {
     fn classify_does_not_treat_binary_prefixes_as_text() {
         assert_eq!(classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4], false), "binary");
         assert_eq!(classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80], false), "binary");
+        assert_eq!(classify("file.bin", ".bin", b"d4:fake4:datae", false), "binary");
         assert_eq!(classify("file.unknown", ".unknown", b"MZprintable header", false), "executable");
     }
 
@@ -2274,6 +3079,78 @@ mod tests {
         assert!(!should_skip_native_image_decode(8_000, 6_000));
         assert!(should_skip_native_image_decode(8_001, 6_000));
         assert!(should_skip_native_image_decode(0, 6_000));
+    }
+
+    #[test]
+    fn checked_raster_writer_writes_exact_packet_and_rejects_bad_layout() {
+        let bgra = [3u8, 2, 1, 255, 30, 20, 10, 128];
+        let mut packet = [0u8; 16];
+        let mut required = 0usize;
+
+        assert_eq!(
+            unsafe {
+                write_raster_packet_v2(
+                    2,
+                    1,
+                    &bgra,
+                    packet.as_mut_ptr(),
+                    packet.len(),
+                    &mut required,
+                )
+            },
+            QL_OK
+        );
+        assert_eq!(required, packet.len());
+        assert_eq!(&packet[..4], &2u32.to_le_bytes());
+        assert_eq!(&packet[4..8], &1u32.to_le_bytes());
+        assert_eq!(&packet[8..], &bgra);
+
+        required = usize::MAX;
+        assert_eq!(
+            unsafe {
+                write_raster_packet_v2(
+                    2,
+                    1,
+                    &bgra[..4],
+                    packet.as_mut_ptr(),
+                    packet.len(),
+                    &mut required,
+                )
+            },
+            QL_ERROR_INTERNAL
+        );
+        assert_eq!(required, 0);
+    }
+
+    #[test]
+    fn animation_packet_distinguishes_internal_layout_from_output_limit() {
+        let bad_frame = vec![(20, vec![0u8; 3])];
+        let mut output = [0u8; 32];
+        let mut required = usize::MAX;
+        assert_eq!(
+            unsafe {
+                write_animation_frames_v2(
+                    1,
+                    1,
+                    &bad_frame,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut required,
+                )
+            },
+            QL_ERROR_INTERNAL
+        );
+        assert_eq!(required, 0);
+
+        let overflowing_dimensions = vec![(20, Vec::new())];
+        assert_eq!(
+            animation_frames_packet_length(
+                u32::MAX,
+                u32::MAX,
+                &overflowing_dimensions,
+            ),
+            Err(AnimationPacketError::LimitExceeded)
+        );
     }
 
     #[test]
@@ -2488,6 +3365,56 @@ mod tests {
                 let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512, None).expect("decode external webp sample");
                 assert!(frames.2.len() > 1, "animated WebP sample should decode multiple frames: {file}");
                 assert_eq!(webp_external_golden(file), Some((frames.0, frames.1, frames.2.len(), fnv1a64(&frames.2[0].1), fnv1a64(&frames.2.last().unwrap().1))));
+
+                use std::os::windows::io::AsRawHandle;
+                let mut source = fs::File::open(&path).expect("open external WebP handle");
+                source
+                    .seek(SeekFrom::Start(1))
+                    .expect("position external WebP handle");
+                let position = source.stream_position().expect("WebP handle position");
+                let logical_name = file.as_bytes();
+                let length = source.metadata().expect("WebP metadata").len();
+                let mut required = 0usize;
+                assert_eq!(
+                    unsafe {
+                        ql_decode_animation_frames_handle(
+                            source.as_raw_handle() as isize,
+                            length,
+                            logical_name.as_ptr(),
+                            logical_name.len(),
+                            512,
+                            512,
+                            std::ptr::null_mut(),
+                            0,
+                            &mut required,
+                            None,
+                        )
+                    },
+                    QL_ERROR_BUFFER_TOO_SMALL
+                );
+                let mut packet = vec![0u8; required];
+                assert_eq!(
+                    unsafe {
+                        ql_decode_animation_frames_handle(
+                            source.as_raw_handle() as isize,
+                            length,
+                            logical_name.as_ptr(),
+                            logical_name.len(),
+                            512,
+                            512,
+                            packet.as_mut_ptr(),
+                            packet.len(),
+                            &mut required,
+                            None,
+                        )
+                    },
+                    QL_OK
+                );
+                assert_eq!(
+                    u32::from_le_bytes(packet[..4].try_into().unwrap()) as usize,
+                    frames.2.len()
+                );
+                assert_eq!(source.stream_position().unwrap(), position);
             }
         }
         for file in ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"] {
@@ -2775,7 +3702,9 @@ pub extern "C" fn ql_get_thumbnail(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
+    ffi_boundary(|| {
+        ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
+    })
 }
 
 #[no_mangle]
@@ -2787,9 +3716,11 @@ pub extern "C" fn ql_get_thumbnail_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    ql_get_thumbnail_cancelable_with_flags(
-        path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
-    )
+    ffi_boundary(|| {
+        ql_get_thumbnail_cancelable_with_flags(
+            path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
+        )
+    })
 }
 
 #[no_mangle]
@@ -2802,33 +3733,35 @@ pub extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if !thumbnail_flags_valid(flags) {
-        return -1;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s.to_string(),
-        None => return -1,
-    };
+    ffi_boundary(|| {
+        if !thumbnail_flags_valid(flags) {
+            return -1;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s.to_string(),
+            None => return -1,
+        };
 
-    let result = shell_thumbnail_on_sta(path, size.max(16), flags, cancel_cb);
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
+        let result = shell_thumbnail_on_sta(path, size.max(16), flags, cancel_cb);
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
 
-    let (w, h, bgra) = match result {
-        Some(x) => x,
-        None => return -2,
-    };
-    let total = 8 + bgra.len();
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-    }
-    total as i32
+        let (w, h, bgra) = match result {
+            Some(x) => x,
+            None => return -2,
+        };
+        let total = 8 + bgra.len();
+        if out.is_null() || out_cap < total {
+            return -(total as i32);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
+            std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
+        }
+        total as i32
+    })
 }
 
 fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
@@ -2875,6 +3808,90 @@ fn shell_thumbnail_on_sta(
     }
 }
 
+fn checked_raster_packet_length(width: u32, height: u32, bgra_len: usize) -> Option<usize> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let expected_bgra_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)?;
+    if bgra_len != expected_bgra_len {
+        return None;
+    }
+    8usize.checked_add(expected_bgra_len)
+}
+
+fn write_checked_raster_packet(
+    width: u32,
+    height: u32,
+    bgra: &[u8],
+    output: &mut [u8],
+) -> bool {
+    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
+        return false;
+    };
+    if output.len() != total {
+        return false;
+    }
+    output[..4].copy_from_slice(&width.to_le_bytes());
+    output[4..8].copy_from_slice(&height.to_le_bytes());
+    output[8..].copy_from_slice(bgra);
+    true
+}
+
+fn write_raster_packet(
+    width: u32,
+    height: u32,
+    bgra: &[u8],
+    out: *mut u8,
+    out_cap: usize,
+) -> i32 {
+    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
+        return -2;
+    };
+    if total > i32::MAX as usize {
+        return -2;
+    }
+    if out.is_null() || out_cap < total {
+        return -(total as i32);
+    }
+    let output = unsafe { std::slice::from_raw_parts_mut(out, total) };
+    if !write_checked_raster_packet(width, height, bgra, output) {
+        return -2;
+    }
+    total as i32
+}
+
+/// # Safety
+/// `out_required` must be writable. When the output buffer is large enough, `out_buf` must be
+/// writable for `out_cap` bytes and must not overlap `bgra`.
+unsafe fn write_raster_packet_v2(
+    width: u32,
+    height: u32,
+    bgra: &[u8],
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+) -> i32 {
+    unsafe { *out_required = 0 };
+    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
+        return QL_ERROR_INTERNAL;
+    };
+    unsafe { *out_required = total };
+    if out_cap < total {
+        return QL_ERROR_BUFFER_TOO_SMALL;
+    }
+    if out_buf.is_null() {
+        return QL_ERROR_INVALID_ARGUMENT;
+    }
+    let output = unsafe { std::slice::from_raw_parts_mut(out_buf, total) };
+    if !write_checked_raster_packet(width, height, bgra, output) {
+        return QL_ERROR_INTERNAL;
+    }
+    QL_OK
+}
+
 /// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).
 /// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
 #[no_mangle]
@@ -2884,25 +3901,18 @@ pub extern "C" fn ql_extract_package_icon(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
 
-    let (w, h, bgra) = match preview::extract_package_icon_bgra(path, None) {
-        Some(x) => x,
-        None => return -2,
-    };
-    let total = 8 + bgra.len();
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-    }
-    total as i32
+        let (w, h, bgra) = match preview::extract_package_icon_bgra(path, None) {
+            Some(x) => x,
+            None => return -2,
+        };
+        write_raster_packet(w, h, &bgra, out, out_cap)
+    })
 }
 
 #[no_mangle]
@@ -2913,24 +3923,23 @@ pub extern "C" fn ql_extract_package_icon_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if cancel_requested(cancel_cb) { return -3; }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    let (w, h, bgra) = match preview::extract_package_icon_bgra(path, cancel_cb) {
-        Some(value) => value,
-        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-    };
-    if cancel_requested(cancel_cb) { return -3; }
-    let total = 8 + bgra.len();
-    if out.is_null() || out_cap < total { return -(total as i32); }
-    unsafe {
-        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-    }
-    total as i32
+    ffi_boundary(|| {
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        let (w, h, bgra) = match preview::extract_package_icon_bgra(path, cancel_cb) {
+            Some(value) => value,
+            None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_raster_packet(w, h, &bgra, out, out_cap)
+    })
 }
 
 /// Extract the first useful embedded image from an OOXML Office document.
@@ -2942,25 +3951,18 @@ pub extern "C" fn ql_extract_office_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
+    ffi_boundary(|| {
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
 
-    let (w, h, bgra) = match preview::extract_office_image_bgra(path, None) {
-        Some(x) => x,
-        None => return -2,
-    };
-    let total = 8 + bgra.len();
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-    }
-    total as i32
+        let (w, h, bgra) = match preview::extract_office_image_bgra(path, None) {
+            Some(x) => x,
+            None => return -2,
+        };
+        write_raster_packet(w, h, &bgra, out, out_cap)
+    })
 }
 
 #[no_mangle]
@@ -2971,24 +3973,23 @@ pub extern "C" fn ql_extract_office_image_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if cancel_requested(cancel_cb) { return -3; }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return -1,
-    };
-    let (w, h, bgra) = match preview::extract_office_image_bgra(path, cancel_cb) {
-        Some(value) => value,
-        None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-    };
-    if cancel_requested(cancel_cb) { return -3; }
-    let total = 8 + bgra.len();
-    if out.is_null() || out_cap < total { return -(total as i32); }
-    unsafe {
-        std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-        std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-        std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-    }
-    total as i32
+    ffi_boundary(|| {
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return -1,
+        };
+        let (w, h, bgra) = match preview::extract_office_image_bgra(path, cancel_cb) {
+            Some(value) => value,
+            None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_raster_packet(w, h, &bgra, out, out_cap)
+    })
 }
 
 unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32, Vec<u8>)> {
@@ -3097,7 +4098,9 @@ pub extern "C" fn ql_preview_text(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    ffi_boundary(|| {
+        ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[no_mangle]
@@ -3108,21 +4111,23 @@ pub extern "C" fn ql_preview_text_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_text(path, cancel_cb);
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_text(path, cancel_cb);
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render an info-only preview (size + mtime). Returns JSON length, 0 on failure.
@@ -3137,16 +4142,18 @@ pub extern "C" fn ql_preview_info(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-    let json = preview::render_info(path, kind, size, modified_unix);
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+        let json = preview::render_info(path, kind, size, modified_unix);
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render an Office document preview. OOXML/ODF paths are parsed in Rust; legacy OLE formats fall back to info.
@@ -3158,15 +4165,17 @@ pub extern "C" fn ql_preview_office(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_office(path, cancel_cb);
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_office(path, cancel_cb);
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render bounded Rust-native image metadata. Returns JSON length, 0 on failure/no metadata.
@@ -3177,15 +4186,17 @@ pub extern "C" fn ql_preview_image_metadata(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_image_metadata(path);
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_image_metadata(path);
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render a PE executable metadata preview. Returns JSON length, 0 on failure.
@@ -3196,7 +4207,9 @@ pub extern "C" fn ql_preview_executable(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    ffi_boundary(|| {
+        ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 /// Render a bounded database metadata preview with cancellation support.
@@ -3210,21 +4223,23 @@ pub extern "C" fn ql_preview_database_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_database_info(path, size, modified_unix, cancel_cb);
-    if cancel_requested(cancel_cb) || json.is_empty() {
-        return 0;
-    }
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_database_info(path, size, modified_unix, cancel_cb);
+        if cancel_requested(cancel_cb) || json.is_empty() {
+            return 0;
+        }
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Shared implementation for ABI 2 HANDLE preview entry points.
@@ -3362,6 +4377,41 @@ fn reader_preview_status(error: preview::ReaderPreviewError) -> i32 {
         preview::ReaderPreviewError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
         preview::ReaderPreviewError::LimitExceeded => QL_ERROR_LIMIT_EXCEEDED,
     }
+}
+
+/// Render bounded Rust-native image metadata from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`. The caller retains the source handle; Rust reopens the disk file with
+/// an independent position and treats `logical_name` only as a bounded filename hint.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_image_metadata_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, _| {
+                preview::render_image_metadata_reader(file, logical_name, cancel_cb)
+                    .map_err(reader_preview_status)
+            },
+        )
+    })
 }
 
 fn reopen_optional_handle(
@@ -3667,11 +4717,99 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        let mut packet = Vec::with_capacity(8 + bgra.len());
-        packet.extend_from_slice(&width.to_le_bytes());
-        packet.extend_from_slice(&height.to_le_bytes());
-        packet.extend_from_slice(&bgra);
-        write_v2_out(&packet, out_buf, out_cap, out_required)
+        write_raster_packet_v2(
+            width,
+            height,
+            &bgra,
+            out_buf,
+            out_cap,
+            out_required,
+        )
+    })
+}
+
+/// Extract one Office layout image by its canonical ZIP media reference.
+/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle` and must keep every pointer valid for the
+/// complete call. Rust reopens the source HANDLE with an independent file position. `image_ref`
+/// must be a canonical, relative ZIP path under the media root matching `logical_name`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    image_ref_utf8: *const u8,
+    image_ref_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        if out_buf.is_null() && out_cap != 0 {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if target_width == 0
+            || target_height == 0
+            || target_width > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
+            || target_height > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
+        {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let image_ref = match owned_utf8_arg(
+            image_ref_utf8,
+            image_ref_len,
+            MAX_OFFICE_IMAGE_REF_BYTES,
+        ) {
+            Some(image_ref) if !image_ref.is_empty() => image_ref,
+            _ => return QL_ERROR_INVALID_ARGUMENT,
+        };
+        if !preview::office_layout_image_ref_is_valid(&logical_name, &image_ref) {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        let (width, height, bgra) =
+            match preview::extract_office_layout_image_bgra_reader(
+                &mut file,
+                expected_length,
+                &logical_name,
+                &image_ref,
+                target_width,
+                target_height,
+                cancel_cb,
+            ) {
+                Ok(image) => image,
+                Err(error) => return reader_preview_status(error),
+            };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        write_raster_packet_v2(
+            width,
+            height,
+            &bgra,
+            out_buf,
+            out_cap,
+            out_required,
+        )
     })
 }
 
@@ -3722,11 +4860,14 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        let mut packet = Vec::with_capacity(8 + bgra.len());
-        packet.extend_from_slice(&width.to_le_bytes());
-        packet.extend_from_slice(&height.to_le_bytes());
-        packet.extend_from_slice(&bgra);
-        write_v2_out(&packet, out_buf, out_cap, out_required)
+        write_raster_packet_v2(
+            width,
+            height,
+            &bgra,
+            out_buf,
+            out_cap,
+            out_required,
+        )
     })
 }
 
@@ -3848,21 +4989,23 @@ pub extern "C" fn ql_preview_executable_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_executable(path, cancel_cb);
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_executable(path, cancel_cb);
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render an archive listing. Returns JSON length, 0 on failure.
@@ -3874,15 +5017,17 @@ pub extern "C" fn ql_preview_archive(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_archive(path, cancel_cb);
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_archive(path, cancel_cb);
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Extract a previewable archive entry into a bounded temp cache. Returns UTF-8 path length, 0 on failure.
@@ -3895,22 +5040,30 @@ pub extern "C" fn ql_extract_archive_entry(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0
-    {
-        return 0;
-    }
-    let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, None) else {
-        return 0;
-    };
-    write_json_out(&path, out_buf, out_cap)
+    ffi_boundary(|| {
+        if archive_path_utf8.is_null()
+            || entry_path_utf8.is_null()
+            || out_buf.is_null()
+            || out_cap == 0
+        {
+            return 0;
+        }
+        let archive_path =
+            match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
+                Some(s) => s,
+                None => return 0,
+            };
+        let entry_path =
+            match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+                Some(s) => s,
+                None => return 0,
+            };
+        let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, None)
+        else {
+            return 0;
+        };
+        write_json_out(&path, out_buf, out_cap)
+    })
 }
 
 #[no_mangle]
@@ -3923,28 +5076,37 @@ pub extern "C" fn ql_extract_archive_entry_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if archive_path_utf8.is_null() || entry_path_utf8.is_null() || out_buf.is_null() || out_cap == 0
-    {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, cancel_cb) else {
-        return if cancel_requested(cancel_cb) { -3 } else { 0 };
-    };
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_json_out(&path, out_buf, out_cap)
+    ffi_boundary(|| {
+        if archive_path_utf8.is_null()
+            || entry_path_utf8.is_null()
+            || out_buf.is_null()
+            || out_cap == 0
+        {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let archive_path =
+            match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
+                Some(s) => s,
+                None => return 0,
+            };
+        let entry_path =
+            match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+                Some(s) => s,
+                None => return 0,
+            };
+        let Some(path) =
+            preview::extract_archive_entry_to_temp(archive_path, entry_path, cancel_cb)
+        else {
+            return if cancel_requested(cancel_cb) { -3 } else { 0 };
+        };
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_json_out(&path, out_buf, out_cap)
+    })
 }
 
 /// Extract a bounded ZIP entry from a borrowed Windows file handle into the private temp cache.
@@ -4031,6 +5193,104 @@ pub unsafe extern "C" fn ql_extract_archive_entry_handle(
     })
 }
 
+/// Stream a bounded ZIP entry into a caller-owned output disk-file HANDLE.
+///
+/// The output object must be a newly created zero-length file whose handle permits write sharing.
+/// Rust validates and reopens both handles with independent file positions, writes at most
+/// `output_capacity` bytes, and reports the exact resulting length through `out_written`.
+///
+/// # Safety
+/// Both UTF-8 pointers must be readable for their declared lengths and `out_written` must be
+/// writable. Both raw handles must remain valid for the complete call. Ownership stays with the
+/// caller; Rust closes only its independently reopened handles.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    entry_path_utf8: *const u8,
+    entry_path_len: usize,
+    output_handle: isize,
+    output_capacity: u64,
+    out_written: *mut u64,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_written.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_written = 0;
+        if source_handle == output_handle
+            || output_capacity == 0
+            || output_capacity > preview::MAX_ARCHIVE_EXTRACT_BYTES
+        {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        let entry_path = match owned_utf8_arg(
+            entry_path_utf8,
+            entry_path_len,
+            MAX_ARCHIVE_ENTRY_NAME_BYTES,
+        ) {
+            Some(entry_path) => entry_path,
+            None => return QL_ERROR_INVALID_ARGUMENT,
+        };
+        let (mut source, logical_name, _, _) = match reopen_handle_input_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            cancel_cb,
+        ) {
+            Ok(input) => input,
+            Err(status) => return status,
+        };
+        let mut output = match native_input::reopen_borrowed_disk_file_for_output(output_handle, 0)
+        {
+            Ok(output) => output,
+            Err(native_input::NativeInputError::InvalidHandle) => {
+                return QL_ERROR_INVALID_HANDLE;
+            }
+            Err(native_input::NativeInputError::LengthMismatch) => {
+                return QL_ERROR_LENGTH_MISMATCH;
+            }
+            Err(native_input::NativeInputError::Io) => return QL_ERROR_IO,
+        };
+        if output.seek(SeekFrom::Start(0)).is_err() || output.set_len(0).is_err() {
+            return QL_ERROR_IO;
+        }
+
+        let written = match preview::extract_archive_entry_to_writer_reader(
+            &mut source,
+            expected_length,
+            &logical_name,
+            &entry_path,
+            &mut output,
+            output_capacity,
+            cancel_cb,
+        ) {
+            Ok(written) => written,
+            Err(error) => {
+                let _ = output.set_len(0);
+                return reader_preview_status(error);
+            }
+        };
+        if cancel_requested(cancel_cb) {
+            let _ = output.set_len(0);
+            return QL_ERROR_CANCELLED;
+        }
+        if !matches!(output.metadata(), Ok(metadata) if metadata.len() == written) {
+            let _ = output.set_len(0);
+            return QL_ERROR_IO;
+        }
+        *out_written = written;
+        QL_OK
+    })
+}
+
 /// Render an ebook preview. Returns JSON length, 0 on failure.
 #[no_mangle]
 pub extern "C" fn ql_preview_ebook(
@@ -4039,7 +5299,9 @@ pub extern "C" fn ql_preview_ebook(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    ffi_boundary(|| {
+        ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[no_mangle]
@@ -4050,21 +5312,23 @@ pub extern "C" fn ql_preview_ebook_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_ebook(path, cancel_cb);
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_ebook(path, cancel_cb);
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render a torrent metadata preview. Returns JSON length, 0 on failure.
@@ -4075,7 +5339,9 @@ pub extern "C" fn ql_preview_torrent(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    ffi_boundary(|| {
+        ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[no_mangle]
@@ -4086,21 +5352,23 @@ pub extern "C" fn ql_preview_torrent_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_torrent(path, cancel_cb);
-    if cancel_requested(cancel_cb) {
-        return -3;
-    }
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_torrent(path, cancel_cb);
+        if cancel_requested(cancel_cb) {
+            return -3;
+        }
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Render a folder listing. Returns JSON length, 0 on failure.
@@ -4112,15 +5380,17 @@ pub extern "C" fn ql_preview_folder(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-        return 0;
-    }
-    let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-        Some(s) => s,
-        None => return 0,
-    };
-    let json = preview::render_folder(path, cancel_cb);
-    write_json_out(&json, out_buf, out_cap)
+    ffi_boundary(|| {
+        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let json = preview::render_folder(path, cancel_cb);
+        write_json_out(&json, out_buf, out_cap)
+    })
 }
 
 /// Check if a file is text-like (for routing in the App).
@@ -4131,16 +5401,18 @@ pub extern "C" fn ql_is_text(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-    let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
-        Some(bytes) => bytes,
-        None => return 0,
-    };
-    if preview::is_text(ext, magic) {
-        1
-    } else {
-        0
-    }
+    ffi_boundary(|| {
+        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+            Some(bytes) => bytes,
+            None => return 0,
+        };
+        if preview::is_text(ext, magic) {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 /// Check if a file is an archive (for routing).
@@ -4153,17 +5425,19 @@ pub extern "C" fn ql_is_archive(
     magic: *const u8,
     magic_len: usize,
 ) -> i32 {
-    let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-    let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-    let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
-        Some(bytes) => bytes,
-        None => return 0,
-    };
-    if preview::is_archive(ext, kind, magic) {
-        1
-    } else {
-        0
-    }
+    ffi_boundary(|| {
+        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+        let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+            Some(bytes) => bytes,
+            None => return 0,
+        };
+        if preview::is_archive(ext, kind, magic) {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {
@@ -4204,6 +5478,10 @@ fn ffi_boundary(body: impl FnOnce() -> i32) -> i32 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(QL_ERROR_INTERNAL)
 }
 
+fn ffi_void_boundary(body: impl FnOnce()) {
+    let _ = catch_unwind(AssertUnwindSafe(body));
+}
+
 #[test]
 fn native_abi_version_is_stable() {
     assert_eq!(ql_abi_version(), 3);
@@ -4222,6 +5500,11 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_PACKAGE_ICON;
     let required = required | QL_FEATURE_HANDLE_PROBE;
     let required = required | QL_FEATURE_HANDLE_RASTER_IMAGE;
+    let required = required | QL_FEATURE_HANDLE_ANIMATION;
+    let required = required | QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE;
+    let required = required | QL_FEATURE_HANDLE_IMAGE_WAVEFORM;
+    let required = required | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT;
+    let required = required | QL_FEATURE_HANDLE_IMAGE_METADATA;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -4247,8 +5530,43 @@ mod handle_v2_tests {
         (path, file)
     }
 
+    fn create_output(extension: &str, bytes: &[u8]) -> (PathBuf, fs::File) {
+        let path = std::env::temp_dir().join(format!(
+            "quicklook-next-handle-v2-output-{}-{}.{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ));
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create handle output");
+        file.write_all(bytes).expect("initialize handle output");
+        file.flush().expect("flush handle output");
+        file.seek(SeekFrom::Start(0))
+            .expect("position handle output");
+        (path, file)
+    }
+
     extern "C" fn always_cancel() -> bool {
         true
+    }
+
+    static IMAGE_METADATA_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn cancel_image_metadata_during_read() -> bool {
+        IMAGE_METADATA_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 4
+    }
+
+    static ARCHIVE_OUTPUT_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn cancel_archive_output_after_validation() -> bool {
+        ARCHIVE_OUTPUT_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 2
     }
 
     fn call_text_handle(
@@ -4393,6 +5711,30 @@ mod handle_v2_tests {
         }
     }
 
+    fn call_image_metadata_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_image_metadata_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
     fn call_office_handle(
         source_handle: isize,
         expected_length: u64,
@@ -4433,6 +5775,39 @@ mod handle_v2_tests {
                 expected_length,
                 logical_name_utf8,
                 logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_office_layout_image_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        image_ref_utf8: *const u8,
+        image_ref_len: usize,
+        target_width: u32,
+        target_height: u32,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_extract_office_layout_image_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                image_ref_utf8,
+                image_ref_len,
+                target_width,
+                target_height,
                 out_buf,
                 out_cap,
                 out_required,
@@ -4495,6 +5870,35 @@ mod handle_v2_tests {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn call_image_with_waveform_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        target_width: u32,
+        target_height: u32,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_decode_image_with_waveform_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                target_width,
+                target_height,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn call_gif_frames_handle(
         source_handle: isize,
         expected_length: u64,
@@ -4509,6 +5913,35 @@ mod handle_v2_tests {
     ) -> i32 {
         unsafe {
             ql_decode_gif_frames_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                target_width,
+                target_height,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_animation_frames_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        target_width: u32,
+        target_height: u32,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_decode_animation_frames_handle(
                 source_handle,
                 expected_length,
                 logical_name_utf8,
@@ -4571,6 +6004,35 @@ mod handle_v2_tests {
                 out_buf,
                 out_cap,
                 out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_archive_entry_output_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        entry_path_utf8: *const u8,
+        entry_path_len: usize,
+        output_handle: isize,
+        output_capacity: u64,
+        out_written: *mut u64,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_extract_archive_entry_to_output_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                entry_path_utf8,
+                entry_path_len,
+                output_handle,
+                output_capacity,
+                out_written,
                 cancel_cb,
             )
         }
@@ -4788,6 +6250,219 @@ mod handle_v2_tests {
     }
 
     #[test]
+    fn image_metadata_handle_obeys_buffer_contract_without_moving_caller_position() {
+        let bytes = b"GIF89a\x02\x00\x03\x00\x00\x00\x00\x3B";
+        let (path, mut file) = create_input("bin", bytes);
+        file.seek(SeekFrom::Start(7))
+            .expect("position caller image handle");
+        let position = file.stream_position().unwrap();
+        let expected_length = file.metadata().unwrap().len();
+        let logical_name = b"pinned-image.gif";
+        let mut required = usize::MAX;
+
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > 8);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut small = [0xA5u8; 8];
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                small.as_mut_ptr(),
+                small.len(),
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required > small.len());
+        assert_eq!(small, [0xA5; 8]);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let exact_length = required;
+        let mut output = vec![0u8; exact_length];
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(required, exact_length);
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&output).expect("image metadata JSON");
+        assert_eq!(metadata["format"], "GIF");
+        assert_eq!(metadata["width"], 2);
+        assert_eq!(metadata["height"], 3);
+        assert_eq!(metadata["animated"], false);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                std::ptr::null_mut(),
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        required = usize::MAX;
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                expected_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                1,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_metadata_handle_rejects_invalid_non_disk_wrong_length_and_logical_name() {
+        let bytes = b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3B";
+        let (path, file) = create_input("gif", bytes);
+        let logical_name = b"image.gif";
+        let mut required = usize::MAX;
+
+        assert_eq!(
+            call_image_metadata_handle(
+                0,
+                0,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(required, 0);
+
+        let non_disk = fs::OpenOptions::new()
+            .read(true)
+            .open("NUL")
+            .expect("open non-disk NUL device");
+        required = usize::MAX;
+        assert_eq!(
+            call_image_metadata_handle(
+                non_disk.as_raw_handle() as isize,
+                0,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len() + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                MAX_LOGICAL_NAME_BYTES + 1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(required, 0);
+
+        drop(non_disk);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_metadata_handle_honors_cancellation_without_moving_caller_position() {
+        let bytes = b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x3B";
+        let (path, mut file) = create_input("gif", bytes);
+        file.seek(SeekFrom::Start(4))
+            .expect("position cancelled image handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"cancelled.gif";
+        let mut required = usize::MAX;
+        IMAGE_METADATA_CANCEL_POLLS.store(0, Ordering::SeqCst);
+
+        assert_eq!(
+            call_image_metadata_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(cancel_image_metadata_during_read),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn handle_probe_obeys_buffer_contract_without_moving_caller_position() {
         let (path, mut file) = create_input("svg", br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#);
         file.seek(SeekFrom::Start(7)).expect("position caller handle");
@@ -4840,6 +6515,72 @@ mod handle_v2_tests {
             QL_ERROR_LENGTH_MISMATCH
         );
         assert_eq!(file.stream_position().unwrap(), position);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn path_and_handle_probes_share_apng_animation_metadata() {
+        let mut apng = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut apng, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(2, 0).expect("enable APNG");
+            let mut writer = encoder.write_header().expect("write APNG header");
+            writer.set_frame_delay(1, 10).expect("first APNG delay");
+            writer
+                .write_image_data(&[255, 0, 0, 255, 255, 0, 0, 255])
+                .expect("first APNG frame");
+            writer.set_frame_delay(2, 10).expect("second APNG delay");
+            writer
+                .write_image_data(&[0, 255, 0, 255, 0, 255, 0, 255])
+                .expect("second APNG frame");
+            writer.finish().expect("finish APNG");
+        }
+
+        let (path, mut file) = create_input("png", &apng);
+        let path_probe: serde_json::Value =
+            serde_json::from_str(&probe_json(path.to_str().unwrap()).expect("path probe"))
+                .expect("path probe JSON");
+        assert_eq!(path_probe["isAnimated"], true);
+
+        file.seek(SeekFrom::Start(5))
+            .expect("position caller APNG handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"renamed.png";
+        let length = file.metadata().unwrap().len();
+        let mut required = 0usize;
+        assert_eq!(
+            call_probe_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut output = vec![0u8; required];
+        assert_eq!(
+            call_probe_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut required,
+            ),
+            QL_OK
+        );
+        let handle_probe: serde_json::Value =
+            serde_json::from_slice(&output).expect("HANDLE APNG probe JSON");
+        assert_eq!(handle_probe["isAnimated"], path_probe["isAnimated"]);
+        assert_eq!(file.stream_position().unwrap(), position);
+
         drop(file);
         let _ = fs::remove_file(path);
     }
@@ -5305,6 +7046,515 @@ mod handle_v2_tests {
     }
 
     #[test]
+    fn office_layout_json_uses_image_references_instead_of_base64() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            8,
+            6,
+            image::Rgba([15, 90, 180, 255]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("encode Office layout image");
+        let image = encoded.into_inner();
+        let bytes = zip_bytes(&[
+            (
+                "word/document.xml",
+                br#"<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Lazy image</w:t></w:r></w:p></w:body></w:document>"#,
+            ),
+            ("word/media/image1.png", image.as_slice()),
+            ("word/media/../traversal.png", b"unsafe"),
+            ("/word/media/absolute.png", b"unsafe"),
+            (r"word\media\backslash.png", b"unsafe"),
+        ]);
+        let (path, file) = create_input("bin", &bytes);
+        let json = preview_json_with(
+            call_office_handle,
+            &file,
+            r"C:\missing\layout.docx",
+        );
+        let items = json["officeLayout"]["pages"][0]["items"]
+            .as_array()
+            .expect("Office layout items");
+        let image_item = items
+            .iter()
+            .find(|item| item["kind"] == "image")
+            .expect("Office image layout item");
+
+        assert_eq!(
+            items.iter().filter(|item| item["kind"] == "image").count(),
+            1
+        );
+        assert_eq!(image_item["imageRef"], "word/media/image1.png");
+        assert_eq!(image_item["imageByteLength"], image.len() as u64);
+        assert_eq!(image_item["imageName"], "image1.png");
+        assert_eq!(image_item["mimeType"], "image/png");
+        assert!(image_item.get("imageBase64").is_none());
+        assert!(!serde_json::to_string(&json)
+            .expect("serialize Office preview")
+            .contains("imageBase64"));
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn office_layout_with_eighteen_large_images_stays_below_pipe_limit() {
+        let mut pixels = vec![0u8; 384 * 384 * 4];
+        let mut state = 0x8f31_29abu32;
+        for pixel in pixels.chunks_exact_mut(4) {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            pixel[0] = (state >> 24) as u8;
+            pixel[1] = (state >> 16) as u8;
+            pixel[2] = (state >> 8) as u8;
+            pixel[3] = 255;
+        }
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(
+            image::ImageBuffer::from_raw(384, 384, pixels).expect("large image pixels"),
+        )
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("encode large Office image");
+        let image = encoded.into_inner();
+        assert!(image.len() > 256 * 1024);
+        assert!(image.len() <= 768 * 1024);
+
+        let mut slide = String::from(r#"<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r"><p:cSld><p:spTree>"#);
+        let mut relationships = String::from(r#"<Relationships xmlns="rels">"#);
+        for index in 1..=18 {
+            slide.push_str(&format!(
+                r#"<p:pic><p:blipFill><a:blip r:embed="rId{index}"/></p:blipFill><p:spPr><a:xfrm><a:off x="{}" y="{}"/><a:ext cx="914400" cy="914400"/></a:xfrm></p:spPr></p:pic>"#,
+                ((index - 1) % 6) * 1_000_000,
+                ((index - 1) / 6) * 1_000_000,
+            ));
+            relationships.push_str(&format!(
+                r#"<Relationship Id="rId{index}" Target="../media/image{index}.png"/>"#
+            ));
+        }
+        slide.push_str("</p:spTree></p:cSld></p:sld>");
+        relationships.push_str("</Relationships>");
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, payload) in [
+            (
+                "ppt/presentation.xml",
+                br#"<p:presentation xmlns:p="p"><p:sldSz cx="9144000" cy="5143500"/></p:presentation>"#
+                    .as_slice(),
+            ),
+            ("ppt/slides/slide1.xml", slide.as_bytes()),
+            (
+                "ppt/slides/_rels/slide1.xml.rels",
+                relationships.as_bytes(),
+            ),
+        ] {
+            writer.start_file(name, options).expect("start PPT part");
+            writer.write_all(payload).expect("write PPT part");
+        }
+        for index in 1..=18 {
+            writer
+                .start_file(format!("ppt/media/image{index}.png"), options)
+                .expect("start PPT image");
+            writer.write_all(&image).expect("write PPT image");
+        }
+        let bytes = writer.finish().expect("finish PPTX").into_inner();
+        let (path, file) = create_input("bin", &bytes);
+        let logical_name = b"large-images.pptx";
+        let mut required = 0usize;
+        assert_eq!(
+            call_office_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert!(required < 4 * 1024 * 1024);
+        let mut output = vec![0u8; required];
+        assert_eq!(
+            call_office_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&output[..required]).expect("large Office layout JSON");
+        let image_items = json["officeLayout"]["pages"][0]["items"]
+            .as_array()
+            .expect("PPT layout items");
+        assert_eq!(image_items.len(), 18);
+        assert!(image_items.iter().all(|item| {
+            item.get("imageBase64").is_none()
+                && item["imageRef"].as_str().is_some()
+                && item["imageByteLength"] == image.len() as u64
+        }));
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn office_layout_image_handle_decodes_exact_ref_and_preserves_position() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            2048,
+            1024,
+            image::Rgba([40, 120, 220, 128]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("encode large Office raster");
+        let image = encoded.into_inner();
+        let bytes = zip_bytes(&[
+            (
+                "word/document.xml",
+                br#"<w:document xmlns:w="w"><w:body/></w:document>"#,
+            ),
+            ("word/media/image1.png", image.as_slice()),
+        ]);
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(17))
+            .expect("position Office layout image handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"layout.docx";
+        let image_ref = b"word/media/image1.png";
+        let length = file.metadata().unwrap().len();
+
+        let mut required = 0usize;
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                1024,
+                1024,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert_eq!(required, 8 + 1024 * 512 * 4);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut small = vec![0u8; required - 1];
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                1024,
+                1024,
+                small.as_mut_ptr(),
+                small.len(),
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                1024,
+                1024,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 1024);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 512);
+        assert_eq!(&packet[8..12], &[110, 60, 20, 128]);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        for (target_width, target_height) in [(0, 64), (64, 0), (1025, 64), (64, 1025)] {
+            assert_eq!(
+                call_office_layout_image_handle(
+                    file.as_raw_handle() as isize,
+                    length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    image_ref.as_ptr(),
+                    image_ref.len(),
+                    target_width,
+                    target_height,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    None,
+                ),
+                QL_ERROR_INVALID_ARGUMENT
+            );
+            assert_eq!(required, 0);
+        }
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                64,
+                64,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn office_layout_image_handle_rejects_untrusted_refs_and_bad_entries() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            4,
+            3,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("encode Office image");
+        let image = encoded.into_inner();
+        let bytes = zip_bytes(&[
+            ("word/media/image.png", image.as_slice()),
+            ("word/media/not-image.png", b"not a PNG"),
+        ]);
+        let (path, file) = create_input("bin", &bytes);
+        let logical_name = b"layout.docx";
+        let length = file.metadata().unwrap().len();
+        let mut required = usize::MAX;
+
+        for image_ref in [
+            "/word/media/image.png",
+            r"word\media\image.png",
+            "word/media/../image.png",
+            "word/media/./image.png",
+            "ppt/media/image.png",
+            "C:/word/media/image.png",
+        ] {
+            assert_eq!(
+                call_office_layout_image_handle(
+                    file.as_raw_handle() as isize,
+                    length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    image_ref.as_ptr(),
+                    image_ref.len(),
+                    64,
+                    64,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    None,
+                ),
+                QL_ERROR_INVALID_ARGUMENT,
+                "unexpected status for {image_ref}"
+            );
+            assert_eq!(required, 0);
+        }
+
+        for image_ref in ["word/media/missing.png", "word/media/not-image.png"] {
+            assert_eq!(
+                call_office_layout_image_handle(
+                    file.as_raw_handle() as isize,
+                    length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    image_ref.as_ptr(),
+                    image_ref.len(),
+                    64,
+                    64,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    None,
+                ),
+                QL_ERROR_MALFORMED,
+                "unexpected status for {image_ref}"
+            );
+            assert_eq!(required, 0);
+        }
+
+        let overlong_ref = vec![b'a'; MAX_OFFICE_IMAGE_REF_BYTES + 1];
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                overlong_ref.as_ptr(),
+                overlong_ref.len(),
+                64,
+                64,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let oversized = vec![0u8; 768 * 1024 + 1];
+        let bytes = zip_bytes(&[("word/media/large.png", oversized.as_slice())]);
+        let (oversized_path, oversized_file) = create_input("bin", &bytes);
+        let image_ref = b"word/media/large.png";
+        assert_eq!(
+            call_office_layout_image_handle(
+                oversized_file.as_raw_handle() as isize,
+                oversized_file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                64,
+                64,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LIMIT_EXCEEDED
+        );
+        drop(oversized_file);
+        let _ = fs::remove_file(oversized_path);
+    }
+
+    #[test]
+    fn office_layout_image_handle_enforces_handle_length_and_cancel_contract() {
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            2,
+            2,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .expect("encode Office image");
+        let image = encoded.into_inner();
+        let bytes = zip_bytes(&[("word/media/image.png", image.as_slice())]);
+        let (path, mut file) = create_input("bin", &bytes);
+        file.seek(SeekFrom::Start(9))
+            .expect("position Office layout source");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"layout.docx";
+        let image_ref = b"word/media/image.png";
+        let length = file.metadata().unwrap().len();
+        let mut required = usize::MAX;
+
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                2,
+                2,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+        assert_eq!(
+            call_office_layout_image_handle(
+                file.as_raw_handle() as isize,
+                length + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                2,
+                2,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(
+            call_office_layout_image_handle(
+                0,
+                0,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                2,
+                2,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
+        assert_eq!(
+            call_office_layout_image_handle(
+                thread.0 as isize,
+                0,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                image_ref.as_ptr(),
+                image_ref.len(),
+                2,
+                2,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn static_image_handle_decodes_ico_without_moving_caller_position() {
         let mut encoded = Cursor::new(Vec::new());
         image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
@@ -5485,6 +7735,41 @@ mod handle_v2_tests {
         assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 1);
         assert_eq!(file.stream_position().unwrap(), position);
 
+        let mut generic_required = 0usize;
+        assert_eq!(
+            call_animation_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut generic_required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut generic_packet = vec![0u8; generic_required];
+        assert_eq!(
+            call_animation_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                generic_packet.as_mut_ptr(),
+                generic_packet.len(),
+                &mut generic_required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(generic_packet, packet);
+        assert_eq!(file.stream_position().unwrap(), position);
+
         let wrong_name = b"logical.png";
         required = usize::MAX;
         assert_eq!(
@@ -5561,6 +7846,123 @@ mod handle_v2_tests {
             QL_ERROR_MALFORMED
         );
         assert_eq!(required, 0);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn animation_handle_decodes_apng_and_rejects_static_webp_without_moving_position() {
+        let mut apng = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut apng, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(2, 0).expect("enable APNG");
+            let mut writer = encoder.write_header().expect("write APNG header");
+            writer.set_frame_delay(1, 10).expect("first APNG delay");
+            writer
+                .write_image_data(&[255, 0, 0, 255, 255, 0, 0, 255])
+                .expect("first APNG frame");
+            writer.set_frame_delay(2, 10).expect("second APNG delay");
+            writer
+                .write_image_data(&[0, 255, 0, 255, 0, 255, 0, 255])
+                .expect("second APNG frame");
+            writer.finish().expect("finish APNG");
+        }
+
+        let (path, mut file) = create_input("bin", &apng);
+        file.seek(SeekFrom::Start(7)).expect("position APNG handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"logical.png";
+        let length = file.metadata().unwrap().len();
+        let mut required = 0usize;
+        assert_eq!(
+            call_animation_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_animation_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 1);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut legacy_required = usize::MAX;
+        assert_eq!(
+            call_gif_frames_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut legacy_required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(legacy_required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let mut webp = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+            2,
+            1,
+            image::Rgba([10, 20, 30, 255]),
+        ))
+        .write_to(&mut webp, image::ImageFormat::WebP)
+        .expect("encode static WebP");
+        let (path, mut file) = create_input("bin", &webp.into_inner());
+        file.seek(SeekFrom::Start(3)).expect("position WebP handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"logical.webp";
+        let mut required = usize::MAX;
+        assert_eq!(
+            call_animation_frames_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_MALFORMED
+        );
+        assert_eq!(required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
         drop(file);
         let _ = fs::remove_file(path);
     }
@@ -5675,6 +8077,371 @@ mod handle_v2_tests {
     }
 
     #[test]
+    fn image_waveform_handle_returns_exact_extended_packet_in_one_decode_contract() {
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 4, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[
+                    255, 0, 0, 255, // opaque red
+                    0, 255, 0, 128, // translucent green
+                    0, 0, 255, 0, // transparent blue: excluded from the density scope
+                    255, 255, 255, 255, // opaque white
+                ])
+                .unwrap();
+        }
+
+        let (path, mut file) = create_input("bin", &png_bytes);
+        file.seek(SeekFrom::Start(5))
+            .expect("position PNG waveform handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"waveform.png";
+        let length = file.metadata().unwrap().len();
+        let expected_packet_bytes =
+            IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 4 * 4 + IMAGE_WAVEFORM_DENSITY_BYTES;
+
+        let mut required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                4,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert_eq!(required, expected_packet_bytes);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut undersized = vec![0u8; required - 1];
+        let mut still_required = 0usize;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                4,
+                1,
+                undersized.as_mut_ptr(),
+                undersized.len(),
+                &mut still_required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert_eq!(still_required, expected_packet_bytes);
+
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                4,
+                1,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(required, packet.len());
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let header: Vec<u32> = packet[..IMAGE_WAVEFORM_PACKET_HEADER_BYTES]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        assert_eq!(header[0..4], [4, 1, 4, 1]);
+        assert_eq!(header[7], IMAGE_WAVEFORM_WIDTH);
+        assert_eq!(header[8], IMAGE_WAVEFORM_HEIGHT);
+        assert_eq!(header[9] as usize, IMAGE_WAVEFORM_DENSITY_BYTES);
+
+        let raster = &packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES
+            ..IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 16];
+        assert_eq!(
+            raster,
+            &[
+                0, 0, 255, 255, // red BGRA
+                0, 128, 0, 128, // premultiplied translucent green BGRA
+                0, 0, 0, 0, // transparent blue becomes transparent BGRA
+                255, 255, 255, 255, // white BGRA
+            ]
+        );
+        let density = &packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 16..];
+        let plane = IMAGE_WAVEFORM_PLANE_BYTES;
+        assert!(density[0] > 0, "red at x=0 belongs at row 0");
+        assert!(
+            density[plane + 48] > 0,
+            "green at x=1 belongs at row 0, column 48"
+        );
+        assert!(
+            density[2 * plane + 144] > 0,
+            "white at x=3 contributes blue at row 0, column 144"
+        );
+        for channel in 0..IMAGE_WAVEFORM_CHANNELS {
+            for row in 0..IMAGE_WAVEFORM_HEIGHT as usize {
+                assert_eq!(
+                    density[channel * plane + row * IMAGE_WAVEFORM_WIDTH as usize + 96],
+                    0,
+                    "fully transparent x=2 must not contribute to any channel"
+                );
+            }
+        }
+
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_waveform_handle_supports_all_native_static_raster_formats() {
+        let formats = [
+            (ImageFormat::Png, "png"),
+            (ImageFormat::Jpeg, "jpg"),
+            (ImageFormat::Bmp, "bmp"),
+            (ImageFormat::Tiff, "tiff"),
+            (ImageFormat::WebP, "webp"),
+        ];
+        for (format, extension) in formats {
+            let mut encoded = Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(3, 2, |x, y| {
+                image::Rgb([
+                    (30 + x * 50) as u8,
+                    (40 + y * 80) as u8,
+                    (200 - x * 20) as u8,
+                ])
+            }))
+            .write_to(&mut encoded, format)
+            .unwrap_or_else(|error| panic!("encode {extension}: {error}"));
+            let (path, mut file) = create_input("bin", &encoded.into_inner());
+            file.seek(SeekFrom::Start(3))
+                .unwrap_or_else(|error| panic!("position {extension}: {error}"));
+            let position = file.stream_position().unwrap();
+            let logical_name = format!("sample.{extension}");
+            let logical_name = logical_name.as_bytes();
+            let length = file.metadata().unwrap().len();
+            let mut required = 0usize;
+            assert_eq!(
+                call_image_with_waveform_handle(
+                    file.as_raw_handle() as isize,
+                    length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    3,
+                    2,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required,
+                    None,
+                ),
+                QL_ERROR_BUFFER_TOO_SMALL,
+                "{extension}"
+            );
+            assert_eq!(
+                required,
+                IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 3 * 2 * 4 + IMAGE_WAVEFORM_DENSITY_BYTES,
+                "{extension}"
+            );
+            let mut packet = vec![0u8; required];
+            assert_eq!(
+                call_image_with_waveform_handle(
+                    file.as_raw_handle() as isize,
+                    length,
+                    logical_name.as_ptr(),
+                    logical_name.len(),
+                    3,
+                    2,
+                    packet.as_mut_ptr(),
+                    packet.len(),
+                    &mut required,
+                    None,
+                ),
+                QL_OK,
+                "{extension}"
+            );
+            assert_eq!(file.stream_position().unwrap(), position, "{extension}");
+            assert!(
+                packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 3 * 2 * 4..]
+                    .iter()
+                    .any(|value| *value != 0),
+                "{extension} density"
+            );
+            drop(file);
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn image_waveform_handle_supports_svg_and_enforces_v2_boundaries() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+            <rect width="20" height="20" fill="#ff0000" fill-opacity="0.5"/>
+            <rect x="20" width="20" height="20" fill="#00ff00"/>
+        </svg>"##;
+        let (path, mut file) = create_input("bin", svg);
+        file.seek(SeekFrom::Start(7))
+            .expect("position SVG waveform handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"scope.svg";
+        let length = file.metadata().unwrap().len();
+        let mut required = 0usize;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let mut packet = vec![0u8; required];
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut required,
+                None,
+            ),
+            QL_OK
+        );
+        assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 20);
+        assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 10);
+        assert!(
+            packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 20 * 10 * 4..]
+                .iter()
+                .any(|value| *value != 0)
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                0,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(required, 0);
+
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        drop(file);
+        let _ = fs::remove_file(path);
+
+        let (path, file) = create_input("bin", b"not a PNG");
+        let png_name = b"bad.png";
+        required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                png_name.as_ptr(),
+                png_name.len(),
+                20,
+                20,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_MALFORMED
+        );
+        assert_eq!(required, 0);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_waveform_sampling_matches_the_one_million_grid_budget() {
+        assert_eq!(ImageWaveformAccumulator::new(1000, 1000).sample_step, 1);
+        assert_eq!(ImageWaveformAccumulator::new(1001, 1000).sample_step, 2);
+        assert_eq!(ImageWaveformAccumulator::new(2048, 2048).sample_step, 3);
+    }
+
+    #[test]
     fn archive_entry_handle_extracts_original_zip_index_without_logical_path() {
         let bytes = zip_bytes(&[(r"folder\item.txt", b"entry from pinned ZIP")]);
         let (path, mut file) = create_input("bin", &bytes);
@@ -5744,6 +8511,217 @@ mod handle_v2_tests {
 
         drop(file);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn archive_entry_output_handle_streams_without_moving_caller_positions() {
+        let expected = b"entry streamed directly into caller output";
+        let bytes = zip_bytes(&[(r"folder\item.txt", expected)]);
+        let (source_path, mut source) = create_input("bin", &bytes);
+        source
+            .seek(SeekFrom::Start(9))
+            .expect("position archive source handle");
+        let source_position = source.stream_position().unwrap();
+        let (output_path, mut output) = create_output("bin", &[]);
+        output
+            .seek(SeekFrom::Start(23))
+            .expect("position archive output handle");
+        let output_position = output.stream_position().unwrap();
+        let logical_name = br"C:\missing\renamed.zip";
+        let entry_path = b"folder/item.txt";
+        let mut written = u64::MAX;
+
+        let status = call_archive_entry_output_handle(
+            source.as_raw_handle() as isize,
+            source.metadata().unwrap().len(),
+            logical_name.as_ptr(),
+            logical_name.len(),
+            entry_path.as_ptr(),
+            entry_path.len(),
+            output.as_raw_handle() as isize,
+            preview::MAX_ARCHIVE_EXTRACT_BYTES,
+            &mut written,
+            None,
+        );
+        assert_eq!(status, QL_OK);
+        assert_eq!(written, expected.len() as u64);
+        assert_eq!(source.stream_position().unwrap(), source_position);
+        assert_eq!(output.stream_position().unwrap(), output_position);
+        assert_eq!(fs::read(&output_path).unwrap(), expected);
+
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source.as_raw_handle() as isize,
+                source.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                output.as_raw_handle() as isize,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                std::ptr::null_mut(),
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(source.stream_position().unwrap(), source_position);
+        assert_eq!(output.stream_position().unwrap(), output_position);
+
+        drop(output);
+        drop(source);
+        let _ = fs::remove_file(output_path);
+        let _ = fs::remove_file(source_path);
+    }
+
+    #[test]
+    fn archive_entry_output_handle_rejects_invalid_outputs_limits_and_cancellation() {
+        let expected = vec![0x5au8; 256 * 1024];
+        let bytes = zip_bytes(&[("payload.bin", &expected)]);
+        let (source_path, source) = create_input("bin", &bytes);
+        let logical_name = b"payload.zip";
+        let entry_path = b"payload.bin";
+        let source_handle = source.as_raw_handle() as isize;
+        let source_length = source.metadata().unwrap().len();
+        let mut written = u64::MAX;
+
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                0,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(written, 0);
+
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                source_handle,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(written, 0);
+
+        let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                thread.0 as isize,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(written, 0);
+
+        let (nonzero_path, nonzero_output) = create_output("bin", b"x");
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                nonzero_output.as_raw_handle() as isize,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(written, 0);
+        assert_eq!(nonzero_output.metadata().unwrap().len(), 1);
+
+        let (small_path, small_output) = create_output("bin", &[]);
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                small_output.as_raw_handle() as isize,
+                1024,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_LIMIT_EXCEEDED
+        );
+        assert_eq!(written, 0);
+        assert_eq!(small_output.metadata().unwrap().len(), 0);
+
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                small_output.as_raw_handle() as isize,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES + 1,
+                &mut written,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(written, 0);
+
+        ARCHIVE_OUTPUT_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        written = u64::MAX;
+        assert_eq!(
+            call_archive_entry_output_handle(
+                source_handle,
+                source_length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                entry_path.as_ptr(),
+                entry_path.len(),
+                small_output.as_raw_handle() as isize,
+                preview::MAX_ARCHIVE_EXTRACT_BYTES,
+                &mut written,
+                Some(cancel_archive_output_after_validation),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(written, 0);
+        assert_eq!(small_output.metadata().unwrap().len(), 0);
+
+        drop(small_output);
+        drop(nonzero_output);
+        drop(source);
+        let _ = fs::remove_file(small_path);
+        let _ = fs::remove_file(nonzero_path);
+        let _ = fs::remove_file(source_path);
     }
 
     #[test]
@@ -6089,5 +9067,10 @@ mod handle_v2_tests {
     #[test]
     fn ffi_boundary_contains_panics() {
         assert_eq!(ffi_boundary(|| panic!("test panic")), QL_ERROR_INTERNAL);
+    }
+
+    #[test]
+    fn ffi_void_boundary_contains_panics() {
+        ffi_void_boundary(|| panic!("test panic"));
     }
 }

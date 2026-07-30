@@ -9,6 +9,7 @@ internal enum RetainedRasterOperations
     None = 0,
     StaticImage = 1,
     Animation = 2,
+    Metadata = 4,
 }
 
 internal sealed class RetainedRasterSource(

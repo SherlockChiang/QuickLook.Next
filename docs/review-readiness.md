@@ -9,6 +9,12 @@ left visible instead of hidden behind vague TODOs.
 - Rust-first preview path: text, folders, archives, packages, certificates,
   executables, torrents, and lightweight Office previews are handled by the
   native layer rather than the legacy .NET plugin pipeline.
+- The native preview implementation is being split by bounded format family: shared DTO/common
+  helpers, folder listing, Text/Markdown/CSV/TSV, JPEG/PNG/GIF/WebP/TIFF image metadata,
+  GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode, and
+  EPUB/FB2 ebook parsing now live in focused submodules with their own tests. Archive, Office,
+  package, database, and the mixed info/media family remain in the parent module and are the next
+  extraction boundaries.
 - RasterHost is lazy-started and scoped to surface-producing work: images, PDF
   page rasterization, shell thumbnails, and fallback media/image surfaces.
 - Tray context menu handling is isolated in `TrayIconManager`. It uses a native
@@ -23,6 +29,9 @@ left visible instead of hidden behind vague TODOs.
   `PreviewResult.Bgra` is marked obsolete and the hot path uses Rust/native JSON
   plus shared raster surfaces instead.
 - Native Reader and XML preview boundaries are hardened:
+  - ParserHost connects/authenticates its pipe before native ABI initialization. Supervisors use a
+    15-second cold-start/ready budget and require the generation's ready task to complete before
+    reuse, preventing idle prewarm from starting a real JSON request's five-second timer early.
   - ABI 2 text, executable, torrent, SQLite snapshot, archive, ebook, and archive-entry previews
     accept authenticated ParserHost disk-file handles directly, validate exact lengths, and reopen
     them with independent file positions before Rust reads them.
@@ -55,6 +64,8 @@ left visible instead of hidden behind vague TODOs.
     represented path strings at 2 MiB; never decompresses payloads; and publishes a browse-only listing.
     RAR4 legacy names preserve valid UTF-8 and use a deterministic Windows-1252 fallback when the
     byte sequence is not UTF-8; the same fallback applies when the optional Unicode name tail is unusable.
+    The listing summary labels this boundary, and activating a RAR entry explains that entry content
+    cannot be opened instead of failing silently.
     ZIP entry extraction retains 64 MiB compressed/uncompressed caps, a 1,000:1 expansion-ratio
     cap, and a four-second deadline; RAR entry extraction fails closed.
   - Ebook HANDLE inputs are capped at 256 MiB. EPUB processing limits central-directory work to
@@ -65,8 +76,17 @@ left visible instead of hidden behind vague TODOs.
   - The HANDLE ABI keeps stable capability bits for text (0), executable (1), torrent (2), SQLite
      snapshot (3), archive (4), Office (5), ebook (6), archive entry (7), static ICO (8), SVG (9),
      GIF static/animation (10), package preview (11), package icon extraction (12), and final local
-     HANDLE probe (13), and general raster image input (14). Bit 8 remains the published ICO-only
-     static-image capability; bit 14 gates PNG/JPEG/BMP/TIFF/WebP native HANDLE fallback.
+     HANDLE probe (13), general raster image input (14), general GIF/WebP/APNG animation (15),
+     Office layout image decode (16), Rust image waveform packets (17), caller-owned archive
+     entry output (18), and optional retained-HANDLE image metadata (19).
+     Bit 8 remains the published ICO-only static-image capability; bit 14 gates
+     PNG/JPEG/BMP/TIFF/WebP native HANDLE fallback. Bit 15 is additive and optional for ABI 3
+     consumers; the stable GIF export and bit 10 remain available as a compatibility fallback.
+     Bit 17 is additive so WIC/system decoders can retain their bounded managed waveform fallback.
+     Bit 18 is required by ParserHost and streams archive children directly into an App-owned
+     zero-length output object.
+     Bit 19 is optional for RasterHost and gates a parent-bound metadata sidecar without making an
+     older ABI 3 raster DLL unusable.
      Implemented HANDLE
      exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,
@@ -90,14 +110,37 @@ left visible instead of hidden behind vague TODOs.
   preview detail labels, image zoom presets, and preview chrome actions.
 - Preview chrome actions are wired: copy path, open file, reveal in Explorer,
   and image zoom presets no longer appear as non-functional visual controls.
-- Folder/listing previews use theme-aware colored folder/archive glyphs while asynchronously
-  replacing real filesystem rows with Shell thumbnail/icon cache images when available.
-- Virtual archive entries use a colored archive glyph plus extension-aware glyphs for common images, media,
-  archives, Office documents, code/text files, installers, certificates,
+- Folder/listing previews use reusable theme-aware multi-layer vector folder/archive icons in both
+  rows and Hero surfaces, while asynchronously replacing real filesystem rows with Shell
+  thumbnail/icon cache images when available.
+- Virtual archive entries use those multi-color vector fallbacks plus extension-aware glyphs for
+  common images, media, archives, Office documents, code/text files, installers, certificates,
   torrents, and disk images.
 - Native animated-frame presentation writes into the fixed WinRT pixel buffer without resizing it
-  and releases the buffer stream before invalidation, so GIF frame playback no longer fails at the
-  App-side upload boundary.
+  and releases the buffer stream before invalidation. GIF, animated WebP, and APNG now decode through
+  retained HANDLE leases without reopening the logical path. Rust publishes tri-state animation
+  metadata so confirmed static files are skipped while unknown metadata remains compatible with
+  older native binaries. The animation follow-up uses a separate 20-second timeout and preserves
+  the static preview if decoding times out. Rust writes the bounded frame packet directly into an
+  unnamed RasterHost section; the App duplicates only `SECTION_MAP_READ`, validates the mapped
+  packet once, retains that view for playback, and acknowledges the remote owner. It stores only
+  delay/offset descriptors and writes each mapped frame span directly to `PixelBuffer`; no per-frame
+  `byte[]` or `ToArray()` remains. Waveform reads and unmapping share one lifetime lock. The former
+  `raster-animation` packet file is gone.
+- App-process Windows Property Handler reads have been removed. Image metadata is now an optional
+  RasterHost child bound to the exact retained image request. It runs bounded Rust metadata, the
+  fixed System32 photo Property Handler over a read-only `IInitializeWithStream`, and WIC over
+  independently reopened HANDLE streams in parallel, merging fields as
+  `native > Property Handler > WIC`. The child carries no path, does not delay the first surface,
+  may finish after parent close through its independent lease, and is canceled/drained on child
+  close or disconnect. The Property Handler is activated directly from System32 without user COM
+  registration; a provider that misses the 1.5-second budget and cannot drain in 250 ms fail-stops
+  RasterHost. App `StorageFile.Properties`, `IInitializeWithFile`, parsing-name stores, and logical
+  path fallback remain forbidden.
+- Office and package Hero extraction use the same anonymous-section ownership contract in
+  ParserHost. The App maps the exact bounded packet read-only and copies only its validated BGRA
+  payload; close, publication failure, Host replacement, and disconnect release the owner. The
+  former `parser-raster` handoff directory is no longer created.
 - ShellBroker thumbnail handoffs release their broker-owned HANDLE and packet directory on explicit
   `CLOSE` and on abrupt pipe EOF. Channel teardown tolerates the expected broken-pipe flush while the
   independently duplicated App HANDLE remains readable.
@@ -135,6 +178,7 @@ cargo test --locked --manifest-path native\quicklook_next_native\Cargo.toml
 cargo build --release --locked --manifest-path native\quicklook_next_native\Cargo.toml
 dotnet test tests\QuickLook.Next.Core.Tests\QuickLook.Next.Core.Tests.csproj -c Release
 dotnet test tests\QuickLook.Next.ParserHost.IntegrationTests\QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release
+dotnet test tests\QuickLook.Next.RasterHost.IntegrationTests\QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release
 pwsh -NoProfile -File tools\smoke-native.ps1
 pwsh -NoProfile -File tools\smoke-exif-map.ps1
 dotnet build QuickLook.Next.slnx -c Release
@@ -142,6 +186,7 @@ pwsh -NoProfile -File tools\guard-performance-bounds.ps1
 pwsh -NoProfile -File tools\guard-format-registry.ps1
 pwsh -NoProfile -File tools\guard-stale-callbacks.ps1
 pwsh -NoProfile -File tools\guard-architecture.ps1 -SkipDist
+pwsh -NoProfile -File tools\benchmark-handle-handoff.ps1
 git diff --check
 ```
 
@@ -151,7 +196,7 @@ Useful targeted checks:
 rg -n "TrackPopupMenu|CreatePopupMenu|AppendMenu|DestroyMenu|TPM_|MF_CHECKED|MF_STRING" src\QuickLook.Next.App
 rg -n "WebView|WebView2" src native tools README.md docs
 rg -n "QuickLook.Next.Plugin." src tools README.md docs
-rg -n "read_to_end\(&mut bytes\)" native\quicklook_next_native\src\preview.rs
+rg -n "read_to_end\(&mut bytes\)" native\quicklook_next_native\src\preview.rs native\quicklook_next_native\src\preview
 ```
 
 The tray popup search should only hit `src/QuickLook.Next.App/TrayIconManager.cs`.
@@ -164,6 +209,14 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 
 ## Known Remaining Work
 
+- Continue splitting the large native preview module by bounded format family. Common DTOs, folder,
+  Text/Markdown/CSV/TSV, image metadata, animation classification, Torrent, executable/PE/CLR, and
+  ebook parsing are separated; archive, Office, package, database, and mixed info/media remain.
+- The final animated-frame upload still copies from the retained CPU section into
+  `WriteableBitmap.PixelBuffer`. A future direct GPU shared-surface renderer is optional and should
+  be justified by profiling before adding cross-process D3D synchronization.
+- Expand the allowlisted Property Handler field mapping only when a concrete Windows metadata gap is
+  demonstrated; keep every supplement inside RasterHost and HANDLE-stream based.
 - Continue improving Office approximate layout fidelity. This is intentionally
   not a full Office rendering engine: PPT/XLSX should prioritize slide/sheet
   layout, text positions, table/cell geometry, relationships, and embedded
@@ -184,8 +237,6 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
     selection changes do not keep decoding old images.
   - Large image decode should eventually accept a native cancellation/epoch
     signal, not just an App-side generation guard.
-  - EXIF metadata reads should keep timeout/cancellation boundaries so slow
-    property handlers cannot stall preview close or file switching.
 - PDF surface caching is intentionally small today. A bounded 3-5 page LRU for
   recently rendered pages would make scroll-back smoother without returning to
   unbounded GPU surface retention.
@@ -197,8 +248,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
   input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
   boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
-  RasterHost ICO, SVG, and GIF static/animation previews now decode from independent leases on a
-  retained HANDLE source without an input anchor. Local system-codec images now wrap an independently
+  RasterHost ICO, SVG, general raster, and GIF/WebP/APNG animation previews now decode from
+  independent leases on a retained HANDLE source without an input anchor. Local system-codec images
+  now wrap an independently
   reopened source lease as a WinRT random-access stream and do not create an input anchor. Local PDF
   sessions now load and retain the exact HANDLE-backed WinRT stream through page rendering, with
   HANDLE-derived cache identity. PDF session close tracks and drains the underlying WinRT render
@@ -209,12 +261,15 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   HANDLE kinds fail closed. Shell fallback remains path-based only for explicit cloud/legacy
   compatibility requests and should move to a broker if RasterHost is later sandboxed further.
 - The legacy path entry points remain for cloud and explicit compatibility inputs. Local
-  Archive/Ebook requests must stay on the HANDLE routes. The App's initial routing probe remains
-  path-based, while the final probe after ParserHost/RasterHost pinning reads the same file object.
-  ParserHost and RasterHost no longer create HANDLE input anchors; both adopt unsupported HANDLE
-  requests and fail closed without consulting logical path metadata.
-  The extracted archive child's bounded App handoff anchor remains while ParserHost publishes a
-  temporary output object; RasterHost receives the resulting pinned child HANDLE directly.
+  Archive/Ebook requests must stay on the HANDLE routes. For a normal local file, the App pins once,
+  performs the initial authoritative `ql_probe_file_handle` routing probe against that object, and
+  transfers the same object to ParserHost/RasterHost without a second format probe. Directories,
+  cloud metadata, missing `HANDLE_PROBE` capability, and a pin failure are the explicit path
+  compatibility cases. ParserHost and RasterHost no longer create HANDLE input anchors; both adopt
+  unsupported HANDLE requests and fail closed without consulting logical path metadata.
+  The extracted archive child's bounded App anchor remains because downstream routing still needs a
+  logical filename, but Rust writes that same object through a caller-provided HANDLE; ParserHost
+  publishes no temporary path or Host-owned file HANDLE and the App performs no intermediate copy.
 
 ## Why Legacy Plugin Source Remains
 

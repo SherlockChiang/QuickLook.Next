@@ -9,11 +9,7 @@ string writableRoot = GetArg(args, "--writable-root") ?? "";
 if (!Path.IsPathFullyQualified(writableRoot) || !Directory.Exists(writableRoot)
     || (File.GetAttributes(writableRoot) & FileAttributes.ReparsePoint) != 0) return;
 string logRoot = Path.Combine(writableRoot, "logs");
-string archiveRoot = Path.Combine(writableRoot, "archive-preview");
-string rasterRoot = Path.Combine(writableRoot, "parser-raster");
-foreach (string child in new[] { logRoot, archiveRoot, rasterRoot })
-    if (!Directory.Exists(child) || (File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0) return;
-Environment.SetEnvironmentVariable("QUICKLOOK_NEXT_ARCHIVE_ROOT", archiveRoot);
+if (!Directory.Exists(logRoot) || (File.GetAttributes(logRoot) & FileAttributes.ReparsePoint) != 0) return;
 
 DiagLog.InitInDirectory(logRoot, "parser-host.log");
 DiagLog.Write("ParserHost", $"start pid={Environment.ProcessId} pipe={pipeName}");
@@ -41,14 +37,15 @@ catch (Exception ex)
 }
 DiagLog.Write("ParserHost", "native ABI ready");
 ProcessPowerMode.SetCurrentBackgroundEfficiency(enabled: true, "ParserHost");
-CleanupStaleHeroRasters(rasterRoot);
 
 var requests = new ConcurrentDictionary<string, CancellationTokenSource>();
-var archiveEntries = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
 var closedArchiveEntries = new ConcurrentDictionary<string, byte>();
 var archiveHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
-var heroRasters = new ConcurrentDictionary<string, (string Path, Microsoft.Win32.SafeHandles.SafeFileHandle Handle)>();
+var heroRasters = new ConcurrentDictionary<string, NativeRasterSection>();
 var heroHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
+var officeImageRasters = new ConcurrentDictionary<string, NativeRasterSection>();
+var officeImageHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
+var officeImageParents = new ConcurrentDictionary<string, string>();
 var retainedPreviewSources = new ConcurrentDictionary<string, RetainedPreviewSource>();
 bool authenticated = false;
 string? activePreviewRequestId = null;
@@ -94,9 +91,28 @@ while (true)
         case PreviewOpen open when IsValidRequestId(open.RequestId)
                                    && !string.IsNullOrWhiteSpace(open.Path)
                                    && IsValidProbe(open.Probe):
+            if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal)
+                || requests.ContainsKey(open.RequestId))
+            {
+                if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal))
+                {
+                    Cancel(open.RequestId);
+                    await CloseOfficeImagesForParentAsync(open.RequestId);
+                    DeleteRetainedPreviewSource(open.RequestId);
+                }
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
+                await CloseOfficeImagesForParentAsync(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var cts = new CancellationTokenSource();
@@ -177,9 +193,29 @@ while (true)
                     DiagLog.Write("ParserHost", "rejected invalid handle preview request");
                 break;
             }
+            if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal)
+                || requests.ContainsKey(open.RequestId))
+            {
+                if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal))
+                {
+                    Cancel(open.RequestId);
+                    await CloseOfficeImagesForParentAsync(open.RequestId);
+                    DeleteRetainedPreviewSource(open.RequestId);
+                }
+                sourceHandle.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
+                await CloseOfficeImagesForParentAsync(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var handleCts = new CancellationTokenSource();
@@ -237,18 +273,37 @@ while (true)
                             if (kind is "archive" or "ebook" or "office" or "package")
                             {
                                 string logicalName = Path.GetFileName(open.LogicalPath);
-                                RetainedPreviewFollowUps followUps =
-                                    kind == "office"
-                                        ? RetainedPreviewFollowUps.OfficeHero
-                                        : kind == "package"
-                                        ? RetainedPreviewFollowUps.PackageHero
-                                        : string.Equals(
-                                            handleReady?.Listing?.ListingKind,
-                                            "archive",
-                                            StringComparison.OrdinalIgnoreCase)
-                                        && handleReady?.Listing?.CanPreviewEntries == true
-                                        ? RetainedPreviewFollowUps.ArchiveEntry
-                                        : RetainedPreviewFollowUps.None;
+                                IReadOnlyDictionary<string, long>? officeLayoutImages = null;
+                                RetainedPreviewFollowUps followUps;
+                                if (kind == "office")
+                                {
+                                    if (!TryCollectOfficeLayoutImages(
+                                        handleReady!,
+                                        out Dictionary<string, long> collectedImages))
+                                    {
+                                        await channel.SendAsync(new PreviewError(
+                                            open.RequestId,
+                                            "Native Office layout returned invalid image references."));
+                                        return;
+                                    }
+                                    officeLayoutImages = collectedImages;
+                                    followUps = RetainedPreviewFollowUps.OfficeHero;
+                                    if (collectedImages.Count > 0)
+                                        followUps |= RetainedPreviewFollowUps.OfficeLayoutImage;
+                                }
+                                else
+                                {
+                                    followUps =
+                                        kind == "package"
+                                            ? RetainedPreviewFollowUps.PackageHero
+                                            : string.Equals(
+                                                handleReady?.Listing?.ListingKind,
+                                                "archive",
+                                                StringComparison.OrdinalIgnoreCase)
+                                            && handleReady?.Listing?.CanPreviewEntries == true
+                                            ? RetainedPreviewFollowUps.ArchiveEntry
+                                            : RetainedPreviewFollowUps.None;
+                                }
                                 if (followUps != RetainedPreviewFollowUps.None)
                                 {
                                     var retainedSource = new RetainedPreviewSource(
@@ -256,7 +311,8 @@ while (true)
                                         open.SourceLength,
                                         logicalName,
                                         kind,
-                                        followUps);
+                                        followUps,
+                                        officeLayoutImages);
                                     if (!retainedPreviewSources.TryAdd(open.RequestId, retainedSource))
                                     {
                                         await channel.SendAsync(new PreviewError(
@@ -332,9 +388,29 @@ while (true)
                     DiagLog.Write("ParserHost", "rejected invalid SQLite handle preview request");
                 break;
             }
+            if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal)
+                || requests.ContainsKey(open.RequestId))
+            {
+                if (string.Equals(
+                    activePreviewRequestId,
+                    open.RequestId,
+                    StringComparison.Ordinal))
+                {
+                    Cancel(open.RequestId);
+                    await CloseOfficeImagesForParentAsync(open.RequestId);
+                    DeleteRetainedPreviewSource(open.RequestId);
+                }
+                sqliteHandles.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
             if (activePreviewRequestId is not null)
             {
                 Cancel(activePreviewRequestId);
+                await CloseOfficeImagesForParentAsync(activePreviewRequestId);
                 DeleteRetainedPreviewSource(activePreviewRequestId);
             }
             var sqliteCts = new CancellationTokenSource();
@@ -400,36 +476,73 @@ while (true)
 
         case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
+            await CloseOfficeImagesForParentAsync(close.RequestId);
             DeleteRetainedPreviewSource(close.RequestId);
             break;
 
-        case ArchiveEntryExtract extract when IsValidRequestId(extract.RequestId)
-                                              && !string.IsNullOrWhiteSpace(extract.EntryPath):
+        case ArchiveEntryExtract extract:
+            Microsoft.Win32.SafeHandles.SafeFileHandle outputHandle;
+            try
+            {
+                // OutputHandle ownership transfers with the message. Adopt it before validating
+                // any other field so malformed requests cannot leak a host-local HANDLE.
+                outputHandle = WindowsHandleTransfer.TakeLocalFileHandle(extract.OutputHandle, 0);
+            }
+            catch (Exception ex)
+            {
+                if (IsValidRequestId(extract.RequestId))
+                    await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid archive output HANDLE request");
+                break;
+            }
+            if (!IsValidRequestId(extract.RequestId)
+                || string.IsNullOrWhiteSpace(extract.EntryPath)
+                || extract.OutputCapacity is <= 0 or > NativeAbi.MaxArchiveEntryOutputBytes)
+            {
+                outputHandle.Dispose();
+                if (IsValidRequestId(extract.RequestId))
+                    await channel.SendAsync(new PreviewError(extract.RequestId, "Invalid archive extraction request."));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid archive extraction request");
+                break;
+            }
             RetainedPreviewSourceLease? retainedArchiveLease = null;
             if (extract.ParentPreviewRequestId is { } parentRequestId)
             {
                 if (!IsValidRequestId(parentRequestId)
                     || string.Equals(parentRequestId, extract.RequestId, StringComparison.Ordinal)
                     || !retainedPreviewSources.TryGetValue(parentRequestId, out RetainedPreviewSource? retainedArchiveSource)
+                    || retainedArchiveSource is null
                     || !retainedArchiveSource.TryAcquire(
                         RetainedPreviewFollowUps.ArchiveEntry,
-                        out retainedArchiveLease))
+                        out retainedArchiveLease)
+                    || retainedArchiveLease is null)
                 {
+                    outputHandle.Dispose();
                     await channel.SendAsync(new PreviewError(
                         extract.RequestId,
                         "Parent archive preview source is unavailable."));
                     break;
                 }
+                nint outputRawHandle = outputHandle.DangerousGetHandle();
+                if (outputRawHandle == retainedArchiveSource.Handle.DangerousGetHandle()
+                    || outputRawHandle == retainedArchiveLease.Handle.DangerousGetHandle())
+                {
+                    // This raw value was not transferred as a new owner; avoid closing the
+                    // retained parent's existing HANDLE through a second SafeFileHandle wrapper.
+                    outputHandle.SetHandleAsInvalid();
+                    retainedArchiveLease.Dispose();
+                    await channel.SendAsync(new PreviewError(
+                        extract.RequestId,
+                        "Archive output HANDLE must be distinct from the parent source."));
+                    break;
+                }
             }
             else if (string.IsNullOrWhiteSpace(extract.ArchivePath))
             {
+                outputHandle.Dispose();
                 await channel.SendAsync(new PreviewError(extract.RequestId, "Archive path is unavailable."));
-                break;
-            }
-            if (archiveEntries.ContainsKey(extract.RequestId))
-            {
-                retainedArchiveLease?.Dispose();
-                await channel.SendAsync(new PreviewError(extract.RequestId, "Archive handoff has not been released."));
                 break;
             }
             closedArchiveEntries.TryRemove(extract.RequestId, out _);
@@ -437,6 +550,7 @@ while (true)
             var archiveHandoffGate = new SemaphoreSlim(1, 1);
             if (!requests.TryAdd(extract.RequestId, extractCts))
             {
+                outputHandle.Dispose();
                 retainedArchiveLease?.Dispose();
                 extractCts.Dispose();
                 archiveHandoffGate.Dispose();
@@ -445,6 +559,7 @@ while (true)
             }
             if (!archiveHandoffGates.TryAdd(extract.RequestId, archiveHandoffGate))
             {
+                outputHandle.Dispose();
                 retainedArchiveLease?.Dispose();
                 requests.TryRemove(extract.RequestId, out _);
                 extractCts.Dispose();
@@ -453,67 +568,60 @@ while (true)
             }
             _ = Task.Run(async () =>
             {
-                string? pendingArchiveEntryPath = null;
-                bool handoffDelivered = false;
+                Microsoft.Win32.SafeHandles.SafeFileHandle? compatibilitySource = null;
                 try
                 {
-                    string? path;
+                    Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle;
+                    long sourceLength;
+                    string logicalName;
                     if (retainedArchiveLease is not null)
                     {
-                        var handleResult = ParserNativePreview.TryExtractArchiveEntryHandle(
-                            retainedArchiveLease.Handle,
-                            retainedArchiveLease.Length,
-                            retainedArchiveLease.LogicalName,
-                            extract.EntryPath,
-                            extractCts.Token);
-                        if (handleResult.Status != NativeAbi.StatusOk)
-                        {
-                            DiagLog.Write(
-                                "ParserHost",
-                                $"native archive entry HANDLE extraction failed request={extract.RequestId} status={handleResult.Status}");
-                        }
-                        path = handleResult.Path;
+                        sourceHandle = retainedArchiveLease.Handle;
+                        sourceLength = retainedArchiveLease.Length;
+                        logicalName = retainedArchiveLease.LogicalName;
                     }
                     else
                     {
-                        path = ParserNativePreview.TryExtractArchiveEntry(
-                            extract.ArchivePath,
-                            extract.EntryPath,
-                            extractCts.Token);
+                        var opened = WindowsHandleTransfer.OpenReadOnlyFile(extract.ArchivePath);
+                        compatibilitySource = opened.Handle;
+                        sourceHandle = opened.Handle;
+                        sourceLength = opened.Length;
+                        logicalName = Path.GetFileName(extract.ArchivePath);
                     }
-                    if (!string.IsNullOrWhiteSpace(path)
-                        && (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId)))
+                    if (sourceLength < 0 || sourceLength > NativeAbi.MaxArchiveHandleInputBytes)
+                        throw new InvalidDataException("Archive source exceeded the HANDLE input limit.");
+
+                    var handleResult = ParserNativePreview.TryExtractArchiveEntryToOutputHandle(
+                        sourceHandle,
+                        sourceLength,
+                        logicalName,
+                        extract.EntryPath,
+                        outputHandle,
+                        extract.OutputCapacity,
+                        extractCts.Token);
+                    // The App cannot transition its writer into a strict read-only anchor until all
+                    // host-side writable duplicates are closed. Close ours before publishing.
+                    outputHandle.Dispose();
+                    if (handleResult.Status != NativeAbi.StatusOk)
                     {
-                        DeleteArchiveEntry(path);
-                        return;
+                        DiagLog.Write(
+                            "ParserHost",
+                            $"native archive entry output HANDLE extraction failed request={extract.RequestId} status={handleResult.Status}");
                     }
                     extractCts.Token.ThrowIfCancellationRequested();
-                    if (string.IsNullOrWhiteSpace(path))
+                    if (handleResult.Status != NativeAbi.StatusOk)
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Archive entry extraction failed."));
                     else
                     {
-                        pendingArchiveEntryPath = path;
                         await archiveHandoffGate.WaitAsync();
                         try
                         {
-                            var transferred = WindowsHandleTransfer.OpenReadOnlyFile(path);
-                            archiveEntries[extract.RequestId] = (path, transferred.Handle);
-                            pendingArchiveEntryPath = null;
                             if (extractCts.IsCancellationRequested || closedArchiveEntries.ContainsKey(extract.RequestId))
-                            {
-                                if (archiveEntries.TryRemove(extract.RequestId, out var closedEntry))
-                                {
-                                    closedEntry.Handle.Dispose();
-                                    DeleteArchiveEntry(closedEntry.Path);
-                                }
                                 return;
-                            }
                             await channel.SendAsync(new ArchiveEntryExtracted(
                                 extract.RequestId,
-                                transferred.Handle.DangerousGetHandle().ToInt64(),
-                                transferred.Length,
+                                handleResult.Written,
                                 extract.EntryPath));
-                            handoffDelivered = true;
                         }
                         finally
                         {
@@ -529,15 +637,9 @@ while (true)
                 }
                 finally
                 {
+                    outputHandle.Dispose();
+                    compatibilitySource?.Dispose();
                     retainedArchiveLease?.Dispose();
-                    if (!handoffDelivered
-                        && archiveEntries.TryRemove(extract.RequestId, out var failedEntry))
-                    {
-                        failedEntry.Handle.Dispose();
-                        DeleteArchiveEntry(failedEntry.Path);
-                    }
-                    if (pendingArchiveEntryPath is not null)
-                        DeleteArchiveEntry(pendingArchiveEntryPath);
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
                     closedArchiveEntries.TryRemove(extract.RequestId, out _);
@@ -554,15 +656,192 @@ while (true)
                 if (requests.ContainsKey(close.RequestId))
                     closedArchiveEntries[close.RequestId] = 0;
                 Cancel(close.RequestId);
-                if (archiveEntries.TryRemove(close.RequestId, out var archiveEntry))
-                {
-                    archiveEntry.Handle.Dispose();
-                    DeleteArchiveEntry(archiveEntry.Path);
-                }
             }
             finally
             {
                 archiveCloseGate?.Release();
+            }
+            break;
+
+        case OfficeImageOpen open:
+            if (!IsValidRequestId(open.RequestId)
+                || !IsValidRequestId(open.ParentPreviewRequestId)
+                || string.Equals(open.RequestId, open.ParentPreviewRequestId, StringComparison.Ordinal)
+                || open.TargetWidth is 0 or > NativeAbi.MaxOfficeImageDimension
+                || open.TargetHeight is 0 or > NativeAbi.MaxOfficeImageDimension
+                || !ParserNativePreview.IsCanonicalOfficeImageRef(open.ImageRef)
+                || System.Text.Encoding.UTF8.GetByteCount(open.ImageRef)
+                    > NativeAbi.MaxOfficeImageRefUtf8Bytes)
+            {
+                await channel.SendAsync(new PreviewError(open.RequestId, "Invalid Office image request."));
+                break;
+            }
+
+            long officeImageByteLength = 0;
+            RetainedPreviewSourceLease? retainedOfficeImageLease = null;
+            if (!retainedPreviewSources.TryGetValue(
+                    open.ParentPreviewRequestId,
+                    out RetainedPreviewSource? retainedOfficeSource)
+                || !retainedOfficeSource.TryAcquireOfficeLayoutImage(
+                    open.ImageRef,
+                    out officeImageByteLength,
+                    out retainedOfficeImageLease)
+                || retainedOfficeImageLease is null
+                || officeImageByteLength is <= 0 or > NativeAbi.MaxOfficeImageSourceBytes)
+            {
+                retainedOfficeImageLease?.Dispose();
+                await channel.SendAsync(new PreviewError(
+                    open.RequestId,
+                    "Parent Office image reference is unavailable."));
+                break;
+            }
+
+            if (officeImageRasters.ContainsKey(open.RequestId))
+            {
+                retainedOfficeImageLease.Dispose();
+                await channel.SendAsync(new PreviewError(
+                    open.RequestId,
+                    "Office image handoff has not been released."));
+                break;
+            }
+            if (officeImageParents.Count(pair => pair.Value == open.ParentPreviewRequestId) >= 18)
+            {
+                retainedOfficeImageLease.Dispose();
+                await channel.SendAsync(new PreviewError(
+                    open.RequestId,
+                    "Too many Office image requests are active for this preview."));
+                break;
+            }
+
+            var officeImageCts = new CancellationTokenSource();
+            var officeImageHandoffGate = new SemaphoreSlim(1, 1);
+            if (!requests.TryAdd(open.RequestId, officeImageCts))
+            {
+                retainedOfficeImageLease.Dispose();
+                officeImageCts.Dispose();
+                officeImageHandoffGate.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
+            if (!officeImageHandoffGates.TryAdd(open.RequestId, officeImageHandoffGate))
+            {
+                retainedOfficeImageLease.Dispose();
+                requests.TryRemove(open.RequestId, out _);
+                officeImageCts.Dispose();
+                officeImageHandoffGate.Dispose();
+                break;
+            }
+            if (!officeImageParents.TryAdd(open.RequestId, open.ParentPreviewRequestId))
+            {
+                retainedOfficeImageLease.Dispose();
+                officeImageHandoffGates.TryRemove(open.RequestId, out _);
+                requests.TryRemove(open.RequestId, out _);
+                officeImageCts.Dispose();
+                officeImageHandoffGate.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                NativeRasterSection? raster = null;
+                bool handoffDelivered = false;
+                try
+                {
+                    var handleResult = ParserNativePreview.TryExtractOfficeLayoutImageHandle(
+                        retainedOfficeImageLease.Handle,
+                        retainedOfficeImageLease.Length,
+                        retainedOfficeImageLease.LogicalName,
+                        open.ImageRef,
+                        checked((int)open.TargetWidth),
+                        checked((int)open.TargetHeight),
+                        officeImageCts.Token);
+                    if (handleResult.Status != NativeAbi.StatusOk)
+                    {
+                        DiagLog.Write(
+                            "ParserHost",
+                            $"native Office image extraction failed request={open.RequestId} status={handleResult.Status}");
+                    }
+                    raster = handleResult.Raster;
+                    officeImageCts.Token.ThrowIfCancellationRequested();
+                    if (raster is null)
+                    {
+                        await channel.SendAsync(new PreviewError(
+                            open.RequestId,
+                            "Office image extraction failed."));
+                        return;
+                    }
+
+                    await officeImageHandoffGate.WaitAsync();
+                    try
+                    {
+                        officeImageCts.Token.ThrowIfCancellationRequested();
+                        officeImageRasters[open.RequestId] = raster;
+                        try
+                        {
+                            await channel.SendAsync(new OfficeImageReady(
+                                open.RequestId,
+                                raster.Section.Handle.DangerousGetHandle().ToInt64(),
+                                raster.PacketLength,
+                                raster.Width,
+                                raster.Height));
+                            raster = null;
+                            handoffDelivered = true;
+                        }
+                        catch
+                        {
+                            if (officeImageRasters.TryRemove(
+                                open.RequestId,
+                                out NativeRasterSection? failed))
+                            {
+                                failed.Dispose();
+                            }
+                            throw;
+                        }
+                    }
+                    finally
+                    {
+                        officeImageHandoffGate.Release();
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write(
+                        "ParserHost",
+                        $"Office image extraction failed request={open.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    retainedOfficeImageLease.Dispose();
+                    raster?.Dispose();
+                    if (requests.TryRemove(open.RequestId, out var current))
+                        current.Dispose();
+                    officeImageHandoffGates.TryRemove(open.RequestId, out _);
+                    if (!handoffDelivered)
+                        officeImageParents.TryRemove(open.RequestId, out _);
+                }
+            });
+            break;
+
+        case OfficeImageClose close when IsValidRequestId(close.RequestId):
+            if (officeImageHandoffGates.TryGetValue(
+                close.RequestId,
+                out var officeImageCloseGate))
+            {
+                await officeImageCloseGate.WaitAsync();
+            }
+            try
+            {
+                Cancel(close.RequestId);
+                if (officeImageRasters.TryRemove(close.RequestId, out var officeImageRaster))
+                    officeImageRaster.Dispose();
+                officeImageParents.TryRemove(close.RequestId, out _);
+            }
+            finally
+            {
+                officeImageCloseGate?.Release();
             }
             break;
 
@@ -630,11 +909,9 @@ while (true)
             }
             _ = Task.Run(async () =>
             {
-                string? tempPath = null;
-                bool handoffDelivered = false;
+                NativeRasterSection? raster = null;
                 try
                 {
-                    byte[]? raster;
                     if (retainedHeroLease is not null)
                     {
                         var handleResult = extract.Kind.Equals("package", StringComparison.OrdinalIgnoreCase)
@@ -664,37 +941,33 @@ while (true)
                             heroCts.Token);
                     }
                     heroCts.Token.ThrowIfCancellationRequested();
-                    if (raster is null || !ParserNativePreview.IsValidRaster(raster, raster.Length))
+                    if (raster is null)
                     {
                         await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster extraction failed."));
                         return;
                     }
 
-                    tempPath = WriteHeroRaster(extract.RequestId, raster, rasterRoot);
-                    heroCts.Token.ThrowIfCancellationRequested();
-                    if (tempPath is null)
-                    {
-                        await channel.SendAsync(new PreviewError(extract.RequestId, "Hero raster handoff failed."));
-                        return;
-                    }
-
-                    int width = BitConverter.ToInt32(raster, 0);
-                    int height = BitConverter.ToInt32(raster, 4);
                     await heroHandoffGate.WaitAsync();
                     try
                     {
                         heroCts.Token.ThrowIfCancellationRequested();
-                        var transferred = WindowsHandleTransfer.OpenReadOnlyFile(tempPath);
-                        if (transferred.Length != raster.LongLength)
+                        heroRasters[extract.RequestId] = raster;
+                        try
                         {
-                            transferred.Handle.Dispose();
-                            throw new InvalidDataException("Hero raster changed before handle transfer.");
+                            await channel.SendAsync(new HeroRasterExtracted(
+                                extract.RequestId,
+                                raster.Section.Handle.DangerousGetHandle().ToInt64(),
+                                raster.PacketLength,
+                                raster.Width,
+                                raster.Height));
+                            raster = null; // The handoff dictionary owns it until close or disconnect.
                         }
-                        heroRasters[extract.RequestId] = (tempPath, transferred.Handle);
-                        await channel.SendAsync(new HeroRasterExtracted(
-                            extract.RequestId, transferred.Handle.DangerousGetHandle().ToInt64(), transferred.Length, width, height));
-                        handoffDelivered = true;
-                        tempPath = null; // retained until the App acknowledges consumption.
+                        catch
+                        {
+                            if (heroRasters.TryRemove(extract.RequestId, out NativeRasterSection? failed))
+                                failed.Dispose();
+                            throw;
+                        }
                     }
                     finally
                     {
@@ -710,13 +983,7 @@ while (true)
                 finally
                 {
                     retainedHeroLease?.Dispose();
-                    if (!handoffDelivered
-                        && heroRasters.TryRemove(extract.RequestId, out var failedRaster))
-                    {
-                        failedRaster.Handle.Dispose();
-                        DeleteHeroRaster(failedRaster.Path);
-                    }
-                    if (tempPath is not null) DeleteHeroRaster(tempPath);
+                    raster?.Dispose();
                     if (requests.TryRemove(extract.RequestId, out var current))
                         current.Dispose();
                     heroHandoffGates.TryRemove(extract.RequestId, out _);
@@ -731,10 +998,7 @@ while (true)
             {
                 Cancel(close.RequestId);
                 if (heroRasters.TryRemove(close.RequestId, out var raster))
-                {
-                    raster.Handle.Dispose();
-                    DeleteHeroRaster(raster.Path);
-                }
+                    raster.Dispose();
             }
             finally
             {
@@ -750,16 +1014,11 @@ while (true)
 
 foreach (string requestId in requests.Keys)
     Cancel(requestId);
-foreach (var entry in archiveEntries.Values)
-{
-    entry.Handle.Dispose();
-    DeleteArchiveEntry(entry.Path);
-}
 foreach (var raster in heroRasters.Values)
-{
-    raster.Handle.Dispose();
-    DeleteHeroRaster(raster.Path);
-}
+    raster.Dispose();
+foreach (var raster in officeImageRasters.Values)
+    raster.Dispose();
+officeImageParents.Clear();
 foreach (string requestId in retainedPreviewSources.Keys)
     DeleteRetainedPreviewSource(requestId);
 
@@ -794,75 +1053,82 @@ static bool IsValidProbe(
        && !string.IsNullOrWhiteSpace(probe.Kind)
        && probe.Size >= 0;
 
-static string? WriteHeroRaster(string requestId, byte[] raster, string root)
+static bool TryCollectOfficeLayoutImages(
+    PreviewReady ready,
+    out Dictionary<string, long> images)
 {
-    try
+    images = new Dictionary<string, long>(StringComparer.Ordinal);
+    if (ready.OfficeLayout is null)
+        return true;
+
+    foreach (var item in ready.OfficeLayout.Pages.SelectMany(static page => page.Items))
     {
-        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return null;
-
-        string directory = Path.Combine(root, "raster-" + requestId);
-        Directory.CreateDirectory(directory);
-        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-            return null;
-
-        string path = Path.Combine(directory, "hero.bgra");
-        using var stream = new FileStream(path, new FileStreamOptions
+        if (item.ImageRef is null)
         {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.Write,
-            Share = FileShare.None,
-            Options = FileOptions.WriteThrough,
-        });
-        stream.Write(raster);
-        return path;
-    }
-    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-    {
-        return null;
-    }
-}
-
-static void DeleteHeroRaster(string path)
-{
-    try
-    {
-        File.Delete(path);
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null) Directory.Delete(directory, recursive: false);
-    }
-    catch { }
-}
-
-static void DeleteArchiveEntry(string path)
-{
-    try
-    {
-        File.Delete(path);
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null) Directory.Delete(directory, recursive: false);
-    }
-    catch { }
-}
-
-static void CleanupStaleHeroRasters(string root)
-{
-    try
-    {
-        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return;
-
-        foreach (string directory in Directory.EnumerateDirectories(root, "raster-*"))
-        {
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
-                Directory.Delete(directory, recursive: true);
+            if (item.ImageByteLength != 0)
+            {
+                images.Clear();
+                return false;
+            }
+            continue;
         }
+        if (!string.Equals(item.Kind, "image", StringComparison.OrdinalIgnoreCase)
+            || !ParserNativePreview.IsCanonicalOfficeImageRef(item.ImageRef)
+            || System.Text.Encoding.UTF8.GetByteCount(item.ImageRef)
+                > NativeAbi.MaxOfficeImageRefUtf8Bytes
+            || item.ImageByteLength is <= 0 or > NativeAbi.MaxOfficeImageSourceBytes)
+        {
+            images.Clear();
+            return false;
+        }
+
+        if (images.TryGetValue(item.ImageRef, out long existingLength))
+        {
+            if (existingLength != item.ImageByteLength)
+            {
+                images.Clear();
+                return false;
+            }
+            continue;
+        }
+
+        if (images.Count >= 18)
+        {
+            images.Clear();
+            return false;
+        }
+        images.Add(item.ImageRef, item.ImageByteLength);
     }
-    catch { }
+    return true;
 }
 
 void DeleteRetainedPreviewSource(string requestId)
 {
     if (retainedPreviewSources.TryRemove(requestId, out var source))
         source.Dispose();
+}
+
+async Task CloseOfficeImagesForParentAsync(string parentRequestId)
+{
+    string[] childRequestIds = officeImageParents
+        .Where(pair => string.Equals(pair.Value, parentRequestId, StringComparison.Ordinal))
+        .Select(static pair => pair.Key)
+        .ToArray();
+    foreach (string childRequestId in childRequestIds)
+    {
+        SemaphoreSlim? gate = null;
+        if (officeImageHandoffGates.TryGetValue(childRequestId, out gate))
+            await gate.WaitAsync();
+        try
+        {
+            Cancel(childRequestId);
+            if (officeImageRasters.TryRemove(childRequestId, out var raster))
+                raster.Dispose();
+            officeImageParents.TryRemove(childRequestId, out _);
+        }
+        finally
+        {
+            gate?.Release();
+        }
+    }
 }

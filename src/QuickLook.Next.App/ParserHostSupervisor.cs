@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.UI.Dispatching;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
@@ -54,7 +55,9 @@ internal sealed class ParserHostSupervisor
         int generation = ++_generation;
         _handleOpenSends.Clear();
         DiagLog.Write("App", $"ParserHost starting gen={generation}; restart={generation > 1}");
-        _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generationReady =
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ready = generationReady;
         _channel?.Dispose();
         _server?.Dispose();
         TryKillHost();
@@ -114,10 +117,10 @@ internal sealed class ParserHostSupervisor
         {
             _channel = new PipeChannel(_server);
             await _channel.SendAsync(new Hello(Environment.ProcessId, _sessionToken));
-            _ = ReadLoopAsync(_channel, generation);
+            _ = ReadLoopAsync(_channel, generation, generationReady);
             using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             readyCts.CancelAfter(HostConnectTimeout);
-            await _ready.Task.WaitAsync(readyCts.Token);
+            await generationReady.Task.WaitAsync(readyCts.Token);
             DiagLog.Write("App", $"ParserHost ready gen={generation}; pid={_host.Id}");
         }
         catch
@@ -137,7 +140,16 @@ internal sealed class ParserHostSupervisor
 
     private bool IsConnected
     {
-        get { try { return _channel is not null && _host is { HasExited: false }; } catch { return false; } }
+        get
+        {
+            try
+            {
+                return _channel is not null
+                    && _host is { HasExited: false }
+                    && _ready.Task.IsCompletedSuccessfully;
+            }
+            catch { return false; }
+        }
     }
 
     public (string RequestId, Task<ControlMessage> Completion) BeginOpen(
@@ -375,60 +387,192 @@ internal sealed class ParserHostSupervisor
         string? parentPreviewRequestId,
         CancellationToken cancellationToken)
     {
-        if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
+        PipeChannel channel = _channel ?? throw new InvalidOperationException("ParserHost not connected");
+        Process host = _host ?? throw new InvalidOperationException("ParserHost process is unavailable");
+        int generation = _generation;
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
-        ArchiveEntryHandoff? handoff = null;
+        ArchiveEntryHandoff? output = null;
+        bool delivered = false;
         try
         {
-            await _channel.SendAsync(new ArchiveEntryExtract(requestId, archivePath, entryPath)
+            output = CreateArchiveEntryOutput(requestId, entryPath);
+            long remoteOutputHandle;
+            try
             {
-                ParentPreviewRequestId = parentPreviewRequestId,
-            }, cancellationToken);
+                remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                    output.OutputHandle,
+                    host.SafeHandle);
+            }
+            catch
+            {
+                _pending.Cancel(requestId);
+                throw;
+            }
+
+            try
+            {
+                await channel.SendAsync(new ArchiveEntryExtract(
+                    requestId,
+                    archivePath,
+                    entryPath,
+                    remoteOutputHandle,
+                    NativeAbi.MaxArchiveEntryOutputBytes)
+                {
+                    ParentPreviewRequestId = parentPreviewRequestId,
+                }, cancellationToken);
+                delivered = true;
+            }
+            catch
+            {
+                // A duplicated remote HANDLE cannot be rolled back reliably after a failed send.
+                // Process teardown closes it and prevents a later message from reusing the value.
+                if (generation == _generation)
+                    RecycleHost("archive output HANDLE request could not be delivered");
+                throw;
+            }
+
             ControlMessage response = await completion.WaitAsync(cancellationToken);
-            if (response is ArchiveEntryExtracted extracted)
-                handoff = CreateArchiveEntryHandoff(extracted);
-            return handoff;
+            if (response is ArchiveEntryExtracted extracted
+                && generation == _generation
+                && string.Equals(extracted.LogicalName, entryPath, StringComparison.Ordinal)
+                && output.SealReadOnly(extracted.FileLength))
+            {
+                ArchiveEntryHandoff handoff = output;
+                output = null;
+                return handoff;
+            }
+            return null;
         }
         finally
         {
             _pending.Cancel(requestId);
-            if (handoff is null)
+            if (output is not null)
             {
-                try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(requestId)) ?? Task.CompletedTask); }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+                if (delivered && generation == _generation)
+                {
+                    try { await channel.SendAsync(new ArchiveEntryExtractClose(requestId)); }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+                }
+                output.Dispose();
             }
         }
     }
 
-    public async Task ReleaseArchiveEntryAsync(ArchiveEntryHandoff handoff)
+    public Task ReleaseArchiveEntryAsync(ArchiveEntryHandoff handoff)
     {
-        try { await (_channel?.SendAsync(new ArchiveEntryExtractClose(handoff.RequestId)) ?? Task.CompletedTask); }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
-        finally { handoff.Dispose(); }
+        handoff.Dispose();
+        return Task.CompletedTask;
+    }
+
+    private static ArchiveEntryHandoff CreateArchiveEntryOutput(string requestId, string entryPath)
+    {
+        string requestDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNext",
+            "app-preview",
+            requestId);
+        string extension = Path.GetExtension(entryPath);
+        if (extension.Length > 32
+            || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
+        {
+            extension = "";
+        }
+        string path = Path.Combine(requestDirectory, "entry" + extension.ToLowerInvariant());
+        try
+        {
+            string root = Path.GetDirectoryName(requestDirectory)!;
+            Directory.CreateDirectory(root);
+            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Archive output root cannot be a reparse point.");
+            Directory.CreateDirectory(requestDirectory);
+            if ((File.GetAttributes(requestDirectory) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Archive output directory cannot be a reparse point.");
+            var writer = new FileStream(
+                path,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.ReadWrite | FileShare.Delete);
+            return new ArchiveEntryHandoff(requestId, path, writer);
+        }
+        catch
+        {
+            try { Directory.Delete(requestDirectory, recursive: true); } catch { }
+            throw;
+        }
     }
 
     public async Task<NativeRasterImage?> ExtractHeroRasterAsync(
         string path, string kind, string? parentPreviewRequestId, CancellationToken cancellationToken)
     {
-        if (_channel is null) throw new InvalidOperationException("ParserHost not connected");
+        PipeChannel channel = _channel ?? throw new InvalidOperationException("ParserHost not connected");
+        Process sourceHost = _host ?? throw new InvalidOperationException("ParserHost process is unavailable");
+        int sourceGeneration = _generation;
         var (requestId, completion) = _pending.Begin(PreviewTimeout);
         _ = StopOnTimeoutAsync(completion, requestId);
         try
         {
-            await _channel.SendAsync(new HeroRasterExtract(requestId, path, kind)
+            await channel.SendAsync(new HeroRasterExtract(requestId, path, kind)
             {
                 ParentPreviewRequestId = parentPreviewRequestId,
             }, cancellationToken);
             ControlMessage response = await completion.WaitAsync(cancellationToken);
-            return response is HeroRasterExtracted extracted
-                ? ReadHeroRaster(extracted)
+            return response is HeroRasterExtracted extracted && sourceGeneration == _generation
+                ? ReadHeroRaster(extracted, sourceHost)
                 : null;
         }
         finally
         {
             _pending.Cancel(requestId);
-            try { await (_channel?.SendAsync(new HeroRasterExtractClose(requestId)) ?? Task.CompletedTask); }
+            try { await channel.SendAsync(new HeroRasterExtractClose(requestId)); }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+        }
+    }
+
+    public async Task<NativeRasterImage?> ExtractOfficeImageAsync(
+        string parentPreviewRequestId,
+        string imageRef,
+        int targetWidth,
+        int targetHeight,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidRequestId(parentPreviewRequestId))
+            throw new ArgumentException("A valid parent preview request ID is required.", nameof(parentPreviewRequestId));
+        if (!IsCanonicalOfficeImageRef(imageRef)
+            || Encoding.UTF8.GetByteCount(imageRef) > NativeAbi.MaxOfficeImageRefUtf8Bytes)
+        {
+            throw new ArgumentException("A canonical Office image reference is required.", nameof(imageRef));
+        }
+        if (targetWidth is <= 0 or > NativeAbi.MaxOfficeImageDimension)
+            throw new ArgumentOutOfRangeException(nameof(targetWidth));
+        if (targetHeight is <= 0 or > NativeAbi.MaxOfficeImageDimension)
+            throw new ArgumentOutOfRangeException(nameof(targetHeight));
+
+        PipeChannel channel = _channel ?? throw new InvalidOperationException("ParserHost not connected");
+        Process sourceHost = _host ?? throw new InvalidOperationException("ParserHost process is unavailable");
+        int sourceGeneration = _generation;
+        var (requestId, completion) = _pending.Begin(PreviewTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
+        try
+        {
+            await channel.SendAsync(new OfficeImageOpen(
+                requestId,
+                parentPreviewRequestId,
+                imageRef,
+                checked((uint)targetWidth),
+                checked((uint)targetHeight)), cancellationToken);
+            ControlMessage response = await completion.WaitAsync(cancellationToken);
+            return response is OfficeImageReady ready
+                && sourceGeneration == _generation
+                && ready.Width <= targetWidth
+                && ready.Height <= targetHeight
+                ? ReadOfficeImageRaster(ready, sourceHost)
+                : null;
+        }
+        finally
+        {
+            _pending.Cancel(requestId);
+            try { await channel.SendAsync(new OfficeImageClose(requestId)); }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
         }
     }
@@ -454,20 +598,25 @@ internal sealed class ParserHostSupervisor
         }
     }
 
-    private async Task ReadLoopAsync(PipeChannel channel, int generation)
+    private async Task ReadLoopAsync(
+        PipeChannel channel,
+        int generation,
+        TaskCompletionSource generationReady)
     {
         try
         {
             while (generation == _generation)
             {
                 ControlMessage? message = await channel.ReceiveAsync();
+                if (generation != _generation)
+                    return;
                 if (message is null)
                     throw new EndOfStreamException("ParserHost pipe closed");
                 switch (message)
                 {
                     case ParserReady:
                         DiagLog.Write("App", "ParserHost ready");
-                        _ready.TrySetResult();
+                        generationReady.TrySetResult();
                         break;
                     case PreviewReady ready:
                         _recycleOnCancel.TryRemove(ready.RequestId, out _);
@@ -481,6 +630,9 @@ internal sealed class ParserHostSupervisor
                     case HeroRasterExtracted extracted:
                         _pending.TryComplete(extracted.RequestId, extracted);
                         break;
+                    case OfficeImageReady ready:
+                        _pending.TryComplete(ready.RequestId, ready);
+                        break;
                 }
             }
         }
@@ -488,7 +640,7 @@ internal sealed class ParserHostSupervisor
         {
             if (generation != _generation)
                 return;
-            _ready.TrySetException(ex);
+            generationReady.TrySetException(ex);
             _recycleOnCancel.Clear();
             _handleOpenSends.Clear();
             _pending.FailAll(ex);
@@ -606,7 +758,7 @@ internal sealed class ParserHostSupervisor
         {
             Directory.CreateDirectory(root);
             HostProcessLauncher.GrantRestrictedWriteAccess(root);
-            foreach (string child in new[] { "logs", "archive-preview", "parser-raster" })
+            foreach (string child in new[] { "logs" })
                 Directory.CreateDirectory(Path.Combine(root, child));
             return root;
         }
@@ -651,95 +803,105 @@ internal sealed class ParserHostSupervisor
         catch { }
     }
 
-    private NativeRasterImage? ReadHeroRaster(HeroRasterExtracted extracted)
+    private static NativeRasterImage? ReadHeroRaster(
+        HeroRasterExtracted extracted,
+        Process sourceHost)
+        => ReadRasterSection(
+            extracted.SectionHandle,
+            extracted.PacketLength,
+            extracted.Width,
+            extracted.Height,
+            sourceHost,
+            maxRasterBytes: 16 * 1024 * 1024,
+            maxDimension: 4096);
+
+    private static NativeRasterImage? ReadOfficeImageRaster(
+        OfficeImageReady ready,
+        Process sourceHost)
+        => ReadRasterSection(
+            ready.SectionHandle,
+            ready.PacketLength,
+            ready.Width,
+            ready.Height,
+            sourceHost,
+            NativeAbi.MaxOfficeImagePacketBytes,
+            NativeAbi.MaxOfficeImageDimension);
+
+    private static NativeRasterImage? ReadRasterSection(
+        long sectionHandle,
+        long packetLength,
+        int reportedWidth,
+        int reportedHeight,
+        Process sourceHost,
+        long maxRasterBytes,
+        int maxDimension)
     {
-        const int maxRasterBytes = 16 * 1024 * 1024;
-        const int maxDimension = 4096;
         try
         {
-            if (_host is null)
-                return null;
-            using var handle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                _host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
-            if (extracted.PacketLength is <= 8 or > maxRasterBytes)
-                return null;
-            using var stream = new FileStream(handle, FileAccess.Read);
-            if (stream.Length != extracted.PacketLength)
+            if (sourceHost.HasExited
+                || packetLength is <= 8
+                || packetLength > maxRasterBytes
+                || packetLength > int.MaxValue
+                || reportedWidth is <= 0
+                || reportedWidth > maxDimension
+                || reportedHeight is <= 0
+                || reportedHeight > maxDimension)
                 return null;
 
-            byte[] raster = new byte[checked((int)stream.Length)];
-            int offset = 0;
-            while (offset < raster.Length)
-            {
-                int read = stream.Read(raster, offset, raster.Length - offset);
-                if (read == 0) return null;
-                offset += read;
-            }
-
-            int width = BitConverter.ToInt32(raster, 0);
-            int height = BitConverter.ToInt32(raster, 4);
+            using SharedSectionView view = SharedSectionView.DuplicateAndMapReadOnly(
+                sourceHost.SafeHandle,
+                sectionHandle,
+                checked((int)packetLength));
+            ReadOnlySpan<byte> raster = view.Bytes;
+            int width = BitConverter.ToInt32(raster[..4]);
+            int height = BitConverter.ToInt32(raster[4..8]);
             int pixelBytes = checked(width * height * 4);
-            if (width is <= 0 or > maxDimension
-                || height is <= 0 or > maxDimension
-                || extracted.Width != width
-                || extracted.Height != height
+            if (width <= 0
+                || width > maxDimension
+                || height <= 0
+                || height > maxDimension
+                || reportedWidth != width
+                || reportedHeight != height
                 || raster.Length != 8 + pixelBytes)
                 return null;
 
-            byte[] bgra = new byte[pixelBytes];
-            Buffer.BlockCopy(raster, 8, bgra, 0, pixelBytes);
+            byte[] bgra = raster[8..].ToArray();
             return new NativeRasterImage(bgra, width, height);
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
+        catch (Exception ex) when (ex is ArgumentException
+            or System.ComponentModel.Win32Exception
+            or InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or OverflowException)
         {
             return null;
         }
     }
 
-    private ArchiveEntryHandoff? CreateArchiveEntryHandoff(ArchiveEntryExtracted extracted)
-    {
-        const long maxArchiveEntryBytes = 64L * 1024 * 1024;
-        if (_host is null || extracted.FileLength is < 0 or > maxArchiveEntryBytes)
-            return null;
+    private static bool IsValidRequestId(string? requestId)
+        => requestId is { Length: 32 }
+            && requestId.All(static c => char.IsAsciiHexDigit(c));
 
-        string requestDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNext", "app-preview", extracted.RequestId);
-        string extension = Path.GetExtension(extracted.LogicalName);
-        if (extension.Length > 32 || extension.Any(static c => !char.IsAsciiLetterOrDigit(c) && c != '.'))
-            extension = "";
-        string path = Path.Combine(requestDirectory, "entry" + extension.ToLowerInvariant());
-        try
+    private static bool IsCanonicalOfficeImageRef(string? imageRef)
+    {
+        if (string.IsNullOrWhiteSpace(imageRef)
+            || imageRef.Length > NativeAbi.MaxOfficeImageRefUtf8Bytes
+            || imageRef[0] == '/'
+            || imageRef.Contains('\\')
+            || imageRef.Contains(':'))
         {
-            using var sourceHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                _host.SafeHandle, extracted.FileHandle, extracted.FileLength);
-            using var source = new FileStream(sourceHandle, FileAccess.Read);
-            string root = Path.GetDirectoryName(requestDirectory)!;
-            Directory.CreateDirectory(root);
-            if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-                return null;
-            Directory.CreateDirectory(requestDirectory);
-            if ((File.GetAttributes(requestDirectory) & FileAttributes.ReparsePoint) != 0)
-                return null;
-            var anchor = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
-            try
-            {
-                source.CopyTo(anchor);
-                anchor.Flush(flushToDisk: true);
-                if (anchor.Length != extracted.FileLength)
-                    throw new InvalidDataException("Archive entry changed during anchored copy.");
-                anchor.Position = 0;
-                return new ArchiveEntryHandoff(extracted.RequestId, path, anchor);
-            }
-            catch
-            {
-                anchor.Dispose();
-                throw;
-            }
+            return false;
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or OverflowException)
-        {
-            try { Directory.Delete(requestDirectory, recursive: true); } catch { }
-            return null;
-        }
+
+        string[] segments = imageRef.Split('/');
+        return segments.Length >= 3
+            && segments[0] is "word" or "ppt" or "xl"
+            && segments[1] == "media"
+            && segments.All(static segment =>
+                segment.Length > 0
+                && segment is not "." and not "..");
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -755,6 +917,52 @@ internal sealed class ArchiveEntryHandoff(
     private FileStream? _anchor = anchor;
     public string RequestId { get; } = requestId;
     public string Path { get; } = path;
+    public Microsoft.Win32.SafeHandles.SafeFileHandle OutputHandle
+        => _anchor?.SafeFileHandle
+            ?? throw new ObjectDisposedException(nameof(ArchiveEntryHandoff));
+
+    public bool SealReadOnly(long expectedLength)
+    {
+        if (expectedLength is < 0 or > NativeAbi.MaxArchiveEntryOutputBytes)
+            return false;
+        FileStream? writer = _anchor;
+        if (writer is null || !writer.CanWrite)
+            return false;
+
+        Microsoft.Win32.SafeHandles.SafeFileHandle? transitional = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? readOnly = null;
+        try
+        {
+            if (writer.Length != expectedLength)
+                return false;
+            transitional = WindowsHandleTransfer.ReopenTransitionalReadOnlyFile(
+                writer.SafeFileHandle,
+                expectedLength);
+            writer.Dispose();
+            _anchor = null;
+            readOnly = WindowsHandleTransfer.ReopenReadOnlyFile(transitional, expectedLength);
+            transitional.Dispose();
+            transitional = null;
+            _anchor = new FileStream(readOnly, FileAccess.Read);
+            readOnly = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or System.ComponentModel.Win32Exception
+                                   or IOException
+                                   or ObjectDisposedException
+                                   or UnauthorizedAccessException
+                                   or NotSupportedException
+                                   or OverflowException)
+        {
+            return false;
+        }
+        finally
+        {
+            transitional?.Dispose();
+            readOnly?.Dispose();
+        }
+    }
 
     public void Dispose()
     {

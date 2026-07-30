@@ -28,8 +28,9 @@ and commit so changes remain independently reviewable and revertible.
 
 ## P3: Strategic architecture
 
-- [ ] Move animated decode/playback into RasterHost shared surfaces with a
-  decoded-byte budget.
+- [ ] Replace the final CPU shared-section-to-`WriteableBitmap` animation upload with
+  renderer-consumable GPU shared surfaces if profiling justifies the additional D3D synchronization
+  contract. Per-frame managed arrays and packet copies have already been removed.
 - [ ] Add AppContainer isolation and enforced network denial to hostile-format hosts after the
   ParserHost write-restricted boundary and RasterHost compatibility split are complete.
 - [ ] Split the native preview implementation by format family.
@@ -41,6 +42,168 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Add a focused manual version/build/update workflow. Root `build.ps1` treats `VERSION` as the
+  authoritative semantic version, transactionally synchronizes the Rust manifest and lock package,
+  bypasses stale persistent .NET build servers, and prints the local App path. `-Test` covers the
+  Release Rust workspace and all .NET projects. The explicit `-Install` path enables those tests,
+  writes the same hash-bound proof used by formal packaging, selects a monotonic `X.Y.Z.N` MSIX
+  revision, signs with the pinned existing identity, and updates only the current user's matching
+  package without uninstall or downgrade behavior. Normal builds never change the installed MSIX.
+  Local, beta, and stable revisions occupy ordered ranges so every same-base forward channel
+  transition remains a valid MSIX upgrade.
+  - Verification: `pwsh -NoProfile -File build.ps1 -NoRestore -Test`
+  - Verification: `pwsh -NoProfile -File tools/pack-msix.ps1 -Version 0.3.0.0 -SkipBuild -SkipSystemImageSmoke`
+  - Guards: `tools/test-set-version.ps1`, `tools/test-build-local.ps1`,
+    `tools/test-local-msix-version.ps1`, `tools/test-formal-msix-version.ps1`,
+    `tools/test-local-msix-update.ps1`
+
+- [x] Remove the ParserHost cold-start/JSON readiness race. ParserHost connects its authenticated
+  pipe before native ABI initialization; App supervision uses a 15-second connect/ready budget and
+  does not publish a generation as connected until `ParserReady` completes. The restricted smoke
+  uses a physical `.bin` plus a nonexistent logical `.json` and asserts exact JSON content/language,
+  while integration coverage routes the same logical format through the HANDLE ABI.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+
+- [x] Remove App-side per-frame animation arrays. The App now owns one read-only duplicate of the
+  validated RasterHost frame section for the playback lifetime, stores only bounded delay/offset
+  descriptors, and writes each `ReadOnlySpan<byte>` directly to the fixed WinRT pixel buffer.
+  Waveform reads and section disposal use the same lifetime lock; stop, clear, stale-result,
+  exception, and unadopted-result paths all release the mapping.
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Eliminate App-process Windows Property Handler reads and replace the image sidecar with three
+  optional, path-free RasterHost HANDLE readers. Capability bit 19 gates bounded Rust typed JSON;
+  missing fields are supplemented by the fixed System32 photo Property Handler over a read-only
+  `IInitializeWithStream` object and then WIC over a HANDLE-backed WinRT stream. The readers run in
+  parallel with field precedence `native > Property Handler > WIC`; the Property Handler module is
+  loaded directly from System32 rather than COM registration and is retained for the Host lifetime.
+  RasterHost enforces a 1.5-second child budget, single-worker reader gates, bounded input/output/
+  property/string/read counts, and a 250-ms Property Handler drain fail-stop. The first surface
+  remains independent. WIC work runs behind the same hard watchdog and exits the isolated host with
+  code 33 if cancellation cannot drain within 250 ms. Integration coverage proves physical `.bin`
+  files with nonexistent logical
+  `.png`/`.bmp` names return metadata from the exact retained object after parent close; a direct
+  Property Handler test returns 1x1/96-DPI BMP fields; a missing parent fails closed.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Extract the bounded JPEG/PNG/GIF/WebP/TIFF image-metadata family from the monolithic native
+  `preview.rs` into `preview/image_metadata.rs`. The parent retains only the stable public/path and
+  HANDLE reader exports; parsing helpers and metadata DTO stay private to the focused module.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+
+- [x] Extract bounded GIF/WebP/APNG animation classification and Torrent/bencode parsing into the
+  focused `preview/animation_probe.rs` and `preview/torrent.rs` child modules. The parent keeps only
+  stable routing/re-exports and shared bounded Reader helpers; the 4-MiB animation probe, full-scan
+  static decision, 16-MiB Torrent input, depth-64, and node-100000 limits remain guarded.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+  - Guard: `tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Extract executable/PE/CLR/AuthentiCode and EPUB/FB2 ebook parsing into focused
+  `preview/executable.rs` and `preview/ebook.rs` modules. Shared bounded binary readers now live in
+  `preview/common.rs`; the parent retains only stable path/Reader exports plus the few Windows
+  version helpers reused by minidump metadata. Existing HANDLE position, invalid-HANDLE, bounded
+  decompression, PE resource, AuthentiCode, CLR metadata, EPUB, and FB2 tests compile against the
+  same implementations after the split.
+  - Verification: `cargo test --locked -p quicklook_next_native --lib`
+  - Verification: `cargo check --locked -p quicklook_next_native`
+
+- [x] Add `tools/benchmark-handle-handoff.ps1`, a bounded same-process microbenchmark that compares
+  an exact `ReOpenFile` retained-HANDLE lease with the former full `WriteThrough`/`Flush(true)`
+  anchor copy. It reports latency and bytes written, uses 32 MiB/five iterations by default, and
+  validates its exact system-temp child before recursive cleanup. It is not an end-to-end IPC
+  benchmark.
+  - Verification: `pwsh -NoProfile -File tools/benchmark-handle-handoff.ps1`
+
+- [x] Stream archive entries directly into an App-owned bounded output HANDLE. The App creates the
+  final zero-length child anchor, duplicates write authority into ParserHost, and recycles the Host
+  if that transferred value cannot be delivered. ParserHost adopts the HANDLE before validating the
+  envelope, resolves a retained parent lease or bounded compatibility source, and calls capability
+  bit 18 `ql_extract_archive_entry_to_output_handle`. Rust validates/reopens both disk HANDLEs,
+  streams checked 64 KiB chunks under the existing 64 MiB/1,000:1/four-second limits, and reports
+  the exact byte count. ParserHost closes write authority before replying; the App transitions the
+  same object to a strict read-only anchor. No Rust/ParserHost child temp path, Host-owned output
+  HANDLE response, App `CopyTo`, or forced disk flush remains.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Generate native static-image waveform density in the final Rust pixel-conversion loop and
+  return it through additive capability bit 17 and an exact packet contract. PNG/JPEG/BMP/TIFF/
+  WebP and SVG accumulate the fixed 192x96 planar RGB density while producing premultiplied BGRA,
+  with a one-million-sample ceiling and no second BGRA scan. RasterHost publishes the surface and
+  readiness before the optional waveform message. WIC/system/older-native paths retain the bounded
+  managed fallback.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Remove Office layout images from the control-channel payload. Rust now emits parent-bound
+  canonical `imageRef`/`imageByteLength` metadata, advertises HANDLE capability bit 16, and exposes
+  `ql_extract_office_layout_image_handle` for bounded lazy decode. ParserHost snapshots the exact
+  published ref whitelist onto the retained Office source, acquires an independent lease for each
+  child, and returns checked BGRA through an unnamed section owned until close/failure/replacement/
+  disconnect. The App binds the response to the captured Host generation, duplicates only
+  `SECTION_MAP_READ`, maps and validates the exact packet, and closes the remote owner. Office page
+  materialization starts ref-deduplicated requests through a two-slot gate, cancels them with the
+  preview session, and uploads BGRA to `WriteableBitmap`; legacy `ImageBase64` remains accepted only
+  for compatibility with older native JSON. The maximum 18-large-image Rust regression stays below
+  the 4 MiB pipe limit, and a 32-cycle ParserHost regression bounds HANDLE growth and proves close
+  and disconnect cleanup without an Office-image temp directory.
+  - Verification: `cargo test --workspace --release --locked`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release --no-restore`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore`
+  - Guards: `tools/guard-architecture.ps1 -SkipDist`,
+    `tools/guard-performance-bounds.ps1`
+
+- [x] Extract the bounded Text/Markdown/CSV/TSV family from the monolithic native
+  `preview.rs` into `preview/text.rs`, including its format registry, Unicode truncation,
+  Markdown AST, delimited-table budgets, and nine focused tests. The parent module now exposes only
+  the four reader/path routing entry points while the broader format-family split remains ongoing.
+  - Verification: `cargo test --locked --lib preview::text::tests`
+  - Verification: `cargo check --workspace --locked`
+  - Guard: `tools/guard-performance-bounds.ps1`
+
+- [x] Remove animation and Hero raster packet files from the hot path. Rust now writes bounded
+  GIF/WebP/APNG frame packets directly into RasterHost-owned anonymous sections and bounded
+  Office/package Hero packets into ParserHost-owned anonymous sections. The App duplicates only
+  `SECTION_MAP_READ`, maps the exact claimed length, validates packet geometry/layout, and
+  acknowledges the Host owner. Close, failed publication, replacement, and disconnect release the
+  remote section; an already-mapped App view remains independently readable. Legacy
+  `raster-animation` and `parser-raster` writable directories are no longer created.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release --no-restore`
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
+
+- [x] Move GIF/WebP/APNG animation candidacy into the bounded Rust file probe with tri-state
+  `isAnimated` metadata, keep unknown metadata backward compatible, and give retained-HANDLE
+  animation decoding an independent 20-second timeout that preserves the static fallback.
+  RasterHost integration tests verify that the first and last decoded frames differ.
+  - Verification: `cargo test --workspace --release --locked`
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore`
+
+- [x] Publish bounded RAR4/RAR5 HANDLE previews as explicit browse-only listings, explain that
+  limitation in the listing summary and row interaction, and cover the production ParserHost
+  boundary with a real RAR5 fixture whose physical path has no `.rar` extension.
+  - Verification: `dotnet test tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release --no-build --no-restore`
+
+- [x] Replace single-color folder/archive fallback glyphs with reusable theme-aware multi-layer
+  vector icons in both listing rows and Hero surfaces, while retaining Shell raster replacement for
+  real filesystem rows.
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore`
+  - Guard: `tools/guard-architecture.ps1`
 
 - [x] Publish the project under the MIT License with `SherlockChiang` as the copyright holder, add
   MIT metadata for .NET, Rust, and the website package, and accept inbound contributions under the
@@ -85,16 +248,17 @@ Completed entries move here with the verification commands and commit hash.
   AppContainer and network denial remain open.
 
 - [x] Add a 32-cycle parent-bound package hero regression using a stable adaptive icon. Every
-  extraction produces a 512x512 BGRA packet of roughly 1 MiB, transfers it through a read-only
-  HANDLE, removes its `parser-raster` directory on close, and leaves the App copy independently
-  readable. Parent leases and host HANDLE growth remain bounded until the retained preview closes.
+  extraction produces a 512x512 BGRA packet of roughly 1 MiB in a ParserHost-owned anonymous
+  section, transfers only read access to the App, never creates a `parser-raster` directory, and
+  leaves the App mapping independently readable after the Host owner closes. Parent leases and host
+  HANDLE growth remain bounded until the retained preview closes.
 
 - [x] Add a 32-cycle parent-bound archive extraction regression. One retained archive HANDLE remains
-  authoritative while each operation acquires an independent lease, publishes a host-owned output
-  HANDLE, and removes its Rust temp root on explicit close. The copied App-side HANDLE remains readable,
-  host HANDLE growth stays bounded, and the parent source unlocks only after its preview closes. The
-  existing 8 MiB inflight-close regression remains guarded to suppress canceled responses and clean
-  partial extraction roots before the host accepts the next preview.
+  authoritative while each operation acquires an independent lease and writes through a transferred
+  caller-owned output HANDLE. The App-owned object remains readable after ParserHost closes write
+  authority, no extraction temp root appears, Host HANDLE growth stays bounded, and the parent source
+  unlocks only after its preview closes. The 8 MiB inflight-close regression suppresses canceled
+  responses, releases the output HANDLE, and proves the Host can accept the next preview.
 
 - [x] Add repeated HANDLE-backed PDF session and page-render resource coverage. Every cycle uses a
   distinct bounded file identity, opens one session, renders and copies one page surface, releases
@@ -266,8 +430,8 @@ Completed entries move here with the verification commands and commit hash.
 
 - [x] Add bounded current-folder archive filtering, encrypted ZIP item metadata
   and summaries, explicit encrypted-entry extraction rejection, and localized
-  visible/automation status. 7z/RAR remain unsupported because no audited parser,
-  signature routing, extraction boundary, or tests currently exist.
+  visible/automation status. At that checkpoint 7z/RAR were unsupported; the later bounded
+  browse-only RAR scanner supersedes the RAR part of that limitation, while 7z remains unsupported.
   - Verification: `cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml`
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj --no-restore`
   - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj --no-restore`

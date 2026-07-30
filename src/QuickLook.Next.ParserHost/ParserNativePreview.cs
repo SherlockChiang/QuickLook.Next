@@ -14,6 +14,9 @@ internal static class ParserNativePreview
     private const int MaxPreviewJsonBytes = PipeChannel.MaxControlLineChars;
     internal const int MaxRasterBytes = 16 * 1024 * 1024;
     internal const int MaxRasterDimension = 4096;
+    // Native Office heroes cap their longest edge at 768px; package icons cap at 512px.
+    // Cover the largest current Hero packet so archive/image decode normally remains single-pass.
+    private const int InitialRasterSectionBytes = 8 + (768 * 768 * 4);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
@@ -25,6 +28,16 @@ internal static class ParserNativePreview
         byte[] logicalNameUtf8,
         nuint logicalNameLen,
         byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+
+    private delegate int NativeHandleRasterCall(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        nint outBuf,
         nuint outCap,
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
@@ -173,62 +186,65 @@ internal static class ParserNativePreview
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_archive_entry(
-        byte[] archivePathUtf8,
-        nuint archivePathLen,
-        byte[] entryPathUtf8,
-        nuint entryPathLen,
-        byte[] outBuf,
-        nuint outCap);
-
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_archive_entry_cancelable(
-        byte[] archivePathUtf8,
-        nuint archivePathLen,
-        byte[] entryPathUtf8,
-        nuint entryPathLen,
-        byte[] outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_archive_entry_handle(
+    private static extern int ql_extract_archive_entry_to_output_handle(
         nint sourceHandle,
         ulong expectedLength,
         byte[] logicalNameUtf8,
         nuint logicalNameLen,
         byte[] entryPathUtf8,
         nuint entryPathLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
+        nint outputHandle,
+        ulong outputCapacity,
+        out ulong outWritten,
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_package_icon(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_package_icon_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    private static extern int ql_extract_package_icon_cancelable(
+        byte[] pathUtf8,
+        nuint pathLen,
+        nint outBuf,
+        nuint outCap,
+        NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_package_icon_handle(
         nint sourceHandle,
         ulong expectedLength,
         byte[] logicalNameUtf8,
         nuint logicalNameLen,
-        byte[] outBuf,
+        nint outBuf,
         nuint outCap,
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_office_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_extract_office_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    private static extern int ql_extract_office_image_cancelable(
+        byte[] pathUtf8,
+        nuint pathLen,
+        nint outBuf,
+        nuint outCap,
+        NativeCancelCallback? cancelCb);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_extract_office_image_handle(
         nint sourceHandle,
         ulong expectedLength,
         byte[] logicalNameUtf8,
         nuint logicalNameLen,
-        byte[] outBuf,
+        nint outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_office_layout_image_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] imageRefUtf8,
+        nuint imageRefLen,
+        uint targetWidth,
+        uint targetHeight,
+        nint outBuf,
         nuint outCap,
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
@@ -500,105 +516,82 @@ internal static class ParserNativePreview
             _ => $"Native handle parser returned unknown status {status}.",
         };
 
-    public static string? TryExtractArchiveEntry(string archivePath, string entryPath, CancellationToken cancellationToken)
-    {
-        const int maxPathBytes = 32 * 1024;
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] archiveBytes = Encoding.UTF8.GetBytes(archivePath);
-            byte[] entryBytes = Encoding.UTF8.GetBytes(entryPath);
-            NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(maxPathBytes);
-            try
-            {
-                int length = ql_extract_archive_entry_cancelable(
-                    archiveBytes, (nuint)archiveBytes.Length,
-                    entryBytes, (nuint)entryBytes.Length,
-                    buffer, (nuint)maxPathBytes, cancel);
-                cancellationToken.ThrowIfCancellationRequested();
-                return length > 0 && length <= maxPathBytes
-                    ? Encoding.UTF8.GetString(buffer, 0, length)
-                    : null;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-                GC.KeepAlive(cancel);
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { return null; }
-    }
-
-    public static (int Status, string? Path) TryExtractArchiveEntryHandle(
+    public static (int Status, long Written) TryExtractArchiveEntryToOutputHandle(
         SafeFileHandle sourceHandle,
         long sourceLength,
         string logicalName,
         string entryPath,
+        SafeFileHandle outputHandle,
+        long outputCapacity,
         CancellationToken cancellationToken)
     {
-        const int maxPathBytes = 32 * 1024;
         if (sourceLength < 0
             || sourceHandle.IsInvalid
             || sourceHandle.IsClosed
+            || outputHandle.IsInvalid
+            || outputHandle.IsClosed
+            || outputCapacity is <= 0 or > NativeAbi.MaxArchiveEntryOutputBytes
             || string.IsNullOrWhiteSpace(entryPath))
         {
-            return (NativeAbi.StatusInvalidArgument, null);
+            return (NativeAbi.StatusInvalidArgument, 0);
         }
 
         logicalName = Path.GetFileName(logicalName);
         if (string.IsNullOrEmpty(logicalName))
-            return (NativeAbi.StatusInvalidArgument, null);
+            return (NativeAbi.StatusInvalidArgument, 0);
         byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
         if (logicalNameBytes.Length > NativeAbi.MaxLogicalNameUtf8Bytes)
-            return (NativeAbi.StatusInvalidArgument, null);
+            return (NativeAbi.StatusInvalidArgument, 0);
 
         byte[] entryPathBytes = Encoding.UTF8.GetBytes(entryPath);
         NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
-        bool addRef = false;
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(maxPathBytes);
+        bool sourceAddRef = false;
+        bool outputAddRef = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            sourceHandle.DangerousAddRef(ref addRef);
-            int status = ql_extract_archive_entry_handle(
+            sourceHandle.DangerousAddRef(ref sourceAddRef);
+            outputHandle.DangerousAddRef(ref outputAddRef);
+            int status = ql_extract_archive_entry_to_output_handle(
                 sourceHandle.DangerousGetHandle(),
                 checked((ulong)sourceLength),
                 logicalNameBytes,
                 (nuint)logicalNameBytes.Length,
                 entryPathBytes,
                 (nuint)entryPathBytes.Length,
-                buffer,
-                (nuint)maxPathBytes,
-                out nuint required,
+                outputHandle.DangerousGetHandle(),
+                checked((ulong)outputCapacity),
+                out ulong written,
                 cancel);
             if (status != NativeAbi.StatusOk)
-                return (status, null);
-            if (required is 0 or > maxPathBytes)
-                return (NativeAbi.StatusInternal, null);
-            return (status, Encoding.UTF8.GetString(buffer, 0, checked((int)required)));
+                return (status, 0);
+            if (written > (ulong)outputCapacity)
+                return (NativeAbi.StatusInternal, 0);
+            return (status, checked((long)written));
         }
         catch (OperationCanceledException) { throw; }
         catch (ObjectDisposedException)
         {
-            return (NativeAbi.StatusInvalidHandle, null);
+            return (NativeAbi.StatusInvalidHandle, 0);
         }
         catch (OverflowException)
         {
-            return (NativeAbi.StatusLengthMismatch, null);
+            return (NativeAbi.StatusLengthMismatch, 0);
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
-            if (addRef) sourceHandle.DangerousRelease();
+            if (outputAddRef) outputHandle.DangerousRelease();
+            if (sourceAddRef) sourceHandle.DangerousRelease();
             GC.KeepAlive(cancel);
         }
     }
 
-    public static byte[]? TryExtractHeroRaster(string kind, string path, CancellationToken cancellationToken)
+    public static NativeRasterSection? TryExtractHeroRaster(
+        string kind,
+        string path,
+        CancellationToken cancellationToken)
     {
-        NativeCancelableRasterCall? call = kind.Equals("package", StringComparison.OrdinalIgnoreCase)
+        NativeCancelableRasterSectionCall? call = kind.Equals("package", StringComparison.OrdinalIgnoreCase)
             ? ql_extract_package_icon_cancelable
             : kind.Equals("office", StringComparison.OrdinalIgnoreCase)
             ? ql_extract_office_image_cancelable
@@ -610,14 +603,20 @@ internal static class ParserNativePreview
         {
             byte[] pathBytes = Encoding.UTF8.GetBytes(path);
             NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
-            int capacity = 2 * 1024 * 1024;
+            int capacity = InitialRasterSectionBytes;
             while (capacity <= MaxRasterBytes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+                SharedSectionOwner? section = SharedSectionOwner.Create(capacity);
                 try
                 {
-                    int length = call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
+                    using SharedSectionView view = section.MapWritable();
+                    int length = call(
+                        pathBytes,
+                        (nuint)pathBytes.Length,
+                        view.Pointer,
+                        (nuint)capacity,
+                        cancel);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (length < 0)
                     {
@@ -627,16 +626,22 @@ internal static class ParserNativePreview
                         capacity = required;
                         continue;
                     }
-                    if (!IsValidRaster(buffer, length))
+                    if (!TryReadRasterMetadata(
+                        view.Bytes,
+                        length,
+                        out int width,
+                        out int height))
+                    {
                         return null;
+                    }
 
-                    byte[] raster = new byte[length];
-                    Buffer.BlockCopy(buffer, 0, raster, 0, length);
+                    var raster = new NativeRasterSection(section, length, width, height);
+                    section = null;
                     return raster;
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    section?.Dispose();
                     GC.KeepAlive(cancel);
                 }
             }
@@ -647,7 +652,7 @@ internal static class ParserNativePreview
         return null;
     }
 
-    public static (int Status, byte[]? Raster) TryExtractOfficeHeroRasterHandle(
+    public static (int Status, NativeRasterSection? Raster) TryExtractOfficeHeroRasterHandle(
         SafeFileHandle sourceHandle,
         long sourceLength,
         string logicalName,
@@ -659,7 +664,7 @@ internal static class ParserNativePreview
             logicalName,
             cancellationToken);
 
-    public static (int Status, byte[]? Raster) TryExtractPackageHeroRasterHandle(
+    public static (int Status, NativeRasterSection? Raster) TryExtractPackageHeroRasterHandle(
         SafeFileHandle sourceHandle,
         long sourceLength,
         string logicalName,
@@ -671,8 +676,111 @@ internal static class ParserNativePreview
             logicalName,
             cancellationToken);
 
-    private static (int Status, byte[]? Raster) TryExtractHeroRasterHandle(
-        NativeHandlePreviewCall handleCall,
+    public static (int Status, NativeRasterSection? Raster) TryExtractOfficeLayoutImageHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName,
+        string imageRef,
+        int targetWidth,
+        int targetHeight,
+        CancellationToken cancellationToken)
+    {
+        if (sourceLength < 0 || sourceHandle.IsInvalid || sourceHandle.IsClosed
+            || targetWidth is <= 0 or > NativeAbi.MaxOfficeImageDimension
+            || targetHeight is <= 0 or > NativeAbi.MaxOfficeImageDimension)
+        {
+            return (NativeAbi.StatusInvalidArgument, null);
+        }
+
+        logicalName = Path.GetFileName(logicalName);
+        if (string.IsNullOrEmpty(logicalName) || !IsCanonicalOfficeImageRef(imageRef))
+            return (NativeAbi.StatusInvalidArgument, null);
+
+        byte[] logicalNameBytes = Encoding.UTF8.GetBytes(logicalName);
+        byte[] imageRefBytes = Encoding.UTF8.GetBytes(imageRef);
+        if (logicalNameBytes.Length > NativeAbi.MaxLogicalNameUtf8Bytes
+            || imageRefBytes.Length > NativeAbi.MaxOfficeImageRefUtf8Bytes)
+        {
+            return (NativeAbi.StatusInvalidArgument, null);
+        }
+
+        NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
+        bool addRef = false;
+        try
+        {
+            sourceHandle.DangerousAddRef(ref addRef);
+            int capacity = checked(8 + checked(targetWidth * targetHeight * 4));
+            cancellationToken.ThrowIfCancellationRequested();
+            SharedSectionOwner? section = SharedSectionOwner.Create(capacity);
+            try
+            {
+                using SharedSectionView view = section.MapWritable();
+                int status = ql_extract_office_layout_image_handle(
+                    sourceHandle.DangerousGetHandle(),
+                    checked((ulong)sourceLength),
+                    logicalNameBytes,
+                    (nuint)logicalNameBytes.Length,
+                    imageRefBytes,
+                    (nuint)imageRefBytes.Length,
+                    checked((uint)targetWidth),
+                    checked((uint)targetHeight),
+                    view.Pointer,
+                    (nuint)capacity,
+                    out nuint required,
+                    cancel);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (status != NativeAbi.StatusOk)
+                    return (status, null);
+                if (required > (nuint)capacity
+                    || required > int.MaxValue
+                    || !TryReadRasterMetadata(
+                        view.Bytes,
+                        checked((int)required),
+                        out int width,
+                        out int height)
+                    || width > targetWidth
+                    || height > targetHeight
+                    || width > NativeAbi.MaxOfficeImageDimension
+                    || height > NativeAbi.MaxOfficeImageDimension)
+                {
+                    return (NativeAbi.StatusInternal, null);
+                }
+
+                var raster = new NativeRasterSection(
+                    section,
+                    checked((int)required),
+                    width,
+                    height);
+                section = null;
+                return (NativeAbi.StatusOk, raster);
+            }
+            finally
+            {
+                section?.Dispose();
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (ObjectDisposedException)
+        {
+            return (NativeAbi.StatusInvalidHandle, null);
+        }
+        catch (OverflowException)
+        {
+            return (NativeAbi.StatusLengthMismatch, null);
+        }
+        catch
+        {
+            return (NativeAbi.StatusInternal, null);
+        }
+        finally
+        {
+            if (addRef) sourceHandle.DangerousRelease();
+            GC.KeepAlive(cancel);
+        }
+    }
+
+    private static (int Status, NativeRasterSection? Raster) TryExtractHeroRasterHandle(
+        NativeHandleRasterCall handleCall,
         SafeFileHandle sourceHandle,
         long sourceLength,
         string logicalName,
@@ -693,29 +801,39 @@ internal static class ParserNativePreview
         try
         {
             sourceHandle.DangerousAddRef(ref addRef);
-            int capacity = 2 * 1024 * 1024;
+            int capacity = InitialRasterSectionBytes;
             while (capacity <= MaxRasterBytes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+                SharedSectionOwner? section = SharedSectionOwner.Create(capacity);
                 try
                 {
+                    using SharedSectionView view = section.MapWritable();
                     int status = handleCall(
                         sourceHandle.DangerousGetHandle(),
                         checked((ulong)sourceLength),
                         logicalNameBytes,
                         (nuint)logicalNameBytes.Length,
-                        buffer,
+                        view.Pointer,
                         (nuint)capacity,
                         out nuint required,
                         cancel);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (status == NativeAbi.StatusOk
                         && required <= (nuint)capacity
-                        && IsValidRaster(buffer, checked((int)required)))
+                        && required <= int.MaxValue
+                        && TryReadRasterMetadata(
+                            view.Bytes,
+                            checked((int)required),
+                            out int width,
+                            out int height))
                     {
-                        byte[] raster = new byte[checked((int)required)];
-                        Buffer.BlockCopy(buffer, 0, raster, 0, raster.Length);
+                        var raster = new NativeRasterSection(
+                            section,
+                            checked((int)required),
+                            width,
+                            height);
+                        section = null;
                         return (status, raster);
                     }
                     if (status == NativeAbi.StatusOk)
@@ -728,7 +846,7 @@ internal static class ParserNativePreview
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    section?.Dispose();
                 }
             }
         }
@@ -750,14 +868,23 @@ internal static class ParserNativePreview
     }
 
     internal static bool IsValidRaster(ReadOnlySpan<byte> raster, int length)
+        => TryReadRasterMetadata(raster, length, out _, out _);
+
+    private static bool TryReadRasterMetadata(
+        ReadOnlySpan<byte> raster,
+        int length,
+        out int width,
+        out int height)
     {
+        width = 0;
+        height = 0;
         if (length <= 8 || length > MaxRasterBytes || raster.Length < length)
             return false;
 
         try
         {
-            int width = BitConverter.ToInt32(raster[..4]);
-            int height = BitConverter.ToInt32(raster.Slice(4, 4));
+            width = BitConverter.ToInt32(raster[..4]);
+            height = BitConverter.ToInt32(raster.Slice(4, 4));
             int pixels = checked(width * height * 4);
             return width is > 0 and <= MaxRasterDimension
                 && height is > 0 and <= MaxRasterDimension
@@ -769,7 +896,45 @@ internal static class ParserNativePreview
         }
     }
 
+    internal static bool IsCanonicalOfficeImageRef(string? imageRef)
+    {
+        if (string.IsNullOrWhiteSpace(imageRef)
+            || imageRef.Length > NativeAbi.MaxOfficeImageRefUtf8Bytes
+            || imageRef[0] == '/'
+            || imageRef.Contains('\\')
+            || imageRef.Contains(':'))
+        {
+            return false;
+        }
+
+        string[] segments = imageRef.Split('/');
+        return segments.Length >= 3
+            && segments[0] is "word" or "ppt" or "xl"
+            && segments[1] == "media"
+            && segments.All(static segment =>
+                segment.Length > 0
+                && segment is not "." and not "..");
+    }
+
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    private delegate int NativeRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    private delegate int NativeCancelableRasterCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    private delegate int NativeCancelableRasterSectionCall(
+        byte[] pathUtf8,
+        nuint pathLen,
+        nint outBuf,
+        nuint outCap,
+        NativeCancelCallback? cancelCb);
+}
+
+internal sealed class NativeRasterSection(
+    SharedSectionOwner section,
+    int packetLength,
+    int width,
+    int height) : IDisposable
+{
+    public SharedSectionOwner Section { get; } = section;
+    public int PacketLength { get; } = packetLength;
+    public int Width { get; } = width;
+    public int Height { get; } = height;
+
+    public void Dispose() => Section.Dispose();
 }

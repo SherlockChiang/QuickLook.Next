@@ -41,9 +41,7 @@ public sealed partial class MainWindow : Window
     private const double RasterContentMargin = 14;
     private const int SwitchDebounceMs = 30;
     private const int ImageSidecarLoadDelayMs = 180;
-    private const int WindowsImageMetadataSupplementDelayMs = 850;
     private const int DuplicateOpenCloseGuardMs = 750;
-    private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan CloudPreviewTimeout = TimeSpan.FromSeconds(45);
 
     private readonly NativeBridge _native = new();
@@ -248,7 +246,8 @@ public sealed partial class MainWindow : Window
         _officePresenter = new OfficePreviewPresenter(
             OfficeScrollViewer,
             OfficePagesPanel,
-            () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)));
+            () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)),
+            LoadOfficeLayoutImageAsync);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, RasterFallbackImage, ImageZoomText);
         _imageWaveformPresenter = new ImageWaveformPresenter(ImageWaveformPanel, ImageWaveformImage);
         _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText)
@@ -729,6 +728,8 @@ public sealed partial class MainWindow : Window
         PreviewTitleText.Text = Title;
         StatusText.Text = UiStrings.Format(UiStrings.OpeningFileFormat, System.IO.Path.GetFileName(path));
         ShowPreviewLoadingShell();
+        Microsoft.Win32.SafeHandles.SafeFileHandle? pinnedPreviewHandle = null;
+        long pinnedPreviewLength = 0;
         try
         {
             Task closeTask = CloseCurrentAsync();
@@ -790,12 +791,15 @@ public sealed partial class MainWindow : Window
             bool mayRequireHydration = availability != CloudFileAvailability.Local;
             _currentPreviewWasCloudPlaceholder = mayRequireHydration;
             DiagLog.Write("App", $"preview probe begin gen={generation}");
-            FileProbe probe = await Task.Run(
-                () => mayRequireHydration
-                    ? FallbackFileProbe.CreateMetadataOnlyProbe(path)
-                    : _native.ProbeFile(path) ?? BuildProbe(path),
+            var preparedProbe = await Task.Run(
+                () => PreparePreviewProbe(path, mayRequireHydration),
                 previewToken);
-            DiagLog.Write("App", $"preview probe end gen={generation}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
+            FileProbe probe = preparedProbe.Probe;
+            pinnedPreviewHandle = preparedProbe.Handle;
+            pinnedPreviewLength = preparedProbe.Length;
+            DiagLog.Write(
+                "App",
+                $"preview probe end gen={generation}; authority={preparedProbe.Authority}; kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             MarkPreviewPhase(generation, "probe-complete", $"kind={probe.Kind}; ext={probe.Extension}; size={probe.Size}");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             _currentProbe = probe;
@@ -880,32 +884,14 @@ public sealed partial class MainWindow : Window
 
             AnimatedImageRenderPlan? animatedPlan = route == PreviewRoute.RasterHost
                 ? null
-                : await Task.Run(() => AnimatedImagePreviewPresenter.CreateRenderPlan(path), previewToken);
+                : AnimatedImagePreviewPresenter.CreateRenderPlan(probe);
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-            if (animatedPlan is { } plan)
+            if (animatedPlan is not null)
             {
-                MarkPreviewPhase(generation, "route-selected", $"route=animation; mode={plan.PlaybackMode}");
-                DiagLog.Write("App", $"preview animated image detected gen={generation}; mode={plan.PlaybackMode}; {plan.Width}x{plan.Height}");
-                if (plan.PlaybackMode == AnimatedImagePlaybackMode.NativeFramePlayback)
-                {
-                    DiagLog.Write("App", $"preview animated image staging raster first frame gen={generation}; {plan.Width}x{plan.Height}");
-                    forceAnimatedFirstFrameRaster = true;
-                    route = PreviewRoutePlanner.Plan(probe.Kind, mayRequireHydration, forceRaster: true);
-                }
-                else
-                {
-                    var gifReady = new PreviewReady(
-                        $"gif-{generation}",
-                        "image",
-                        System.IO.Path.GetFileName(path),
-                        plan.Width,
-                        plan.Height);
-                    _previewSession.CommitPath(path);
-                    _previewSession.SetRequestId(null);
-                    StatusText.Text = ShowAnimatedImagePreview(gifReady, path);
-                    RevealPreviewWindow(ShouldActivatePreview(gifReady));
-                    return;
-                }
+                MarkPreviewPhase(generation, "route-selected", "route=animation; mode=native-frames");
+                DiagLog.Write("App", $"preview animated image candidate detected by Rust probe gen={generation}");
+                forceAnimatedFirstFrameRaster = true;
+                route = PreviewRoutePlanner.Plan(probe.Kind, mayRequireHydration, forceRaster: true);
             }
 
 
@@ -915,13 +901,31 @@ public sealed partial class MainWindow : Window
                 MarkPreviewPhase(generation, "route-selected", "route=parser-host");
                 await EnsureParserHostStartedAsync(previewToken);
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                (string parserRequestId, Task<ControlMessage> parserCompletion) = mayRequireHydration
-                    ? _parserSupervisor!.BeginOpen(
+                string parserRequestId;
+                Task<ControlMessage> parserCompletion;
+                if (mayRequireHydration)
+                {
+                    (parserRequestId, parserCompletion) = _parserSupervisor!.BeginOpen(
                         path,
                         probe,
                         CloudPreviewTimeout,
-                        recycleHostOnCancel: true)
-                    : BeginPinnedParserOpen(path, probe);
+                        recycleHostOnCancel: true);
+                }
+                else if (pinnedPreviewHandle is not null)
+                {
+                    Microsoft.Win32.SafeHandles.SafeFileHandle parserSource = pinnedPreviewHandle;
+                    pinnedPreviewHandle = null;
+                    (parserRequestId, parserCompletion) = BeginPinnedParserOpen(
+                        path,
+                        probe,
+                        parserSource,
+                        pinnedPreviewLength);
+                }
+                else
+                {
+                    (parserRequestId, parserCompletion) =
+                        _parserSupervisor!.BeginOpen(path, probe);
+                }
                 _requestHosts[parserRequestId] = PreviewHostOwner.Parser;
                 _previewSession.SetRequestId(parserRequestId);
                 _previewSession.CommitPath(path);
@@ -983,15 +987,40 @@ public sealed partial class MainWindow : Window
             MarkPreviewPhase(generation, "route-selected", "route=raster-host");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
-            var (requestId, completion) = mayRequireHydration
-                ? _supervisor!.BeginOpen(
+            string requestId;
+            Task<ControlMessage> completion;
+            if (mayRequireHydration)
+            {
+                (requestId, completion) = _supervisor!.BeginOpen(
                     path,
                     probe,
                     targetSize.Width,
                     targetSize.Height,
                     CloudPreviewTimeout,
-                    recycleHostOnCancel: true)
-                : BeginPinnedRasterOpen(path, probe, targetSize.Width, targetSize.Height);
+                    recycleHostOnCancel: true);
+            }
+            else if (pinnedPreviewHandle is null)
+            {
+                (requestId, completion) = _supervisor!.BeginOpen(
+                    path,
+                    probe,
+                    targetSize.Width,
+                    targetSize.Height);
+            }
+            else
+            {
+                Microsoft.Win32.SafeHandles.SafeFileHandle rasterSource = pinnedPreviewHandle;
+                pinnedPreviewHandle = null;
+                var pinnedRequest = BeginPinnedRasterOpen(
+                    path,
+                    probe,
+                    rasterSource,
+                    pinnedPreviewLength,
+                    targetSize.Width,
+                    targetSize.Height);
+                requestId = pinnedRequest.RequestId;
+                completion = pinnedRequest.Completion;
+            }
             _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
@@ -1048,15 +1077,14 @@ public sealed partial class MainWindow : Window
                 _ => "?",
             };
             RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
-            if (result is PreviewReady rasterReady
-                && animatedPlan is { PlaybackMode: AnimatedImagePlaybackMode.NativeFramePlayback } nativeAnimationPlan)
+            if (result is PreviewReady
+                && animatedPlan is not null)
             {
                 _ = TryUpgradeRasterToNativeAnimationAsync(
                     path,
                     generation,
                     previewToken,
-                    requestId,
-                    nativeAnimationPlan);
+                    requestId);
             }
         }
         catch (TimeoutException ex)
@@ -1083,6 +1111,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            pinnedPreviewHandle?.Dispose();
             if (archiveHandoff is not null && !archiveHandoffTransferred)
             {
                 if (_parserSupervisor is not null) await _parserSupervisor.ReleaseArchiveEntryAsync(archiveHandoff);
@@ -1102,16 +1131,18 @@ public sealed partial class MainWindow : Window
         string path,
         int generation,
         CancellationToken cancellationToken,
-        string rasterRequestId,
-        AnimatedImageRenderPlan plan)
+        string rasterRequestId)
     {
+        NativeAnimationFrames? frames = null;
+        bool framesOwnershipTransferred = false;
         try
         {
             var targetSize = GetRasterDecodeTargetSize();
-            NativeAnimationFrames? frames = await _supervisor!.ExtractAnimationFramesAsync(
+            frames = await _supervisor!.ExtractAnimationFramesAsync(
                 rasterRequestId, targetSize.Width, targetSize.Height, cancellationToken);
 
             if (frames is null
+                || frames.FrameCount <= 1
                 || !IsPreviewGenerationCurrent(generation, cancellationToken)
                 || !_previewSession.IsCurrentPath(path)
                 || !_previewSession.IsCurrentRequest(rasterRequestId))
@@ -1123,9 +1154,12 @@ public sealed partial class MainWindow : Window
                 $"animated-native-{generation}",
                 "image",
                 System.IO.Path.GetFileName(path),
-                plan.Width,
-                plan.Height);
+                frames.Width,
+                frames.Height);
             _previewSession.SetRequestId(null);
+            // ShowNativeAnimatedImagePreview consumes the mapping on every path: the
+            // presenter keeps it when rendering succeeds and disposes it before adoption.
+            framesOwnershipTransferred = true;
             StatusText.Text = ShowNativeAnimatedImagePreview(ready, path, frames, scheduleSidecars: false);
             await CloseCurrentAsync(rasterRequestId);
         }
@@ -1135,6 +1169,11 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", $"animated image upgrade failed gen={generation}; {ex}");
+        }
+        finally
+        {
+            if (!framesOwnershipTransferred)
+                frames?.Dispose();
         }
     }
 
@@ -1764,10 +1803,10 @@ public sealed partial class MainWindow : Window
 
             var attachWatch = Stopwatch.StartNew();
             handleConsumed = true;
-                if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
-                {
-                    ShowSurfaceFailure(surface.RequestId, error ?? UiStrings.SurfaceFailed);
-                    return;
+            if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
+            {
+                ShowSurfaceFailure(surface.RequestId, error ?? UiStrings.SurfaceFailed);
+                return;
             }
             attachWatch.Stop();
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
@@ -1893,35 +1932,32 @@ public sealed partial class MainWindow : Window
         return ((uint)Math.Ceiling(width), (uint)Math.Ceiling(height));
     }
 
-    private string ShowAnimatedImagePreview(PreviewReady ready, string path)
-    {
-        UpdatePreviewChrome(ready, showRasterTools: true);
-        _panelController.ShowAnimatedImage();
-        _rasterPresenter?.Clear();
-
-        AnimatedImagePreviewResult result = _animatedImagePresenter!.Render(path, ready, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-        UpdateImageAnimationPlaybackButton();
-        ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        ScheduleImageSidecarLoads(ready);
-        return result.Status;
-    }
-
     private string ShowNativeAnimatedImagePreview(
         PreviewReady ready,
         string path,
         NativeAnimationFrames frames,
         bool scheduleSidecars = true)
     {
-        UpdatePreviewChrome(ready, showRasterTools: true);
-        _panelController.ShowAnimatedImage();
-        _rasterPresenter?.Clear();
+        bool presenterOwnsFrames = false;
+        try
+        {
+            UpdatePreviewChrome(ready, showRasterTools: true);
+            _panelController.ShowAnimatedImage();
+            _rasterPresenter?.Clear();
 
-        AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-        UpdateImageAnimationPlaybackButton();
-        ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
-        if (scheduleSidecars)
-            ScheduleImageSidecarLoads(ready);
-        return result.Status;
+            AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
+            presenterOwnsFrames = true;
+            UpdateImageAnimationPlaybackButton();
+            ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
+            if (scheduleSidecars)
+                ScheduleImageSidecarLoads(ready);
+            return result.Status;
+        }
+        finally
+        {
+            if (!presenterOwnsFrames)
+                frames.Dispose();
+        }
     }
 
     private string ShowPdfDocument(string requestId, PreviewReady ready)
@@ -1972,6 +2008,49 @@ public sealed partial class MainWindow : Window
         OfficePreviewResult result = _officePresenter!.Render(ready, GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight));
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
+    }
+
+    private async Task<NativeRasterImage?> LoadOfficeLayoutImageAsync(
+        string parentPreviewRequestId,
+        string imageRef,
+        int targetWidth,
+        int targetHeight,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(parentPreviewRequestId)
+            || string.IsNullOrWhiteSpace(imageRef)
+            || targetWidth is <= 0 or > NativeAbi.MaxOfficeImageDimension
+            || targetHeight is <= 0 or > NativeAbi.MaxOfficeImageDimension
+            || !_previewSession.IsCurrentRequest(parentPreviewRequestId))
+        {
+            return null;
+        }
+
+        try
+        {
+            await EnsureParserHostStartedAsync(cancellationToken);
+            if (cancellationToken.IsCancellationRequested
+                || !_previewSession.IsCurrentRequest(parentPreviewRequestId))
+            {
+                return null;
+            }
+
+            return await _parserSupervisor!.ExtractOfficeImageAsync(
+                parentPreviewRequestId,
+                imageRef,
+                targetWidth,
+                targetHeight,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Office layout image request failed: " + ex.Message);
+            return null;
+        }
     }
 
     private string ShowMediaPreview(PreviewReady ready)
@@ -2371,8 +2450,6 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
-        ResetExifDetails();
-        _ = LoadImageMetadataAsync(imagePath, generation, token);
         _ = _imageSidecarController?.LoadFilmstripAsync(imagePath, generation, token);
     }
 
@@ -2390,6 +2467,7 @@ public sealed partial class MainWindow : Window
 
         int generation = _previewSession.Generation;
         CancellationToken token = CurrentPreviewToken;
+        _ = LoadImageMetadataAsync(ready.RequestId, path, generation, token);
         DispatcherQueue.TryEnqueue(() =>
         {
             if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
@@ -2433,194 +2511,51 @@ public sealed partial class MainWindow : Window
     private void ResetExifDetails()
         => _exifPresenter?.Reset();
 
-    private async Task LoadImageMetadataAsync(string path, int generation, CancellationToken token)
+    private async Task LoadImageMetadataAsync(
+        string previewRequestId,
+        string path,
+        int generation,
+        CancellationToken token)
     {
         try
         {
-            using var trace = DiagLog.TraceScope("App", $"image metadata load gen={generation}; path={path}", 250);
-            ImageMetadata? nativeMetadata = await Task.Run(() => _native.TryPreviewImageMetadata(path), token);
-            if (nativeMetadata is not null && RenderNativeImageMetadata(path, generation, token, nativeMetadata))
-            {
-                if (ShouldSupplementNativeImageMetadata(nativeMetadata))
-                    _ = LoadWindowsImageMetadataAfterDelayAsync(path, generation, token);
+            using var trace = DiagLog.TraceScope(
+                "App",
+                $"HANDLE image metadata load gen={generation}; request={previewRequestId}; path={path}",
+                250);
+            ImageMetadata? metadata = await _supervisor!.GetImageMetadataAsync(
+                previewRequestId,
+                token);
+            if (metadata is null
+                || !IsPreviewGenerationCurrent(generation, token)
+                || !_previewSession.IsCurrentPath(path))
                 return;
-            }
-
-            await LoadWindowsImageMetadataAsync(path, generation, token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "image metadata load failed: " + ex.Message);
-        }
-    }
-
-    private async Task LoadWindowsImageMetadataAfterDelayAsync(string path, int generation, CancellationToken token)
-    {
-        try
-        {
-            await Task.Delay(WindowsImageMetadataSupplementDelayMs, token);
-            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-                return;
-
-            using var trace = DiagLog.TraceScope("App", $"windows image metadata supplement gen={generation}; path={path}", 250);
-            await LoadWindowsImageMetadataAsync(path, generation, token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "windows image metadata supplement failed: " + ex.Message);
-        }
-    }
-
-    private async Task LoadWindowsImageMetadataAsync(string path, int generation, CancellationToken token)
-    {
-        try
-        {
-            StorageFile file = await StorageFile
-                .GetFileFromPathAsync(path)
-                .AsTask(token)
-                .WaitAsync(ImageMetadataTimeout, token);
-            ImageProperties image = await file.Properties
-                .GetImagePropertiesAsync()
-                .AsTask(token)
-                .WaitAsync(ImageMetadataTimeout, token);
-            var names = new[]
-            {
-                "System.Image.HorizontalSize",
-                "System.Image.VerticalSize",
-                "System.Image.HorizontalResolution",
-                "System.Image.VerticalResolution",
-                "System.Image.BitDepth",
-                "System.Image.ColorSpace",
-                "System.Image.Compression",
-                "System.Photo.CameraManufacturer",
-                "System.Photo.CameraModel",
-                "System.Photo.LensManufacturer",
-                "System.Photo.LensModel",
-                "System.Photo.FocalLength",
-                "System.Photo.FocalLengthInFilm",
-                "System.Photo.FNumber",
-                "System.Photo.MaxAperture",
-                "System.Photo.ExposureTime",
-                "System.Photo.ISOSpeed",
-                "System.Photo.ExposureBias",
-                "System.Photo.ExposureProgram",
-                "System.Photo.ExposureMode",
-                "System.Photo.Flash",
-                "System.Photo.MeteringMode",
-                "System.Photo.WhiteBalance",
-                "System.Photo.LightSource",
-                "System.Photo.DigitalZoom",
-                "System.Photo.SubjectDistance",
-                "System.Photo.Contrast",
-                "System.Photo.Saturation",
-                "System.Photo.Sharpness",
-                "System.Photo.GainControl",
-                "System.Photo.PhotometricInterpretation",
-                "System.Photo.EXIFVersion",
-                "System.ApplicationName",
-                "System.SoftwareUsed",
-                "System.GPS.Altitude",
-                "System.GPS.ImgDirection",
-            };
-            IDictionary<string, object> props = await RetrieveImagePropertiesAsync(file, names, token);
-            token.ThrowIfCancellationRequested();
-
-            var rows = new List<(string Label, string Value)>();
-            AddIfValue(rows, "Dimensions", image.Width > 0 && image.Height > 0 ? $"{image.Width:N0} x {image.Height:N0}" : null);
-            AddIfValue(rows, "Resolution", FormatResolution(
-                PropText(props, "System.Image.HorizontalResolution"),
-                PropText(props, "System.Image.VerticalResolution")));
-            AddIfValue(rows, "Date taken", image.DateTaken.Year > 1900 ? image.DateTaken.LocalDateTime.ToString("G") : null);
-            AddIfValue(rows, "Camera", JoinNonEmpty(
-                image.CameraManufacturer,
-                image.CameraModel,
-                PropText(props, "System.Photo.CameraManufacturer"),
-                PropText(props, "System.Photo.CameraModel")));
-            AddIfValue(rows, "Lens", JoinNonEmpty(PropText(props, "System.Photo.LensManufacturer"), PropText(props, "System.Photo.LensModel")));
-            AddIfValue(rows, "Focal length", FormatNumberWithUnit(PropText(props, "System.Photo.FocalLength"), "mm"));
-            AddIfValue(rows, "35mm equivalent", FormatNumberWithUnit(PropText(props, "System.Photo.FocalLengthInFilm"), "mm"));
-            AddIfValue(rows, "Aperture", FormatAperture(PropText(props, "System.Photo.FNumber")));
-            AddIfValue(rows, "Max aperture", FormatAperture(PropText(props, "System.Photo.MaxAperture")));
-            AddIfValue(rows, "Shutter speed", FormatExposure(PropText(props, "System.Photo.ExposureTime")));
-            AddIfValue(rows, "ISO", PropText(props, "System.Photo.ISOSpeed"));
-            AddIfValue(rows, "Exposure bias", FormatNumberWithUnit(PropText(props, "System.Photo.ExposureBias"), "EV"));
-            AddIfValue(rows, "Exposure program", FormatExposureProgram(PropText(props, "System.Photo.ExposureProgram")));
-            AddIfValue(rows, "Exposure mode", FormatExposureMode(PropText(props, "System.Photo.ExposureMode")));
-            AddIfValue(rows, "Metering", FormatMeteringMode(PropText(props, "System.Photo.MeteringMode")));
-            AddIfValue(rows, "White balance", FormatWhiteBalance(PropText(props, "System.Photo.WhiteBalance")));
-            AddIfValue(rows, "Light source", FormatLightSource(PropText(props, "System.Photo.LightSource")));
-            AddIfValue(rows, "Flash", FormatFlash(PropText(props, "System.Photo.Flash")));
-            AddIfValue(rows, "Digital zoom", FormatNumberWithUnit(PropText(props, "System.Photo.DigitalZoom"), "x"));
-            AddIfValue(rows, "Subject distance", FormatNumberWithUnit(PropText(props, "System.Photo.SubjectDistance"), "m"));
-            AddIfValue(rows, "Orientation", image.Orientation.ToString());
-            AddIfValue(rows, "Bit depth", FormatNumberWithUnit(PropText(props, "System.Image.BitDepth"), "bit"));
-            AddIfValue(rows, "Color space", FormatColorSpace(PropText(props, "System.Image.ColorSpace")));
-            AddIfValue(rows, "Compression", FormatCompression(PropText(props, "System.Image.Compression")));
-            AddIfValue(rows, "Photometric", PropText(props, "System.Photo.PhotometricInterpretation"));
-            AddIfValue(rows, "Contrast", FormatNormalHardSoft(PropText(props, "System.Photo.Contrast")));
-            AddIfValue(rows, "Saturation", FormatNormalHardSoft(PropText(props, "System.Photo.Saturation")));
-            AddIfValue(rows, "Sharpness", FormatNormalHardSoft(PropText(props, "System.Photo.Sharpness")));
-            AddIfValue(rows, "Gain control", FormatGainControl(PropText(props, "System.Photo.GainControl")));
-            AddIfValue(rows, "Location", FormatLocation(image.Latitude, image.Longitude));
-            AddIfValue(rows, "Altitude", FormatNumberWithUnit(PropText(props, "System.GPS.Altitude"), "m"));
-            AddIfValue(rows, "Direction", FormatNumberWithUnit(PropText(props, "System.GPS.ImgDirection"), "deg"));
-            AddIfValue(rows, "Software", JoinNonEmpty(PropText(props, "System.ApplicationName"), PropText(props, "System.SoftwareUsed")));
-            AddIfValue(rows, "EXIF version", PropText(props, "System.Photo.EXIFVersion"));
-
-            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-                return;
-
             DispatcherQueue.TryEnqueue(() =>
             {
                 if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
                     return;
-                _exifPresenter?.RenderRows(rows, image.Latitude, image.Longitude);
+                RenderImageMetadata(metadata);
             });
         }
         catch (OperationCanceledException)
         {
         }
-        catch (TimeoutException)
-        {
-            DiagLog.Write("App", $"image metadata timed out gen={generation}");
-        }
         catch (Exception ex)
         {
-            DiagLog.Write("App", "image metadata load failed: " + ex.Message);
+            DiagLog.Write("App", "HANDLE image metadata load failed: " + ex.Message);
         }
     }
 
-    private static bool ShouldSupplementNativeImageMetadata(ImageMetadata metadata)
-        => metadata.Width is null or 0
-            || metadata.Height is null or 0
-            || (string.IsNullOrWhiteSpace(metadata.Make) && string.IsNullOrWhiteSpace(metadata.Model))
-            || (metadata.FNumber is null && metadata.ExposureTime is null && metadata.Iso is null && metadata.FocalLength is null)
-            || metadata.MaxAperture is null
-            || metadata.FocalLengthIn35mmFilm is null
-            || metadata.ExposureProgram is null
-            || metadata.ExposureMode is null
-            || metadata.LightSource is null
-            || metadata.DigitalZoomRatio is null
-            || metadata.SubjectDistance is null
-            || metadata.Contrast is null
-            || metadata.Saturation is null
-            || metadata.Sharpness is null
-            || metadata.GainControl is null
-            || string.IsNullOrWhiteSpace(metadata.ExifVersion);
-
-    private bool RenderNativeImageMetadata(string path, int generation, CancellationToken token, ImageMetadata metadata)
+    private void RenderImageMetadata(ImageMetadata metadata)
     {
         var rows = new List<(string Label, string Value)>();
         AddIfValue(rows, "Format", metadata.Format);
         AddIfValue(rows, "Title", metadata.Title);
         AddIfValue(rows, "Comment", metadata.Comment);
         AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
+        AddIfValue(rows, "Resolution", FormatResolution(
+            metadata.HorizontalResolution,
+            metadata.VerticalResolution));
         AddIfValue(rows, "Bit depth", metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
         AddIfValue(rows, "Color type", metadata.ColorType);
         AddIfValue(rows, "Compression", metadata.Compression);
@@ -2648,6 +2583,7 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Digital zoom", FormatDoubleWithUnit(metadata.DigitalZoomRatio, "x"));
         AddIfValue(rows, "Subject distance", FormatDoubleWithUnit(metadata.SubjectDistance, "m"));
         AddIfValue(rows, "Orientation", metadata.Orientation?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, "Photometric", metadata.PhotometricInterpretation);
         AddIfValue(rows, "Contrast", FormatExifEnum(metadata.Contrast, NormalHardSoftNames));
         AddIfValue(rows, "Saturation", FormatExifEnum(metadata.Saturation, NormalHardSoftNames));
         AddIfValue(rows, "Sharpness", FormatExifEnum(metadata.Sharpness, NormalHardSoftNames));
@@ -2661,18 +2597,8 @@ public sealed partial class MainWindow : Window
         AddIfValue(rows, "Lens serial", metadata.LensSerial);
         AddIfValue(rows, "EXIF version", metadata.ExifVersion);
 
-        if (rows.Count == 0)
-            return false;
-        if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-            return true;
-
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (!IsPreviewGenerationCurrent(generation, token) || !_previewSession.IsCurrentPath(path))
-                return;
+        if (rows.Count > 0)
             _exifPresenter?.RenderRows(rows, metadata.Latitude, metadata.Longitude);
-        });
-        return true;
     }
 
     private static string? FormatExifDateTime(string? value)
@@ -2722,130 +2648,19 @@ public sealed partial class MainWindow : Window
         return parts.Length == 0 ? null : string.Join(" ", parts);
     }
 
-    private static string? PropText(IDictionary<string, object> props, string name)
-        => props.TryGetValue(name, out object? value) ? FormatPropertyValue(value) : null;
-
-    private static async Task<IDictionary<string, object>> RetrieveImagePropertiesAsync(
-        StorageFile file,
-        IReadOnlyList<string> names,
-        CancellationToken token)
+    private static string? FormatResolution(double? horizontal, double? vertical)
     {
-        try
-        {
-            return await file.Properties
-                .RetrievePropertiesAsync(names)
-                .AsTask(token)
-                .WaitAsync(ImageMetadataTimeout, token);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (TimeoutException)
-        {
-            return new Dictionary<string, object>();
-        }
-        catch
-        {
-            var result = new Dictionary<string, object>();
-            DateTimeOffset deadline = DateTimeOffset.UtcNow + ImageMetadataTimeout;
-            foreach (string name in names)
-            {
-                token.ThrowIfCancellationRequested();
-                TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
-                if (remaining <= TimeSpan.Zero)
-                    break;
-
-                try
-                {
-                    IDictionary<string, object> one = await file.Properties
-                        .RetrievePropertiesAsync([name])
-                        .AsTask(token)
-                        .WaitAsync(remaining < TimeSpan.FromMilliseconds(150) ? remaining : TimeSpan.FromMilliseconds(150), token);
-                    if (one.TryGetValue(name, out object? value) && value is not null)
-                        result[name] = value;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch
-                {
-                    // Some Windows builds/codecs do not expose every canonical property.
-                }
-            }
-
-            return result;
-        }
-    }
-
-    private static string? FormatPropertyValue(object? value)
-    {
-        if (value is null)
+        if (!horizontal.HasValue && !vertical.HasValue)
             return null;
-        if (value is string s)
-            return string.IsNullOrWhiteSpace(s) ? null : s;
-        if (value is string[] strings)
-            return string.Join(", ", strings.Where(x => !string.IsNullOrWhiteSpace(x)));
-        if (value is DateTimeOffset dto)
-            return dto.LocalDateTime.ToString("G");
-        if (value is double d)
-            return d.ToString("0.##");
-        if (value is float f)
-            return f.ToString("0.##");
-        return value.ToString();
+        if (horizontal.HasValue && vertical.HasValue
+            && Math.Abs(horizontal.Value - vertical.Value) < 0.001)
+            return $"{horizontal.Value:0.##} dpi";
+        string? horizontalText = horizontal.HasValue ? $"{horizontal.Value:0.##}" : null;
+        string? verticalText = vertical.HasValue ? $"{vertical.Value:0.##}" : null;
+        return JoinNonEmpty(horizontalText, verticalText) is { } joined
+            ? $"{joined} dpi"
+            : null;
     }
-
-    private static string? FormatNumberWithUnit(string? raw, string unit)
-        => string.IsNullOrWhiteSpace(raw) ? null : $"{raw} {unit}";
-
-    private static string? FormatResolution(string? horizontal, string? vertical)
-    {
-        if (string.IsNullOrWhiteSpace(horizontal) && string.IsNullOrWhiteSpace(vertical))
-            return null;
-        if (string.Equals(horizontal, vertical, StringComparison.OrdinalIgnoreCase))
-            return $"{horizontal} dpi";
-        return JoinNonEmpty(horizontal, vertical) is { } joined ? $"{joined} dpi" : null;
-    }
-
-    private static string? FormatAperture(string? raw)
-        => string.IsNullOrWhiteSpace(raw) ? null : $"f/{raw}";
-
-    private static string? FormatExposure(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-        if (!double.TryParse(raw, out double seconds) || seconds <= 0)
-            return raw + " sec";
-        return seconds < 1.0 ? $"1/{Math.Round(1.0 / seconds):0} sec" : $"{seconds:0.##} sec";
-    }
-
-    private static string? FormatExposureProgram(string? raw)
-        => FormatExifEnum(raw, ExposureProgramNames);
-
-    private static string? FormatExposureMode(string? raw)
-        => FormatExifEnum(raw, ExposureModeNames);
-
-    private static string? FormatMeteringMode(string? raw)
-        => FormatExifEnum(raw, MeteringModeNames);
-
-    private static string? FormatWhiteBalance(string? raw)
-        => FormatExifEnum(raw, WhiteBalanceNames);
-
-    private static string? FormatLightSource(string? raw)
-        => FormatExifEnum(raw, LightSourceNames);
-
-    private static string? FormatColorSpace(string? raw)
-        => FormatExifEnum(raw, ColorSpaceNames);
-
-    private static string? FormatCompression(string? raw)
-        => FormatExifEnum(raw, CompressionNames);
-
-    private static string? FormatNormalHardSoft(string? raw)
-        => FormatExifEnum(raw, NormalHardSoftNames);
-
-    private static string? FormatGainControl(string? raw)
-        => FormatExifEnum(raw, GainControlNames);
 
     private static string? FormatExifEnum(string? raw, IReadOnlyDictionary<int, string> names)
     {
@@ -3817,6 +3632,85 @@ public sealed partial class MainWindow : Window
         catch (Exception ex) { DiagLog.Write("App", "graceful exit failed: " + ex); }
     }
 
+    private (
+        FileProbe Probe,
+        Microsoft.Win32.SafeHandles.SafeFileHandle? Handle,
+        long Length,
+        string Authority) PreparePreviewProbe(
+            string path,
+            bool metadataOnly)
+    {
+        if (metadataOnly)
+        {
+            return (
+                FallbackFileProbe.CreateMetadataOnlyProbe(path),
+                null,
+                0,
+                "cloud-metadata");
+        }
+
+        if (Directory.Exists(path))
+        {
+            return (
+                _native.ProbeFile(path) ?? BuildProbe(path),
+                null,
+                0,
+                "path-directory");
+        }
+
+        if (!_native.SupportsHandleProbe)
+        {
+            DiagLog.Write(
+                "App",
+                $"preview probe compatibility fallback: reason=missing-handle-capability; path={path}");
+            return (
+                _native.ProbeFile(path) ?? BuildProbe(path),
+                null,
+                0,
+                "path-compatibility");
+        }
+
+        (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length) pinned;
+        try
+        {
+            pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        }
+        catch (Exception ex) when (
+            ex is System.ComponentModel.Win32Exception
+                or IOException
+                or UnauthorizedAccessException
+                or InvalidDataException
+                or NotSupportedException
+                or ArgumentException)
+        {
+            DiagLog.Write(
+                "App",
+                $"preview probe compatibility fallback: reason=pin-failed; type={ex.GetType().Name}; path={path}");
+            return (
+                _native.ProbeFile(path) ?? BuildProbe(path),
+                null,
+                0,
+                "path-compatibility");
+        }
+
+        try
+        {
+            FileProbe probe = _native.ProbeFileHandle(
+                    pinned.Handle,
+                    pinned.Length,
+                    path)
+                ?? throw new InvalidDataException("Native HANDLE probe returned no result.");
+            if (probe.Size != pinned.Length)
+                throw new InvalidDataException("Native HANDLE probe length did not match its pinned source.");
+            return (probe, pinned.Handle, pinned.Length, "pinned-handle");
+        }
+        catch
+        {
+            pinned.Handle.Dispose();
+            throw;
+        }
+    }
+
     private static FileProbe BuildProbe(string path)
     {
         if (Directory.Exists(path))
@@ -3885,24 +3779,21 @@ public sealed partial class MainWindow : Window
     private static bool IsParserHostPreview(FileProbe probe)
         => PreviewFormatPolicy.UsesParserHost(probe.Kind);
 
-    private (string RequestId, Task<ControlMessage> Completion) BeginPinnedParserOpen(string path, FileProbe initialProbe)
+    private (string RequestId, Task<ControlMessage> Completion) BeginPinnedParserOpen(
+        string path,
+        FileProbe verifiedProbe,
+        Microsoft.Win32.SafeHandles.SafeFileHandle pinnedHandle,
+        long pinnedLength)
     {
-        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
         (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length)? wal = null;
         (Microsoft.Win32.SafeHandles.SafeFileHandle Handle, long Length)? shm = null;
         try
         {
-            FileProbe verifiedProbe = _native.SupportsHandleProbe
-                ? _native.ProbeFileHandle(pinned.Handle, pinned.Length, path)
-                    ?? throw new InvalidDataException("Native HANDLE probe returned no result.")
-                : _native.ProbeFile(path) ?? BuildProbe(path);
-            if (verifiedProbe.Size != pinned.Length
-                || !IsParserHostPreview(verifiedProbe)
-                || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
+            if (verifiedProbe.Size != pinnedLength
+                || !IsParserHostPreview(verifiedProbe))
             {
-                throw new InvalidDataException("Preview file changed while establishing the ParserHost boundary.");
+                throw new InvalidDataException("Pinned ParserHost input did not match its authoritative probe.");
             }
-            _currentProbe = verifiedProbe;
             if (verifiedProbe.Kind.Equals("database", StringComparison.OrdinalIgnoreCase))
             {
                 if (IsSqliteMainDatabase(path, verifiedProbe))
@@ -3913,20 +3804,24 @@ public sealed partial class MainWindow : Window
                 return _parserSupervisor!.BeginOpenSqliteHandles(
                     path,
                     verifiedProbe,
-                    pinned.Handle,
-                    pinned.Length,
+                    pinnedHandle,
+                    pinnedLength,
                     wal?.Handle,
                     wal?.Length ?? 0,
                     shm?.Handle,
                     shm?.Length ?? 0);
             }
-            return _parserSupervisor!.BeginOpenHandle(path, verifiedProbe, pinned.Handle, pinned.Length);
+            return _parserSupervisor!.BeginOpenHandle(
+                path,
+                verifiedProbe,
+                pinnedHandle,
+                pinnedLength);
         }
         finally
         {
             shm?.Handle.Dispose();
             wal?.Handle.Dispose();
-            pinned.Handle.Dispose();
+            pinnedHandle.Dispose();
         }
     }
 
@@ -3937,29 +3832,29 @@ public sealed partial class MainWindow : Window
             && magic.AsSpan().StartsWith("SQLite format 3\0"u8);
 
     private (string RequestId, Task<ControlMessage> Completion) BeginPinnedRasterOpen(
-        string path, FileProbe initialProbe, uint targetWidth, uint targetHeight)
+        string path,
+        FileProbe verifiedProbe,
+        Microsoft.Win32.SafeHandles.SafeFileHandle pinnedHandle,
+        long pinnedLength,
+        uint targetWidth,
+        uint targetHeight)
     {
-        var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
         try
         {
-            FileProbe verifiedProbe = _native.SupportsHandleProbe
-                ? _native.ProbeFileHandle(pinned.Handle, pinned.Length, path)
-                    ?? throw new InvalidDataException("Native HANDLE probe returned no result.")
-                : _native.ProbeFile(path) ?? BuildProbe(path);
-            if (verifiedProbe.Size != pinned.Length
-                || !string.Equals(verifiedProbe.Kind, initialProbe.Kind, StringComparison.OrdinalIgnoreCase))
+            if (verifiedProbe.Size != pinnedLength)
             {
-                throw new InvalidDataException("Preview file changed while establishing the RasterHost boundary.");
+                throw new InvalidDataException("Pinned RasterHost input did not match its authoritative probe.");
             }
-            _currentProbe = verifiedProbe;
-            var request = _supervisor!.BeginPinnedOpen(
-                path, verifiedProbe, pinned.Handle, targetWidth, targetHeight);
-            pinned.Handle = null!;
-            return request;
+            return _supervisor!.BeginPinnedOpen(
+                path,
+                verifiedProbe,
+                pinnedHandle,
+                targetWidth,
+                targetHeight);
         }
         finally
         {
-            pinned.Handle?.Dispose();
+            pinnedHandle.Dispose();
         }
     }
 

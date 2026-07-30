@@ -77,6 +77,9 @@ jobs:
           }
           else { throw "Unknown release channel: ${{ inputs.channel }}" }
           $packageVersion = if ($suffix) { "$version-$suffix" } else { $version }
+          $msixVersion = ./tools/resolve-formal-msix-version.ps1 `
+            -VersionPrefix $version `
+            -VersionSuffix $suffix
           $version | Set-Content -LiteralPath VERSION -Encoding ascii
           "version=$packageVersion" >> $env:GITHUB_OUTPUT
           "tag=v$packageVersion" >> $env:GITHUB_OUTPUT
@@ -84,7 +87,7 @@ jobs:
           "base_version=$version" >> $env:GITHUB_OUTPUT
           "suffix=$suffix" >> $env:GITHUB_OUTPUT
           "previous_tag=$previousTag" >> $env:GITHUB_OUTPUT
-          "msix_version=$version.0" >> $env:GITHUB_OUTPUT
+          "msix_version=$msixVersion" >> $env:GITHUB_OUTPUT
 
       - name: Check release target and visible changes
         shell: pwsh

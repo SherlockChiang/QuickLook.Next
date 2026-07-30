@@ -14,11 +14,14 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
-    <ProjectReference Include="..\..\src\QuickLook.Next.RasterHost\QuickLook.Next.RasterHost.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\QuickLook.Next.RasterHost\QuickLook.Next.RasterHost.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\testdata\image-corpus\external\gif-disposal-background.gif"
           Link="Fixtures\animated.gif"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\testdata\image-corpus\external\webp-animated.webp"
+          Link="Fixtures\animated.webp"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\QuickLook.Next.App\Assets\QuickLookNext.ico"
           Link="Fixtures\static.ico"

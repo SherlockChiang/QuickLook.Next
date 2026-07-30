@@ -28,8 +28,14 @@ if ($Version) {
 }
 else {
     if (-not $VersionPrefix) { $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
-    if ($VersionPrefix -notmatch '^\d+\.\d+\.\d+$') { throw "VersionPrefix must use X.Y.Z format." }
-    $numericVersion = "$VersionPrefix.0"
+    $numericVersion = @(
+        & (Join-Path $PSScriptRoot "resolve-formal-msix-version.ps1") `
+            -VersionPrefix $VersionPrefix `
+            -VersionSuffix $VersionSuffix
+    )[-1]
+    if (-not $numericVersion) {
+        throw "The formal MSIX version could not be resolved."
+    }
     $packageVersion = if ($VersionSuffix) { "$VersionPrefix-$VersionSuffix" } else { $VersionPrefix }
 }
 
@@ -40,6 +46,22 @@ $manifestTemplate = Join-Path $root "packaging\AppxManifest.xml"
 $msixName = "QuickLook.Next-$packageVersion-win-x64.msix"
 $installerName = "QuickLook.Next-Installer-$packageVersion-win-x64.zip"
 $installScript = Join-Path $root "packaging\Install.ps1"
+
+function Resolve-ArtifactChildPath {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $artifactRoot = [IO.Path]::GetFullPath($artifacts).TrimEnd('\', '/')
+    $candidate = [IO.Path]::GetFullPath((Join-Path $artifactRoot $Name))
+    $requiredPrefix = $artifactRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.StartsWith(
+            $requiredPrefix,
+            [StringComparison]::OrdinalIgnoreCase))
+    {
+        throw "Artifact path escaped the artifacts directory: $Name"
+    }
+    return $candidate
+}
+
 if (-not $ExpectedCertificatePath) { $ExpectedCertificatePath = Join-Path $root "packaging\QuickLook.Next-Release.cer" }
 $localSigningDirectory = Join-Path $root ".signing"
 if (-not $CertificatePath) {
@@ -107,7 +129,7 @@ if (-not $CreateDevelopmentCertificate) {
     }
 }
 
-$msixPath = Join-Path $artifacts $msixName
+$msixPath = Resolve-ArtifactChildPath $msixName
 Remove-Item -LiteralPath $msixPath -Force -ErrorAction SilentlyContinue
 $packagePri = Join-Path $msixRoot "resources.pri"
 if (-not (Test-Path -LiteralPath $packagePri -PathType Leaf)) {
@@ -147,7 +169,7 @@ Copy-Item -LiteralPath (Join-Path $root "packaging\README.txt") -Destination $in
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $installerRoot
 Copy-Item -LiteralPath (Join-Path $root "dist\THIRD-PARTY-NOTICES.txt") -Destination $installerRoot
 
-$installerPath = Join-Path $artifacts $installerName
+$installerPath = Resolve-ArtifactChildPath $installerName
 Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $installerPath -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()

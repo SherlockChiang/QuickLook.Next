@@ -11,6 +11,7 @@ using Xunit;
 
 namespace QuickLook.Next.ParserHost.IntegrationTests;
 
+[Collection("ParserHost integration")]
 public sealed class ParserHostIntegrationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
@@ -22,8 +23,8 @@ public sealed class ParserHostIntegrationTests
         const int handleGrowthBudget = 12;
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
-        string sourcePath = Path.Combine(tempDirectory, "cycle-source.txt");
-        string logicalPath = Path.Combine(tempDirectory, "missing-cycle-source.txt");
+        string sourcePath = Path.Combine(tempDirectory, "physical-cycle-source.bin");
+        string logicalPath = Path.Combine(tempDirectory, "opencode.json");
 
         string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
@@ -42,12 +43,12 @@ public sealed class ParserHostIntegrationTests
             int peakHandles = 0;
             for (int cycle = 0; cycle <= cycleCount; cycle++)
             {
-                string contents = $"cycle {cycle}";
+                string contents = $$"""{"theme":"system","cycle":{{cycle}},"enabled":true}""";
                 await File.WriteAllTextAsync(sourcePath, contents, timeout.Token);
                 string requestId = Guid.NewGuid().ToString("n");
                 var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
                 long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
-                var probe = new FileProbe(logicalPath, ".txt", "cycle"u8.ToArray())
+                var probe = new FileProbe(logicalPath, ".json", "{"u8.ToArray())
                 {
                     Kind = "text",
                     Size = pinned.Length,
@@ -59,6 +60,7 @@ public sealed class ParserHostIntegrationTests
 
                 PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
                 Assert.Equal(contents, ready.TextContent);
+                Assert.Equal("json", ready.TextLanguage);
                 await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
                 await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
 
@@ -204,6 +206,80 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal(requestId, ready.RequestId);
             Assert.Equal("archive", ready.Kind);
             Assert.Contains(ready.Listing!.Items, item => item.Name.Contains("integration-marker.txt", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Rar_handle_preview_returns_listing_only_and_releases_source()
+    {
+        // WinRAR 7.23 RAR5 archive containing one empty file named integration-marker.txt.
+        byte[] rarBytes = Convert.FromBase64String(
+            "UmFyIRoHAQAzkrXlCgEFBgAFAQGAgACmEn9SMgIDC4AABIAAIAAAAACAAAAWaW50ZWdyYXRpb24tbWFya2VyLnR4dAoDAmO3uH8tH90BHXdWUQMFBAA=");
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string sourcePath = Path.Combine(tempDirectory, "physical-source.bin");
+        string logicalPath = Path.Combine(tempDirectory, "missing-logical.rar");
+        await File.WriteAllBytesAsync(sourcePath, rarBytes);
+
+        string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            string requestId = Guid.NewGuid().ToString("n");
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                pinned.Handle,
+                host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".rar", rarBytes[..8])
+            {
+                Kind = "archive",
+                Size = pinned.Length,
+            };
+            await channel.SendAsync(
+                new PreviewOpenHandle(requestId, hostHandle, pinned.Length, logicalPath, probe),
+                timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewReady ready = Assert.IsType<PreviewReady>(
+                await channel.ReceiveAsync(timeout.Token));
+            PreviewListing listing = Assert.IsType<PreviewListing>(ready.Listing);
+            Assert.Equal("archive", ready.Kind);
+            Assert.Equal("archive", listing.ListingKind);
+            Assert.Empty(listing.RootPath);
+            Assert.False(listing.CanPreviewEntries);
+            Assert.Contains(
+                listing.Items,
+                item => item.Name == "integration-marker.txt" && !item.IsFolder);
+            Assert.False(File.Exists(logicalPath));
+            Assert.False(Directory.Exists(
+                Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
+            await WaitUntilAsync(
+                () => TryOverwriteFile(sourcePath, "released"),
+                timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
         }
         finally
         {
@@ -605,6 +681,7 @@ public sealed class ParserHostIntegrationTests
     [InlineData("README.md", "# HANDLE Markdown\n\nRust owns parsing.", "markdown", null)]
     [InlineData("资料.csv", "name,value\nRust,handle", "table", ",")]
     [InlineData("data.tsv", "name\tvalue\nRust\thandle", "table", "\t")]
+    [InlineData("opencode.json", "{\"theme\":\"system\",\"provider\":{\"enabled\":true}}", "text", null)]
     [InlineData("large.txt", "__LARGE_TEXT__", "text", null)]
     public async Task Handle_open_previews_text_formats_without_an_anchor(
         string fileName,
@@ -663,8 +740,13 @@ public sealed class ParserHostIntegrationTests
                 Assert.Equal(["name", "value"], table.Headers);
                 Assert.Contains(table.Rows, row => row.Cells.SequenceEqual(["Rust", "handle"]));
             }
-            else
+            else if (fileName == "large.txt")
                 Assert.EndsWith(tailMarker, Assert.IsType<string>(ready.TextContent), StringComparison.Ordinal);
+            else
+            {
+                Assert.Equal(content, Assert.IsType<string>(ready.TextContent));
+                Assert.Equal("json", ready.TextLanguage);
+            }
 
             string anchorDirectory = Path.Combine(
                 GetWritableRoot(host), "parser-input", "input-" + requestId);
@@ -1284,30 +1366,61 @@ public sealed class ParserHostIntegrationTests
             Assert.False(TryOverwriteFile(sourcePath, "replacement"));
 
             string missingParentRequestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(missingParentRequestId, sourcePath, entryName)
+            var missingParentOutput = CreateArchiveOutput(tempDirectory, missingParentRequestId);
+            using FileStream missingParentWriter = missingParentOutput.Writer;
+            long missingParentOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                missingParentWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                missingParentRequestId,
+                sourcePath,
+                entryName,
+                missingParentOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes)
             {
                 ParentPreviewRequestId = Guid.NewGuid().ToString("n"),
             }, timeout.Token);
             PreviewError missingParentError =
                 Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
             Assert.Contains("parent", missingParentError.Message, StringComparison.OrdinalIgnoreCase);
+            using (FileStream missingParentReader = await WaitForArchiveOutputReaderAsync(
+                missingParentWriter,
+                missingParentOutput.Path,
+                timeout.Token))
+            {
+                Assert.Equal(0, missingParentReader.Length);
+            }
 
             string extractRequestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(extractRequestId, "", entryName)
+            var output = CreateArchiveOutput(tempDirectory, extractRequestId);
+            using FileStream outputWriter = output.Writer;
+            long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                outputWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                extractRequestId,
+                "",
+                entryName,
+                remoteOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes)
             {
                 ParentPreviewRequestId = previewRequestId,
             }, timeout.Token);
             ArchiveEntryExtracted extracted =
                 Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            AssertArchiveOutputResponse(extracted, extractRequestId, entryName);
             {
-                using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                    host.SafeHandle, extracted.FileHandle, extracted.FileLength);
-                using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+                using FileStream entryStream = await WaitForArchiveOutputReaderAsync(
+                    outputWriter,
+                    output.Path,
+                    timeout.Token);
+                Assert.Equal(extracted.FileLength, entryStream.Length);
                 using var reader = new StreamReader(entryStream);
                 Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
             }
 
-            await channel.SendAsync(new ArchiveEntryExtractClose(extractRequestId), timeout.Token);
+            Assert.Empty(EnumerateExtractionRoots(
+                Path.Combine(GetWritableRoot(host), "archive-preview")));
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
             await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
@@ -1320,7 +1433,7 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
-    public async Task Repeated_parent_bound_archive_extractions_release_leases_handles_and_temp_roots()
+    public async Task Repeated_parent_bound_archive_extractions_release_leases_handles_without_temp_roots()
     {
         const int cycleCount = 32;
         const int handleGrowthBudget = 12;
@@ -1363,31 +1476,40 @@ public sealed class ParserHostIntegrationTests
             Assert.False(TryOverwriteFile(sourcePath, "parent must remain retained"));
 
             string extractionRoot = Path.Combine(GetWritableRoot(host), "archive-preview");
-            HashSet<string> rootsBefore = EnumerateExtractionRoots(extractionRoot);
+            Assert.Empty(EnumerateExtractionRoots(extractionRoot));
             host.Refresh();
             int baselineHandles = host.HandleCount;
             int peakHandles = baselineHandles;
             for (int cycle = 0; cycle < cycleCount; cycle++)
             {
                 string extractRequestId = Guid.NewGuid().ToString("n");
-                await channel.SendAsync(new ArchiveEntryExtract(extractRequestId, "", entryName)
+                var output = CreateArchiveOutput(tempDirectory, extractRequestId);
+                using FileStream outputWriter = output.Writer;
+                long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                    outputWriter.SafeFileHandle,
+                    host.SafeHandle);
+                await channel.SendAsync(new ArchiveEntryExtract(
+                    extractRequestId,
+                    "",
+                    entryName,
+                    remoteOutputHandle,
+                    NativeAbi.MaxArchiveEntryOutputBytes)
                 {
                     ParentPreviewRequestId = previewRequestId,
                 }, timeout.Token);
                 ArchiveEntryExtracted extracted =
                     Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
-                using (var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                    host.SafeHandle, extracted.FileHandle, extracted.FileLength))
-                using (var entryStream = new FileStream(entryHandle, FileAccess.Read))
+                AssertArchiveOutputResponse(extracted, extractRequestId, entryName);
+                using (FileStream entryStream = await WaitForArchiveOutputReaderAsync(
+                    outputWriter,
+                    output.Path,
+                    timeout.Token))
                 using (var reader = new StreamReader(entryStream))
                 {
+                    Assert.Equal(extracted.FileLength, entryStream.Length);
                     Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
-                    await channel.SendAsync(new ArchiveEntryExtractClose(extractRequestId), timeout.Token);
-                    await WaitUntilAsync(
-                        () => EnumerateExtractionRoots(extractionRoot).IsSubsetOf(rootsBefore),
-                        timeout.Token);
-                    Assert.True(entryStream.CanRead);
                 }
+                Assert.Empty(EnumerateExtractionRoots(extractionRoot));
                 host.Refresh();
                 peakHandles = Math.Max(peakHandles, host.HandleCount);
             }
@@ -1519,21 +1641,35 @@ public sealed class ParserHostIntegrationTests
             Assert.False(TryOverwriteFile(sourcePath, "replacement"));
 
             string extractRequestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(extractRequestId, "", entryName)
+            var output = CreateArchiveOutput(tempDirectory, extractRequestId);
+            using FileStream outputWriter = output.Writer;
+            long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                outputWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                extractRequestId,
+                "",
+                entryName,
+                remoteOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes)
             {
                 ParentPreviewRequestId = previewRequestId,
             }, timeout.Token);
             ArchiveEntryExtracted extracted =
                 Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
+            AssertArchiveOutputResponse(extracted, extractRequestId, entryName);
             {
-                using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                    host.SafeHandle, extracted.FileHandle, extracted.FileLength);
-                using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+                using FileStream entryStream = await WaitForArchiveOutputReaderAsync(
+                    outputWriter,
+                    output.Path,
+                    timeout.Token);
+                Assert.Equal(extracted.FileLength, entryStream.Length);
                 using var reader = new StreamReader(entryStream);
                 Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
             }
 
-            await channel.SendAsync(new ArchiveEntryExtractClose(extractRequestId), timeout.Token);
+            Assert.Empty(EnumerateExtractionRoots(
+                Path.Combine(GetWritableRoot(host), "archive-preview")));
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
             await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
@@ -1546,7 +1682,7 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
-    public async Task Archive_entry_close_removes_successful_handoff()
+    public async Task Archive_entry_writes_app_owned_output_without_host_handoff()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
@@ -1573,17 +1709,101 @@ public sealed class ParserHostIntegrationTests
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
             string requestId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(requestId, zipPath, entryName), timeout.Token);
+            var output = CreateArchiveOutput(tempDirectory, requestId);
+            using FileStream outputWriter = output.Writer;
+            long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                outputWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                requestId,
+                zipPath,
+                entryName,
+                remoteOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes), timeout.Token);
             ArchiveEntryExtracted extracted = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
-            Assert.Equal(entryName, extracted.LogicalName);
-            using var entryHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                host.SafeHandle, extracted.FileHandle, extracted.FileLength);
-            using var entryStream = new FileStream(entryHandle, FileAccess.Read);
+            AssertArchiveOutputResponse(extracted, requestId, entryName);
+            using FileStream entryStream = await WaitForArchiveOutputReaderAsync(
+                outputWriter,
+                output.Path,
+                timeout.Token);
+            Assert.Equal(extracted.FileLength, entryStream.Length);
             using var reader = new StreamReader(entryStream);
             Assert.Equal(contents, await reader.ReadToEndAsync(timeout.Token));
+            Assert.Empty(EnumerateExtractionRoots(
+                Path.Combine(GetWritableRoot(host), "archive-preview")));
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            await StopHostAsync(host);
+            try { Directory.Delete(tempDirectory, recursive: true); } catch { }
+        }
+    }
 
-            await channel.SendAsync(new ArchiveEntryExtractClose(requestId), timeout.Token);
-            Assert.True(entryStream.CanRead);
+    [Fact]
+    public async Task Invalid_archive_output_envelopes_adopt_and_close_transferred_handles()
+    {
+        string tempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "QuickLookNextParserHostTests",
+            Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+        string zipPath = Path.Combine(tempDirectory, "invalid-output.zip");
+        const string entryName = "entry.txt";
+        using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            WriteEntry(archive, entryName, "unused");
+
+        string pipeName =
+            $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        using Process host = StartHost(pipeName, token);
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
+
+            foreach ((string requestedEntry, long capacity) in new[]
+            {
+                ("", NativeAbi.MaxArchiveEntryOutputBytes),
+                (entryName, 0L),
+                (entryName, NativeAbi.MaxArchiveEntryOutputBytes + 1),
+            })
+            {
+                string requestId = Guid.NewGuid().ToString("n");
+                var output = CreateArchiveOutput(tempDirectory, requestId);
+                using FileStream outputWriter = output.Writer;
+                long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                    outputWriter.SafeFileHandle,
+                    host.SafeHandle);
+                await channel.SendAsync(new ArchiveEntryExtract(
+                    requestId,
+                    zipPath,
+                    requestedEntry,
+                    remoteOutputHandle,
+                    capacity), timeout.Token);
+
+                PreviewError error =
+                    Assert.IsType<PreviewError>(await channel.ReceiveAsync(timeout.Token));
+                Assert.Equal(requestId, error.RequestId);
+                Assert.Contains("invalid", error.Message, StringComparison.OrdinalIgnoreCase);
+                using FileStream outputReader = await WaitForArchiveOutputReaderAsync(
+                    outputWriter,
+                    output.Path,
+                    timeout.Token);
+                Assert.Equal(0, outputReader.Length);
+            }
+
+            Assert.Empty(EnumerateExtractionRoots(
+                Path.Combine(GetWritableRoot(host), "archive-preview")));
         }
         finally
         {
@@ -1702,7 +1922,7 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
-    public async Task Office_hero_raster_close_removes_bgra_handoff()
+    public async Task Office_hero_raster_uses_a_released_shared_section()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
@@ -1722,7 +1942,6 @@ public sealed class ParserHostIntegrationTests
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
-        string? handoffPath = null;
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -1766,22 +1985,22 @@ public sealed class ParserHostIntegrationTests
             PreviewError? heroError = heroResponse as PreviewError;
             Assert.Null(heroError);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(heroResponse);
-            handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
-            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(8, extracted.Width);
             Assert.Equal(8, extracted.Height);
-            using var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
-            using var heroStream = new FileStream(heroHandle, FileAccess.Read);
-            Assert.Equal(extracted.PacketLength, heroStream.Length);
-            var raster = new byte[heroStream.Length];
-            heroStream.ReadExactly(raster);
-            Assert.Equal(8, BitConverter.ToInt32(raster, 0));
-            Assert.Equal(8, BitConverter.ToInt32(raster, 4));
-            Assert.Equal(8 + 8 * 8 * 4, raster.Length);
+            using SharedSectionView heroView = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                extracted.SectionHandle,
+                checked((int)extracted.PacketLength));
+            Assert.Equal(8, BitConverter.ToInt32(heroView.Bytes[..4]));
+            Assert.Equal(8, BitConverter.ToInt32(heroView.Bytes[4..8]));
+            Assert.Equal(8 + 8 * 8 * 4, heroView.Length);
+            Assert.False(Directory.Exists(Path.Combine(GetWritableRoot(host), "parser-raster")));
 
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
-            Assert.True(heroStream.CanRead);
+            await WaitUntilAsync(
+                () => !CanDuplicateSection(host, extracted.SectionHandle, heroView.Length),
+                timeout.Token);
+            Assert.Equal(8, BitConverter.ToInt32(heroView.Bytes[..4]));
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
             await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
@@ -1789,13 +2008,12 @@ public sealed class ParserHostIntegrationTests
         {
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
-            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }
     }
 
     [Fact]
-    public async Task Package_hero_raster_close_removes_bgra_handoff()
+    public async Task Package_hero_raster_uses_a_released_shared_section()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
@@ -1817,7 +2035,6 @@ public sealed class ParserHostIntegrationTests
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
-        string? handoffPath = null;
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -1857,22 +2074,22 @@ public sealed class ParserHostIntegrationTests
                 ParentPreviewRequestId = previewRequestId,
             }, timeout.Token);
             HeroRasterExtracted extracted = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            handoffPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + requestId, "hero.bgra");
-            string handoffDirectory = Path.GetDirectoryName(handoffPath)!;
             Assert.Equal(512, extracted.Width);
             Assert.Equal(512, extracted.Height);
-            using var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, extracted.FileHandle, extracted.PacketLength);
-            using var heroStream = new FileStream(heroHandle, FileAccess.Read);
-            Assert.Equal(extracted.PacketLength, heroStream.Length);
-            var raster = new byte[heroStream.Length];
-            heroStream.ReadExactly(raster);
-            Assert.Equal(512, BitConverter.ToInt32(raster, 0));
-            Assert.Equal(512, BitConverter.ToInt32(raster, 4));
-            Assert.Equal(8 + 512 * 512 * 4, raster.Length);
+            using SharedSectionView heroView = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                extracted.SectionHandle,
+                checked((int)extracted.PacketLength));
+            Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[..4]));
+            Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[4..8]));
+            Assert.Equal(8 + 512 * 512 * 4, heroView.Length);
+            Assert.False(Directory.Exists(Path.Combine(GetWritableRoot(host), "parser-raster")));
 
             await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory), timeout.Token);
-            Assert.True(heroStream.CanRead);
+            await WaitUntilAsync(
+                () => !CanDuplicateSection(host, extracted.SectionHandle, heroView.Length),
+                timeout.Token);
+            Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[..4]));
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
             await WaitUntilAsync(() => TryOverwriteFile(sourcePath, "released"), timeout.Token);
         }
@@ -1880,13 +2097,12 @@ public sealed class ParserHostIntegrationTests
         {
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
-            if (handoffPath is not null) try { Directory.Delete(Path.GetDirectoryName(handoffPath)!, recursive: true); } catch { }
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }
     }
 
     [Fact]
-    public async Task Repeated_parent_bound_package_heroes_release_leases_handles_and_temp_roots()
+    public async Task Repeated_parent_bound_package_heroes_release_leases_handles_and_sections()
     {
         const int cycleCount = 32;
         const int handleGrowthBudget = 12;
@@ -1935,11 +2151,11 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal("package", Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token)).Kind);
             Assert.False(TryOverwriteFile(sourcePath, "parent must remain retained"));
 
-            string rasterRoot = Path.Combine(GetWritableRoot(host), "parser-raster");
+            string legacyRasterRoot = Path.Combine(GetWritableRoot(host), "parser-raster");
+            Assert.False(Directory.Exists(legacyRasterRoot));
             host.Refresh();
             int baselineHandles = host.HandleCount;
             int peakHandles = baselineHandles;
-            byte[] header = new byte[8];
             for (int cycle = 0; cycle < cycleCount; cycle++)
             {
                 string requestId = Guid.NewGuid().ToString("n");
@@ -1951,22 +2167,18 @@ public sealed class ParserHostIntegrationTests
                     Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
                 Assert.Equal((512, 512, (long)expectedPacketLength),
                     (extracted.Width, extracted.Height, extracted.PacketLength));
-                string handoffDirectory = Path.Combine(rasterRoot, "raster-" + requestId);
-                string handoffPath = Path.Combine(handoffDirectory, "hero.bgra");
-                Assert.True(File.Exists(handoffPath));
-
-                using (var heroHandle = WindowsHandleTransfer.DuplicateFileFromProcess(
-                    host.SafeHandle, extracted.FileHandle, extracted.PacketLength))
-                using (var heroStream = new FileStream(heroHandle, FileAccess.Read))
+                using (SharedSectionView heroView = SharedSectionView.DuplicateAndMapReadOnly(
+                    host.SafeHandle,
+                    extracted.SectionHandle,
+                    checked((int)extracted.PacketLength)))
                 {
-                    heroStream.ReadExactly(header);
-                    Assert.Equal(512, BitConverter.ToInt32(header, 0));
-                    Assert.Equal(512, BitConverter.ToInt32(header, 4));
+                    Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[..4]));
+                    Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[4..8]));
                     await channel.SendAsync(new HeroRasterExtractClose(requestId), timeout.Token);
                     await WaitUntilAsync(
-                        () => !File.Exists(handoffPath) && !Directory.Exists(handoffDirectory),
+                        () => !CanDuplicateSection(host, extracted.SectionHandle, heroView.Length),
                         timeout.Token);
-                    Assert.Equal(expectedPacketLength, heroStream.Length);
+                    Assert.Equal(512, BitConverter.ToInt32(heroView.Bytes[..4]));
                 }
 
                 host.Refresh();
@@ -1974,7 +2186,7 @@ public sealed class ParserHostIntegrationTests
             }
 
             Assert.InRange(peakHandles, 1, baselineHandles + handleGrowthBudget);
-            Assert.Empty(Directory.EnumerateDirectories(rasterRoot, "raster-*"));
+            Assert.False(Directory.Exists(legacyRasterRoot));
             Assert.False(File.Exists(logicalPath));
             Assert.False(TryOverwriteFile(sourcePath, "parent still retained"));
             await channel.SendAsync(new PreviewClose(previewRequestId), timeout.Token);
@@ -2010,9 +2222,8 @@ public sealed class ParserHostIntegrationTests
         var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
-        string? rasterPath = null;
-        Microsoft.Win32.SafeHandles.SafeFileHandle? archiveHandle = null;
-        Microsoft.Win32.SafeHandles.SafeFileHandle? rasterHandle = null;
+        FileStream? archiveOutput = null;
+        SharedSectionView? rasterView = null;
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -2022,9 +2233,26 @@ public sealed class ParserHostIntegrationTests
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
             string archiveId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(archiveId, zipPath, entryName), timeout.Token);
+            var output = CreateArchiveOutput(tempDirectory, archiveId);
+            using FileStream outputWriter = output.Writer;
+            long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                outputWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                archiveId,
+                zipPath,
+                entryName,
+                remoteOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes), timeout.Token);
             ArchiveEntryExtracted archive = Assert.IsType<ArchiveEntryExtracted>(await channel.ReceiveAsync(timeout.Token));
-            archiveHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, archive.FileHandle, archive.FileLength);
+            AssertArchiveOutputResponse(archive, archiveId, entryName);
+            archiveOutput = await WaitForArchiveOutputReaderAsync(
+                outputWriter,
+                output.Path,
+                timeout.Token);
+            Assert.Equal(archive.FileLength, archiveOutput.Length);
+            Assert.Empty(EnumerateExtractionRoots(
+                Path.Combine(GetWritableRoot(host), "archive-preview")));
             string officePreviewId = Guid.NewGuid().ToString("n");
             var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(docxPath);
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
@@ -2045,30 +2273,34 @@ public sealed class ParserHostIntegrationTests
                 ParentPreviewRequestId = officePreviewId,
             }, timeout.Token);
             HeroRasterExtracted raster = Assert.IsType<HeroRasterExtracted>(await channel.ReceiveAsync(timeout.Token));
-            rasterHandle = WindowsHandleTransfer.DuplicateFileFromProcess(host.SafeHandle, raster.FileHandle, raster.PacketLength);
-            rasterPath = Path.Combine(GetWritableRoot(host), "parser-raster", "raster-" + rasterId, "hero.bgra");
-            Assert.False(archiveHandle.IsInvalid);
-            Assert.True(File.Exists(rasterPath));
+            rasterView = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                raster.SectionHandle,
+                checked((int)raster.PacketLength));
+            Assert.True(archiveOutput.CanRead);
+            Assert.Equal(raster.Width, BitConverter.ToInt32(rasterView.Bytes[..4]));
+            Assert.False(Directory.Exists(Path.Combine(GetWritableRoot(host), "parser-raster")));
 
             channel.Dispose();
             pipe.Dispose();
             await host.WaitForExitAsync(timeout.Token);
-            await WaitUntilAsync(() => !File.Exists(rasterPath), timeout.Token);
-            Assert.True(RandomAccess.GetLength(archiveHandle) > 0);
+            archiveOutput.Position = 0;
+            using (var archiveReader = new StreamReader(archiveOutput, leaveOpen: true))
+                Assert.Equal("handoff", await archiveReader.ReadToEndAsync(timeout.Token));
+            Assert.Equal(raster.Width, BitConverter.ToInt32(rasterView.Bytes[..4]));
         }
         finally
         {
-            archiveHandle?.Dispose();
-            rasterHandle?.Dispose();
+            archiveOutput?.Dispose();
+            rasterView?.Dispose();
             try { pipe.Dispose(); } catch { }
             await StopHostAsync(host);
-            if (rasterPath is not null) try { Directory.Delete(Path.GetDirectoryName(rasterPath)!, recursive: true); } catch { }
             try { Directory.Delete(tempDirectory, recursive: true); } catch { }
         }
     }
 
     [Fact]
-    public async Task Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file()
+    public async Task Closing_inflight_archive_extract_suppresses_response_and_releases_output_handle()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
@@ -2089,7 +2321,7 @@ public sealed class ParserHostIntegrationTests
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process host = StartHost(pipeName, token);
         string extractionRoot = Path.Combine(GetWritableRoot(host), "archive-preview");
-        HashSet<string> rootsBefore = EnumerateExtractionRoots(extractionRoot);
+        Assert.Empty(EnumerateExtractionRoots(extractionRoot));
         try
         {
             using var timeout = new CancellationTokenSource(Timeout);
@@ -2099,8 +2331,26 @@ public sealed class ParserHostIntegrationTests
             Assert.IsType<ParserReady>(await channel.ReceiveAsync(timeout.Token));
 
             string canceledId = Guid.NewGuid().ToString("n");
-            await channel.SendAsync(new ArchiveEntryExtract(canceledId, zipPath, entryName), timeout.Token);
+            var output = CreateArchiveOutput(tempDirectory, canceledId);
+            using FileStream outputWriter = output.Writer;
+            long remoteOutputHandle = WindowsHandleTransfer.DuplicateFileToProcess(
+                outputWriter.SafeFileHandle,
+                host.SafeHandle);
+            await channel.SendAsync(new ArchiveEntryExtract(
+                canceledId,
+                zipPath,
+                entryName,
+                remoteOutputHandle,
+                NativeAbi.MaxArchiveEntryOutputBytes), timeout.Token);
             await channel.SendAsync(new ArchiveEntryExtractClose(canceledId), timeout.Token);
+            using FileStream canceledOutput = await WaitForArchiveOutputReaderAsync(
+                outputWriter,
+                output.Path,
+                timeout.Token);
+            Assert.InRange(
+                canceledOutput.Length,
+                0,
+                NativeAbi.MaxArchiveEntryOutputBytes);
 
             string previewId = Guid.NewGuid().ToString("n");
             var probe = new FileProbe(zipPath, ".zip", [0x50, 0x4B, 0x03, 0x04])
@@ -2112,7 +2362,7 @@ public sealed class ParserHostIntegrationTests
             PreviewReady ready = Assert.IsType<PreviewReady>(await channel.ReceiveAsync(timeout.Token));
             Assert.Equal(previewId, ready.RequestId);
 
-            await WaitUntilAsync(() => EnumerateExtractionRoots(extractionRoot).IsSubsetOf(rootsBefore), timeout.Token);
+            Assert.Empty(EnumerateExtractionRoots(extractionRoot));
         }
         finally
         {
@@ -2127,7 +2377,7 @@ public sealed class ParserHostIntegrationTests
         string hostPath = Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
         string writableRoot = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", "host-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(writableRoot);
-        foreach (string child in new[] { "logs", "archive-preview", "parser-raster" })
+        foreach (string child in new[] { "logs", "archive-preview" })
             Directory.CreateDirectory(Path.Combine(writableRoot, child));
         try
         {
@@ -2190,6 +2440,76 @@ public sealed class ParserHostIntegrationTests
     {
         while (!condition())
             await Task.Delay(25, cancellationToken);
+    }
+
+    private static (string Path, FileStream Writer) CreateArchiveOutput(
+        string directory,
+        string requestId)
+    {
+        string path = Path.Combine(directory, $"archive-output-{requestId}.bin");
+        var writer = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete);
+        Assert.Equal(0, writer.Length);
+        return (path, writer);
+    }
+
+    private static async Task<FileStream> WaitForArchiveOutputReaderAsync(
+        FileStream writer,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        writer.Dispose();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                // Excluding FILE_SHARE_WRITE makes this open succeed only after ParserHost closes
+                // every writable duplicate adopted from ArchiveEntryExtract.
+                return new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read | FileShare.Delete);
+            }
+            catch (IOException)
+            {
+                await Task.Delay(25, cancellationToken);
+            }
+        }
+    }
+
+    private static void AssertArchiveOutputResponse(
+        ArchiveEntryExtracted response,
+        string requestId,
+        string logicalName)
+    {
+        Assert.Equal(requestId, response.RequestId);
+        Assert.Equal(logicalName, response.LogicalName);
+        Assert.InRange(response.FileLength, 0, NativeAbi.MaxArchiveEntryOutputBytes);
+        Assert.DoesNotContain(
+            "\"fileHandle\"",
+            ProtocolJson.Serialize(response),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool CanDuplicateSection(Process host, long remoteHandle, int length)
+    {
+        try
+        {
+            using SharedSectionView view = SharedSectionView.DuplicateAndMapReadOnly(
+                host.SafeHandle,
+                remoteHandle,
+                length);
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static bool TryOverwriteFile(string path, string contents)

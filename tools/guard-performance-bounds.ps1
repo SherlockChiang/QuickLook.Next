@@ -29,6 +29,19 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
     "Control-channel messages must remain capped at 4 MiB."
 
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+$nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
+$nativeEbookPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
+$nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
+$nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
+$nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
+$handleHandoffBenchmark = Join-Path $Root "tools/benchmark-handle-handoff.ps1"
+Require-Pattern $handleHandoffBenchmark '\[ValidateRange\(1,\s*1024\)\][\s\S]*\[int\]\$SizeMiB\s*=\s*32[\s\S]*\[ValidateRange\(1,\s*25\)\][\s\S]*\[int\]\$Iterations\s*=\s*5' `
+    "The HANDLE handoff microbenchmark must retain bounded 32 MiB/five-iteration defaults."
+Require-Pattern $handleHandoffBenchmark 'ReOpenFile\([\s\S]*GetFileSizeEx\([\s\S]*length\s*!=\s*expectedLength[\s\S]*FileOptions\]::WriteThrough[\s\S]*\.CopyTo\(\$anchor[\s\S]*\$anchor\.Flush\(\$true\)' `
+    "The handoff microbenchmark must compare exact HANDLE reopen against a write-through full anchor copy."
+Require-Pattern $handleHandoffBenchmark 'HandleBytesWritten\s*=\s*0[\s\S]*AnchorBytesWrittenPerIteration\s*=\s*\$sourceLength[\s\S]*StartsWith\(\s*\$resolvedTemp[\s\S]*quicklook-next-handoff-benchmark-[\s\S]*Directory\]::Delete\(\$resolvedBenchmark,\s*\$true\)' `
+    "The handoff benchmark must report write volume and narrowly validate its temporary cleanup target."
 Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAME_DIMENSION:\s*u32\s*=\s*1024' `
     "Animated frame dimensions must remain capped at 1024 pixels."
 Require-Pattern $nativeLibrary 'MAX_ANIMATED_FRAMES:\s*usize\s*=\s*120' `
@@ -47,6 +60,14 @@ Require-Pattern $nativeLibrary 'MAX_SVG_MARKUP_TOKENS:\s*usize\s*=\s*100_000' `
     "SVG HANDLE parsing must retain a markup complexity budget."
 Require-Pattern $nativeLibrary 'image_href_resolver\.resolve_data\s*=\s*Box::new\(\|_, _, _\| None\)[\s\S]*image_href_resolver\.resolve_string\s*=\s*Box::new\(\|_, _\| None\)' `
     "SVG HANDLE rendering must not resolve external image resources."
+Require-Pattern $nativeLibrary 'MAX_OFFICE_IMAGE_REF_BYTES:\s*usize\s*=\s*2048' `
+    "Office layout image refs must remain capped at 2048 UTF-8 bytes."
+Require-Pattern $nativePreview 'MAX_OFFICE_INLINE_IMAGE_BYTES:\s*u64\s*=\s*768\s*\*\s*1024' `
+    "Each Office layout image source must remain capped at 768 KiB."
+Require-Pattern $nativePreview 'MAX_OFFICE_LAYOUT_IMAGE_DIMENSION:\s*u32\s*=\s*1024' `
+    "Office layout image output dimensions must remain capped at 1024 pixels."
+Require-Pattern $nativeLibrary 'ql_extract_office_layout_image_handle\([\s\S]*target_width\s*==\s*0[\s\S]*target_width\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION[\s\S]*target_height\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION' `
+    "The Office layout image HANDLE ABI must reject zero and oversized output targets."
 
 $certificatePreview = Join-Path $Root "src/QuickLook.Next.Core/CertificatePreview.cs"
 Require-Pattern $certificatePreview 'MaxHandleInputBytes\s*=\s*1024\s*\*\s*1024' `
@@ -62,19 +83,86 @@ Require-Pattern $imageWaveform 'ScopeHeight\s*=\s*96' `
 Require-Pattern $imageWaveform '1_000_000d' `
     "Image waveform generation must retain its one-million-sample ceiling."
 $rasterHostProgram = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
-Require-Pattern $rasterHostProgram 'PreviewReady\(open\.RequestId,\s*"image"[\s\S]*Task\.Run\([\s\S]*ImageWaveformBuilder\.Create' `
-    "Static image waveforms must be computed after first-frame readiness."
+$nativeImageDecoder = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeImageDecoder.cs"
+$nativeImageMetadataReader = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeImageMetadataReader.cs"
+$systemImageMetadataReader = Join-Path $Root "src/QuickLook.Next.RasterHost/SystemImageMetadataReader.cs"
+$propertyHandlerMetadataReader =
+    Join-Path $Root "src/QuickLook.Next.RasterHost/WindowsPropertyHandlerMetadataReader.cs"
+$rasterHostStaticImageIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
+$nativeImageWaveformPacketTests = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/NativeImageWaveformPacketTests.cs"
+Require-Pattern $rasterHostProgram 'PreviewSurface\([\s\S]*PreviewReady\([\s\S]*return await PublishImageWaveformAsync' `
+    "Static image surfaces and readiness must be published before their waveform message."
+Require-Pattern $rasterHostProgram 'ImageWaveform waveform = image\.Waveform \?\? await Task\.Run\([\s\S]*ImageWaveformBuilder\.Create' `
+    "Compatibility image decoders must retain the bounded managed waveform fallback."
+Require-Pattern $nativeImageDecoder 'HandleImageWaveform[\s\S]*ql_decode_image_with_waveform_handle\([\s\S]*ParseDecodedImageWithWaveform' `
+    "Rust-native HANDLE images must consume the additive waveform packet without a managed BGRA rescan."
+Require-Pattern $nativeLibrary 'IMAGE_WAVEFORM_WIDTH:\s*u32\s*=\s*192[\s\S]*IMAGE_WAVEFORM_HEIGHT:\s*u32\s*=\s*96[\s\S]*IMAGE_WAVEFORM_SAMPLE_LIMIT:\s*f64\s*=\s*1_000_000\.0' `
+    "Rust-native image waveform generation must retain its fixed dimensions and sample ceiling."
+Require-Pattern $nativeLibrary 'let mut waveform = include_waveform\.then\(\|\| ImageWaveformAccumulator::new\(width, height\)\);[\s\S]*for \(index, px\) in rgba\.chunks_exact\(4\)\.enumerate\(\)[\s\S]*accumulator\.add_straight_rgba\(index, px\)[\s\S]*bgra\.push' `
+    "Rust-native raster image waveforms must be accumulated in the final RGBA-to-BGRA conversion loop."
+Require-Pattern $nativeLibrary 'for \(index, pixel\) in bgra\.chunks_exact_mut\(4\)\.enumerate\(\)[\s\S]*accumulator\.add_premultiplied_rgba\(index, pixel\)[\s\S]*pixel\.swap\(0, 2\)' `
+    "Rust-native SVG waveforms must be accumulated in the final premultiplied RGBA-to-BGRA conversion loop."
+Require-Pattern $nativeImageWaveformPacketTests 'Native_waveform_packet_accepts_only_exact_bounded_layout[\s\S]*Assert\.Null\(Parse\(valid,\s*valid\.Length\s*-\s*1\)\);[\s\S]*Assert\.Null\(Parse\(\[\.\. valid,\s*0\]\)\);[\s\S]*AssertRejected\(' `
+    "Native image waveform packets must reject malformed, truncated, and trailing layouts."
+Require-Pattern $rasterHostStaticImageIntegration 'messageOrder\.IndexOf\(typeof\(PreviewSurface\)\)[\s\S]*PreviewImageWaveform[\s\S]*messageOrder\.IndexOf\(typeof\(PreviewReady\)\)[\s\S]*PreviewImageWaveform' `
+    "RasterHost integration tests must preserve surface/ready ordering ahead of waveform publication."
+Require-Pattern $nativeImageMetadataReader 'MaxMetadataJsonBytes\s*=\s*1024\s*\*\s*1024[\s\S]*MaxInputImageBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024[\s\S]*MetadataGate\s*=\s*new\(1,\s*1\)' `
+    "RasterHost image metadata must retain its 1 MiB response, 256 MiB input, and single-worker bounds."
+Require-Pattern $nativeImageMetadataReader 'while\s*\(capacity\s*<=\s*MaxMetadataJsonBytes\)[\s\S]*status\s*==\s*NativeAbi\.StatusOk[\s\S]*required\s*>\s*\(nuint\)MaxMetadataJsonBytes[\s\S]*status\s*!=\s*NativeAbi\.StatusBufferTooSmall' `
+    "RasterHost image metadata must validate exact native output sizing and reject oversized responses."
+Require-Pattern $systemImageMetadataReader 'MaxInputImageBytes\s*=\s*512L\s*\*\s*1024\s*\*\s*1024[\s\S]*MetadataGate\s*=\s*new\(1,\s*1\)[\s\S]*CancelAfter\(timeout\)[\s\S]*ReopenReadOnlyFile\(sourceHandle,\s*sourceLength\)[\s\S]*AsRandomAccessStream\(\)[\s\S]*BitmapDecoder[\s\S]*CreateAsync\(stream\)' `
+    "RasterHost Windows-codec metadata must remain single-worker, timeout-bounded, size-bounded, and bound to a reopened HANDLE stream."
+Require-Pattern $systemImageMetadataReader 'SystemMetadataTimeoutExitCode\s*=\s*33[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*Task\.Run\([\s\S]*worker\.WaitAsync\(timeoutCts\.Token\)[\s\S]*DrainsWithinGraceAsync\(worker,\s*DrainGrace\)[\s\S]*Environment\.Exit\(SystemMetadataTimeoutExitCode\)' `
+    "A Windows-codec metadata call that cannot drain within 250 ms must fail-stop the isolated RasterHost."
+Require-Pattern $propertyHandlerMetadataReader 'MaxInputImageBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024[\s\S]*MaxProperties\s*=\s*128[\s\S]*MaxAcceptedProperties\s*=\s*48[\s\S]*MaxStringChars\s*=\s*512[\s\S]*MaxAggregateStringChars\s*=\s*4\s*\*\s*1024[\s\S]*MetadataGate\s*=\s*new\(1,\s*1\)' `
+    "RasterHost Property Handler metadata must retain its input, property, string, and single-worker budgets."
+Require-Pattern $propertyHandlerMetadataReader 'MaxSingleReadBytes\s*=\s*1024\s*\*\s*1024[\s\S]*MaxTotalReadBytes\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*MaxCalls\s*=\s*4096[\s\S]*public\s+int\s+Write\(\s*nint\s+buffer,\s*uint\s+count[\s\S]*StgEAccessDenied[\s\S]*public\s+int\s+SetSize\([\s\S]*StgEAccessDenied[\s\S]*public\s+int\s+Commit\([\s\S]*StgEAccessDenied' `
+    "The Property Handler COM stream must remain read-only with bounded reads and calls."
+Require-Pattern $propertyHandlerMetadataReader '\[Guid\("0000000C-0000-0000-C000-000000000046"\)\][\s\S]*interface\s+IRawComStream[\s\S]*int\s+Read\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesRead\)[\s\S]*int\s+Write\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesWritten\)' `
+    "The Property Handler must expose the native IID_IStream ABI without marshalled byte arrays."
+Require-Pattern $propertyHandlerMetadataReader 'public\s+unsafe\s+int\s+Read\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesRead\)[\s\S]*count\s*>\s*MaxSingleReadBytes[\s\S]*new\s+Span<byte>\(\(void\*\)buffer,\s*allowed\)' `
+    "The Property Handler IStream must validate native read sizes before exposing the caller buffer to managed code."
+Require-Pattern $propertyHandlerMetadataReader 'PropertyHandlerTimeoutExitCode\s*=\s*32[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*worker\.WaitAsync\(DrainGrace\)[\s\S]*Environment\.Exit\(PropertyHandlerTimeoutExitCode\)' `
+    "A Property Handler call that cannot drain within 250 ms must fail-stop the isolated RasterHost."
+Require-Pattern $rasterHostProgram 'imageMetadataTimeout\s*=\s*TimeSpan\.FromMilliseconds\(1500\)[\s\S]*TryAcquire\(\s*RetainedRasterOperations\.Metadata[\s\S]*NativeImageMetadataReader\.TryReadHandleAsync\([\s\S]*PreviewImageMetadataReady\(' `
+    "Image metadata must remain an optional 1.5-second child operation over an independent retained HANDLE lease."
+Require-Pattern $rasterHostStaticImageIntegration 'Image_metadata_child_keeps_an_independent_handle_lease_after_parent_close[\s\S]*missing-metadata-[^;]*\.png[\s\S]*PreviewImageMetadataOpen\(metadataRequestId,\s*parentRequestId\)[\s\S]*PreviewClose\(parentRequestId\)[\s\S]*Metadata\.Format[\s\S]*Metadata\.Width[\s\S]*Metadata\.Height[\s\S]*PreviewImageMetadataClose\(metadataRequestId\)[\s\S]*TryOverwriteFile\(physicalPath\)' `
+    "RasterHost must verify path-free metadata identity, parent/child lease independence, and final source release."
+Require-Pattern $rasterHostStaticImageIntegration 'Image_metadata_child_with_missing_parent_fails_closed[\s\S]*PreviewImageMetadataOpen\(metadataRequestId,\s*missingParentRequestId\)[\s\S]*PreviewError[\s\S]*no longer available' `
+    "RasterHost must fail image metadata child requests closed when their retained parent is absent."
+Require-Pattern $rasterHostStaticImageIntegration 'Windows_metadata_supplement_reads_bmp_from_the_retained_handle_after_parent_close[\s\S]*missing-wic-metadata-[^;]*\.bmp[\s\S]*PreviewImageMetadataOpen\(metadataRequestId,\s*parentRequestId\)[\s\S]*PreviewClose\(parentRequestId\)[\s\S]*Metadata\.Format[\s\S]*HorizontalResolution[\s\S]*VerticalResolution[\s\S]*PreviewImageMetadataClose\(metadataRequestId\)[\s\S]*TryOverwriteFile\(physicalPath\)' `
+    "RasterHost must verify Windows-codec metadata uses the retained HANDLE after parent close and releases it on child close."
+Require-Pattern $rasterHostStaticImageIntegration 'Windows_property_handler_reads_a_missing_logical_image_from_the_retained_handle[\s\S]*quicklook-next-property-handler-[^;]*\.bin[\s\S]*missing-property-handler-[^;]*\.bmp[\s\S]*WindowsPropertyHandlerMetadataReader\.TryReadHandleAsync\([\s\S]*metadata\.Width[\s\S]*metadata\.Height[\s\S]*HorizontalResolution[\s\S]*VerticalResolution' `
+    "RasterHost must directly verify its System32 Property Handler reads an exact retained HANDLE with no logical path."
+Require-Pattern $rasterHostStaticImageIntegration 'Windows_property_handler_stream_uses_raw_pointer_read_write_abi[\s\S]*IRawComStream[\s\S]*typeof\(nint\)[\s\S]*typeof\(uint\)[\s\S]*typeof\(byte\[\]\)' `
+    "RasterHost tests must lock the Property Handler IStream read/write ABI to raw pointers rather than marshalled arrays."
+Require-Pattern $rasterHostStaticImageIntegration 'Windows_property_handler_stream_rejects_oversized_read_before_touching_source[\s\S]*MaxSingleReadBytes\s*\+\s*1[\s\S]*Assert\.Equal\(0,\s*source\.Position\)[\s\S]*Assert\.Equal\(sourceBytes,\s*copied\)' `
+    "RasterHost tests must reject oversized Property Handler reads before advancing the source and retain valid raw reads."
+Require-Pattern $rasterHostStaticImageIntegration 'System_metadata_drain_watchdog_has_a_hard_grace_bound[\s\S]*DrainsWithinGraceAsync\([\s\S]*TimeSpan\.FromMilliseconds\(50\)[\s\S]*Assert\.False\(drained\)[\s\S]*Assert\.True\(await SystemImageMetadataReader\.DrainsWithinGraceAsync' `
+    "RasterHost tests must retain a direct hard-grace check for the Windows-codec metadata watchdog."
+Require-Pattern $rasterHostStaticImageIntegration 'Image_metadata_merge_precedence_is_native_then_property_handler_then_wic[\s\S]*WindowsPropertyHandlerMetadataReader\.Merge\(native,\s*propertyHandler\)[\s\S]*Assert\.Equal\("native",\s*merged\.Title\)[\s\S]*Assert\.Equal\(96,\s*merged\.HorizontalResolution\)[\s\S]*Assert\.Equal\(72,\s*merged\.VerticalResolution\)' `
+    "RasterHost tests must preserve native, Property Handler, then WIC metadata precedence."
 Require-Pattern $rasterHostProgram 'void StartOpen\([^)]*\)[\s\S]*producer\.ReleaseRetired\(\)' `
     "Every path and HANDLE open must release surfaces retired by the previous preview."
 $parserHostIntegration = Join-Path $Root "tests/QuickLook.Next.ParserHost.IntegrationTests/ParserHostIntegrationTests.cs"
+$officeImageIntegration = Join-Path $Root "tests/QuickLook.Next.ParserHost.IntegrationTests/OfficeImageSharedSectionTests.cs"
+$parserNativePreview = Join-Path $Root "src/QuickLook.Next.ParserHost/ParserNativePreview.cs"
+Require-Pattern $parserNativePreview 'InitialRasterSectionBytes\s*=\s*8\s*\+\s*\(768\s*\*\s*768\s*\*\s*4\)[\s\S]*int\s+capacity\s*=\s*InitialRasterSectionBytes' `
+    "ParserHost Hero sections must cover the bounded 768px Office raster without a normal retry decode."
 Require-Pattern $parserHostIntegration 'Repeated_handle_previews_release_sources_without_linear_handle_growth[\s\S]*cycleCount\s*=\s*32[\s\S]*baselineHandles[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "ParserHost must retain a repeat-preview HANDLE growth regression budget."
-Require-Pattern $parserHostIntegration 'Repeated_parent_bound_archive_extractions_release_leases_handles_and_temp_roots[\s\S]*cycleCount\s*=\s*32[\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*DuplicateFileFromProcess[\s\S]*ArchiveEntryExtractClose[\s\S]*EnumerateExtractionRoots\(extractionRoot\)\.IsSubsetOf\(rootsBefore\)[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*PreviewClose\(previewRequestId\)' `
-    "ParserHost must retain a parent-bound archive extraction lease, output HANDLE, and temp-root regression budget."
-Require-Pattern $parserHostIntegration 'Closing_inflight_archive_extract_suppresses_response_and_cleans_temp_file[\s\S]*ArchiveEntryExtract\(canceledId[\s\S]*ArchiveEntryExtractClose\(canceledId\)[\s\S]*PreviewOpen\(previewId[\s\S]*EnumerateExtractionRoots\(extractionRoot\)\.IsSubsetOf\(rootsBefore\)' `
-    "ParserHost must retain inflight archive extraction cancellation, response suppression, and temp-root cleanup coverage."
-Require-Pattern $parserHostIntegration 'Repeated_parent_bound_package_heroes_release_leases_handles_and_temp_roots[\s\S]*cycleCount\s*=\s*32[\s\S]*expectedPacketLength\s*=\s*8\s*\+\s*512\s*\*\s*512\s*\*\s*4[\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*DuplicateFileFromProcess[\s\S]*HeroRasterExtractClose[\s\S]*!Directory\.Exists\(handoffDirectory\)[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*PreviewClose\(previewRequestId\)' `
-    "ParserHost must retain a parent-bound package hero lease, 1 MiB output HANDLE, and temp-root regression budget."
+Require-Pattern $parserHostIntegration 'Repeated_parent_bound_archive_extractions_release_leases_handles_without_temp_roots[\s\S]*cycleCount\s*=\s*32[\s\S]*CreateArchiveOutput\([\s\S]*DuplicateFileToProcess\([\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*WaitForArchiveOutputReaderAsync\([\s\S]*Assert\.Empty\(EnumerateExtractionRoots\(extractionRoot\)\)[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*PreviewClose\(previewRequestId\)' `
+    "ParserHost must retain a parent-bound caller-output HANDLE, lease, no-temp, and HANDLE-growth regression budget."
+Require-Pattern $parserHostIntegration 'Closing_inflight_archive_extract_suppresses_response_and_releases_output_handle[\s\S]*CreateArchiveOutput\([\s\S]*ArchiveEntryExtract\([\s\S]*ArchiveEntryExtractClose\(canceledId\)[\s\S]*WaitForArchiveOutputReaderAsync\([\s\S]*PreviewOpen\(previewId[\s\S]*PreviewReady[\s\S]*Assert\.Empty\(EnumerateExtractionRoots\(extractionRoot\)\)' `
+    "ParserHost must retain inflight archive extraction cancellation, response suppression, output-HANDLE release, and no-temp coverage."
+Require-Pattern $parserHostIntegration 'Repeated_parent_bound_package_heroes_release_leases_handles_and_sections[\s\S]*cycleCount\s*=\s*32[\s\S]*expectedPacketLength\s*=\s*8\s*\+\s*512\s*\*\s*512\s*\*\s*4[\s\S]*ParentPreviewRequestId\s*=\s*previewRequestId[\s\S]*SharedSectionView\.DuplicateAndMapReadOnly[\s\S]*extracted\.SectionHandle[\s\S]*HeroRasterExtractClose[\s\S]*!CanDuplicateSection[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*Assert\.False\(Directory\.Exists\(legacyRasterRoot\)\)[\s\S]*PreviewClose\(previewRequestId\)' `
+    "ParserHost must retain a parent-bound package hero lease, 1 MiB shared-section handoff, and HANDLE-growth regression budget."
+Require-Pattern $officeImageIntegration 'Repeated_office_image_sections_release_leases_handles_and_temp_artifacts[\s\S]*cycleCount\s*=\s*32[\s\S]*OfficeImageOpen\([\s\S]*SharedSectionView\.DuplicateAndMapReadOnly\([\s\S]*OfficeImageClose\([\s\S]*!CanDuplicateSection\([\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*AssertNoOfficeImageTempArtifacts[\s\S]*PreviewClose\(previewRequestId\)' `
+    "Office imageRef sections must retain a 32-cycle lease, HANDLE-growth, close, and no-temp regression."
+Require-Pattern $officeImageIntegration 'Pipe_disconnect_releases_unclosed_office_image_section_and_parent_source[\s\S]*OfficeImageReady[\s\S]*DisconnectAndWaitForExitAsync\([\s\S]*TryOverwriteFile\(sourcePath,\s*"released after disconnect"\)[\s\S]*AssertNoOfficeImageTempArtifacts' `
+    "ParserHost disconnects must release unclosed Office image sections and their retained parent."
+Require-Pattern $nativeLibrary 'office_layout_with_eighteen_large_images_stays_below_pipe_limit[\s\S]*assert!\(required\s*<\s*4\s*\*\s*1024\s*\*\s*1024\)[\s\S]*item\.get\("imageBase64"\)\.is_none' `
+    "Rust must retain the 18-large-image control-pipe regression without inline Base64."
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
@@ -120,6 +208,8 @@ $rasterPresenter = Join-Path $Root "src/QuickLook.Next.App/RasterPreviewPresente
 Require-Pattern $rasterPresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
     "Static image wheel zoom must remain anchored at the pointer."
 $animatedImagePresenter = Join-Path $Root "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs"
+$nativeAnimationFrames = Join-Path $Root "src/QuickLook.Next.App/NativeAnimationFrames.cs"
+$rasterSupervisor = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
 Require-Pattern $animatedImagePresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
     "Animated image wheel zoom must remain anchored at the pointer."
 Require-Pattern $rasterPresenter 'public void PanBy\(double x, double y\)' `
@@ -128,19 +218,38 @@ Require-Pattern $animatedImagePresenter 'public void PanBy\(double x, double y\)
     "Animated images must retain bounded keyboard panning."
 Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100' `
     "Animated image waveforms must remain throttled to at most ten updates per second."
-Require-Pattern $animatedImagePresenter 'Task\.Run\(\(\)\s*=>\s*ImageWaveformBuilder\.Create' `
+Require-Pattern $animatedImagePresenter 'Task\.Run\(\(\)\s*=>\s*frames\.CreateWaveform\(frameIndex\)\)' `
     "Animated image waveform generation must remain off the UI thread."
 Require-Pattern $animatedImagePresenter 'version\s*!=\s*_waveformVersion' `
     "Animated image waveform callbacks must reject stale presenter generations."
-Require-Pattern $animatedImagePresenter '"\.png"\s*=>\s*TryReadAnimatedPngSize' `
-    "Animated PNG detection must require APNG chunk inspection."
-Require-Pattern $animatedImagePresenter 'type\.SequenceEqual\("IDAT"u8\)[\s\S]*return null' `
-    "Static PNG files must not trigger animation frame extraction."
+Require-Pattern $animatedImagePresenter 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]*probe\.IsAnimated' `
+    "Animated image routing must consume bounded Rust FileProbe metadata."
+Require-Pattern $nativeAnimationProbe 'MAX_IMAGE_ANIMATION_PROBE_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
+    "GIF/WebP/APNG metadata probes must remain capped at 4 MiB."
 Require-Pattern $animatedImagePresenter 'PixelBuffer\.AsStream\(\)[\s\S]*stream\.Position\s*=\s*0[\s\S]*stream\.Write\([\s\S]*\}\s*\r?\n\s*_nativeFrameBitmap\.Invalidate\(\)' `
     "Animated native frames must release the WinRT pixel-buffer stream before invalidation."
+Require-Pattern $animatedImagePresenter 'frames\.TryReadFrame\(index,\s*bgra\s*=>\s*stream\.Write\(bgra\)\)' `
+    "Animated native frames must upload directly from the retained read-only section span."
+Require-Pattern $animatedImagePresenter 'Stopwatch\.StartNew\(\)[\s\S]*new\s+DispatcherTimer\(\)[\s\S]*AdvanceNativeFrame\(\)[\s\S]*ElapsedMilliseconds\s*%\s*_nativeAnimationDurationMs[\s\S]*FindFrameIndex\([\s\S]*ScheduleNextNativeFrame\(\)' `
+    "Animated native frames must advance on a monotonic deadline timeline instead of remaining on the first frame."
+Require-Pattern $nativeAnimationFrames 'SharedSectionView\?\s+_view[\s\S]*TryReadFrame\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*view\.Bytes\.Slice\([\s\S]*CreateWaveform\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*public\s+void\s+Dispose\(\)[\s\S]*lock\s*\(_lifetimeGate\)' `
+    "Animation section reads, waveform scans, and disposal must share one lifetime gate."
 $animatedImagePresenterText = Get-Content -LiteralPath $animatedImagePresenter -Raw
 if ($animatedImagePresenterText -match 'PixelBuffer\.AsStream\(\)[\s\S]{0,400}\.SetLength\(') {
     $failures.Add("Animated native frames must not resize the fixed WinRT pixel buffer.")
+}
+$rasterSupervisorText = Get-Content -LiteralPath $rasterSupervisor -Raw
+$animationReadMethod = [regex]::Match(
+    $rasterSupervisorText,
+    'private\s+static\s+NativeAnimationFrames\?\s+ReadAnimationFrames\([\s\S]*?(?=\r?\n\s*public\s+async\s+Task\s+CloseAsync)').Value
+if ([string]::IsNullOrWhiteSpace($animationReadMethod) -or
+    $animationReadMethod -notmatch 'SharedSectionView\.DuplicateAndMapReadOnly\(' -or
+    $animationReadMethod -notmatch 'new\s+NativeAnimationFrameDescriptor\[' -or
+    $animationReadMethod -notmatch 'new\s+NativeAnimationFrames\(' -or
+    $animationReadMethod -notmatch 'view\s*=\s*null' -or
+    $animationReadMethod -match '\.ToArray\(' -or
+    $animationReadMethod -match 'byte\[\]\s+(?:Bgra|Pixels|Frame)') {
+    $failures.Add("The App must retain the mapped animation section and must not materialize per-frame byte arrays.")
 }
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
@@ -158,6 +267,12 @@ Require-Pattern $officePresenter 'PageSlot\?\s+pageToMaterialize\s*=\s*null' `
     "Office scrolling must materialize at most one missing page per dispatcher callback."
 Require-Pattern $officePresenter 'QueueVirtualPageUpdate\(\)' `
     "Office virtual-page updates must remain dispatcher-queued."
+Require-Pattern $officePresenter 'MaxOfficeImageReferences\s*=\s*18' `
+    "Office layout image lazy loading must remain capped at 18 unique refs."
+Require-Pattern $officePresenter 'SemaphoreSlim\s+DecodeGate\s*\{\s*get;\s*\}\s*=\s*new\(2,\s*2\)' `
+    "Office layout image decoding must remain capped at two concurrent requests."
+Require-Pattern $officePresenter 'NativeAbi\.MaxOfficeImageSourceBytes[\s\S]*NativeAbi\.MaxOfficeImageDimension' `
+    "Office layout image source and raster bounds must be validated before UI upload."
 $mainWindow = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml.cs"
 $mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
 Require-Pattern $mainWindowXaml '<Border\s+[^>]*x:Name="PreviewRoot"[^>]*Background="\{ThemeResource PreviewHeroSurfaceBrush\}"[^>]*/>' `
@@ -188,7 +303,7 @@ Require-Pattern $mainWindow 'IsPointInside\(e\.GetCurrentPoint\(ImageFilmstrip\)
     "Mouse wheel input over the image filmstrip must use geometric hit testing."
 Require-Pattern $mainWindow 'MinRasterChromeContentWidth\s*=\s*760' `
     "Small image windows must remain wide enough for the info rail and complete zoom toolbar."
-if (([regex]::Matches((Get-Content -LiteralPath $mainWindow -Raw), 'Math\.Max\(result\.Width,\s*MinRasterChromeContentWidth\)')).Count -lt 3) {
+if (([regex]::Matches((Get-Content -LiteralPath $mainWindow -Raw), 'Math\.Max\(result\.Width,\s*MinRasterChromeContentWidth\)')).Count -lt 2) {
     $failures.Add("Static and animated image windows must all retain the minimum raster chrome width.")
 }
 $mainWindowXaml = Join-Path $Root "src/QuickLook.Next.App/MainWindow.xaml"
@@ -304,7 +419,7 @@ Require-Pattern $textSearchIndex 'MaxMarkdownBlocks\s*=\s*2000' `
 $listingFilter = Join-Path $Root "src/QuickLook.Next.Core/ListingFilter.cs"
 Require-Pattern $listingFilter 'MaxItems\s*=\s*5000' `
     "Listing filtering must remain capped at 5000 items."
-$nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$nativeFolderPreview = Join-Path $Root "native/quicklook_next_native/src/preview/folder.rs"
 Require-Pattern $nativePreview 'MAX_INFO_HEADER_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024' `
     "Database parsing must retain its 1 MiB main-file prefix."
 Require-Pattern $nativePreview 'MAX_DATABASE_HANDLE_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
@@ -325,25 +440,25 @@ Require-Pattern $nativePreview 'fn apply_sqlite_wal_snapshot\([\s\S]*committed_p
     "SQLite WAL application must bound historical page frames by the final committed database prefix."
 Require-Pattern $nativePreview 'inspect_sqlite_shm\([\s\S]*shm_length\s*>\s*MAX_SQLITE_SHM_BYTES[\s\S]*shm_length\.min\(4096\)[\s\S]*"SHM HANDLE: diagnostic only' `
     "SQLite SHM must remain a bounded diagnostic input rather than snapshot authority."
-Require-Pattern $nativePreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*1024' `
+Require-Pattern $nativeTextPreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Native text inputs must remain capped at 512 KiB."
-Require-Pattern $nativePreview 'fn read_text_preview_bytes<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_TEXT_BYTES\s*\+\s*1,\s*cancel_cb\)' `
+Require-Pattern $nativeTextPreview 'fn read_text_preview_bytes<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_TEXT_BYTES\s*\+\s*1,\s*cancel_cb\)' `
     "Path and HANDLE text previews must share the bounded, cancellable Reader pipeline."
 Require-Pattern $nativePreview 'fn read_reader_prefix_cancelable<R:\s*Read>[\s\S]*Vec::with_capacity\(max_bytes\.min\(64\s*\*\s*1024\)\)' `
     "Small Reader previews must not preallocate their complete input budget."
 Require-Pattern $nativePreview 'MAX_EXECUTABLE_HEADER_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
     "Executable HANDLE previews must retain their 4 MiB header-read cap."
-Require-Pattern $nativePreview 'render_executable_reader<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_EXECUTABLE_HEADER_BYTES,\s*cancel_cb\)' `
+Require-Pattern $nativeExecutablePreview 'render_executable_reader<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_EXECUTABLE_HEADER_BYTES,\s*cancel_cb\)' `
     "Path and HANDLE executable previews must share the bounded, cancellable Reader pipeline."
-Require-Pattern $nativePreview 'MAX_TORRENT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeTorrentPreview 'MAX_TORRENT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
     "Torrent HANDLE previews must retain their 16 MiB input cap."
-Require-Pattern $nativePreview 'render_torrent_reader<R:\s*Read>[\s\S]*read_reader_exact_bounded_cancelable\(reader,\s*size\s+as\s+u64,\s*MAX_TORRENT_BYTES,\s*cancel_cb\)' `
+Require-Pattern $nativeTorrentPreview 'render_torrent_reader<R:\s*Read>[\s\S]*read_reader_exact_bounded_cancelable\(reader,\s*size\s+as\s+u64,\s*MAX_TORRENT_BYTES,\s*cancel_cb\)' `
     "Path and HANDLE torrent previews must enforce bounded exact-length reads."
 Require-Pattern $nativePreview 'let read_limit\s*=\s*expected_bytes[\s\S]*?\.saturating_add\(1\)[\s\S]*?\.min\(max_bytes\.saturating_add\(1\)\)' `
     "Exact-length Reader previews must stop after the expected length plus one byte."
-Require-Pattern $nativePreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
+Require-Pattern $nativeTorrentPreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
     "Torrent bencode parsing must retain its depth limit of 64."
-Require-Pattern $nativePreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
+Require-Pattern $nativeTorrentPreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
     "Torrent bencode parsing must retain its 100000-node budget."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
     "Seek-only archive HANDLE inputs must remain capped at 16 TiB."
@@ -406,11 +521,11 @@ Require-Pattern $nativePreview 'MAX_EBOOK_CHAPTERS:\s*usize\s*=\s*10' `
     "EPUB previews must remain capped at ten retained chapters."
 Require-Pattern $nativePreview 'MAX_EBOOK_TEXT_CHARS:\s*usize\s*=\s*140\s*\*\s*1024' `
     "Ebook previews must remain capped at 140 Ki retained characters."
-Require-Pattern $nativePreview 'fn\s+flush_ebook_block\([\s\S]*output_chars:\s*&mut\s+usize[\s\S]*MAX_EBOOK_TEXT_CHARS\.saturating_sub\(\*output_chars\)[\s\S]*block\.chars\(\)\.count\(\)[\s\S]*out\.extend\(block\.chars\(\)\.take\(remaining\)\)' `
+Require-Pattern $nativeEbookPreview 'fn\s+flush_ebook_block\([\s\S]*output_chars:\s*&mut\s+usize[\s\S]*MAX_EBOOK_TEXT_CHARS\.saturating_sub\(\*output_chars\)[\s\S]*block\.chars\(\)\.count\(\)[\s\S]*out\.extend\(block\.chars\(\)\.take\(remaining\)\)' `
     "XHTML/FB2 output limits must use bounded per-block character accounting."
-Require-Pattern $nativePreview 'for\s+idref\s+in\s+opf\.spine\.iter\(\)\.take\(40\)' `
+Require-Pattern $nativeEbookPreview 'for\s+idref\s+in\s+opf\.spine\.iter\(\)\.take\(40\)' `
     "EPUB contents lists must remain capped at 40 spine items."
-Require-Pattern $nativePreview 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(512\)' `
+Require-Pattern $nativeEbookPreview 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(512\)' `
     "EPUB fallback OPF discovery must remain capped at 512 entries."
 Require-Pattern $nativePreview 'fn\s+validate_zip_container<R:\s*Read\s*\+\s*Seek>[\s\S]*read_exact_cancelable\([\s\S]*entries\s*>\s*max_entries\s*\|\|\s*central_size\s*>\s*MAX_ZIP_CENTRAL_DIRECTORY_BYTES' `
     "ZIP preflight must read cancellably and reject entry-count or central-directory budget overflow."
@@ -420,7 +535,7 @@ Require-Pattern $nativePreview 'fn\s+open_validated_zip<R:\s*Read\s*\+\s*Seek>[\
     "Archive and ebook readers must share cancellable ZIP validation before parsing the central directory."
 Require-Pattern $nativePreview 'render_archive_reader_with_root<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES' `
     "Archive path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
-Require-Pattern $nativePreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
+Require-Pattern $nativeEbookPreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
     "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativePreview 'render_office_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
     "Office path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
@@ -428,27 +543,29 @@ Require-Pattern $nativePreview 'extract_office_image_bgra_reader<R:\s*Read\s*\+\
     "Office hero extraction must share the bounded, cancellable HANDLE ZIP pipeline."
 Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
     "Archive entry HANDLE extraction must validate the source and enforce cancellation, deadline, and output bounds."
-Require-Pattern $nativePreview 'struct\s+EbookContext[\s\S]*remaining_decompressed_bytes[\s\S]*MAX_EBOOK_DECOMPRESSED_BYTES[\s\S]*fn\s+read_ebook_limited_to_end<R:\s*Read>[\s\S]*context\.check_cancelled\(\)[\s\S]*context\.consume\(' `
+Require-Pattern $nativeEbookPreview 'struct\s+EbookContext[\s\S]*remaining_decompressed_bytes[\s\S]*MAX_EBOOK_DECOMPRESSED_BYTES[\s\S]*fn\s+read_ebook_limited_to_end<R:\s*Read>[\s\S]*context\.check_cancelled\(\)[\s\S]*context\.consume\(' `
     "EPUB parts must share a cumulative decompression budget with per-chunk cancellation."
 $nativePreviewText = Get-Content -LiteralPath $nativePreview -Raw
-if ($nativePreviewText -match 'fs::File::open\(\s*&?\s*logical_name\b' -or
-    $nativePreviewText -match 'render_archive\(\s*&?\s*logical_name\b') {
+$nativeEbookPreviewText = Get-Content -LiteralPath $nativeEbookPreview -Raw
+$nativePreviewAndEbookText = $nativePreviewText + "`n" + $nativeEbookPreviewText
+if ($nativePreviewAndEbookText -match 'fs::File::open\(\s*&?\s*logical_name\b' -or
+    $nativePreviewAndEbookText -match 'render_archive\(\s*&?\s*logical_name\b') {
     $failures.Add("Logical HANDLE names must never be reopened as paths or sent to the EPUB archive fallback.")
 }
-if ($nativePreviewText -notmatch 'fn\s+render_epub_from_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+Some\(opf_xml\)[\s\S]*else\s*\{\s*return\s+render_zip_archive_from_zip\(\s*zip,\s*logical_name,\s*"",\s*cancel_cb\s*\)') {
+if ($nativeEbookPreviewText -notmatch 'fn\s+render_epub_from_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+Some\(opf_xml\)[\s\S]*else\s*\{\s*return\s+render_zip_archive_from_zip\(\s*zip,\s*logical_name,\s*"",\s*cancel_cb\s*\)') {
     $failures.Add("An EPUB without usable OPF data must reuse the same validated ZIP reader for its rootless archive listing.")
 }
-Require-Pattern $nativePreview 'fn render_markdown_json[\s\S]*text:\s*None,[\s\S]*markdown:\s*Some\(PreviewMarkdownDto' `
+Require-Pattern $nativeTextPreview 'fn render_markdown_json[\s\S]*text:\s*None,[\s\S]*markdown:\s*Some\(PreviewMarkdownDto' `
     "Structured Markdown must not duplicate its source text alongside the AST."
-Require-Pattern $nativePreview 'let Ok\(meta\)\s*=\s*fs::symlink_metadata\(&entry_path\)[\s\S]*meta\.is_dir\(\)\s*\|\|\s*meta\.is_file\(\)' `
+Require-Pattern $nativeFolderPreview 'let Ok\(meta\)\s*=\s*fs::symlink_metadata\(&entry_path\)[\s\S]*if\s+!meta\.is_dir\(\)\s*&&\s*!meta\.is_file\(\)\s*\{\s*continue;' `
     "Folder listings must query each entry's metadata only once."
-Require-Pattern $nativePreview 'items\.sort_by_cached_key\(\|item\|\s*\(!item\.is_folder,\s*item\.name\.to_ascii_lowercase\(\)\)\)' `
+Require-Pattern $nativeFolderPreview 'items\.sort_by_cached_key\(\|item\|\s*\(!item\.is_folder,\s*item\.name\.to_ascii_lowercase\(\)\)\)' `
     "Folder listing sort keys must be allocated once per item."
-Require-Pattern $nativePreview 'MAX_TABLE_ROWS:\s*usize\s*=\s*4_000' `
+Require-Pattern $nativeTextPreview 'MAX_TABLE_ROWS:\s*usize\s*=\s*4_000' `
     "Delimited table models must remain capped at 4000 represented rows."
-Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' `
+Require-Pattern $nativeTextPreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_536' `
     "Delimited table models must retain their 65536-cell budget."
-Require-Pattern $nativePreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
+Require-Pattern $nativeTextPreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Delimited table models must retain their 512 KiB character budget."
 Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_OBJECTS:\s*usize\s*=\s*32' `
     "SQLite previews must retain their 32-object schema budget."

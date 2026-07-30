@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using Microsoft.Win32.SafeHandles;
+using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using QuickLook.Next.RasterHost;
 
@@ -42,18 +43,19 @@ var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
 var surfacePublishGate = new SemaphoreSlim(1, 1);
 var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
-var animationPackets = new ConcurrentDictionary<string, (string Path, SafeFileHandle Handle)>();
+var animationPackets = new ConcurrentDictionary<string, NativeAnimationPacket>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
+var metadataRequests = new ConcurrentDictionary<string, ImageMetadataRequestState>();
 var retainedRasterSources = new ConcurrentDictionary<string, RetainedRasterSource>();
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
+TimeSpan imageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
 bool authenticated = false;
 string? activeRequestId = null;
 RasterOpen? activeOpen = null;
 const uint MaxSurfaceDimension = 8192;
 const ulong MaxSurfacePixels = 32UL * 1024 * 1024;
-CleanupStaleAnimationPackets();
 
 while (true)
 {
@@ -182,6 +184,29 @@ while (true)
                 await CloseAnimationAsync(animationClose.RequestId);
                 break;
 
+            case PreviewImageMetadataOpen metadata
+                when IsValidRequestId(metadata.RequestId)
+                     && IsValidRequestId(metadata.PreviewRequestId):
+                if (!retainedRasterSources.TryGetValue(metadata.PreviewRequestId, out var metadataParent)
+                    || !metadataParent.TryAcquire(
+                        RetainedRasterOperations.Metadata,
+                        out RetainedRasterSourceLease? metadataLease)
+                    || metadataLease is null)
+                {
+                    await channel.SendAsync(new PreviewError(
+                        metadata.RequestId,
+                        "Image metadata source is no longer available."));
+                }
+                else
+                {
+                    StartImageMetadataRead(metadata, metadataLease);
+                }
+                break;
+
+            case PreviewImageMetadataClose metadataClose when IsValidRequestId(metadataClose.RequestId):
+                await CloseImageMetadataAsync(metadataClose.RequestId);
+                break;
+
             case PreviewSurfaceRelease release when IsValidRequestId(release.TransferId):
                 producer.ReleaseSurfaceTransfer(release.TransferId);
                 break;
@@ -275,16 +300,20 @@ foreach (var cts in remainingOpenCts)
 }
 foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
+ImageMetadataRequestState[] remainingMetadataRequests = metadataRequests.Values.ToArray();
+foreach (ImageMetadataRequestState request in remainingMetadataRequests)
+{
+    metadataRequests.TryRemove(request.RequestId, out _);
+    request.Cancel();
+}
+await Task.WhenAll(remainingMetadataRequests.Select(static request => request.Worker));
 foreach (PdfPreviewSession session in pdfSessions.Values)
     await DisposePdfSessionAsync(session, "pipe-disconnect");
 pdfSessions.Clear();
 foreach (string requestId in retainedRasterSources.Keys)
     DeleteRetainedRasterSource(requestId);
 foreach (var packet in animationPackets.Values)
-{
-    packet.Handle.Dispose();
-    DeleteAnimationPacket(packet.Path);
-}
+    packet.Dispose();
 
 void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long sourceLength = 0)
 {
@@ -339,8 +368,11 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
                             sourceLength,
                             Path.GetFileName(open.Path),
                             NativeImageDecoder.SupportsHandleAnimation(open.Path, open.Probe)
-                                ? RetainedRasterOperations.StaticImage | RetainedRasterOperations.Animation
-                                : RetainedRasterOperations.StaticImage);
+                                ? RetainedRasterOperations.StaticImage
+                                    | RetainedRasterOperations.Animation
+                                    | RetainedRasterOperations.Metadata
+                                : RetainedRasterOperations.StaticImage
+                                    | RetainedRasterOperations.Metadata);
                         if (!retainedRasterSources.TryAdd(open.RequestId, retainedSource))
                         {
                             retainedSource.Dispose();
@@ -497,9 +529,26 @@ async Task<bool> HandleImageOpenAsync(
         surfacePublishGate.Release();
     }
 
-    ImageWaveform waveform = await Task.Run(
+    return await PublishImageWaveformAsync(open, image, cancellationToken);
+}
+
+async Task<bool> PublishImageWaveformAsync(
+    RasterOpen open,
+    NativeDecodedImage image,
+    CancellationToken cancellationToken)
+{
+    // Native HANDLE decoding can produce this fixed-size analysis while it converts pixels.
+    // Compatibility decoders retain the bounded background scan, but readiness and the first
+    // surface are always sent before either waveform path is published.
+    ImageWaveform waveform = image.Waveform ?? await Task.Run(
         () => ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height),
         cancellationToken);
+    if (!ImageWaveformBuilder.IsValid(waveform))
+    {
+        DiagLog.Write("RasterHost", $"discarded malformed image waveform: request={open.RequestId}");
+        return false;
+    }
+
     await surfacePublishGate.WaitAsync(cancellationToken);
     try
     {
@@ -541,6 +590,125 @@ static async Task<NativeDecodedImage?> DecodeSystemImageHandleWithTimeoutAsync(
     }
 }
 
+void StartImageMetadataRead(
+    PreviewImageMetadataOpen metadata,
+    RetainedRasterSourceLease source)
+{
+    var request = new ImageMetadataRequestState(metadata.RequestId, metadata.PreviewRequestId, source);
+    if (!metadataRequests.TryAdd(metadata.RequestId, request))
+    {
+        request.Dispose();
+        _ = channel.SendAsync(new PreviewError(
+            metadata.RequestId,
+            "Image metadata request is already active."));
+        return;
+    }
+
+    request.Worker = Task.Run(async () =>
+    {
+        try
+        {
+            Task<NativeImageMetadataResult> nativeTask =
+                NativeImageMetadataReader.TryReadHandleAsync(
+                    request.Source.Handle,
+                    request.Source.Length,
+                    request.Source.LogicalName,
+                    imageMetadataTimeout,
+                    request.Cancellation.Token);
+            Task<ImageMetadata?> propertyHandlerTask =
+                WindowsPropertyHandlerMetadataReader.TryReadHandleAsync(
+                    request.Source.Handle,
+                    request.Source.Length,
+                    request.Source.LogicalName,
+                    imageMetadataTimeout,
+                    request.Cancellation.Token);
+            Task<ImageMetadata?> systemTask =
+                SystemImageMetadataReader.TryReadHandleAsync(
+                    request.Source.Handle,
+                    request.Source.Length,
+                    request.Source.LogicalName,
+                    imageMetadataTimeout,
+                    request.Cancellation.Token);
+            await Task.WhenAll(nativeTask, propertyHandlerTask, systemTask);
+            NativeImageMetadataResult result = await nativeTask;
+            ImageMetadata? metadataResult = SystemImageMetadataReader.Merge(
+                WindowsPropertyHandlerMetadataReader.Merge(
+                    result.Metadata,
+                    await propertyHandlerTask),
+                await systemTask);
+            request.Cancellation.Token.ThrowIfCancellationRequested();
+            if (!metadataRequests.TryGetValue(metadata.RequestId, out var current)
+                || !ReferenceEquals(current, request))
+            {
+                return;
+            }
+
+            if (metadataResult is not null)
+            {
+                await channel.SendAsync(new PreviewImageMetadataReady(
+                    metadata.RequestId,
+                    metadata.PreviewRequestId,
+                    metadataResult),
+                    request.Cancellation.Token);
+            }
+            else if (!result.IsSupported)
+            {
+                await channel.SendAsync(new PreviewError(
+                    metadata.RequestId,
+                    "Image metadata is not available in this RasterHost."),
+                    request.Cancellation.Token);
+            }
+            else
+            {
+                await channel.SendAsync(new PreviewError(
+                    metadata.RequestId,
+                    NativeImageMetadataReader.DescribeStatus(result.Status)),
+                    request.Cancellation.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            DiagLog.Write(
+                "RasterHost",
+                $"image metadata canceled: request={metadata.RequestId} parent={metadata.PreviewRequestId}");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write(
+                "RasterHost",
+                $"image metadata failed: request={metadata.RequestId} parent={metadata.PreviewRequestId}: {ex}");
+            if (metadataRequests.TryGetValue(metadata.RequestId, out var current)
+                && ReferenceEquals(current, request)
+                && !request.Cancellation.IsCancellationRequested)
+            {
+                try
+                {
+                    await channel.SendAsync(new PreviewError(
+                        metadata.RequestId,
+                        "Image metadata extraction failed."),
+                        request.Cancellation.Token);
+                }
+                catch { }
+            }
+        }
+        finally
+        {
+            ((ICollection<KeyValuePair<string, ImageMetadataRequestState>>)metadataRequests)
+                .Remove(new KeyValuePair<string, ImageMetadataRequestState>(metadata.RequestId, request));
+            request.Dispose();
+        }
+    });
+}
+
+async Task CloseImageMetadataAsync(string requestId)
+{
+    if (metadataRequests.TryRemove(requestId, out ImageMetadataRequestState? request))
+    {
+        request.Cancel();
+        await request.Worker;
+    }
+}
+
 void StartAnimationDecode(
     PreviewAnimationFramesOpen animation,
     string? path,
@@ -569,10 +737,10 @@ void StartAnimationDecode(
 
     _ = Task.Run(async () =>
     {
-        string? tempPath = null;
+        NativeAnimationPacket? packet = null;
         try
         {
-            byte[]? packet = source is null
+            packet = source is null
                 ? await NativeAnimationPacketDecoder.TryDecodeAsync(
                     path!, animation.TargetWidth, animation.TargetHeight, cts.Token)
                 : await NativeAnimationPacketDecoder.TryDecodeHandleAsync(
@@ -588,33 +756,32 @@ void StartAnimationDecode(
                 await channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame decode failed."));
                 return;
             }
-
-            tempPath = WriteAnimationPacket(animation.RequestId, packet);
-            if (tempPath is null)
-            {
-                await channel.SendAsync(new PreviewError(animation.RequestId, "Animation frame handoff failed."));
-                return;
-            }
-
-            int count = checked((int)BitConverter.ToUInt32(packet, 0));
-            int width = checked((int)BitConverter.ToUInt32(packet, 4));
-            int height = checked((int)BitConverter.ToUInt32(packet, 8));
             await gate.WaitAsync();
             try
             {
                 cts.Token.ThrowIfCancellationRequested();
                 if (!string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal))
                     return;
-                var transferred = WindowsHandleTransfer.OpenReadOnlyFile(tempPath);
-                if (transferred.Length != packet.LongLength)
+
+                animationPackets[animation.RequestId] = packet;
+                try
                 {
-                    transferred.Handle.Dispose();
-                    throw new InvalidDataException("Animation packet changed before handle transfer.");
+                    await channel.SendAsync(new PreviewAnimationFramesReady(
+                        animation.RequestId,
+                        animation.PreviewRequestId,
+                        packet.Section.Handle.DangerousGetHandle().ToInt64(),
+                        packet.FrameCount,
+                        packet.Width,
+                        packet.Height,
+                        packet.PacketLength));
+                    packet = null; // The handoff dictionary owns it until close or disconnect.
                 }
-                animationPackets[animation.RequestId] = (tempPath, transferred.Handle);
-                await channel.SendAsync(new PreviewAnimationFramesReady(
-                    animation.RequestId, animation.PreviewRequestId, transferred.Handle.DangerousGetHandle().ToInt64(), count, width, height, transferred.Length));
-                tempPath = null;
+                catch
+                {
+                    if (animationPackets.TryRemove(animation.RequestId, out NativeAnimationPacket? failed))
+                        failed.Dispose();
+                    throw;
+                }
             }
             finally
             {
@@ -630,7 +797,7 @@ void StartAnimationDecode(
         finally
         {
             source?.Dispose();
-            if (tempPath is not null) DeleteAnimationPacket(tempPath);
+            packet?.Dispose();
             if (animationCts.TryRemove(animation.RequestId, out var current)) current.Dispose();
             if (!animationPackets.ContainsKey(animation.RequestId))
                 animationParents.TryRemove(animation.RequestId, out _);
@@ -648,10 +815,7 @@ async Task CloseAnimationAsync(string requestId)
     try
     {
         if (animationPackets.TryRemove(requestId, out var packet))
-        {
-            packet.Handle.Dispose();
-            DeleteAnimationPacket(packet.Path);
-        }
+            packet.Dispose();
         animationParents.TryRemove(requestId, out _);
     }
     finally
@@ -738,11 +902,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                 {
                     surfacePublishGate.Release();
                 }
-                ImageWaveform waveform = await Task.Run(
-                    () => ImageWaveformBuilder.Create(image.Bgra, image.Width, image.Height),
-                    cancellationToken);
-                if (string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
-                    await channel.SendAsync(new PreviewImageWaveform(open.RequestId, waveform));
+                await PublishImageWaveformAsync(open, image, cancellationToken);
                 return;
             }
 
@@ -1019,60 +1179,6 @@ void DeleteRetainedRasterSource(string requestId)
         source.Dispose();
 }
 
-static string? WriteAnimationPacket(string requestId, byte[] packet)
-{
-    try
-    {
-        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-animation");
-        Directory.CreateDirectory(root);
-        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return null;
-        string directory = Path.Combine(root, "frames-" + requestId);
-        Directory.CreateDirectory(directory);
-        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-            return null;
-        string path = Path.Combine(directory, "frames.bin");
-        using var stream = new FileStream(path, new FileStreamOptions
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.Write,
-            Share = FileShare.None,
-            Options = FileOptions.WriteThrough,
-        });
-        stream.Write(packet);
-        return path;
-    }
-    catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
-    {
-        return null;
-    }
-}
-
-static void DeleteAnimationPacket(string path)
-{
-    try
-    {
-        File.Delete(path);
-        string? directory = Path.GetDirectoryName(path);
-        if (directory is not null) Directory.Delete(directory, recursive: false);
-    }
-    catch { }
-}
-
-static void CleanupStaleAnimationPackets()
-{
-    try
-    {
-        string root = Path.Combine(Path.GetTempPath(), "QuickLookNext", "raster-animation");
-        if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-            return;
-        foreach (string directory in Directory.EnumerateDirectories(root, "frames-*"))
-            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0)
-                Directory.Delete(directory, recursive: true);
-    }
-    catch { }
-}
-
 static async Task SmokeSystemImageCorpusAsync(string corpusDir, bool requireSystemCodecs)
 {
     string[] files = ["jpeg-cmyk.jpg", "jpeg-wide-gamut-icc.jpg", "avif-still.avif", "heic-still.heic", "jxl-still.jxl"];
@@ -1129,3 +1235,31 @@ internal sealed record RasterOpen(
     QuickLook.Next.Contracts.FileProbe Probe,
     uint TargetWidth,
     uint TargetHeight);
+
+internal sealed class ImageMetadataRequestState(
+    string requestId,
+    string previewRequestId,
+    RetainedRasterSourceLease source) : IDisposable
+{
+    private int _disposed;
+
+    public string RequestId { get; } = requestId;
+    public string PreviewRequestId { get; } = previewRequestId;
+    public RetainedRasterSourceLease Source { get; } = source;
+    public CancellationTokenSource Cancellation { get; } = new();
+    public Task Worker { get; set; } = Task.CompletedTask;
+
+    public void Cancel()
+    {
+        try { Cancellation.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        Source.Dispose();
+        Cancellation.Dispose();
+    }
+}

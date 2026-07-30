@@ -180,6 +180,8 @@ internal sealed class ListingPreviewPresenter
 
         if (row.IsFolder)
             await NavigateIntoFolderAsync(row);
+        else if (_currentListing?.CanPreviewEntries == false)
+            _summary.Text = UiStrings.ListingEntriesCannotBePreviewed;
     }
 
     private void RenderListing()
@@ -482,6 +484,8 @@ internal sealed class ListingPreviewPresenter
                 : UiStrings.ListingEncryptedSummaryFormat;
             summary += UiStrings.Format(format, encrypted);
         }
+        if (!listing.CanPreviewEntries)
+            summary += UiStrings.ListingBrowseOnlySuffix;
         return summary;
     }
 

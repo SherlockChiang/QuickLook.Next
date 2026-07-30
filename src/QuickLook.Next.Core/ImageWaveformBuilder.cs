@@ -16,6 +16,9 @@ public static class ImageWaveformBuilder
             && waveform.RgbDensity.Length == ScopeWidth * ScopeHeight * ChannelCount;
 
     public static ImageWaveform Create(byte[] bgra, int width, int height)
+        => Create(bgra.AsSpan(), width, height);
+
+    public static ImageWaveform Create(ReadOnlySpan<byte> bgra, int width, int height)
     {
         int planeLength = ScopeWidth * ScopeHeight;
         var counts = new int[planeLength * ChannelCount];

@@ -117,17 +117,25 @@ Get-Content "$($zip.FullName).sha256"
 <details>
 <summary><strong>从源码构建</strong></summary>
 
-需要 Windows x64 和 Desktop C++/MSVC 工具链、[`global.json`](global.json) 指定的 .NET SDK，以及 [`rust-toolchain.toml`](native/quicklook_next_native/rust-toolchain.toml) 指定的 Rust MSVC 工具链。
+需要 Windows x64 和 Desktop C++/MSVC 工具链、[`global.json`](global.json) 指定的 .NET SDK，以及 [`rust-toolchain.toml`](native/rust-toolchain.toml) 指定的 Rust MSVC 工具链。
 
 ```powershell
-dotnet restore QuickLook.Next.slnx --locked-mode
-cargo test --locked --manifest-path native/quicklook_next_native/Cargo.toml
-cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml
-dotnet build QuickLook.Next.slnx -c Release --no-restore
-dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore
+.\build.ps1                       # 同步 VERSION 并执行 Release 构建
+.\build.ps1 0.3.1                 # 设置并同步版本，然后构建
+.\build.ps1 -Bump Patch -Test     # 递增补丁版本并运行全部测试
+.\build.ps1 -NoRestore            # 依赖已还原时快速重复构建
+.\build.ps1 -Bump Patch -Install  # 测试、签名并更新当前用户的 MSIX
 ```
 
-`tools/release.ps1` 是本地 restore、test、build、签名和打包的唯一权威入口。发布产物生成到 `artifacts/`。
+`VERSION` 是唯一权威版本源。构建入口会在编译前把它同步到原生 crate manifest 和
+lock 文件，并输出 App 可执行文件路径。默认只生成本地二进制。显式使用 `-Install`
+时会自动启用全部测试，要求 `.signing/` 中已有固定签名证书，关闭正在运行的 App，
+然后更新当前用户的软件包。同一语义版本的重复安装会自动递增 MSIX 的第四段
+`X.Y.Z.N`，但不会修改 `VERSION`。第四段按渠道排序：本地构建使用 `1..32767`，
+beta 使用 `32768..65534`，stable 使用 `65535`，因此同一基础版本的后续 beta 或
+stable 可以直接升级本地构建；安装 beta 或 stable 后若要继续安装本地构建，请先
+递增 Patch。正式签名与打包仍以 `tools/release.ps1` 为权威入口，发布产物生成到
+`artifacts/`。
 
 </details>
 

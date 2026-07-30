@@ -45,6 +45,32 @@
                     <Setter Property="BorderThickness" Value="0" />
                     <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
                 </Style>
+                <ControlTemplate x:Key="ListingFolderColorIconTemplate" TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="24" Height="24">
+                            <Path Fill="{ThemeResource ListingFolderBackIconBrush}"
+                                  Data="M2,6 C2,4.9 2.9,4 4,4 L9,4 L11,7 L20,7 C21.1,7 22,7.9 22,9 L22,19 C22,20.1 21.1,21 20,21 L4,21 C2.9,21 2,20.1 2,19 Z" />
+                            <Path Fill="{ThemeResource ListingFolderIconBrush}"
+                                  Data="M2,9 L22,9 L20.5,21 L3.5,21 Z" />
+                            <Path Fill="{ThemeResource ListingFolderHighlightIconBrush}"
+                                  Data="M4,10 L20,10 L19.75,12 L3.75,12 Z" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
+                <ControlTemplate x:Key="ListingArchiveColorIconTemplate" TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="24" Height="24">
+                            <Path Fill="{ThemeResource ListingArchiveIconBrush}"
+                                  Data="M4,7 L20,7 C21.1,7 22,7.9 22,9 L22,20 C22,21.1 21.1,22 20,22 L4,22 C2.9,22 2,21.1 2,20 L2,9 C2,7.9 2.9,7 4,7 Z" />
+                            <Path Fill="{ThemeResource ListingArchiveLidIconBrush}"
+                                  Data="M3,3 L21,3 C21.6,3 22,3.4 22,4 L22,8 L2,8 L2,4 C2,3.4 2.4,3 3,3 Z" />
+                            <Path Fill="{ThemeResource ListingArchiveBandIconBrush}"
+                                  Data="M10,3 L14,3 L14,22 L10,22 Z" />
+                            <Path Fill="{ThemeResource ListingArchiveHighlightIconBrush}"
+                                  Data="M10,11 L14,11 L14,14 L10,14 Z" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
                         <SolidColorBrush x:Key="PreviewSurfaceBrush" Color="#F8FFFFFF" />
@@ -52,8 +78,13 @@
                         <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#0A000000" />
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="#EBFFFFFF" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#F7FFFFFF" />
-                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#B7791F" />
-                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#C65D00" />
+                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#FFC83D" />
+                        <SolidColorBrush x:Key="ListingFolderBackIconBrush" Color="#C97A00" />
+                        <SolidColorBrush x:Key="ListingFolderHighlightIconBrush" Color="#FFF1A8" />
+                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#EA6A17" />
+                        <SolidColorBrush x:Key="ListingArchiveLidIconBrush" Color="#FFA33C" />
+                        <SolidColorBrush x:Key="ListingArchiveBandIconBrush" Color="#3478F6" />
+                        <SolidColorBrush x:Key="ListingArchiveHighlightIconBrush" Color="#C8DCFF" />
                         <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="#8A000000" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
@@ -62,8 +93,13 @@
                         <SolidColorBrush x:Key="PreviewHeroSurfaceBrush" Color="#12FFFFFF" />
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="#E61F1F1F" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="#D41F1F1F" />
-                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#FFC83D" />
-                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#FF9F4A" />
+                        <SolidColorBrush x:Key="ListingFolderIconBrush" Color="#FFD45A" />
+                        <SolidColorBrush x:Key="ListingFolderBackIconBrush" Color="#B87300" />
+                        <SolidColorBrush x:Key="ListingFolderHighlightIconBrush" Color="#FFF3AE" />
+                        <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="#F17A27" />
+                        <SolidColorBrush x:Key="ListingArchiveLidIconBrush" Color="#FFB24D" />
+                        <SolidColorBrush x:Key="ListingArchiveBandIconBrush" Color="#5B96FF" />
+                        <SolidColorBrush x:Key="ListingArchiveHighlightIconBrush" Color="#D7E6FF" />
                         <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="#C8FFFFFF" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="HighContrast">
@@ -73,7 +109,12 @@
                         <SolidColorBrush x:Key="PreviewFloatingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
                         <SolidColorBrush x:Key="ExplorerListingSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
                         <SolidColorBrush x:Key="ListingFolderIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingFolderBackIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingFolderHighlightIconBrush" Color="{ThemeResource SystemColorWindowColor}" />
                         <SolidColorBrush x:Key="ListingArchiveIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingArchiveLidIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                        <SolidColorBrush x:Key="ListingArchiveBandIconBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                        <SolidColorBrush x:Key="ListingArchiveHighlightIconBrush" Color="{ThemeResource SystemColorHighlightTextColor}" />
                         <SolidColorBrush x:Key="ListingNeutralIconBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
@@ -953,20 +994,20 @@
                                 BorderThickness="1"
                                 Background="{ThemeResource PreviewHeroSurfaceBrush}">
                             <Grid>
-                                <FontIcon x:Name="ListingFolderHeroIcon"
-                                          Glyph="&#xE8B7;"
-                                          FontSize="25"
-                                          Foreground="{ThemeResource ListingFolderIconBrush}"
-                                          Visibility="Collapsed"
-                                          IsHitTestVisible="False"
-                                          AutomationProperties.AccessibilityView="Raw" />
-                                <FontIcon x:Name="ListingArchiveHeroIcon"
-                                          Glyph="&#xF012;"
-                                          FontSize="25"
-                                          Foreground="{ThemeResource ListingArchiveIconBrush}"
-                                          Visibility="Collapsed"
-                                          IsHitTestVisible="False"
-                                          AutomationProperties.AccessibilityView="Raw" />
+                                <ContentControl x:Name="ListingFolderHeroIcon"
+                                                Width="30"
+                                                Height="30"
+                                                Template="{StaticResource ListingFolderColorIconTemplate}"
+                                                Visibility="Collapsed"
+                                                IsHitTestVisible="False"
+                                                AutomationProperties.AccessibilityView="Raw" />
+                                <ContentControl x:Name="ListingArchiveHeroIcon"
+                                                Width="30"
+                                                Height="30"
+                                                Template="{StaticResource ListingArchiveColorIconTemplate}"
+                                                Visibility="Collapsed"
+                                                IsHitTestVisible="False"
+                                                AutomationProperties.AccessibilityView="Raw" />
                                 <Image x:Name="ListingHeroImage"
                                        Stretch="Uniform"
                                        Margin="5"
@@ -1085,22 +1126,22 @@
                                           Width="22"
                                           Height="22"
                                           VerticalAlignment="Center">
-                                        <FontIcon Glyph="{Binding Glyph}"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  FontSize="15"
-                                                  Foreground="{ThemeResource ListingFolderIconBrush}"
-                                                  Visibility="{Binding FolderGlyphVisibility}"
-                                                  IsHitTestVisible="False"
-                                                  AutomationProperties.AccessibilityView="Raw" />
-                                        <FontIcon Glyph="{Binding Glyph}"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  FontSize="15"
-                                                  Foreground="{ThemeResource ListingArchiveIconBrush}"
-                                                  Visibility="{Binding ArchiveGlyphVisibility}"
-                                                  IsHitTestVisible="False"
-                                                  AutomationProperties.AccessibilityView="Raw" />
+                                        <ContentControl Width="18"
+                                                        Height="18"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Template="{StaticResource ListingFolderColorIconTemplate}"
+                                                        Visibility="{Binding FolderGlyphVisibility}"
+                                                        IsHitTestVisible="False"
+                                                        AutomationProperties.AccessibilityView="Raw" />
+                                        <ContentControl Width="18"
+                                                        Height="18"
+                                                        HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center"
+                                                        Template="{StaticResource ListingArchiveColorIconTemplate}"
+                                                        Visibility="{Binding ArchiveGlyphVisibility}"
+                                                        IsHitTestVisible="False"
+                                                        AutomationProperties.AccessibilityView="Raw" />
                                         <FontIcon Glyph="{Binding Glyph}"
                                                   HorizontalAlignment="Center"
                                                   VerticalAlignment="Center"

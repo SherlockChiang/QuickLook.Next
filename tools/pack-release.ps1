@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "release-payload.ps1")
 $root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
 $dist = Join-Path $root "dist"
 $tfm  = "net10.0-windows10.0.19041.0\win-x64"
@@ -30,6 +31,11 @@ if (-not $VersionPrefix -and (Test-Path $versionFile)) {
 
 if ($VersionPrefix -and $VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
     throw "VersionPrefix must use semantic X.Y.Z format. Current value: '$VersionPrefix'"
+}
+if ($VersionSuffix -and
+    $VersionSuffix -notmatch '^[0-9A-Za-z](?:[0-9A-Za-z.-]{0,63})$')
+{
+    throw "VersionSuffix must be a short SemVer-compatible identifier."
 }
 
 if (-not $SkipBuild) {
@@ -69,92 +75,54 @@ foreach ($requiredOutput in $requiredOutputs) {
         throw "Release build output is missing: $requiredOutput"
     }
 }
+
+$noticePath = Join-Path $artifacts "THIRD-PARTY-NOTICES.txt"
+& (Join-Path $PSScriptRoot "new-third-party-notices.ps1") `
+    -Root $root `
+    -OutputPath $noticePath
+$payload = @(
+    Get-QuickLookReleasePayload `
+        -Root $root `
+        -ArtifactsDirectory $artifacts)
+$payloadHashesForStage = $null
 if ($SkipBuild) {
     $proofPath = Join-Path $root "artifacts\.tested-release-build.json"
     if (-not (Test-Path -LiteralPath $proofPath -PathType Leaf)) {
         throw "No tested release build proof exists. Run tools/release.ps1 before using -SkipBuild."
     }
     $proof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+    if ($proof.payloadSchemaVersion -ne 1) {
+        throw "Tested release build proof uses an unsupported payload schema."
+    }
     if ($proof.versionPrefix -ne $VersionPrefix -or $proof.versionSuffix -ne $VersionSuffix) {
         throw "Tested release build version does not match requested package version."
     }
-    if ($proof.commit -ne (git -C $root rev-parse HEAD)) {
+    $currentCommit = @(git -C $root rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or -not $currentCommit) {
+        throw "Could not resolve the current source commit."
+    }
+    if ($proof.commit -ne $currentCommit[-1].Trim()) {
         throw "Tested release build belongs to a different commit."
     }
-    foreach ($property in $proof.outputs.PSObject.Properties) {
-        $outputPath = Join-Path $root $property.Name
-        $actualHash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash
-        if ($actualHash -ne $property.Value) {
-            throw "Tested release output changed after tests: $($property.Name)"
-        }
-    }
+    Assert-QuickLookReleasePayloadProof `
+        -Payload $payload `
+        -ProofOutputs $proof.outputs
+    $payloadHashesForStage = $proof.outputs
+}
+else {
+    $payloadHashesForStage = New-QuickLookReleasePayloadHashes `
+        -Payload $payload
 }
 
 Write-Host "== assembling dist ==" -ForegroundColor Cyan
-$noticePath = Join-Path $artifacts "THIRD-PARTY-NOTICES.txt"
-& (Join-Path $PSScriptRoot "new-third-party-notices.ps1") -Root $root -OutputPath $noticePath
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
-New-Item -ItemType Directory -Force "$dist\RasterHost" | Out-Null
-New-Item -ItemType Directory -Force "$dist\ParserHost" | Out-Null
-
-function Copy-Clean($src, $dst) {
-    if (-not (Test-Path -LiteralPath $src -PathType Container)) {
-        throw "Release build output is missing: $src"
-    }
-    New-Item -ItemType Directory -Force $dst | Out-Null
-    Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -ne ".pdb" } | ForEach-Object { Copy-Item $_.FullName $dst -Force }
-    Get-ChildItem -LiteralPath $src -Directory | ForEach-Object { Copy-Item $_.FullName -Destination $dst -Recurse -Force }
-}
-
-Copy-Clean (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm") $dist
-Copy-Clean (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm") "$dist\RasterHost"
-Copy-Clean (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm") "$dist\ParserHost"
-$shellBrokerOutput = Join-Path $root "src\QuickLook.Next.ShellBroker\bin\Release\$tfm"
-foreach ($name in @(
-    "QuickLook.Next.ShellBroker.exe",
-    "QuickLook.Next.ShellBroker.dll",
-    "QuickLook.Next.ShellBroker.deps.json",
-    "QuickLook.Next.ShellBroker.runtimeconfig.json")) {
-    Copy-Item -LiteralPath (Join-Path $shellBrokerOutput $name) -Destination $dist -Force
-}
-Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $dist -Force
-Copy-Item -LiteralPath $noticePath -Destination $dist -Force
-
-Write-Host "== pruning unused optional runtime payloads ==" -ForegroundColor Cyan
-$optionalPayloadPatterns = @(
-    "DirectML.dll",
-    "onnxruntime.dll",
-    "Microsoft.ML.OnnxRuntime.dll",
-    "Microsoft.Windows.AI.*",
-    "Microsoft.Windows.Workloads*",
-    "Microsoft.Graphics.Imaging*",
-    "Microsoft.Graphics.Internal.Imaging*",
-    "Microsoft.Graphics.ImagingInternal*",
-    "Microsoft.Windows.Vision*",
-    "Microsoft.Windows.Internal.Vision*",
-    "Microsoft.Windows.ImageCreationInternal*",
-    "Microsoft.Windows.Internal.ImageCreation*",
-    "Microsoft.Windows.Internal.AI.*",
-    "Microsoft.Windows.SemanticSearch*",
-    "Microsoft.Windows.Internal.SemanticSearch*",
-    "Microsoft.Windows.Private.Workloads*",
-    "NPUDetect.dll",
-    "PerceptiveStreaming.dll",
-    "SessionHandleIPCProxyStub.dll",
-    "System.Numerics.Tensors.dll",
-    "workloads*.json"
-)
-foreach ($pattern in $optionalPayloadPatterns) {
-    Get-ChildItem -LiteralPath $dist -Filter $pattern -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force
-}
-
-$retainedLocaleDirectories = @("en-US", "en-us", "zh-CN")
-Get-ChildItem -LiteralPath $dist -Directory | Where-Object {
-    Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.ui.xaml.dll.mui") -PathType Leaf
-} | Where-Object {
-    $retainedLocaleDirectories -notcontains $_.Name
-} | Remove-Item -Recurse -Force
+Copy-QuickLookReleasePayload `
+    -Payload $payload `
+    -DestinationRoot $dist
+Assert-QuickLookReleasePayloadProof `
+    -Payload $payload `
+    -ProofOutputs $payloadHashesForStage `
+    -ContentRoot $dist
 
 & (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist -SkipSystemImageSmoke:$SkipSystemImageSmoke
 

@@ -73,8 +73,6 @@ internal sealed class NativeBridge : IDisposable
         byte[] outBuf,
         nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_image_metadata(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap);
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
@@ -172,17 +170,7 @@ internal sealed class NativeBridge : IDisposable
                 if (n <= 0) return null;
 
                 using var doc = JsonDocument.Parse(new ReadOnlyMemory<byte>(outBuf, 0, n));
-                var r = doc.RootElement;
-                string magicHex = r.GetProperty("magicHex").GetString() ?? "";
-                return new FileProbe(
-                    r.GetProperty("path").GetString() ?? path,
-                    r.GetProperty("extension").GetString() ?? "",
-                    magicHex.Length > 0 ? Convert.FromHexString(magicHex) : [])
-                {
-                    Kind = r.GetProperty("kind").GetString() ?? "unknown",
-                    Size = r.GetProperty("size").GetInt64(),
-                    ModifiedUnix = r.GetProperty("modifiedUnix").GetInt64(),
-                };
+                return ParseProbe(doc.RootElement, path, useNativePath: true);
             }
             finally { ArrayPool<byte>.Shared.Return(outBuf); }
         }
@@ -239,13 +227,24 @@ internal sealed class NativeBridge : IDisposable
     private static FileProbe ParseProbe(byte[] utf8Json, int length, string path)
     {
         using var doc = JsonDocument.Parse(new ReadOnlyMemory<byte>(utf8Json, 0, length));
-        var root = doc.RootElement;
+        return ParseProbe(doc.RootElement, path, useNativePath: false);
+    }
+
+    private static FileProbe ParseProbe(JsonElement root, string path, bool useNativePath)
+    {
         string magicHex = root.GetProperty("magicHex").GetString() ?? "";
-        return new FileProbe(path, root.GetProperty("extension").GetString() ?? "", magicHex.Length > 0 ? Convert.FromHexString(magicHex) : [])
+        return new FileProbe(
+            useNativePath ? root.GetProperty("path").GetString() ?? path : path,
+            root.GetProperty("extension").GetString() ?? "",
+            magicHex.Length > 0 ? Convert.FromHexString(magicHex) : [])
         {
             Kind = root.GetProperty("kind").GetString() ?? "unknown",
             Size = root.GetProperty("size").GetInt64(),
             ModifiedUnix = root.GetProperty("modifiedUnix").GetInt64(),
+            IsAnimated = root.TryGetProperty("isAnimated", out JsonElement animated)
+                && animated.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? animated.GetBoolean()
+                    : null,
         };
     }
 
@@ -293,22 +292,6 @@ internal sealed class NativeBridge : IDisposable
             return doc.RootElement.TryGetProperty("listing", out var listing)
                 ? JsonSerializer.Deserialize<PreviewListing>(listing.GetRawText(), ProtocolJson.Options)
                 : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public ImageMetadata? TryPreviewImageMetadata(string path)
-    {
-        string? json = CallPreview(ql_preview_image_metadata, path);
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
-
-        try
-        {
-            return JsonSerializer.Deserialize<ImageMetadata>(json, ProtocolJson.Options);
         }
         catch
         {
@@ -532,5 +515,3 @@ internal sealed class NativeBridge : IDisposable
 }
 
 internal sealed record NativeRasterImage(byte[] Bgra, int Width, int Height);
-internal sealed record NativeAnimationFrame(int DelayMilliseconds, byte[] Bgra);
-internal sealed record NativeAnimationFrames(int Width, int Height, IReadOnlyList<NativeAnimationFrame> Frames);

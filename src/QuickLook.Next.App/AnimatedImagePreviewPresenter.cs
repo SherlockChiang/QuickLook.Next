@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
+using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
@@ -68,75 +69,55 @@ internal sealed class AnimatedImagePreviewPresenter
     }
 
     public bool HasImage => _image.Source is not null;
-    public bool CanTogglePlayback => _nativeFrames?.Frames.Count > 1 && _nativeFrameTimer is not null;
+    public bool CanTogglePlayback => _nativeFrames?.FrameCount > 1 && _nativeFrameTimer is not null;
     public bool IsPlaybackPaused { get; private set; }
     public Action<ImageWaveform>? WaveformChanged { get; init; }
-
-    public AnimatedImagePreviewResult Render(string path, PreviewReady ready, (double Width, double Height) maxContent)
-    {
-        StopNativePlayback();
-        _layoutVersion++;
-        _currentPath = path;
-        _openWatch = Stopwatch.StartNew();
-        _sourceWidth = Math.Max(1, ready.PreferredWidth);
-        _sourceHeight = Math.Max(1, ready.PreferredHeight);
-        _image.Width = _sourceWidth;
-        _image.Height = _sourceHeight;
-        double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
-        double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
-        double scale = Math.Min(1.0, Math.Min(imageMaxWidth / _sourceWidth, imageMaxHeight / _sourceHeight));
-        var bitmap = new BitmapImage(new Uri(path));
-        if (scale < 1.0)
-        {
-            bitmap.DecodePixelWidth = Math.Max(1, (int)Math.Round(_sourceWidth * scale));
-            bitmap.DecodePixelHeight = Math.Max(1, (int)Math.Round(_sourceHeight * scale));
-        }
-        _image.Source = bitmap;
-        ResetView();
-        ScheduleLayoutUpdate();
-
-        double width = _sourceWidth * scale + InfoRailWidth;
-        double height = _sourceHeight * scale + ToolbarHeight;
-        return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
-    }
 
     public AnimatedImagePreviewResult RenderNativeFrames(string path, PreviewReady ready, NativeAnimationFrames frames, (double Width, double Height) maxContent)
     {
         StopNativePlayback();
-        _layoutVersion++;
-        _currentPath = path;
-        _openWatch = null;
         _nativeFrames = frames;
-        _waveformVersion++;
-        _waveformUpdatePending = false;
-        IsPlaybackPaused = false;
-        _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
-        _nativeFrameIndex = 0;
-        _nativeFrameTimeline = BuildFrameTimeline(frames);
-        _nativeAnimationDurationMs = _nativeFrameTimeline.Length == 0 ? 0 : _nativeFrameTimeline[^1];
-        _sourceWidth = Math.Max(1, frames.Width);
-        _sourceHeight = Math.Max(1, frames.Height);
-        _lastWaveformUpdateMilliseconds = -WaveformUpdateIntervalMilliseconds;
-        _image.Width = frames.Width;
-        _image.Height = frames.Height;
-        double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
-        double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
-        double scale = Math.Min(1.0, Math.Min(imageMaxWidth / frames.Width, imageMaxHeight / frames.Height));
-        PresentNativeFrame(0);
-        ResetView();
-        ScheduleLayoutUpdate();
-
-        if (frames.Frames.Count > 1)
+        try
         {
-            _nativeFrameClock = Stopwatch.StartNew();
-            _nativeFrameTimer = new DispatcherTimer();
-            _nativeFrameTimer.Tick += (_, _) => AdvanceNativeFrame();
-            ScheduleNextNativeFrame();
-        }
+            _layoutVersion++;
+            _currentPath = path;
+            _openWatch = null;
+            _waveformVersion++;
+            _waveformUpdatePending = false;
+            IsPlaybackPaused = false;
+            _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
+            _nativeFrameIndex = 0;
+            _nativeFrameTimeline = BuildFrameTimeline(frames);
+            _nativeAnimationDurationMs = _nativeFrameTimeline.Length == 0 ? 0 : _nativeFrameTimeline[^1];
+            _sourceWidth = Math.Max(1, frames.Width);
+            _sourceHeight = Math.Max(1, frames.Height);
+            _lastWaveformUpdateMilliseconds = -WaveformUpdateIntervalMilliseconds;
+            _image.Width = frames.Width;
+            _image.Height = frames.Height;
+            double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
+            double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
+            double scale = Math.Min(1.0, Math.Min(imageMaxWidth / frames.Width, imageMaxHeight / frames.Height));
+            PresentNativeFrame(0);
+            ResetView();
+            ScheduleLayoutUpdate();
 
-        double width = frames.Width * scale + InfoRailWidth;
-        double height = frames.Height * scale + ToolbarHeight;
-        return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
+            if (frames.FrameCount > 1)
+            {
+                _nativeFrameClock = Stopwatch.StartNew();
+                _nativeFrameTimer = new DispatcherTimer();
+                _nativeFrameTimer.Tick += (_, _) => AdvanceNativeFrame();
+                ScheduleNextNativeFrame();
+            }
+
+            double width = frames.Width * scale + InfoRailWidth;
+            double height = frames.Height * scale + ToolbarHeight;
+            return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
+        }
+        catch
+        {
+            StopNativePlayback();
+            throw;
+        }
     }
 
     public void Clear()
@@ -210,7 +191,7 @@ internal sealed class AnimatedImagePreviewPresenter
 
     private void AdvanceNativeFrame()
     {
-        if (_nativeFrames is null || _nativeFrames.Frames.Count == 0)
+        if (_nativeFrames is null || _nativeFrames.FrameCount == 0)
             return;
 
         if (_nativeFrameTimeline is null || _nativeAnimationDurationMs <= 0 || _nativeFrameClock is null)
@@ -243,19 +224,20 @@ internal sealed class AnimatedImagePreviewPresenter
 
     private void PresentNativeFrame(int index)
     {
-        if (_nativeFrames is null || index < 0 || index >= _nativeFrames.Frames.Count)
+        NativeAnimationFrames? frames = _nativeFrames;
+        if (frames is null || index < 0 || index >= frames.FrameCount)
             return;
 
         if (_nativeFrameBitmap is null)
-            _nativeFrameBitmap = new WriteableBitmap(_nativeFrames.Width, _nativeFrames.Height);
+            _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
 
-        byte[] bgra = _nativeFrames.Frames[index].Bgra;
         // PixelBuffer is a fixed-size WinRT buffer. Resizing it (SetLength) can throw a
         // COMException, and it must be unmapped before Invalidate asks XAML to consume it.
         using (var stream = _nativeFrameBitmap.PixelBuffer.AsStream())
         {
             stream.Position = 0;
-            stream.Write(bgra, 0, bgra.Length);
+            if (!frames.TryReadFrame(index, bgra => stream.Write(bgra)))
+                return;
         }
         _nativeFrameBitmap.Invalidate();
         _image.Source = _nativeFrameBitmap;
@@ -263,26 +245,26 @@ internal sealed class AnimatedImagePreviewPresenter
         if (elapsed - _lastWaveformUpdateMilliseconds >= WaveformUpdateIntervalMilliseconds)
         {
             _lastWaveformUpdateMilliseconds = elapsed;
-            QueueWaveformUpdate(bgra, _nativeFrames.Width, _nativeFrames.Height);
+            QueueWaveformUpdate(frames, index);
         }
     }
 
-    private void QueueWaveformUpdate(byte[] bgra, int width, int height)
+    private void QueueWaveformUpdate(NativeAnimationFrames frames, int frameIndex)
     {
         if (_waveformUpdatePending || WaveformChanged is null)
             return;
 
         _waveformUpdatePending = true;
         int version = _waveformVersion;
-        _ = Task.Run(() => ImageWaveformBuilder.Create(bgra, width, height)).ContinueWith(task =>
+        _ = Task.Run(() => frames.CreateWaveform(frameIndex)).ContinueWith(task =>
         {
             _previewRoot.DispatcherQueue.TryEnqueue(() =>
             {
                 if (version != _waveformVersion)
                     return;
                 _waveformUpdatePending = false;
-                if (task.IsCompletedSuccessfully)
-                    WaveformChanged?.Invoke(task.Result);
+                if (task.IsCompletedSuccessfully && task.Result is { } waveform)
+                    WaveformChanged?.Invoke(waveform);
             });
         }, TaskScheduler.Default);
     }
@@ -294,9 +276,11 @@ internal sealed class AnimatedImagePreviewPresenter
             _nativeFrameTimer.Stop();
             _nativeFrameTimer = null;
         }
+        NativeAnimationFrames? frames = _nativeFrames;
         _nativeFrames = null;
         _waveformVersion++;
         _waveformUpdatePending = false;
+        frames?.Dispose();
         _nativeFrameBitmap = null;
         _nativeFrameIndex = 0;
         _nativeFrameTimeline = null;
@@ -308,11 +292,11 @@ internal sealed class AnimatedImagePreviewPresenter
 
     private static int[] BuildFrameTimeline(NativeAnimationFrames frames)
     {
-        var timeline = new int[frames.Frames.Count];
+        var timeline = new int[frames.FrameCount];
         int total = 0;
-        for (int i = 0; i < frames.Frames.Count; i++)
+        for (int i = 0; i < frames.FrameCount; i++)
         {
-            total = checked(total + Math.Clamp(frames.Frames[i].DelayMilliseconds, 20, 1_000));
+            total = checked(total + Math.Clamp(frames.GetDelayMilliseconds(i), 20, 1_000));
             timeline[i] = total;
         }
         return timeline;
@@ -486,202 +470,18 @@ internal sealed class AnimatedImagePreviewPresenter
         e.Handled = true;
     }
 
-    public static (int Width, int Height)? TryReadAnimatedSize(string path)
-        => Path.GetExtension(path).ToLowerInvariant() switch
-        {
-            ".gif" => TryReadGifSize(path),
-            ".webp" => TryReadAnimatedWebPSize(path),
-            ".png" => TryReadAnimatedPngSize(path),
-            _ => null,
-        };
-
-    private static (int Width, int Height)? TryReadGifSize(string path)
+    public static AnimatedImageRenderPlan? CreateRenderPlan(FileProbe probe)
     {
-        try
-        {
-            Span<byte> header = stackalloc byte[10];
-            using var stream = File.OpenRead(path);
-            if (stream.Read(header) != header.Length)
-                return null;
-            bool gif = header[..6].SequenceEqual("GIF87a"u8) || header[..6].SequenceEqual("GIF89a"u8);
-            if (!gif)
-                return null;
-            int width = BitConverter.ToUInt16(header[6..8]);
-            int height = BitConverter.ToUInt16(header[8..10]);
-            return width > 0 && height > 0 ? (width, height) : null;
-        }
-        catch
+        if (!probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+            || probe.IsAnimated is false)
         {
             return null;
         }
+
+        return probe.Extension.ToLowerInvariant() is ".gif" or ".webp" or ".png"
+            ? new AnimatedImageRenderPlan()
+            : null;
     }
-
-    private static (int Width, int Height)? TryReadAnimatedPngSize(string path)
-    {
-        const long maxHeaderScanBytes = 4L * 1024 * 1024;
-        try
-        {
-            using var stream = File.OpenRead(path);
-            Span<byte> signature = stackalloc byte[8];
-            Span<byte> chunkHeader = stackalloc byte[8];
-            Span<byte> ihdr = stackalloc byte[13];
-            ReadOnlySpan<byte> pngSignature = [0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A];
-            if (stream.Read(signature) != signature.Length
-                || !signature.SequenceEqual(pngSignature)
-                || stream.Read(chunkHeader) != chunkHeader.Length
-                || System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(chunkHeader[..4]) != 13
-                || !chunkHeader[4..].SequenceEqual("IHDR"u8)
-                || stream.Read(ihdr) != ihdr.Length)
-            {
-                return null;
-            }
-            int width = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(ihdr[..4]));
-            int height = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(ihdr[4..8]));
-            stream.Position += 4; // IHDR CRC
-            while (stream.Position + chunkHeader.Length <= stream.Length
-                && stream.Position <= maxHeaderScanBytes)
-            {
-                if (stream.Read(chunkHeader) != chunkHeader.Length)
-                    return null;
-                uint length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(chunkHeader[..4]);
-                ReadOnlySpan<byte> type = chunkHeader[4..];
-                long next = checked(stream.Position + length + 4L);
-                if (next > stream.Length)
-                    return null;
-                if (type.SequenceEqual("acTL"u8))
-                {
-                    Span<byte> control = stackalloc byte[8];
-                    if (length != control.Length || stream.Read(control) != control.Length)
-                        return null;
-                    uint frames = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(control[..4]);
-                    return frames > 0 && width > 0 && height > 0 ? (width, height) : null;
-                }
-                if (type.SequenceEqual("IDAT"u8) || type.SequenceEqual("IEND"u8))
-                    return null;
-                stream.Position = next;
-            }
-        }
-        catch
-        {
-        }
-        return null;
-    }
-
-    public static AnimatedImageRenderPlan? CreateRenderPlan(string path)
-    {
-        if (TryReadAnimatedSize(path) is not { } size)
-            return null;
-
-        return new AnimatedImageRenderPlan(
-            size.Width,
-            size.Height,
-            AnimatedImagePlaybackMode.NativeFramePlayback);
-    }
-
-    private static (int Width, int Height)? TryReadAnimatedWebPSize(string path)
-    {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            Span<byte> header = stackalloc byte[12];
-            if (stream.Read(header) != header.Length
-                || !header[..4].SequenceEqual("RIFF"u8)
-                || !header[8..12].SequenceEqual("WEBP"u8))
-            {
-                return null;
-            }
-
-            Span<byte> chunkHeader = stackalloc byte[8];
-            while (stream.Position + chunkHeader.Length <= stream.Length)
-            {
-                if (stream.Read(chunkHeader) != chunkHeader.Length)
-                    return null;
-
-                string chunk = System.Text.Encoding.ASCII.GetString(chunkHeader[..4]);
-                uint size = BitConverter.ToUInt32(chunkHeader[4..8]);
-                long payloadStart = stream.Position;
-                long nextChunk = payloadStart + size + (size % 2);
-                if (nextChunk < payloadStart || nextChunk > stream.Length + 1)
-                    return null;
-
-                if (chunk == "VP8X")
-                {
-                    Span<byte> data = stackalloc byte[10];
-                    if (size < data.Length || stream.Read(data) != data.Length)
-                        return null;
-
-                    bool animated = (data[0] & 0x02) != 0;
-                    int width = Read24(data[4], data[5], data[6]) + 1;
-                    int height = Read24(data[7], data[8], data[9]) + 1;
-                    return animated && width > 0 && height > 0 ? (width, height) : null;
-                }
-
-                if (chunk == "ANIM" || chunk == "ANMF")
-                    return TryReadWebPStaticSize(path);
-
-                stream.Position = nextChunk;
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static (int Width, int Height)? TryReadWebPStaticSize(string path)
-    {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            stream.Position = 12;
-            Span<byte> chunkHeader = stackalloc byte[8];
-            while (stream.Position + chunkHeader.Length <= stream.Length)
-            {
-                if (stream.Read(chunkHeader) != chunkHeader.Length)
-                    return null;
-
-                string chunk = System.Text.Encoding.ASCII.GetString(chunkHeader[..4]);
-                uint size = BitConverter.ToUInt32(chunkHeader[4..8]);
-                long payloadStart = stream.Position;
-                long nextChunk = payloadStart + size + (size % 2);
-                if (nextChunk < payloadStart || nextChunk > stream.Length + 1)
-                    return null;
-
-                if (chunk == "VP8 " && size >= 10)
-                {
-                    byte[] data = new byte[10];
-                    if (stream.Read(data, 0, data.Length) != data.Length)
-                        return null;
-                    if (data[3] == 0x9D && data[4] == 0x01 && data[5] == 0x2A)
-                    {
-                        int width = BitConverter.ToUInt16(data, 6) & 0x3FFF;
-                        int height = BitConverter.ToUInt16(data, 8) & 0x3FFF;
-                        return width > 0 && height > 0 ? (width, height) : null;
-                    }
-                }
-                else if (chunk == "VP8L" && size >= 5)
-                {
-                    byte[] data = new byte[5];
-                    if (stream.Read(data, 0, data.Length) != data.Length || data[0] != 0x2F)
-                        return null;
-                    int width = 1 + data[1] + ((data[2] & 0x3F) << 8);
-                    int height = 1 + ((data[2] & 0xC0) >> 6) + (data[3] << 2) + ((data[4] & 0x0F) << 10);
-                    return width > 0 && height > 0 ? (width, height) : null;
-                }
-
-                stream.Position = nextChunk;
-            }
-        }
-        catch
-        {
-        }
-
-        return null;
-    }
-
-    private static int Read24(byte b0, byte b1, byte b2)
-        => b0 | (b1 << 8) | (b2 << 16);
 
     private void SyncDecodedImageSize()
     {
@@ -719,10 +519,4 @@ internal sealed class AnimatedImagePreviewPresenter
 
 internal readonly record struct AnimatedImagePreviewResult(string Status, double Width, double Height);
 
-internal enum AnimatedImagePlaybackMode
-{
-    WinUiAnimatedPlayback,
-    NativeFramePlayback,
-}
-
-internal readonly record struct AnimatedImageRenderPlan(int Width, int Height, AnimatedImagePlaybackMode PlaybackMode);
+internal readonly record struct AnimatedImageRenderPlan;

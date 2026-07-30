@@ -121,33 +121,50 @@ public static class Program
                 Console.Error.WriteLine(ex);
                 Environment.ExitCode = 1000 + ex.NativeErrorCode;
             }
-            catch (UnauthorizedAccessException) { Environment.ExitCode = 23; }
-            catch (IOException) { Environment.ExitCode = 24; }
-            catch (ArgumentException) { Environment.ExitCode = 25; }
-            catch (PlatformNotSupportedException) { Environment.ExitCode = 26; }
-            catch
+            catch (UnauthorizedAccessException ex)
             {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 23;
+            }
+            catch (IOException ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 24;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 25;
+            }
+            catch (PlatformNotSupportedException ex)
+            {
+                Console.Error.WriteLine(ex);
+                Environment.ExitCode = 26;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex);
                 Environment.ExitCode = 21;
             }
             return;
         }
         if (args is ["--smoke-write-restricted-parser-host", var parserHostPath])
         {
-            string sourcePath = Path.Combine(Path.GetTempPath(), $"quicklook-parser-smoke-{Guid.NewGuid():N}.txt");
+            string sourcePath = Path.Combine(Path.GetTempPath(), $"quicklook-parser-smoke-{Guid.NewGuid():N}.bin");
             var supervisor = new ParserHostSupervisor(parserHostPath);
             try
             {
                 HostProcessLauncher.GrantRestrictedReadAccess(
                     Path.GetDirectoryName(parserHostPath) ?? throw new InvalidDataException("ParserHost directory is unavailable."));
-                const string contents = "write-restricted parser HANDLE smoke";
+                const string contents = """{"theme":"system","provider":{"enabled":true}}""";
                 File.WriteAllText(sourcePath, contents);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 supervisor.EnsureStartedAsync(timeout.Token).GetAwaiter().GetResult();
                 var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(sourcePath);
                 using (pinned.Handle)
                 {
-                    string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-parser-smoke-{Guid.NewGuid():N}.txt");
-                    var probe = new FileProbe(logicalPath, ".txt", "write-restricted"u8.ToArray())
+                    string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-parser-smoke-{Guid.NewGuid():N}.json");
+                    var probe = new FileProbe(logicalPath, ".json", [])
                     {
                         Kind = "text",
                         Size = pinned.Length,
@@ -160,8 +177,12 @@ public static class Program
                         TimeSpan.FromSeconds(10));
                     PreviewReady ready = completion.WaitAsync(timeout.Token).GetAwaiter().GetResult() as PreviewReady
                         ?? throw new InvalidDataException("Write-restricted ParserHost returned no preview.");
-                    if (!string.Equals(ready.TextContent, contents, StringComparison.Ordinal))
-                        throw new InvalidDataException("Write-restricted ParserHost returned unexpected content.");
+                    if (!string.Equals(ready.TextContent, contents, StringComparison.Ordinal)
+                        || !string.Equals(ready.TextLanguage, "json", StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException(
+                            "Write-restricted ParserHost returned an unexpected JSON preview.");
+                    }
                 }
                 Environment.ExitCode = 0;
             }

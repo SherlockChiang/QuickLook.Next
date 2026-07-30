@@ -16,7 +16,7 @@
     "bmp": [".bmp", ".dib"]
   },
   "systemRequiredImages": [".avif", ".heic", ".heif", ".jxl"],
-  "animatedImages": [".gif", ".webp"],
+  "animatedImages": [".gif", ".webp", ".png"],
   "listingOnlyArchives": [".rar"],
   "unsupportedArchives": [".7z"]
 }

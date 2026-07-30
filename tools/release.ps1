@@ -12,6 +12,9 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $version = if ($VersionPrefix) { $VersionPrefix } else { (Get-Content -LiteralPath (Join-Path $root "VERSION") -Raw).Trim() }
+if ($ExpectedVersion -and $ExpectedVersion.TrimStart("v") -ne $version) {
+    throw "ExpectedVersion and VersionPrefix resolve to different releases."
+}
 $localSigningDirectory = Join-Path $root ".signing"
 $localCertificatePath = Join-Path $localSigningDirectory "QuickLook.Next-Release.pfx"
 if ($CreateDevelopmentCertificate) {
@@ -31,7 +34,7 @@ if (-not $CertificatePassword) {
     }
 }
 
-& (Join-Path $PSScriptRoot "test-release-version.ps1") -ExpectedVersion $ExpectedVersion
+& (Join-Path $PSScriptRoot "test-release-version.ps1") -ExpectedVersion $version
 
 Write-Host "== restoring locked dependencies ==" -ForegroundColor Cyan
 dotnet restore (Join-Path $root "QuickLook.Next.slnx") --locked-mode
@@ -50,40 +53,14 @@ $versionProperties = @("/p:VersionPrefix=$version")
 if ($VersionSuffix) { $versionProperties += "/p:VersionSuffix=$VersionSuffix" }
 dotnet build (Join-Path $root "QuickLook.Next.slnx") -c Release --no-restore @versionProperties
 if ($LASTEXITCODE -ne 0) { throw "Solution build failed." }
-dotnet test (Join-Path $root "QuickLook.Next.slnx") -c Release --no-build --no-restore @versionProperties
+dotnet test (Join-Path $root "QuickLook.Next.slnx") -c Release `
+    --no-build --no-restore --maxcpucount:1 @versionProperties
 if ($LASTEXITCODE -ne 0) { throw "Solution tests failed." }
 
-$tfm = "net10.0-windows10.0.19041.0\win-x64"
-$testedOutputs = @(
-    "native\target\release\quicklook_next_native.dll",
-    "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe",
-    "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.dll",
-    "src\QuickLook.Next.App\bin\Release\$tfm\quicklook_next_native.dll",
-    "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe",
-    "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.dll",
-    "src\QuickLook.Next.RasterHost\bin\Release\$tfm\quicklook_next_native.dll",
-    "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe",
-    "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.dll",
-    "src\QuickLook.Next.ParserHost\bin\Release\$tfm\quicklook_next_native.dll",
-    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.exe",
-    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.dll",
-    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.deps.json",
-    "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.runtimeconfig.json"
-)
-$outputHashes = [ordered]@{}
-foreach ($relativePath in $testedOutputs) {
-    $fullPath = Join-Path $root $relativePath
-    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { throw "Tested release output is missing: $fullPath" }
-    $outputHashes[$relativePath] = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
-}
-$artifacts = Join-Path $root "artifacts"
-New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
-[ordered]@{
-    versionPrefix = $version
-    versionSuffix = $VersionSuffix
-    commit = (git -C $root rev-parse HEAD)
-    outputs = $outputHashes
-} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifacts ".tested-release-build.json") -Encoding utf8
+& (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
+    -Root $root `
+    -VersionPrefix $version `
+    -VersionSuffix $VersionSuffix | Out-Null
 
 if (-not $SkipPackage) {
     & (Join-Path $PSScriptRoot "pack-msix.ps1") -VersionPrefix $version `

@@ -18,6 +18,11 @@ public static class NativeAbi
     public const ulong HandlePackageIcon = 1UL << 12;
     public const ulong HandleProbe = 1UL << 13;
     public const ulong HandleRasterImage = 1UL << 14;
+    public const ulong HandleAnimation = 1UL << 15;
+    public const ulong HandleOfficeLayoutImage = 1UL << 16;
+    public const ulong HandleImageWaveform = 1UL << 17;
+    public const ulong HandleArchiveEntryOutput = 1UL << 18;
+    public const ulong HandleImageMetadata = 1UL << 19;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable
@@ -27,18 +32,26 @@ public static class NativeAbi
         | HandleOffice
         | HandleEbook
         | HandleArchiveEntry
+        | HandleArchiveEntryOutput
         | HandlePackage
-        | HandlePackageIcon;
+        | HandlePackageIcon
+        | HandleOfficeLayoutImage;
     public const ulong RasterHandleInputs = HandleStaticImage | HandleSvg | HandleGif | HandleRasterImage;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
+    public const int MaxOfficeImageRefUtf8Bytes = 2048;
+    public const long MaxOfficeImageSourceBytes = 768L * 1024;
+    public const int MaxOfficeImageDimension = 1024;
+    public const long MaxOfficeImagePacketBytes =
+        8L + (long)MaxOfficeImageDimension * MaxOfficeImageDimension * 4;
     public const long MaxParserHandleInputBytes = 256L * 1024 * 1024;
     // Archive readers seek across compressed payloads and retain only bounded headers/listing
     // metadata, so they can safely inspect large local archives without mapping the whole file.
     public const long MaxArchiveHandleInputBytes = 16L * 1024 * 1024 * 1024 * 1024;
     public const long MaxSqliteWalBytes = 64L * 1024 * 1024;
     public const long MaxSqliteShmBytes = 4L * 1024 * 1024;
+    public const long MaxArchiveEntryOutputBytes = 64L * 1024 * 1024;
 
-    // Stable status values for ABI 2 HANDLE entry points. Legacy path entry points retain their
+    // Stable status values for HANDLE entry points. Legacy path entry points retain their
     // existing per-function return conventions until they are migrated.
     public const int StatusOk = 0;
     public const int StatusInvalidArgument = -1;

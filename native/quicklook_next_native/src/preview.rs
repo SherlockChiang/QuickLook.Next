@@ -10,268 +10,72 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
-use image::{DynamicImage, GenericImageView, ImageReader, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgba, RgbaImage};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
-use serde::Serialize;
 use tar::Archive as TarArchive;
 use zip::ZipArchive;
 
 use crate::rar_listing::{self, RarScanError};
 
+mod animation_probe;
+mod common;
+mod ebook;
+mod executable;
+mod folder;
+mod image_metadata;
+mod text;
+mod torrent;
+mod types;
+
+pub(crate) use animation_probe::probe_image_animation_reader;
+#[cfg(test)]
+use animation_probe::ImageAnimationProbe;
+pub(crate) use folder::render_folder;
+pub use ebook::{render_ebook, render_ebook_reader};
+pub use executable::{render_executable, render_executable_reader};
+use executable::{align4, format_pe_version, pe_version_file_type, PeFixedVersion};
+#[cfg(test)]
+use ebook::{
+    ebook_item_label, extract_xhtml_markdown, parse_epub_opf, parse_epub_rootfile,
+    read_ebook_limited_to_end, EbookContext,
+};
+#[cfg(test)]
+use executable::{
+    parse_authenticode_certificate_subjects, parse_authenticode_signers, parse_pe_headers,
+};
+pub use image_metadata::render_image_metadata;
+pub(crate) use image_metadata::render_image_metadata_reader;
+pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
+use torrent::parse_bencode;
+pub use torrent::{render_torrent, render_torrent_reader};
+#[cfg(test)]
+use torrent::{MAX_BENCODE_DEPTH, MAX_BENCODE_NODES};
+use common::{
+    format_bytes, format_number, read_c_string, read_i16_be, read_i32_be, read_i32_endian,
+    read_i64_be, read_u16, read_u16_be, read_u16_endian, read_u32, read_u32_be,
+    read_u32_endian, read_u64, read_u64_be, read_u64_endian, type_for_ext,
+};
+use image_metadata::{
+    parse_gif_metadata_from_bytes, parse_png_metadata_from_bytes,
+    parse_webp_metadata_from_bytes,
+};
+#[cfg(test)]
+use image_metadata::{
+    parse_jpeg_exif_metadata, parse_jpeg_exif_metadata_from_bytes, parse_tiff_exif_metadata,
+};
+use types::{
+    to_json, OfficeCellDto, OfficeLayoutDto, OfficeLayoutItemDto, OfficePageDto,
+    PreviewListingDto, PreviewListingItemDto, PreviewReadyDto, PreviewTableDto,
+    PreviewTableRowDto, PreviewTableSheetDto,
+};
+pub(crate) use types::ReaderPreviewError;
+
 fn preview_cancelled(cancel_cb: Option<extern "C" fn() -> bool>) -> bool {
     cancel_cb.map(|callback| callback()).unwrap_or(false)
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewReadyDto {
-    kind: String,
-    title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    language: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    office_layout: Option<OfficeLayoutDto>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    listing: Option<PreviewListingDto>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    table: Option<PreviewTableDto>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    markdown: Option<PreviewMarkdownDto>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OfficeLayoutDto {
-    layout_kind: String,
-    width: f64,
-    height: f64,
-    pages: Vec<OfficePageDto>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OfficePageDto {
-    title: String,
-    index: usize,
-    width: f64,
-    height: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    background_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    freeze_rows: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    freeze_columns: Option<usize>,
-    cells: Vec<OfficeCellDto>,
-    items: Vec<OfficeLayoutItemDto>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct OfficeCellDto {
-    row: usize,
-    column: usize,
-    text: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    row_span: usize,
-    column_span: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    number_format: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fill_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    horizontal_alignment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    vertical_alignment: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
-    bold: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    italic: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    font_size: Option<f64>,
-    #[serde(skip_serializing_if = "is_false")]
-    wrap_text: bool,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct OfficeLayoutItemDto {
-    kind: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    #[serde(skip_serializing_if = "is_zero_usize")]
-    z_index: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    shape: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    placeholder_type: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
-    bold: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    italic: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    font_size: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fill_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stroke_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image_base64: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewListingDto {
-    root_name: String,
-    root_path: String,
-    listing_kind: String,
-    summary: String,
-    is_partial: bool,
-    can_preview_entries: bool,
-    #[serde(skip_serializing_if = "is_zero_usize")]
-    encrypted_file_count: usize,
-    items: Vec<PreviewListingItemDto>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewListingItemDto {
-    name: String,
-    path: String,
-    parent_path: String,
-    is_folder: bool,
-    size: i64,
-    packed_size: i64,
-    modified_unix: i64,
-    #[serde(rename = "type")]
-    typ: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    native_path: Option<String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    is_encrypted: bool,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PreviewTableDto {
-    format: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    delimiter: String,
-    headers: Vec<String>,
-    rows: Vec<PreviewTableRowDto>,
-    total_rows: usize,
-    total_columns: usize,
-    is_partial: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    sheets: Vec<PreviewTableSheetDto>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PreviewTableSheetDto {
-    name: String,
-    table: PreviewTableDto,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PreviewTableRowDto {
-    cells: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PreviewMarkdownDto {
-    blocks: Vec<PreviewMarkdownBlockDto>,
-    is_partial: bool,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PreviewMarkdownBlockDto {
-    kind: String,
-    level: usize,
-    text: String,
-    language: String,
-    inlines: Vec<PreviewMarkdownInlineDto>,
-    children: Vec<PreviewMarkdownBlockDto>,
-    table_headers: Vec<String>,
-    table_rows: Vec<Vec<String>>,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct PreviewMarkdownInlineDto {
-    kind: String,
-    text: String,
-    url: String,
-    children: Vec<PreviewMarkdownInlineDto>,
-}
-
-#[derive(Debug, Clone)]
-enum BValue {
-    Int(i64),
-    Bytes(Vec<u8>),
-    List(Vec<BValue>),
-    Dict(BTreeMap<Vec<u8>, BValue>),
-}
-
-fn to_json<T: Serialize>(value: &T) -> String {
-    serde_json::to_string(value).unwrap_or_default()
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-fn is_zero_usize(value: &usize) -> bool {
-    *value == 0
-}
-
-// ── Text preview ─────────────────────────────────────────────────────────────
-
-const MAX_TEXT_BYTES: usize = 512 * 1024;
-// The App viewport-virtualizes cells; these bounds cap the retained IPC model.
-const MAX_TABLE_ROWS: usize = 4_000;
-const MAX_TABLE_COLUMNS: usize = 64;
-const MAX_TABLE_CELL_CHARS: usize = 240;
-const MAX_TABLE_RETAINED_CELLS: usize = 65_536;
-const MAX_TABLE_RETAINED_CHARS: usize = 512 * 1024;
-const MAX_MARKDOWN_BLOCKS: usize = 500;
-const MAX_MARKDOWN_LIST_ITEMS: usize = 300;
-const MAX_MARKDOWN_TABLE_ROWS: usize = 120;
-const MAX_MARKDOWN_INLINE_CHARS: usize = 4096;
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
-const MAX_TORRENT_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_BENCODE_DEPTH: usize = 64;
-const MAX_BENCODE_NODES: usize = 100_000;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReaderPreviewError {
-    Cancelled,
-    Io,
-    Malformed,
-    LengthMismatch,
-    LimitExceeded,
-}
 const MAX_APPX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_ICON_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_PACKAGE_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
@@ -292,458 +96,6 @@ const MAX_EBOOK_TEXT_CHARS: usize = 140 * 1024;
 pub(crate) const MAX_EBOOK_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_EBOOK_ZIP_ENTRIES: usize = 8_192;
 const MAX_EBOOK_DECOMPRESSED_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_EXIF_BYTES: usize = 256 * 1024;
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ExifMetadata {
-    format: Option<String>,
-    title: Option<String>,
-    comment: Option<String>,
-    make: Option<String>,
-    model: Option<String>,
-    date_time: Option<String>,
-    width: Option<u32>,
-    height: Option<u32>,
-    orientation: Option<u16>,
-    lens_make: Option<String>,
-    lens_model: Option<String>,
-    software: Option<String>,
-    f_number: Option<f64>,
-    max_aperture: Option<f64>,
-    exposure_time: Option<f64>,
-    iso: Option<u32>,
-    focal_length: Option<f64>,
-    focal_length_in_35mm_film: Option<u32>,
-    exposure_bias: Option<f64>,
-    exposure_program: Option<u16>,
-    exposure_mode: Option<u16>,
-    metering_mode: Option<u16>,
-    flash: Option<u16>,
-    white_balance: Option<u16>,
-    light_source: Option<u16>,
-    digital_zoom_ratio: Option<f64>,
-    subject_distance: Option<f64>,
-    contrast: Option<u16>,
-    saturation: Option<u16>,
-    sharpness: Option<u16>,
-    gain_control: Option<u16>,
-    color_space: Option<u16>,
-    exif_version: Option<String>,
-    camera_serial: Option<String>,
-    lens_serial: Option<String>,
-    latitude: Option<f64>,
-    longitude: Option<f64>,
-    altitude: Option<f64>,
-    direction: Option<f64>,
-    bit_depth: Option<u8>,
-    color_type: Option<String>,
-    compression: Option<String>,
-    has_alpha: Option<bool>,
-    interlace: Option<String>,
-    animated: Option<bool>,
-    frame_count: Option<u32>,
-    duration_ms: Option<u32>,
-}
-
-pub fn render_image_metadata(path: &str) -> String {
-    parse_jpeg_exif_metadata(path)
-        .or_else(|| parse_png_metadata(path))
-        .or_else(|| parse_gif_metadata(path))
-        .or_else(|| parse_webp_metadata(path))
-        .or_else(|| parse_tiff_metadata(path))
-        .map(|metadata| to_json(&metadata))
-        .unwrap_or_default()
-}
-
-fn parse_tiff_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, MAX_EXIF_BYTES)?;
-    let mut metadata = parse_tiff_exif_metadata(&bytes)?;
-    metadata.format = Some("TIFF".to_string());
-    Some(metadata)
-}
-
-fn parse_webp_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, 1024 * 1024)?;
-    parse_webp_metadata_from_bytes(&bytes)
-}
-
-fn parse_webp_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
-    if bytes.len() < 12 || bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WEBP" {
-        return None;
-    }
-    let mut offset = 12usize;
-    let mut width = None;
-    let mut height = None;
-    let mut has_alpha = None;
-    let mut animated = false;
-    let mut frames = 0u32;
-    let mut sidecar = ExifMetadata::default();
-    while offset.checked_add(8).is_some_and(|end| end <= bytes.len()) {
-        let chunk = bytes.get(offset..offset + 4)?;
-        let size = read_u32(bytes, offset + 4)? as usize;
-        let payload = offset + 8;
-        let payload_end = payload.checked_add(size)?;
-        if payload_end > bytes.len() {
-            break;
-        }
-        match chunk {
-            b"VP8X" if size >= 10 => {
-                let flags = bytes[payload];
-                has_alpha = Some(flags & 0x10 != 0);
-                animated = flags & 0x02 != 0;
-                width = Some(read_u24_le(bytes, payload + 4)? + 1);
-                height = Some(read_u24_le(bytes, payload + 7)? + 1);
-            }
-            b"VP8 "
-                if size >= 10
-                    && bytes.get(payload + 3..payload + 6) == Some(&[0x9D, 0x01, 0x2A]) =>
-            {
-                width = Some((read_u16(bytes, payload + 6)? & 0x3FFF) as u32);
-                height = Some((read_u16(bytes, payload + 8)? & 0x3FFF) as u32);
-                has_alpha.get_or_insert(false);
-            }
-            b"VP8L" if size >= 5 && bytes.get(payload).copied() == Some(0x2F) => {
-                let b1 = bytes[payload + 1] as u32;
-                let b2 = bytes[payload + 2] as u32;
-                let b3 = bytes[payload + 3] as u32;
-                let b4 = bytes[payload + 4] as u32;
-                width = Some(1 + b1 + ((b2 & 0x3F) << 8));
-                height = Some(1 + ((b2 & 0xC0) >> 6) + (b3 << 2) + ((b4 & 0x0F) << 10));
-                has_alpha.get_or_insert(true);
-            }
-            b"ANMF" => {
-                animated = true;
-                frames = frames.saturating_add(1);
-            }
-            b"ALPH" => {
-                has_alpha = Some(true);
-            }
-            b"EXIF" => {
-                if let Some(exif) =
-                    parse_tiff_exif_metadata(bytes.get(payload..payload_end).unwrap_or_default())
-                {
-                    merge_missing_metadata(&mut sidecar, exif);
-                }
-            }
-            b"XMP " => {
-                if let Some(xmp) =
-                    parse_xmp_metadata(bytes.get(payload..payload_end).unwrap_or_default())
-                {
-                    merge_missing_metadata(&mut sidecar, xmp);
-                }
-            }
-            _ => {}
-        }
-        offset = payload_end + (size % 2);
-    }
-    sidecar.format = Some("WebP".to_string());
-    sidecar.width = sidecar.width.or(width);
-    sidecar.height = sidecar.height.or(height);
-    sidecar.has_alpha = sidecar.has_alpha.or(has_alpha);
-    sidecar.animated = Some(animated);
-    sidecar.frame_count = sidecar.frame_count.or((frames > 0).then_some(frames));
-    Some(sidecar)
-}
-
-fn merge_missing_metadata(target: &mut ExifMetadata, source: ExifMetadata) {
-    target.title = target.title.take().or(source.title);
-    target.comment = target.comment.take().or(source.comment);
-    target.make = target.make.take().or(source.make);
-    target.model = target.model.take().or(source.model);
-    target.date_time = target.date_time.take().or(source.date_time);
-    target.width = target.width.or(source.width);
-    target.height = target.height.or(source.height);
-    target.orientation = target.orientation.or(source.orientation);
-    target.bit_depth = target.bit_depth.or(source.bit_depth);
-    target.color_type = target.color_type.take().or(source.color_type);
-    target.compression = target.compression.take().or(source.compression);
-    target.lens_make = target.lens_make.take().or(source.lens_make);
-    target.lens_model = target.lens_model.take().or(source.lens_model);
-    target.software = target.software.take().or(source.software);
-    target.f_number = target.f_number.or(source.f_number);
-    target.exposure_time = target.exposure_time.or(source.exposure_time);
-    target.iso = target.iso.or(source.iso);
-    target.focal_length = target.focal_length.or(source.focal_length);
-}
-
-fn parse_xmp_metadata(bytes: &[u8]) -> Option<ExifMetadata> {
-    let text = String::from_utf8_lossy(bytes);
-    let mut metadata = ExifMetadata::default();
-    metadata.title = extract_xml_text(&text, &["dc:title", "title"]);
-    metadata.comment =
-        extract_xml_text(&text, &["dc:description", "description", "xmp:Description"]);
-    metadata.software = extract_xml_text(&text, &["xmp:CreatorTool", "CreatorTool", "software"]);
-    (metadata.title.is_some() || metadata.comment.is_some() || metadata.software.is_some())
-        .then_some(metadata)
-}
-
-fn extract_xml_text(text: &str, names: &[&str]) -> Option<String> {
-    for name in names {
-        let open = format!("<{name}");
-        let Some(start) = text.find(&open) else {
-            continue;
-        };
-        let Some(content_start) = text[start..].find('>').map(|idx| start + idx + 1) else {
-            continue;
-        };
-        let close = format!("</{name}>");
-        let Some(content_end) = text[content_start..]
-            .find(&close)
-            .map(|idx| content_start + idx)
-        else {
-            continue;
-        };
-        let value = strip_xml_tags(&text[content_start..content_end]);
-        if !value.is_empty() {
-            return Some(value.chars().take(512).collect());
-        }
-    }
-    None
-}
-
-fn strip_xml_tags(text: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for ch in text.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    xml_unescape_str(out.trim()).trim().to_string()
-}
-
-fn read_u24_le(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(
-        *bytes.get(offset)? as u32
-            | ((*bytes.get(offset + 1)? as u32) << 8)
-            | ((*bytes.get(offset + 2)? as u32) << 16),
-    )
-}
-
-fn parse_gif_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, 1024 * 1024)?;
-    parse_gif_metadata_from_bytes(&bytes)
-}
-
-fn parse_gif_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
-    if bytes.get(0..6)? != b"GIF87a" && bytes.get(0..6)? != b"GIF89a" {
-        return None;
-    }
-    let width = read_u16(bytes, 6)? as u32;
-    let height = read_u16(bytes, 8)? as u32;
-    let packed = *bytes.get(10)?;
-    let mut offset = 13usize;
-    if packed & 0x80 != 0 {
-        let colors = 1usize << ((packed & 0x07) + 1);
-        offset = offset.checked_add(colors.checked_mul(3)?)?;
-    }
-    let mut frames = 0u32;
-    let mut duration_ms = 0u32;
-    while offset < bytes.len() {
-        match bytes[offset] {
-            0x2C => {
-                frames = frames.saturating_add(1);
-                offset = offset.checked_add(10)?;
-                let image_packed = *bytes.get(offset - 1)?;
-                if image_packed & 0x80 != 0 {
-                    let colors = 1usize << ((image_packed & 0x07) + 1);
-                    offset = offset.checked_add(colors.checked_mul(3)?)?;
-                }
-                offset = offset.checked_add(1)?;
-                offset = skip_gif_sub_blocks(bytes, offset)?;
-            }
-            0x21 => {
-                let label = *bytes.get(offset + 1)?;
-                if label == 0xF9 && bytes.get(offset + 2).copied() == Some(4) {
-                    let delay = read_u16(bytes, offset + 4).unwrap_or(0) as u32;
-                    duration_ms = duration_ms.saturating_add(delay.saturating_mul(10));
-                    offset = offset.checked_add(8)?;
-                } else {
-                    offset = skip_gif_sub_blocks(bytes, offset + 2)?;
-                }
-            }
-            0x3B => break,
-            _ => break,
-        }
-    }
-    Some(ExifMetadata {
-        format: Some("GIF".to_string()),
-        width: Some(width),
-        height: Some(height),
-        animated: Some(frames > 1),
-        frame_count: (frames > 0).then_some(frames),
-        duration_ms: (duration_ms > 0).then_some(duration_ms),
-        ..Default::default()
-    })
-}
-
-fn skip_gif_sub_blocks(bytes: &[u8], mut offset: usize) -> Option<usize> {
-    loop {
-        let len = *bytes.get(offset)? as usize;
-        offset = offset.checked_add(1)?;
-        if len == 0 {
-            return Some(offset);
-        }
-        offset = offset.checked_add(len)?;
-        if offset > bytes.len() {
-            return None;
-        }
-    }
-}
-
-fn parse_png_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, 256 * 1024)?;
-    parse_png_metadata_from_bytes(&bytes)
-}
-
-fn parse_png_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
-    if bytes.get(0..8)? != b"\x89PNG\r\n\x1A\n" {
-        return None;
-    }
-    if read_u32_be(bytes, 8)? != 13 || bytes.get(12..16)? != b"IHDR" {
-        return None;
-    }
-    let color = *bytes.get(25)?;
-    let (title, comment, software) = parse_png_text_chunks(bytes);
-    let animation = parse_png_animation_chunks(bytes);
-    Some(ExifMetadata {
-        format: Some("PNG".to_string()),
-        title,
-        comment,
-        width: read_u32_be(bytes, 16),
-        height: read_u32_be(bytes, 20),
-        software,
-        bit_depth: bytes.get(24).copied(),
-        color_type: Some(png_color_type_name(color).to_string()),
-        has_alpha: Some(matches!(color, 4 | 6)),
-        interlace: Some(match bytes.get(28).copied().unwrap_or(0) {
-            1 => "Adam7".to_string(),
-            _ => "none".to_string(),
-        }),
-        animated: animation.as_ref().map(|summary| summary.animated),
-        frame_count: animation.as_ref().and_then(|summary| summary.frame_count),
-        duration_ms: animation.and_then(|summary| summary.duration_ms),
-        ..Default::default()
-    })
-}
-
-#[derive(Debug, Clone, Default)]
-struct PngAnimationSummary {
-    animated: bool,
-    frame_count: Option<u32>,
-    duration_ms: Option<u32>,
-}
-
-fn parse_png_animation_chunks(bytes: &[u8]) -> Option<PngAnimationSummary> {
-    let mut offset = 8usize;
-    let mut actl_frames = None;
-    let mut fctl_frames = 0u32;
-    let mut duration_ms = 0u32;
-    while offset.checked_add(12).is_some_and(|end| end <= bytes.len()) {
-        let length = read_u32_be(bytes, offset)? as usize;
-        let chunk_type = bytes.get(offset + 4..offset + 8).unwrap_or_default();
-        let payload_start = offset + 8;
-        let payload_end = payload_start.checked_add(length)?;
-        let next = payload_end.checked_add(4)?;
-        if payload_end > bytes.len() {
-            break;
-        }
-        match chunk_type {
-            b"acTL" if length >= 8 => actl_frames = read_u32_be(bytes, payload_start),
-            b"fcTL" if length >= 26 => {
-                fctl_frames = fctl_frames.saturating_add(1);
-                let numerator = read_u16_be(bytes, payload_start + 20).unwrap_or(0) as u32;
-                let denominator = read_u16_be(bytes, payload_start + 22).unwrap_or(100) as u32;
-                let denominator = if denominator == 0 { 100 } else { denominator };
-                duration_ms =
-                    duration_ms.saturating_add(numerator.saturating_mul(1000) / denominator);
-            }
-            b"IEND" => break,
-            _ => {}
-        }
-        offset = next;
-    }
-
-    if actl_frames.is_none() && fctl_frames == 0 {
-        return None;
-    }
-    let frames = actl_frames.or((fctl_frames > 0).then_some(fctl_frames));
-    Some(PngAnimationSummary {
-        animated: frames.unwrap_or(0) > 1 || fctl_frames > 1,
-        frame_count: frames,
-        duration_ms: (duration_ms > 0).then_some(duration_ms),
-    })
-}
-
-fn parse_png_text_chunks(bytes: &[u8]) -> (Option<String>, Option<String>, Option<String>) {
-    let mut title = None;
-    let mut comment = None;
-    let mut software = None;
-    let mut offset = 8usize;
-    while offset.checked_add(12).is_some_and(|end| end <= bytes.len()) {
-        let Some(length) = read_u32_be(bytes, offset).map(|value| value as usize) else {
-            break;
-        };
-        let chunk_type = bytes.get(offset + 4..offset + 8).unwrap_or_default();
-        let payload_start = offset + 8;
-        let Some(payload_end) = payload_start.checked_add(length) else {
-            break;
-        };
-        let Some(next) = payload_end.checked_add(4) else {
-            break;
-        };
-        if payload_end > bytes.len() {
-            break;
-        }
-        if chunk_type == b"tEXt" {
-            if let Some((keyword, value)) =
-                parse_png_text_chunk(bytes.get(payload_start..payload_end).unwrap_or_default())
-            {
-                match keyword.to_ascii_lowercase().as_str() {
-                    "title" if title.is_none() => title = Some(value),
-                    "description" | "comment" if comment.is_none() => comment = Some(value),
-                    "software" if software.is_none() => software = Some(value),
-                    _ => {}
-                }
-            }
-        }
-        if chunk_type == b"IEND" {
-            break;
-        }
-        offset = next;
-    }
-    (title, comment, software)
-}
-
-fn parse_png_text_chunk(payload: &[u8]) -> Option<(String, String)> {
-    let separator = payload.iter().position(|byte| *byte == 0)?;
-    let keyword = String::from_utf8_lossy(payload.get(..separator)?)
-        .trim()
-        .to_string();
-    let value = String::from_utf8_lossy(payload.get(separator + 1..)?)
-        .trim_matches('\0')
-        .trim()
-        .chars()
-        .take(512)
-        .collect::<String>();
-    (!keyword.is_empty() && !value.is_empty()).then_some((keyword, value))
-}
-
-fn png_color_type_name(value: u8) -> &'static str {
-    match value {
-        0 => "grayscale",
-        2 => "truecolor",
-        3 => "indexed color",
-        4 => "grayscale with alpha",
-        6 => "truecolor with alpha",
-        _ => "unknown",
-    }
-}
-
 fn file_size_modified(path: &str) -> (i64, i64) {
     let meta = fs::metadata(path).ok();
     let size = meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
@@ -862,1343 +214,6 @@ fn drain_exact_cancelable<R: Read + ?Sized>(
     Ok(())
 }
 
-fn parse_jpeg_exif_metadata(path: &str) -> Option<ExifMetadata> {
-    let bytes = read_file_prefix(path, MAX_EXIF_BYTES)?;
-    parse_jpeg_exif_metadata_from_bytes(&bytes)
-}
-
-fn parse_jpeg_exif_metadata_from_bytes(bytes: &[u8]) -> Option<ExifMetadata> {
-    let tiff = find_jpeg_exif_tiff(bytes)?;
-    parse_tiff_exif_metadata(tiff)
-}
-
-fn find_jpeg_exif_tiff(bytes: &[u8]) -> Option<&[u8]> {
-    if bytes.get(0..2)? != [0xFF, 0xD8] {
-        return None;
-    }
-
-    let mut offset = 2usize;
-    while offset.checked_add(4)? <= bytes.len() {
-        if bytes[offset] != 0xFF {
-            return None;
-        }
-        while offset < bytes.len() && bytes[offset] == 0xFF {
-            offset += 1;
-        }
-        let marker = *bytes.get(offset)?;
-        offset += 1;
-        if marker == 0xDA || marker == 0xD9 {
-            break;
-        }
-        let len = read_u16_be(bytes, offset)? as usize;
-        if len < 2 {
-            return None;
-        }
-        let payload_start = offset.checked_add(2)?;
-        let payload_end = offset.checked_add(len)?;
-        let payload = bytes.get(payload_start..payload_end)?;
-        if marker == 0xE1 && payload.starts_with(b"Exif\0\0") {
-            return payload.get(6..);
-        }
-        offset = payload_end;
-    }
-
-    None
-}
-
-fn parse_tiff_exif_metadata(tiff: &[u8]) -> Option<ExifMetadata> {
-    let endian = match tiff.get(0..2)? {
-        b"II" => 1,
-        b"MM" => 2,
-        _ => return None,
-    };
-    if read_u16_endian(tiff, 2, endian)? != 42 {
-        return None;
-    }
-
-    let ifd0 = read_u32_endian(tiff, 4, endian)? as usize;
-    let mut metadata = ExifMetadata::default();
-    let mut exif_ifd = None;
-    let mut gps_ifd = None;
-    parse_exif_ifd(
-        tiff,
-        ifd0,
-        endian,
-        &mut metadata,
-        &mut exif_ifd,
-        &mut gps_ifd,
-    );
-    if let Some(offset) = exif_ifd {
-        parse_exif_ifd(tiff, offset, endian, &mut metadata, &mut None, &mut None);
-    }
-    if let Some(offset) = gps_ifd {
-        parse_gps_ifd(tiff, offset, endian, &mut metadata);
-    }
-
-    Some(metadata)
-}
-
-fn parse_exif_ifd(
-    tiff: &[u8],
-    offset: usize,
-    endian: u8,
-    metadata: &mut ExifMetadata,
-    exif_ifd: &mut Option<usize>,
-    gps_ifd: &mut Option<usize>,
-) {
-    let Some(count) = read_u16_endian(tiff, offset, endian).map(usize::from) else {
-        return;
-    };
-    let entries = offset.saturating_add(2);
-    for index in 0..count.min(128) {
-        let entry = entries.saturating_add(index.saturating_mul(12));
-        let Some(tag) = read_u16_endian(tiff, entry, endian) else {
-            break;
-        };
-        match tag {
-            0x0100 => {
-                metadata.width = metadata
-                    .width
-                    .or_else(|| exif_u32_or_u16_value(tiff, entry, endian))
-            }
-            0x0101 => {
-                metadata.height = metadata
-                    .height
-                    .or_else(|| exif_u32_or_u16_value(tiff, entry, endian))
-            }
-            0x0102 => {
-                metadata.bit_depth = metadata
-                    .bit_depth
-                    .or_else(|| tiff_bits_per_sample(tiff, entry, endian))
-            }
-            0x0103 => {
-                metadata.compression = metadata.compression.take().or_else(|| {
-                    tiff_compression_name(exif_u16_value(tiff, entry, endian)?).map(str::to_string)
-                })
-            }
-            0x0106 => {
-                metadata.color_type = metadata.color_type.take().or_else(|| {
-                    tiff_photometric_name(exif_u16_value(tiff, entry, endian)?).map(str::to_string)
-                })
-            }
-            0x010F => metadata.make = exif_ascii(tiff, entry, endian),
-            0x0110 => metadata.model = exif_ascii(tiff, entry, endian),
-            0x0112 => metadata.orientation = exif_u16_value(tiff, entry, endian),
-            0x0131 => metadata.software = exif_ascii(tiff, entry, endian),
-            0x0132 | 0x9003 => {
-                if metadata.date_time.is_none() {
-                    metadata.date_time = exif_ascii(tiff, entry, endian);
-                }
-            }
-            0x829A => metadata.exposure_time = exif_rational_value(tiff, entry, endian),
-            0x829D => metadata.f_number = exif_rational_value(tiff, entry, endian),
-            0x8822 => metadata.exposure_program = exif_u16_value(tiff, entry, endian),
-            0x8827 => metadata.iso = exif_u32_or_u16_value(tiff, entry, endian),
-            0x8769 => *exif_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
-            0x8825 => *gps_ifd = exif_u32_value(tiff, entry, endian).map(|v| v as usize),
-            0x9204 => metadata.exposure_bias = exif_signed_rational_value(tiff, entry, endian),
-            0x9205 => metadata.max_aperture = exif_rational_value(tiff, entry, endian),
-            0x9206 => metadata.subject_distance = exif_rational_value(tiff, entry, endian),
-            0x9207 => metadata.metering_mode = exif_u16_value(tiff, entry, endian),
-            0x9208 => metadata.light_source = exif_u16_value(tiff, entry, endian),
-            0x9209 => metadata.flash = exif_u16_value(tiff, entry, endian),
-            0x920A => metadata.focal_length = exif_rational_value(tiff, entry, endian),
-            0x9000 => metadata.exif_version = exif_version(tiff, entry, endian),
-            0xA001 => metadata.color_space = exif_u16_value(tiff, entry, endian),
-            0xA002 => metadata.width = exif_u32_or_u16_value(tiff, entry, endian),
-            0xA003 => metadata.height = exif_u32_or_u16_value(tiff, entry, endian),
-            0xA402 => metadata.exposure_mode = exif_u16_value(tiff, entry, endian),
-            0xA403 => metadata.white_balance = exif_u16_value(tiff, entry, endian),
-            0xA404 => metadata.digital_zoom_ratio = exif_rational_value(tiff, entry, endian),
-            0xA405 => {
-                metadata.focal_length_in_35mm_film = exif_u32_or_u16_value(tiff, entry, endian)
-            }
-            0xA407 => metadata.gain_control = exif_u16_value(tiff, entry, endian),
-            0xA408 => metadata.contrast = exif_u16_value(tiff, entry, endian),
-            0xA409 => metadata.saturation = exif_u16_value(tiff, entry, endian),
-            0xA40A => metadata.sharpness = exif_u16_value(tiff, entry, endian),
-            0xA431 => metadata.camera_serial = exif_ascii(tiff, entry, endian),
-            0xA433 => metadata.lens_make = exif_ascii(tiff, entry, endian),
-            0xA434 => metadata.lens_model = exif_ascii(tiff, entry, endian),
-            0xA435 => metadata.lens_serial = exif_ascii(tiff, entry, endian),
-            _ => {}
-        }
-    }
-}
-
-fn parse_gps_ifd(tiff: &[u8], offset: usize, endian: u8, metadata: &mut ExifMetadata) {
-    let Some(count) = read_u16_endian(tiff, offset, endian).map(usize::from) else {
-        return;
-    };
-    let entries = offset.saturating_add(2);
-    let mut lat_ref = None;
-    let mut lon_ref = None;
-    let mut altitude_ref = None;
-    let mut lat = None;
-    let mut lon = None;
-    let mut altitude = None;
-    let mut direction = None;
-    for index in 0..count.min(64) {
-        let entry = entries.saturating_add(index.saturating_mul(12));
-        let Some(tag) = read_u16_endian(tiff, entry, endian) else {
-            break;
-        };
-        match tag {
-            1 => lat_ref = exif_ascii(tiff, entry, endian),
-            2 => lat = exif_gps_coordinate(tiff, entry, endian),
-            3 => lon_ref = exif_ascii(tiff, entry, endian),
-            4 => lon = exif_gps_coordinate(tiff, entry, endian),
-            5 => altitude_ref = exif_u16_value(tiff, entry, endian),
-            6 => altitude = exif_rational_value(tiff, entry, endian),
-            17 => direction = exif_rational_value(tiff, entry, endian),
-            _ => {}
-        }
-    }
-
-    metadata.latitude = signed_gps_coordinate(lat, lat_ref.as_deref(), "S");
-    metadata.longitude = signed_gps_coordinate(lon, lon_ref.as_deref(), "W");
-    metadata.altitude = altitude.map(|value| {
-        if altitude_ref == Some(1) {
-            -value
-        } else {
-            value
-        }
-    });
-    metadata.direction = direction;
-}
-
-fn exif_ascii(tiff: &[u8], entry: usize, endian: u8) -> Option<String> {
-    let bytes = exif_value_bytes(tiff, entry, endian)?;
-    let text = String::from_utf8_lossy(bytes)
-        .trim_matches('\0')
-        .trim()
-        .to_string();
-    (!text.is_empty()).then_some(text)
-}
-
-fn exif_version(tiff: &[u8], entry: usize, endian: u8) -> Option<String> {
-    let bytes = exif_value_bytes(tiff, entry, endian)?;
-    let text: String = bytes
-        .iter()
-        .filter_map(|b| b.is_ascii_graphic().then_some(*b as char))
-        .collect();
-    (!text.is_empty()).then_some(text)
-}
-
-fn exif_u16_value(tiff: &[u8], entry: usize, endian: u8) -> Option<u16> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 3 {
-        return None;
-    }
-    if read_u32_endian(tiff, entry + 4, endian)? == 0 {
-        return None;
-    }
-    read_u16_endian(tiff, entry + 8, endian)
-}
-
-fn exif_u32_value(tiff: &[u8], entry: usize, endian: u8) -> Option<u32> {
-    match read_u16_endian(tiff, entry + 2, endian)? {
-        3 => exif_u16_value(tiff, entry, endian).map(u32::from),
-        4 => read_u32_endian(tiff, entry + 8, endian),
-        _ => None,
-    }
-}
-
-fn exif_u32_or_u16_value(tiff: &[u8], entry: usize, endian: u8) -> Option<u32> {
-    match read_u16_endian(tiff, entry + 2, endian)? {
-        3 => exif_u16_value(tiff, entry, endian).map(u32::from),
-        4 => exif_u32_value(tiff, entry, endian),
-        _ => None,
-    }
-}
-
-fn tiff_bits_per_sample(tiff: &[u8], entry: usize, endian: u8) -> Option<u8> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 3 {
-        return None;
-    }
-    let count = read_u32_endian(tiff, entry + 4, endian)? as usize;
-    if count == 0 {
-        return None;
-    }
-    let value = if count == 1 {
-        read_u16_endian(tiff, entry + 8, endian)?
-    } else {
-        let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
-        read_u16_endian(tiff, offset, endian)?
-    };
-    u8::try_from(value).ok()
-}
-
-fn tiff_compression_name(value: u16) -> Option<&'static str> {
-    Some(match value {
-        1 => "none",
-        2 => "CCITT Group 3 1-D",
-        3 => "Group 3 fax",
-        4 => "Group 4 fax",
-        5 => "LZW",
-        6 => "old JPEG",
-        7 => "JPEG",
-        8 => "Deflate",
-        32773 => "PackBits",
-        _ => return None,
-    })
-}
-
-fn tiff_photometric_name(value: u16) -> Option<&'static str> {
-    Some(match value {
-        0 => "white is zero",
-        1 => "black is zero",
-        2 => "RGB",
-        3 => "palette color",
-        4 => "transparency mask",
-        5 => "CMYK",
-        6 => "YCbCr",
-        8 => "CIELab",
-        _ => return None,
-    })
-}
-
-fn exif_gps_coordinate(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 5
-        || read_u32_endian(tiff, entry + 4, endian)? < 3
-    {
-        return None;
-    }
-    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
-    let degrees = exif_rational(tiff, offset, endian)?;
-    let minutes = exif_rational(tiff, offset + 8, endian)?;
-    let seconds = exif_rational(tiff, offset + 16, endian)?;
-    Some(degrees + minutes / 60.0 + seconds / 3600.0)
-}
-
-fn exif_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 5
-        || read_u32_endian(tiff, entry + 4, endian)? == 0
-    {
-        return None;
-    }
-    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
-    exif_rational(tiff, offset, endian)
-}
-
-fn exif_signed_rational_value(tiff: &[u8], entry: usize, endian: u8) -> Option<f64> {
-    if read_u16_endian(tiff, entry + 2, endian)? != 10
-        || read_u32_endian(tiff, entry + 4, endian)? == 0
-    {
-        return None;
-    }
-    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
-    exif_signed_rational(tiff, offset, endian)
-}
-
-fn exif_rational(tiff: &[u8], offset: usize, endian: u8) -> Option<f64> {
-    let numerator = read_u32_endian(tiff, offset, endian)? as f64;
-    let denominator = read_u32_endian(tiff, offset + 4, endian)? as f64;
-    if denominator == 0.0 {
-        return None;
-    }
-    Some(numerator / denominator)
-}
-
-fn exif_signed_rational(tiff: &[u8], offset: usize, endian: u8) -> Option<f64> {
-    let numerator = read_i32_endian(tiff, offset, endian)? as f64;
-    let denominator = read_i32_endian(tiff, offset + 4, endian)? as f64;
-    if denominator == 0.0 {
-        return None;
-    }
-    Some(numerator / denominator)
-}
-
-fn signed_gps_coordinate(
-    value: Option<f64>,
-    reference: Option<&str>,
-    negative_ref: &str,
-) -> Option<f64> {
-    let mut value = value?;
-    if reference?.trim().eq_ignore_ascii_case(negative_ref) {
-        value = -value;
-    }
-    Some(value)
-}
-
-fn exif_value_bytes(tiff: &[u8], entry: usize, endian: u8) -> Option<&[u8]> {
-    let typ = read_u16_endian(tiff, entry + 2, endian)?;
-    let count = read_u32_endian(tiff, entry + 4, endian)? as usize;
-    let unit = match typ {
-        1 | 2 | 7 => 1,
-        3 => 2,
-        4 | 9 => 4,
-        5 | 10 => 8,
-        _ => return None,
-    };
-    let len = count.checked_mul(unit)?;
-    if len <= 4 {
-        return tiff.get(entry + 8..entry + 8 + len);
-    }
-    let offset = read_u32_endian(tiff, entry + 8, endian)? as usize;
-    tiff.get(offset..offset.checked_add(len)?)
-}
-
-fn read_text_preview_bytes<R: Read>(
-    reader: &mut R,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Option<(Vec<u8>, bool)> {
-    let mut bytes = read_reader_prefix_cancelable(reader, MAX_TEXT_BYTES + 1, cancel_cb).ok()?;
-    let truncated = bytes.len() > MAX_TEXT_BYTES;
-    if truncated {
-        bytes.truncate(MAX_TEXT_BYTES);
-        trim_text_bytes_to_safe_boundary(&mut bytes);
-    }
-    Some((bytes, truncated))
-}
-
-fn trim_text_bytes_to_safe_boundary(bytes: &mut Vec<u8>) {
-    if bytes.len() < 2 {
-        return;
-    }
-
-    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        if (bytes.len() - 2) % 2 != 0 {
-            bytes.pop();
-        }
-        return;
-    }
-
-    let start = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        3
-    } else {
-        0
-    };
-    if start >= bytes.len() {
-        return;
-    }
-
-    let min_end = bytes.len().saturating_sub(3).max(start);
-    for end in (min_end..=bytes.len()).rev() {
-        if std::str::from_utf8(&bytes[start..end]).is_ok() {
-            bytes.truncate(end);
-            return;
-        }
-    }
-}
-
-fn known_text_formats() -> &'static [(&'static str, &'static str, &'static str)] {
-    &[
-        (".md", "markdown", "markdown"),
-        (".markdown", "markdown", "markdown"),
-        (".txt", "plain", "text"),
-        (".log", "plain", "log"),
-        (".csv", "plain", "csv"),
-        (".tsv", "plain", "tsv"),
-        (".env", "code", "env"),
-        (".bat", "code", "batch"),
-        (".cmd", "code", "batch"),
-        (".ps1", "code", "powershell"),
-        (".sh", "code", "shell"),
-        (".bash", "code", "shell"),
-        (".zsh", "code", "shell"),
-        (".json", "code", "json"),
-        (".xml", "code", "xml"),
-        (".xaml", "code", "xaml"),
-        (".xsd", "code", "xml"),
-        (".resx", "code", "xml"),
-        (".config", "code", "xml"),
-        (".manifest", "code", "xml"),
-        (".policy", "code", "xml"),
-        (".settings", "code", "xml"),
-        (".ini", "code", "ini"),
-        (".cfg", "code", "ini"),
-        (".conf", "code", "ini"),
-        (".cnf", "code", "ini"),
-        (".inf", "code", "ini"),
-        (".url", "code", "ini"),
-        (".desktop", "code", "ini"),
-        (".service", "code", "ini"),
-        (".reg", "code", "ini"),
-        (".rdp", "code", "properties"),
-        (".rc", "code", "properties"),
-        (".prefs", "code", "properties"),
-        (".properties", "code", "properties"),
-        (".yml", "code", "yaml"),
-        (".yaml", "code", "yaml"),
-        (".toml", "code", "toml"),
-        (".cs", "code", "csharp"),
-        (".csproj", "code", "xml"),
-        (".sln", "plain", "text"),
-        (".props", "code", "xml"),
-        (".targets", "code", "xml"),
-        (".rs", "code", "rust"),
-        (".js", "code", "javascript"),
-        (".jsx", "code", "javascript"),
-        (".mjs", "code", "javascript"),
-        (".cjs", "code", "javascript"),
-        (".ts", "code", "typescript"),
-        (".tsx", "code", "typescript"),
-        (".css", "code", "css"),
-        (".scss", "code", "scss"),
-        (".sass", "code", "sass"),
-        (".less", "code", "less"),
-        (".html", "code", "html"),
-        (".htm", "code", "html"),
-        (".py", "code", "python"),
-        (".c", "code", "c"),
-        (".h", "code", "c"),
-        (".cc", "code", "cpp"),
-        (".cpp", "code", "cpp"),
-        (".cxx", "code", "cpp"),
-        (".hpp", "code", "cpp"),
-        (".hxx", "code", "cpp"),
-        (".java", "code", "java"),
-        (".go", "code", "go"),
-        (".php", "code", "php"),
-        (".rb", "code", "ruby"),
-        (".pl", "code", "perl"),
-        (".swift", "code", "swift"),
-        (".kt", "code", "kotlin"),
-        (".kts", "code", "kotlin"),
-        (".sql", "code", "sql"),
-        (".lua", "code", "lua"),
-        (".fs", "code", "fsharp"),
-        (".fsx", "code", "fsharp"),
-        (".vb", "code", "vb"),
-        (".dart", "code", "dart"),
-        (".scala", "code", "scala"),
-        (".r", "code", "r"),
-        (".dockerfile", "code", "dockerfile"),
-    ]
-}
-
-fn known_text_filenames() -> &'static [(&'static str, &'static str, &'static str)] {
-    &[
-        ("Dockerfile", "code", "dockerfile"),
-        ("Containerfile", "code", "dockerfile"),
-        ("Makefile", "code", "makefile"),
-        ("CMakeLists.txt", "code", "cmake"),
-        (".editorconfig", "code", "ini"),
-        (".gitignore", "plain", "text"),
-        (".gitattributes", "plain", "text"),
-        (".dockerignore", "plain", "text"),
-        (".env", "code", "env"),
-    ]
-}
-
-/// Produce JSON for a text preview: `{"kind":"text","title":"...","format":"...","language":"...","text":"..."}`.
-/// Returns empty string on failure.
-pub fn render_text(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    let Ok(mut file) = fs::File::open(path) else {
-        return String::new();
-    };
-    render_text_reader(&mut file, path, cancel_cb)
-}
-
-pub fn render_text_reader<R: Read>(
-    reader: &mut R,
-    logical_name: &str,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> String {
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    let ext = Path::new(logical_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{}", e.to_ascii_lowercase()))
-        .unwrap_or_default();
-    let filename = Path::new(logical_name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-
-    let (format, language) = known_text_filenames()
-        .iter()
-        .find(|(name, _, _)| name.eq_ignore_ascii_case(filename))
-        .or_else(|| {
-            known_text_formats()
-                .iter()
-                .find(|(e, _, _)| e.eq_ignore_ascii_case(&ext))
-        })
-        .map(|(_, f, l)| (*f, *l))
-        .unwrap_or(("plain", "text"));
-
-    let (bytes, truncated) = match read_text_preview_bytes(reader, cancel_cb) {
-        Some(result) => result,
-        None => return String::new(),
-    };
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-
-    // BOM-aware Unicode first, then strict UTF-8 and Windows-1252 for legacy configuration files.
-    let text = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
-        encoding_rs::UTF_8.decode(&bytes[3..]).0
-    } else if bytes.len() >= 2 && &bytes[..2] == &[0xFF, 0xFE] {
-        encoding_rs::UTF_16LE.decode(&bytes[2..]).0
-    } else if bytes.len() >= 2 && &bytes[..2] == &[0xFE, 0xFF] {
-        encoding_rs::UTF_16BE.decode(&bytes[2..]).0
-    } else if std::str::from_utf8(&bytes).is_ok() {
-        encoding_rs::UTF_8.decode(&bytes).0
-    } else {
-        encoding_rs::WINDOWS_1252.decode(&bytes).0
-    };
-
-    let mut text = text.into_owned();
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    if format == "markdown" {
-        return render_markdown_json(filename, &text, truncated, cancel_cb);
-    }
-    if language == "csv" || language == "tsv" {
-        return render_delimited_table_json(
-            filename,
-            &text,
-            if language == "tsv" { '\t' } else { ',' },
-            language,
-            truncated,
-            cancel_cb,
-        );
-    }
-
-    if truncated {
-        text.push_str(&format!(
-            "\n\n[Preview truncated at {} bytes]",
-            MAX_TEXT_BYTES
-        ));
-    }
-
-    let kind = if format == "markdown" {
-        "markdown"
-    } else {
-        "text"
-    };
-    to_json(&PreviewReadyDto {
-        kind: kind.to_string(),
-        title: filename.to_string(),
-        format: Some(format.to_string()),
-        language: Some(language.to_string()),
-        text: Some(text),
-        office_layout: None,
-        listing: None,
-        table: None,
-        markdown: None,
-    })
-}
-
-fn render_markdown_json(
-    filename: &str,
-    text: &str,
-    input_truncated: bool,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> String {
-    let (blocks, parse_partial) = parse_markdown_blocks(text, cancel_cb);
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    to_json(&PreviewReadyDto {
-        kind: "markdown".to_string(),
-        title: filename.to_string(),
-        format: Some("markdown".to_string()),
-        language: Some("markdown".to_string()),
-        text: None,
-        office_layout: None,
-        listing: None,
-        table: None,
-        markdown: Some(PreviewMarkdownDto {
-            blocks,
-            is_partial: input_truncated || parse_partial,
-        }),
-    })
-}
-
-fn parse_markdown_blocks(
-    text: &str,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> (Vec<PreviewMarkdownBlockDto>, bool) {
-    let lines = text.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = lines.split('\n').collect();
-    let mut blocks = Vec::new();
-    let mut i = 0usize;
-    let mut partial = false;
-
-    while i < lines.len() {
-        if preview_cancelled(cancel_cb) { break; }
-        if blocks.len() >= MAX_MARKDOWN_BLOCKS {
-            partial = true;
-            break;
-        }
-
-        let line = lines[i];
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            i += 1;
-            continue;
-        }
-
-        if let Some(language) = fenced_code_language(trimmed) {
-            i += 1;
-            let mut code = String::new();
-            while i < lines.len() {
-                if preview_cancelled(cancel_cb) { break; }
-                if lines[i].trim_start().starts_with("```") {
-                    i += 1;
-                    break;
-                }
-                code.push_str(lines[i]);
-                code.push('\n');
-                i += 1;
-            }
-            blocks.push(markdown_block(
-                "code",
-                0,
-                code.trim_end_matches('\n'),
-                &language,
-            ));
-            continue;
-        }
-
-        if is_markdown_rule(trimmed) {
-            blocks.push(markdown_block("thematicBreak", 0, "", ""));
-            i += 1;
-            continue;
-        }
-
-        if let Some((level, heading)) = parse_heading(trimmed) {
-            let mut block = markdown_block("heading", level, heading, "");
-            block.inlines = parse_markdown_inlines(heading);
-            blocks.push(block);
-            i += 1;
-            continue;
-        }
-
-        if is_markdown_table_start(&lines, i) {
-            let (block, next, table_partial) = parse_markdown_table(&lines, i);
-            blocks.push(block);
-            partial |= table_partial;
-            i = next;
-            continue;
-        }
-
-        if let Some((ordered, start_text)) = parse_list_item(trimmed) {
-            let (block, next, list_partial) = parse_markdown_list(&lines, i, ordered, start_text);
-            blocks.push(block);
-            partial |= list_partial;
-            i = next;
-            continue;
-        }
-
-        if trimmed.starts_with('>') {
-            let (block, next) = parse_markdown_quote(&lines, i);
-            blocks.push(block);
-            i = next;
-            continue;
-        }
-
-        let mut paragraph = String::new();
-        while i < lines.len() {
-            let candidate = lines[i].trim();
-            if candidate.is_empty()
-                || fenced_code_language(candidate).is_some()
-                || parse_heading(candidate).is_some()
-                || is_markdown_rule(candidate)
-                || is_markdown_table_start(&lines, i)
-                || parse_list_item(candidate).is_some()
-                || candidate.starts_with('>')
-            {
-                break;
-            }
-            if !paragraph.is_empty() {
-                paragraph.push(' ');
-            }
-            paragraph.push_str(candidate);
-            i += 1;
-        }
-
-        if !paragraph.is_empty() {
-            let mut block = markdown_block("paragraph", 0, &paragraph, "");
-            block.inlines = parse_markdown_inlines(&paragraph);
-            blocks.push(block);
-        } else {
-            i += 1;
-        }
-    }
-
-    (blocks, partial)
-}
-
-fn markdown_block(kind: &str, level: usize, text: &str, language: &str) -> PreviewMarkdownBlockDto {
-    PreviewMarkdownBlockDto {
-        kind: kind.to_string(),
-        level,
-        text: truncate_markdown_text(text),
-        language: language.to_string(),
-        inlines: Vec::new(),
-        children: Vec::new(),
-        table_headers: Vec::new(),
-        table_rows: Vec::new(),
-    }
-}
-
-fn markdown_inline(
-    kind: &str,
-    text: &str,
-    url: &str,
-    children: Vec<PreviewMarkdownInlineDto>,
-) -> PreviewMarkdownInlineDto {
-    PreviewMarkdownInlineDto {
-        kind: kind.to_string(),
-        text: truncate_markdown_text(text),
-        url: url.to_string(),
-        children,
-    }
-}
-
-fn truncate_markdown_text(text: &str) -> String {
-    let mut out = String::new();
-    for ch in text.chars().take(MAX_MARKDOWN_INLINE_CHARS) {
-        out.push(ch);
-    }
-    out
-}
-
-fn fenced_code_language(trimmed: &str) -> Option<String> {
-    trimmed
-        .strip_prefix("```")
-        .map(|rest| rest.trim().trim_matches('`').to_string())
-}
-
-fn parse_heading(trimmed: &str) -> Option<(usize, &str)> {
-    let level = trimmed.chars().take_while(|c| *c == '#').count();
-    if level == 0 || level > 6 {
-        return None;
-    }
-    let rest = trimmed[level..].trim_start();
-    if rest.is_empty() {
-        return None;
-    }
-    Some((level, rest.trim_end_matches('#').trim_end()))
-}
-
-fn is_markdown_rule(trimmed: &str) -> bool {
-    let chars: Vec<char> = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
-    chars.len() >= 3 && chars.iter().all(|c| *c == '-' || *c == '*' || *c == '_')
-}
-
-fn parse_list_item(trimmed: &str) -> Option<(bool, &str)> {
-    if let Some(text) = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))
-    {
-        return Some((false, text.trim()));
-    }
-    let dot = trimmed.find('.')?;
-    if dot == 0 || dot > 6 || !trimmed[..dot].chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let after = trimmed[dot + 1..].trim_start();
-    if after.is_empty() {
-        None
-    } else {
-        Some((true, after))
-    }
-}
-
-fn parse_markdown_list(
-    lines: &[&str],
-    start: usize,
-    ordered: bool,
-    first_text: &str,
-) -> (PreviewMarkdownBlockDto, usize, bool) {
-    let mut block = markdown_block(
-        if ordered {
-            "orderedList"
-        } else {
-            "unorderedList"
-        },
-        0,
-        "",
-        "",
-    );
-    let mut i = start;
-    let mut partial = false;
-    let mut next_text = Some(first_text.to_string());
-
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let item_text = if let Some(text) = next_text.take() {
-            text
-        } else if let Some((item_ordered, text)) = parse_list_item(trimmed) {
-            if item_ordered != ordered {
-                break;
-            }
-            text.to_string()
-        } else {
-            break;
-        };
-
-        let mut item = markdown_block("listItem", 0, &item_text, "");
-        item.inlines = parse_markdown_inlines(&item_text);
-        if block.children.len() < MAX_MARKDOWN_LIST_ITEMS {
-            block.children.push(item);
-        } else {
-            partial = true;
-        }
-        i += 1;
-    }
-
-    (block, i, partial)
-}
-
-fn parse_markdown_quote(lines: &[&str], start: usize) -> (PreviewMarkdownBlockDto, usize) {
-    let mut text = String::new();
-    let mut i = start;
-    while i < lines.len() {
-        let trimmed = lines[i].trim_start();
-        let Some(rest) = trimmed.strip_prefix('>') else {
-            break;
-        };
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(rest.trim_start());
-        i += 1;
-    }
-    let mut block = markdown_block("blockquote", 0, &text, "");
-    block.inlines = parse_markdown_inlines(&text);
-    (block, i)
-}
-
-fn is_markdown_table_start(lines: &[&str], index: usize) -> bool {
-    if index + 1 >= lines.len() {
-        return false;
-    }
-    let header = lines[index].trim();
-    let separator = lines[index + 1].trim();
-    header.contains('|') && is_markdown_table_separator(separator)
-}
-
-fn is_markdown_table_separator(line: &str) -> bool {
-    let cells = split_markdown_table_row(line);
-    cells.len() >= 2
-        && cells.iter().all(|cell| {
-            cell.trim()
-                .chars()
-                .all(|c| c == '-' || c == ':' || c.is_whitespace())
-                && cell.contains('-')
-        })
-}
-
-fn parse_markdown_table(lines: &[&str], start: usize) -> (PreviewMarkdownBlockDto, usize, bool) {
-    let mut block = markdown_block("table", 0, "", "");
-    block.table_headers = split_markdown_table_row(lines[start])
-        .into_iter()
-        .map(|cell| cell.trim().to_string())
-        .collect();
-    let mut i = start + 2;
-    let mut partial = false;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.is_empty() || !trimmed.contains('|') {
-            break;
-        }
-        if block.table_rows.len() < MAX_MARKDOWN_TABLE_ROWS {
-            block.table_rows.push(
-                split_markdown_table_row(trimmed)
-                    .into_iter()
-                    .map(|cell| cell.trim().to_string())
-                    .collect(),
-            );
-        } else {
-            partial = true;
-        }
-        i += 1;
-    }
-    (block, i, partial)
-}
-
-fn split_markdown_table_row(row: &str) -> Vec<String> {
-    row.trim()
-        .trim_matches('|')
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
-}
-
-fn parse_markdown_inlines(text: &str) -> Vec<PreviewMarkdownInlineDto> {
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i < text.len() {
-        let rest = &text[i..];
-        if let Some(after) = rest.strip_prefix('`') {
-            if let Some(end) = after.find('`') {
-                out.push(markdown_inline("code", &after[..end], "", Vec::new()));
-                i += end + 2;
-                continue;
-            }
-        }
-        if let Some(after) = rest.strip_prefix("**") {
-            if let Some(end) = after.find("**") {
-                let inner = &after[..end];
-                out.push(markdown_inline(
-                    "strong",
-                    "",
-                    "",
-                    parse_markdown_inlines(inner),
-                ));
-                i += end + 4;
-                continue;
-            }
-        }
-        if let Some(after) = rest.strip_prefix('*') {
-            if let Some(end) = after.find('*') {
-                let inner = &after[..end];
-                out.push(markdown_inline(
-                    "emphasis",
-                    "",
-                    "",
-                    parse_markdown_inlines(inner),
-                ));
-                i += end + 2;
-                continue;
-            }
-        }
-        if rest.starts_with('[') {
-            if let Some(close) = rest.find("](") {
-                if let Some(end) = rest[close + 2..].find(')') {
-                    let label = &rest[1..close];
-                    let url = &rest[close + 2..close + 2 + end];
-                    out.push(markdown_inline(
-                        "link",
-                        "",
-                        url,
-                        parse_markdown_inlines(label),
-                    ));
-                    i += close + 3 + end;
-                    continue;
-                }
-            }
-        }
-
-        let next = next_markdown_inline_token(rest);
-        out.push(markdown_inline("text", &rest[..next], "", Vec::new()));
-        i += next;
-    }
-    out
-}
-
-fn next_markdown_inline_token(text: &str) -> usize {
-    let mut next = text.len();
-    let start = text.chars().next().map(|c| c.len_utf8()).unwrap_or(0);
-    if start > 0 {
-        for token in ["`", "**", "*", "["] {
-            if let Some(at) = text[start..].find(token) {
-                next = next.min(at + start);
-            }
-        }
-    }
-    next.max(start)
-}
-
-fn render_delimited_table_json(
-    filename: &str,
-    text: &str,
-    delimiter: char,
-    format: &str,
-    input_truncated: bool,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> String {
-    let (mut records, total_records, total_columns, parse_partial) =
-        parse_delimited_records(text, delimiter, cancel_cb);
-    if preview_cancelled(cancel_cb) { return String::new(); }
-    if records.is_empty() {
-        records.push(vec![String::new()]);
-    }
-
-    let first_record = records.first().cloned().unwrap_or_default();
-    let has_header = looks_like_header_row(&first_record);
-    let display_total_columns = total_columns.max(1);
-    let column_count = display_total_columns.clamp(1, MAX_TABLE_COLUMNS);
-    let headers = if has_header {
-        normalize_table_headers(first_record, column_count)
-    } else {
-        (0..column_count)
-            .map(|i| format!("Column {}", i + 1))
-            .collect()
-    };
-
-    let data_records = if has_header {
-        records.into_iter().skip(1).collect::<Vec<_>>()
-    } else {
-        records
-    };
-    let total_rows = total_records.saturating_sub(usize::from(has_header));
-    let rows = data_records
-        .into_iter()
-        .take(MAX_TABLE_ROWS)
-        .map(|record| PreviewTableRowDto {
-            cells: normalize_table_cells(record, headers.len()),
-        })
-        .collect::<Vec<_>>();
-    let represented_rows = rows.len();
-    let is_partial = input_truncated
-        || parse_partial
-        || total_rows > represented_rows
-        || display_total_columns > MAX_TABLE_COLUMNS;
-
-    to_json(&PreviewReadyDto {
-        kind: "table".to_string(),
-        title: format!("{filename} - Table"),
-        format: Some(format.to_string()),
-        language: Some(format.to_string()),
-        text: None,
-        office_layout: None,
-        listing: None,
-        table: Some(PreviewTableDto {
-            format: format.to_string(),
-            summary: None,
-            delimiter: delimiter.to_string(),
-            headers,
-            rows,
-            total_rows,
-            total_columns: display_total_columns,
-            is_partial,
-            sheets: Vec::new(),
-        }),
-        markdown: None,
-    })
-}
-
-fn parse_delimited_records(
-    text: &str,
-    delimiter: char,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> (Vec<Vec<String>>, usize, usize, bool) {
-    let mut records = Vec::new();
-    let mut row = Vec::new();
-    let mut cell = String::new();
-    let mut total_records = 0usize;
-    let mut total_columns = 0usize;
-    let mut is_partial = false;
-    let mut in_quotes = false;
-    let mut saw_any = false;
-    let mut chars = text.chars().peekable();
-    let mut processed = 0usize;
-    let mut retained_cells = 0usize;
-    let mut retained_chars = 0usize;
-    let mut retention_exhausted = false;
-
-    while let Some(ch) = chars.next() {
-        processed += 1;
-        if processed & 0x0fff == 0 && preview_cancelled(cancel_cb) { break; }
-        saw_any = true;
-        if in_quotes {
-            if ch == '"' {
-                if chars.peek() == Some(&'"') {
-                    chars.next();
-                    push_table_char(&mut cell, '"');
-                    if cell.chars().count() >= MAX_TABLE_CELL_CHARS {
-                        is_partial = true;
-                    }
-                } else {
-                    in_quotes = false;
-                }
-            } else {
-                if cell.chars().count() < MAX_TABLE_CELL_CHARS {
-                    cell.push(ch);
-                } else if !ch.is_control() {
-                    is_partial = true;
-                }
-            }
-            continue;
-        }
-
-        if ch == '"' && cell.is_empty() {
-            in_quotes = true;
-        } else if ch == delimiter {
-            finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-        } else if ch == '\n' || ch == '\r' {
-            if ch == '\r' && chars.peek() == Some(&'\n') {
-                chars.next();
-            }
-            finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-            finish_table_row(
-                &mut records, &mut row, &mut total_records, &mut retained_cells,
-                &mut retained_chars, &mut retention_exhausted, &mut is_partial);
-        } else if cell.chars().count() < MAX_TABLE_CELL_CHARS {
-            cell.push(ch);
-        } else {
-            is_partial = true;
-        }
-    }
-
-    if saw_any && (!cell.is_empty() || !row.is_empty()) {
-        finish_table_cell(&mut row, &mut cell, &mut total_columns, &mut is_partial);
-        finish_table_row(
-            &mut records, &mut row, &mut total_records, &mut retained_cells,
-            &mut retained_chars, &mut retention_exhausted, &mut is_partial);
-    }
-
-    (records, total_records, total_columns, is_partial)
-}
-
-fn push_table_char(cell: &mut String, ch: char) {
-    if cell.chars().count() < MAX_TABLE_CELL_CHARS {
-        cell.push(ch);
-    }
-}
-
-fn finish_table_cell(
-    row: &mut Vec<String>,
-    cell: &mut String,
-    total_columns: &mut usize,
-    is_partial: &mut bool,
-) {
-    *total_columns = (*total_columns).max(row.len() + 1);
-    if row.len() < MAX_TABLE_COLUMNS {
-        row.push(cell.to_string());
-    } else {
-        *is_partial = true;
-    }
-    cell.clear();
-}
-
-fn finish_table_row(
-    records: &mut Vec<Vec<String>>,
-    row: &mut Vec<String>,
-    total_records: &mut usize,
-    retained_cells: &mut usize,
-    retained_chars: &mut usize,
-    retention_exhausted: &mut bool,
-    is_partial: &mut bool,
-) {
-    *total_records += 1;
-    let row_cells = row.len();
-    let row_chars = row.iter().map(|cell| cell.chars().count()).sum::<usize>();
-    if !*retention_exhausted
-        && records.len() < MAX_TABLE_ROWS + 1
-        && retained_cells.saturating_add(row_cells) <= MAX_TABLE_RETAINED_CELLS
-        && retained_chars.saturating_add(row_chars) <= MAX_TABLE_RETAINED_CHARS
-    {
-        *retained_cells += row_cells;
-        *retained_chars += row_chars;
-        records.push(std::mem::take(row));
-    } else {
-        *retention_exhausted = true;
-        row.clear();
-        *is_partial = true;
-    }
-}
-
-fn looks_like_header_row(row: &[String]) -> bool {
-    row.iter()
-        .any(|cell| cell.chars().any(|ch| ch.is_alphabetic()))
-}
-
-fn normalize_table_headers(mut headers: Vec<String>, column_count: usize) -> Vec<String> {
-    headers.truncate(column_count);
-    while headers.len() < column_count {
-        headers.push(String::new());
-    }
-    headers
-        .into_iter()
-        .enumerate()
-        .map(|(index, header)| {
-            let header = header.trim();
-            if header.is_empty() {
-                format!("Column {}", index + 1)
-            } else {
-                header.to_string()
-            }
-        })
-        .collect()
-}
-
-fn normalize_table_cells(mut cells: Vec<String>, column_count: usize) -> Vec<String> {
-    cells.truncate(column_count);
-    while cells.len() < column_count {
-        cells.push(String::new());
-    }
-    cells
-}
-
-/// Check if a file is text-like (extension known or a small printable Unicode header).
-pub fn is_text(ext: &str, magic: &[u8]) -> bool {
-    if known_text_formats()
-        .iter()
-        .any(|(e, _, _)| e.eq_ignore_ascii_case(ext))
-    {
-        return true;
-    }
-    is_probably_utf8_text(magic)
-}
-
-pub fn is_text_file(file_name: &str, ext: &str, magic: &[u8]) -> bool {
-    known_text_filenames()
-        .iter()
-        .any(|(name, _, _)| name.eq_ignore_ascii_case(file_name))
-        || is_text(ext, magic)
-}
-
-fn is_probably_utf8_text(bytes: &[u8]) -> bool {
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        return is_probably_utf16_text(&bytes[2..], true);
-    }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        return is_probably_utf16_text(&bytes[2..], false);
-    }
-    if bytes.is_empty() || bytes.contains(&0) || std::str::from_utf8(bytes).is_err() {
-        return is_probably_windows_1252_text(bytes);
-    }
-    let printable = bytes
-        .iter()
-        .filter(|b| matches!(**b, b'\t' | b'\r' | b'\n' | 0x20..=0x7E) || **b >= 0x80)
-        .count();
-    printable * 100 / bytes.len().max(1) >= 90
-}
-
-fn is_probably_windows_1252_text(bytes: &[u8]) -> bool {
-    if bytes.is_empty()
-        || bytes.contains(&0)
-        || !bytes
-            .iter()
-            .any(|byte| matches!(*byte, b'=' | b':' | b'[' | b'#' | b';' | b'\r' | b'\n'))
-    {
-        return false;
-    }
-    let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
-    let char_count = text.chars().count();
-    let printable = text
-        .chars()
-        .filter(|ch| matches!(*ch, '\t' | '\r' | '\n') || !ch.is_control())
-        .count();
-    char_count > 0 && printable * 100 / char_count >= 90
-}
-
-fn is_probably_utf16_text(bytes: &[u8], little_endian: bool) -> bool {
-    if bytes.len() < 2 || bytes.len() % 2 != 0 {
-        return false;
-    }
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|unit| {
-            if little_endian {
-                u16::from_le_bytes([unit[0], unit[1]])
-            } else {
-                u16::from_be_bytes([unit[0], unit[1]])
-            }
-        })
-        .collect();
-    let Ok(text) = String::from_utf16(&units) else {
-        return false;
-    };
-    let char_count = text.chars().count();
-    let printable = text
-        .chars()
-        .filter(|ch| matches!(*ch, '\t' | '\r' | '\n') || !ch.is_control())
-        .count();
-    char_count > 0 && printable * 100 / char_count >= 90
-}
-
 // ── Office preview (OOXML / ODF lightweight extraction) ─────────────────────
 
 const MAX_OFFICE_TEXT_CHARS: usize = 96 * 1024;
@@ -2212,6 +227,8 @@ const MAX_OFFICE_TABLE_CELL_WIDTH: usize = 36;
 const MAX_OFFICE_MEDIA_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OFFICE_LAYOUT_IMAGES: usize = 18;
 const MAX_OFFICE_INLINE_IMAGE_BYTES: u64 = 768 * 1024;
+pub(crate) const MAX_OFFICE_LAYOUT_IMAGE_DIMENSION: u32 = 1024;
+const OFFICE_MEDIA_ROOTS: &[&str] = &["word/media/", "ppt/media/", "xl/media/"];
 const OFFICE_EMUS_PER_DIP: f64 = 9525.0;
 const XLSX_CELL_WIDTH: f64 = 96.0;
 const XLSX_ROW_HEIGHT: f64 = 28.0;
@@ -2547,7 +564,7 @@ fn office_media_entries<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     roots: &[&str],
 ) -> OfficeResult<Vec<String>> {
-    let mut entries = Vec::new();
+    let mut entry_counts = BTreeMap::new();
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         context.check_cancelled()?;
         let Ok(entry) = zip.by_index_raw(i) else {
@@ -2557,14 +574,18 @@ fn office_media_entries<R: Read + Seek>(
             continue;
         }
 
-        let normalized = entry.name().replace('\\', "/");
+        let Some(normalized) = canonical_office_media_ref(entry.name(), None) else {
+            continue;
+        };
         let lower = normalized.to_ascii_lowercase();
-        if roots.iter().any(|root| lower.starts_with(root)) && is_supported_zip_image_name(&lower) {
-            entries.push(normalized);
+        if roots.iter().any(|root| lower.starts_with(root)) {
+            *entry_counts.entry(normalized).or_insert(0usize) += 1;
         }
     }
-    entries.sort();
-    Ok(entries)
+    Ok(entry_counts
+        .into_iter()
+        .filter_map(|(entry, count)| (count == 1).then_some(entry))
+        .collect())
 }
 
 fn append_office_media_summary(out: &mut String, entries: &[String]) {
@@ -2763,7 +784,8 @@ fn build_docx_layout<R: Read + Seek>(
             stroke_color: None,
             image_name: None,
             mime_type: None,
-            image_base64: None,
+            image_ref: None,
+            image_byte_length: None,
         });
         y += height + 6.0;
 
@@ -2783,12 +805,12 @@ fn build_docx_layout<R: Read + Seek>(
             items = Vec::new();
             y = margin;
         }
-        let lower = entry.to_ascii_lowercase();
-        let Some(bytes) =
-            read_office_zip_bytes(context, zip, entry, MAX_OFFICE_INLINE_IMAGE_BYTES)?
+        let Some((image_ref, image_byte_length)) =
+            read_office_layout_image_reference(context, zip, entry, "word/media/")?
         else {
             continue;
         };
+        let lower = image_ref.to_ascii_lowercase();
         image_budget = image_budget.saturating_sub(1);
         items.push(OfficeLayoutItemDto {
             kind: "image".to_string(),
@@ -2806,14 +828,15 @@ fn build_docx_layout<R: Read + Seek>(
             fill_color: None,
             stroke_color: None,
             image_name: Some(
-                entry
+                image_ref
                     .rsplit('/')
                     .next()
-                    .unwrap_or(entry.as_str())
+                    .unwrap_or(image_ref.as_str())
                     .to_string(),
             ),
             mime_type: image_mime_type(&lower).map(str::to_string),
-            image_base64: Some(base64_encode(&bytes)),
+            image_ref: Some(image_ref),
+            image_byte_length: Some(image_byte_length),
         });
         y += 188.0;
     }
@@ -3104,7 +1127,8 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                                 stroke_color: stroke_color.clone(),
                                 image_name: None,
                                 mime_type: None,
-                                image_base64: None,
+                                image_ref: None,
+                                image_byte_length: None,
                             });
                         }
                     } else if let Some(item) = image_item_from_relationship(
@@ -3982,14 +2006,15 @@ fn image_item_from_relationship<R: Read + Seek>(
         return Ok(None);
     };
     let path = normalize_zip_target(base_dir, target);
-    let lower = path.to_ascii_lowercase();
-    if !is_supported_zip_image_name(&lower) {
+    let Some(expected_root) = office_media_root_for_part(base_dir) else {
         return Ok(None);
-    }
-    let Some(bytes) = read_office_zip_bytes(context, zip, &path, MAX_OFFICE_INLINE_IMAGE_BYTES)?
+    };
+    let Some((image_ref, image_byte_length)) =
+        read_office_layout_image_reference(context, zip, &path, expected_root)?
     else {
         return Ok(None);
     };
+    let lower = image_ref.to_ascii_lowercase();
     *image_budget = (*image_budget).saturating_sub(1);
     Ok(Some(OfficeLayoutItemDto {
         kind: "image".to_string(),
@@ -4006,9 +2031,16 @@ fn image_item_from_relationship<R: Read + Seek>(
         font_size: None,
         fill_color: None,
         stroke_color: None,
-        image_name: Some(path.rsplit('/').next().unwrap_or(path.as_str()).to_string()),
+        image_name: Some(
+            image_ref
+                .rsplit('/')
+                .next()
+                .unwrap_or(image_ref.as_str())
+                .to_string(),
+        ),
         mime_type: image_mime_type(&lower).map(str::to_string),
-        image_base64: Some(base64_encode(&bytes)),
+        image_ref: Some(image_ref),
+        image_byte_length: Some(image_byte_length),
     }))
 }
 
@@ -4367,6 +2399,76 @@ fn normalize_zip_target(base_dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
+fn office_media_root_for_part(part_path: &str) -> Option<&'static str> {
+    let lower = part_path.to_ascii_lowercase();
+    if lower.starts_with("word/") {
+        Some("word/media/")
+    } else if lower.starts_with("ppt/") {
+        Some("ppt/media/")
+    } else if lower.starts_with("xl/") {
+        Some("xl/media/")
+    } else {
+        None
+    }
+}
+
+fn office_media_root_for_path(path: &str) -> Option<&'static str> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "docx" | "docm" => Some("word/media/"),
+        "pptx" | "pptm" => Some("ppt/media/"),
+        "xlsx" | "xlsm" => Some("xl/media/"),
+        _ => None,
+    }
+}
+
+fn canonical_office_media_ref(path: &str, expected_root: Option<&str>) -> Option<String> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\\')
+        || path.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.contains(':')
+        {
+            return None;
+        }
+        segments.push(segment);
+    }
+    let normalized = segments.join("/");
+    if normalized != path {
+        return None;
+    }
+
+    let lower = normalized.to_ascii_lowercase();
+    let root = match expected_root {
+        Some(root) if OFFICE_MEDIA_ROOTS.contains(&root) => root,
+        Some(_) => return None,
+        None => OFFICE_MEDIA_ROOTS
+            .iter()
+            .copied()
+            .find(|root| lower.starts_with(root))?,
+    };
+    if !lower.starts_with(root)
+        || lower.len() <= root.len()
+        || !is_supported_zip_image_name(&lower)
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
 fn image_mime_type(lower: &str) -> Option<&'static str> {
     if lower.ends_with(".png") {
         Some("image/png")
@@ -4383,38 +2485,6 @@ fn image_mime_type(lower: &str) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(((bytes.len() + 2) / 3) * 4);
-    let mut i = 0;
-    while i + 3 <= bytes.len() {
-        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | bytes[i + 2] as u32;
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-        out.push(TABLE[(n & 0x3F) as usize] as char);
-        i += 3;
-    }
-    match bytes.len() - i {
-        1 => {
-            let n = (bytes[i] as u32) << 16;
-            out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-            out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
-            out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-            out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-            out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-            out.push('=');
-        }
-        _ => {}
-    }
-    out
 }
 
 fn extract_wordprocessing_text(context: &OfficeContext, xml: &str) -> OfficeResult<String> {
@@ -11288,2722 +9358,6 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-// ── Executable preview ──────────────────────────────────────────────────────
-
-pub fn render_executable(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    let (size, modified_unix) = file_size_modified(path);
-    let Ok(mut file) = fs::File::open(path) else {
-        return String::new();
-    };
-    render_executable_reader(&mut file, path, size, modified_unix, cancel_cb).unwrap_or_default()
-}
-
-pub fn render_executable_reader<R: Read>(
-    reader: &mut R,
-    logical_name: &str,
-    size: i64,
-    modified_unix: i64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<String, ReaderPreviewError> {
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    let filename = Path::new(logical_name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let bytes = read_reader_prefix_cancelable(reader, MAX_EXECUTABLE_HEADER_BYTES, cancel_cb)?;
-
-    let Some(pe) = parse_pe_headers(&bytes, cancel_cb) else {
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        return Ok(render_info(logical_name, "executable", size, modified_unix));
-    };
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-
-    let mut text = String::new();
-    text.push_str(&format!("Name: {filename}\n"));
-    text.push_str("Kind: executable\n");
-    text.push_str(&format!("Format: {}\n", pe.format));
-    text.push_str(&format!("Machine: {}\n", pe.machine));
-    text.push_str(&format!("Subsystem: {}\n", pe.subsystem));
-    text.push_str(&format!("Sections: {}\n", pe.sections));
-    text.push_str(&format!("Entry point RVA: 0x{:08X}\n", pe.entry_point));
-    text.push_str(&format!(
-        "Image size: {}\n",
-        format_bytes(pe.image_size as i64)
-    ));
-    if pe.link_timestamp > 0 {
-        text.push_str(&format!(
-            "Link time: {}\n",
-            format_timestamp(pe.link_timestamp as i64)
-        ));
-    }
-    text.push_str(&format!("Characteristics: 0x{:04X}\n", pe.characteristics));
-    text.push_str(&format!("Image base: 0x{:016X}\n", pe.image_base));
-    text.push_str(&format!(
-        "Section alignment: {}\n",
-        format_bytes(pe.section_alignment as i64)
-    ));
-    text.push_str(&format!(
-        "File alignment: {}\n",
-        format_bytes(pe.file_alignment as i64)
-    ));
-    if pe.dll_characteristics > 0 {
-        text.push_str(&format!(
-            "DLL characteristics: 0x{:04X}\n",
-            pe.dll_characteristics
-        ));
-    }
-    if pe.data_directories > 0 {
-        text.push_str(&format!("Data directories: {}\n", pe.data_directories));
-    }
-    for directory in &pe.directories {
-        text.push_str(&format!(
-            "{} directory: 0x{:08X}, {}\n",
-            directory.name,
-            directory.address,
-            format_bytes(directory.size as i64)
-        ));
-    }
-    if !pe.section_names.is_empty() {
-        text.push_str(&format!("Section names: {}\n", pe.section_names.join(", ")));
-    }
-    if !pe.exports.is_empty() {
-        text.push_str(&format!("Exports: {}\n", pe.exports.join(", ")));
-    }
-    if !pe.export_details.is_empty() {
-        text.push_str(&format!(
-            "Export details: {}\n",
-            pe.export_details.join(", ")
-        ));
-    }
-    if pe.has_version_resource {
-        text.push_str("Version resource: present\n");
-    }
-    for (name, value) in &pe.version_strings {
-        text.push_str(&format!("Version {name}: {value}\n"));
-    }
-    if let Some(fixed) = &pe.fixed_version {
-        text.push_str(&format!(
-            "Fixed file version: {}; product {}; flags 0x{:08X}; type {}\n",
-            fixed.file_version, fixed.product_version, fixed.flags, fixed.file_type
-        ));
-    }
-    if let Some(certificate) = &pe.certificate {
-        text.push_str(&format!(
-            "Certificate table: {}, revision 0x{:04X}, type 0x{:04X}\n",
-            format_bytes(certificate.length as i64),
-            certificate.revision,
-            certificate.typ
-        ));
-        if !certificate.digest_algorithms.is_empty() {
-            text.push_str(&format!(
-                "Certificate digest algorithms: {}\n",
-                certificate.digest_algorithms.join(", ")
-            ));
-        }
-        if !certificate.signature_algorithms.is_empty() {
-            text.push_str(&format!(
-                "Certificate signature algorithms: {}\n",
-                certificate.signature_algorithms.join(", ")
-            ));
-        }
-        if !certificate.signers.is_empty() {
-            text.push_str(&format!(
-                "Certificate signers: {}\n",
-                certificate.signers.join(", ")
-            ));
-        }
-        if !certificate.names.is_empty() {
-            text.push_str(&format!(
-                "Certificate names: {}\n",
-                certificate.names.join(", ")
-            ));
-        }
-        if !certificate.issuers.is_empty() {
-            text.push_str(&format!(
-                "Certificate issuers: {}\n",
-                certificate.issuers.join(", ")
-            ));
-        }
-        if !certificate.subjects.is_empty() {
-            text.push_str(&format!(
-                "Certificate subjects: {}\n",
-                certificate.subjects.join(", ")
-            ));
-        }
-    }
-    if let Some(clr) = &pe.clr {
-        text.push_str(&format!(
-            "CLR runtime: {}.{}; metadata 0x{:08X}, {}; flags 0x{:08X}\n",
-            clr.major,
-            clr.minor,
-            clr.metadata_rva,
-            format_bytes(clr.metadata_size as i64),
-            clr.flags
-        ));
-        if !clr.metadata_version.is_empty() {
-            text.push_str(&format!("CLR metadata version: {}\n", clr.metadata_version));
-        }
-        if !clr.metadata_streams.is_empty() {
-            text.push_str(&format!(
-                "CLR metadata streams: {}\n",
-                clr.metadata_streams.join(", ")
-            ));
-        }
-        if !clr.metadata_tables.is_empty() {
-            text.push_str(&format!(
-                "CLR metadata tables: {}\n",
-                clr.metadata_tables.join(", ")
-            ));
-        }
-        if let Some(assembly) = &clr.assembly {
-            text.push_str(&format!("CLR assembly: {assembly}\n"));
-        }
-        if !clr.assembly_refs.is_empty() {
-            text.push_str(&format!(
-                "CLR assembly references: {}\n",
-                clr.assembly_refs.join(", ")
-            ));
-        }
-        if !clr.type_defs.is_empty() {
-            text.push_str(&format!(
-                "CLR type definitions: {}\n",
-                clr.type_defs.join(", ")
-            ));
-        }
-        if clr.custom_attributes > 0 {
-            text.push_str(&format!(
-                "CLR custom attributes: {}\n",
-                clr.custom_attributes
-            ));
-        }
-    }
-    text.push_str(&format!("File size: {}\n", format_bytes(size)));
-    text.push_str(&format!("Modified: {}\n", format_timestamp(modified_unix)));
-
-    Ok(to_json(&PreviewReadyDto {
-        kind: "executable".to_string(),
-        title: format!("{filename} - {}", pe.machine),
-        format: Some("plain".to_string()),
-        language: Some("text".to_string()),
-        text: Some(text),
-        office_layout: None,
-        listing: None,
-        table: None,
-        markdown: None,
-    }))
-}
-
-struct PeSummary {
-    machine: &'static str,
-    format: &'static str,
-    subsystem: &'static str,
-    sections: u16,
-    entry_point: u32,
-    image_size: u32,
-    link_timestamp: u32,
-    characteristics: u16,
-    image_base: u64,
-    section_alignment: u32,
-    file_alignment: u32,
-    dll_characteristics: u16,
-    data_directories: u32,
-    section_names: Vec<String>,
-    directories: Vec<PeDataDirectory>,
-    #[cfg(test)]
-    imports: Vec<String>,
-    #[cfg(test)]
-    imported_functions: Vec<String>,
-    exports: Vec<String>,
-    export_details: Vec<String>,
-    has_version_resource: bool,
-    version_strings: Vec<(String, String)>,
-    fixed_version: Option<PeFixedVersion>,
-    certificate: Option<PeCertificateSummary>,
-    clr: Option<PeClrSummary>,
-}
-
-struct PeDataDirectory {
-    name: &'static str,
-    address: u32,
-    size: u32,
-}
-
-struct PeSectionSummary {
-    virtual_address: u32,
-    virtual_size: u32,
-    raw_pointer: u32,
-    raw_size: u32,
-}
-
-struct PeCertificateSummary {
-    length: u32,
-    revision: u16,
-    typ: u16,
-    digest_algorithms: Vec<String>,
-    signature_algorithms: Vec<String>,
-    signers: Vec<String>,
-    names: Vec<String>,
-    issuers: Vec<String>,
-    subjects: Vec<String>,
-}
-
-struct PeFixedVersion {
-    file_version: String,
-    product_version: String,
-    flags: u32,
-    file_type: &'static str,
-}
-
-struct PeClrSummary {
-    major: u16,
-    minor: u16,
-    metadata_rva: u32,
-    metadata_size: u32,
-    flags: u32,
-    metadata_version: String,
-    metadata_streams: Vec<String>,
-    metadata_tables: Vec<String>,
-    assembly: Option<String>,
-    assembly_refs: Vec<String>,
-    type_defs: Vec<String>,
-    custom_attributes: u32,
-}
-
-fn parse_pe_headers(bytes: &[u8], cancel_cb: Option<extern "C" fn() -> bool>) -> Option<PeSummary> {
-    if preview_cancelled(cancel_cb) { return None; }
-    if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
-        return None;
-    }
-    let pe_offset = read_u32(bytes, 0x3C)? as usize;
-    if pe_offset.checked_add(24)? > bytes.len() || &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
-        return None;
-    }
-
-    let coff = pe_offset + 4;
-    let machine = read_u16(bytes, coff)?;
-    let sections = read_u16(bytes, coff + 2)?;
-    let timestamp = read_u32(bytes, coff + 4)?;
-    let opt_size = read_u16(bytes, coff + 16)? as usize;
-    let characteristics = read_u16(bytes, coff + 18)?;
-    let opt = coff + 20;
-    if opt.checked_add(opt_size)? > bytes.len() || opt_size < 70 {
-        return None;
-    }
-
-    let magic = read_u16(bytes, opt)?;
-    let entry_point = read_u32(bytes, opt + 16).unwrap_or(0);
-    let image_base = if magic == 0x20B {
-        read_u64(bytes, opt + 24).unwrap_or(0)
-    } else {
-        read_u32(bytes, opt + 28).unwrap_or(0) as u64
-    };
-    let section_alignment = read_u32(bytes, opt + 32).unwrap_or(0);
-    let file_alignment = read_u32(bytes, opt + 36).unwrap_or(0);
-    let image_size = read_u32(bytes, opt + 56).unwrap_or(0);
-    let subsystem = read_u16(bytes, opt + 68).unwrap_or(0);
-    let dll_characteristics = read_u16(bytes, opt + 70).unwrap_or(0);
-    let data_directories_offset = if magic == 0x20B { opt + 108 } else { opt + 92 };
-    let data_directories = read_u32(bytes, data_directories_offset).unwrap_or(0);
-    let directories =
-        parse_pe_data_directories(bytes, data_directories_offset + 4, data_directories);
-    if preview_cancelled(cancel_cb) { return None; }
-    let section_table = opt + opt_size;
-    let section_names = parse_pe_section_names(bytes, section_table, sections);
-    let section_summaries = parse_pe_sections(bytes, section_table, sections);
-    if preview_cancelled(cancel_cb) { return None; }
-    #[cfg(test)]
-    let imports = directories
-        .iter()
-        .find(|directory| directory.name == "Import")
-        .map(|directory| parse_pe_import_dlls(bytes, &section_summaries, directory.address))
-        .unwrap_or_default();
-    #[cfg(test)]
-    let imported_functions = directories
-        .iter()
-        .find(|directory| directory.name == "Import")
-        .map(|directory| {
-            parse_pe_import_functions(bytes, &section_summaries, directory.address, magic == 0x20B)
-        })
-        .unwrap_or_default();
-    let exports = directories
-        .iter()
-        .find(|directory| directory.name == "Export")
-        .map(|directory| parse_pe_export_names(bytes, &section_summaries, directory.address))
-        .unwrap_or_default();
-    if preview_cancelled(cancel_cb) { return None; }
-    let export_details = directories
-        .iter()
-        .find(|directory| directory.name == "Export")
-        .map(|directory| {
-            parse_pe_export_details(bytes, &section_summaries, directory.address, directory.size)
-        })
-        .unwrap_or_default();
-    if preview_cancelled(cancel_cb) { return None; }
-    let version_resource = directories
-        .iter()
-        .find(|directory| directory.name == "Resource")
-        .and_then(|directory| {
-            pe_rva_to_file_offset(&section_summaries, directory.address)
-                .and_then(|offset| pe_find_resource_data(bytes, &section_summaries, offset, 16))
-        });
-    let version_strings = version_resource
-        .and_then(|(offset, size)| {
-            bytes
-                .get(offset..offset.saturating_add(size))
-                .map(parse_pe_version_strings)
-        })
-        .unwrap_or_default();
-    let fixed_version = version_resource
-        .and_then(|(offset, size)| bytes.get(offset..offset.saturating_add(size)))
-        .and_then(parse_pe_fixed_version);
-    let has_version_resource = version_resource.is_some();
-    if preview_cancelled(cancel_cb) { return None; }
-    let certificate = directories
-        .iter()
-        .find(|directory| directory.name == "Certificate")
-        .and_then(|directory| parse_pe_certificate(bytes, directory.address));
-    if preview_cancelled(cancel_cb) { return None; }
-    let clr = directories
-        .iter()
-        .find(|directory| directory.name == "CLR")
-        .and_then(|directory| pe_rva_to_file_offset(&section_summaries, directory.address))
-        .and_then(|offset| parse_pe_clr_header(bytes, &section_summaries, offset));
-    if preview_cancelled(cancel_cb) { return None; }
-
-    Some(PeSummary {
-        machine: machine_name(machine),
-        format: match magic {
-            0x10B => "PE32",
-            0x20B => "PE32+",
-            _ => "PE",
-        },
-        subsystem: subsystem_name(subsystem),
-        sections,
-        entry_point,
-        image_size,
-        link_timestamp: timestamp,
-        characteristics,
-        image_base,
-        section_alignment,
-        file_alignment,
-        dll_characteristics,
-        data_directories,
-        section_names,
-        directories,
-        #[cfg(test)]
-        imports,
-        #[cfg(test)]
-        imported_functions,
-        exports,
-        export_details,
-        has_version_resource,
-        version_strings,
-        fixed_version,
-        certificate,
-        clr,
-    })
-}
-
-fn parse_pe_data_directories(bytes: &[u8], offset: usize, count: u32) -> Vec<PeDataDirectory> {
-    let names = [
-        "Export",
-        "Import",
-        "Resource",
-        "Exception",
-        "Certificate",
-        "Base relocation",
-        "Debug",
-        "Architecture",
-        "Global pointer",
-        "TLS",
-        "Load config",
-        "Bound import",
-        "IAT",
-        "Delay import",
-        "CLR",
-        "Reserved",
-    ];
-    let mut directories = Vec::new();
-    for index in 0..count.min(names.len() as u32) as usize {
-        let entry = offset + index * 8;
-        let Some(address) = read_u32(bytes, entry) else {
-            break;
-        };
-        let Some(size) = read_u32(bytes, entry + 4) else {
-            break;
-        };
-        if address != 0 || size != 0 {
-            directories.push(PeDataDirectory {
-                name: names[index],
-                address,
-                size,
-            });
-        }
-    }
-    directories
-}
-
-fn parse_pe_section_names(bytes: &[u8], section_table: usize, sections: u16) -> Vec<String> {
-    let mut names = Vec::new();
-    for index in 0..sections.min(12) as usize {
-        let offset = section_table + index * 40;
-        let Some(raw) = bytes.get(offset..offset + 8) else {
-            break;
-        };
-        let name = String::from_utf8_lossy(raw)
-            .trim_matches('\0')
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            names.push(name);
-        }
-    }
-    names
-}
-
-fn parse_pe_sections(bytes: &[u8], section_table: usize, sections: u16) -> Vec<PeSectionSummary> {
-    let mut summaries = Vec::new();
-    for index in 0..sections.min(96) as usize {
-        let offset = section_table + index * 40;
-        if offset + 40 > bytes.len() {
-            break;
-        }
-        summaries.push(PeSectionSummary {
-            virtual_size: read_u32(bytes, offset + 8).unwrap_or(0),
-            virtual_address: read_u32(bytes, offset + 12).unwrap_or(0),
-            raw_size: read_u32(bytes, offset + 16).unwrap_or(0),
-            raw_pointer: read_u32(bytes, offset + 20).unwrap_or(0),
-        });
-    }
-    summaries
-}
-
-#[cfg(test)]
-fn parse_pe_import_dlls(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    import_rva: u32,
-) -> Vec<String> {
-    let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
-        return Vec::new();
-    };
-    let mut imports: Vec<String> = Vec::new();
-    for _ in 0..64 {
-        if offset + 20 > bytes.len() {
-            break;
-        }
-        let original_first_thunk = read_u32(bytes, offset).unwrap_or(0);
-        let name_rva = read_u32(bytes, offset + 12).unwrap_or(0);
-        let first_thunk = read_u32(bytes, offset + 16).unwrap_or(0);
-        if original_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
-            break;
-        }
-        if let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) {
-            if let Some(name) = read_c_string(bytes, name_offset, 260) {
-                if !name.is_empty()
-                    && !imports
-                        .iter()
-                        .any(|existing| existing.eq_ignore_ascii_case(&name))
-                {
-                    imports.push(name);
-                }
-            }
-        }
-        offset += 20;
-    }
-    imports
-}
-
-#[cfg(test)]
-fn parse_pe_import_functions(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    import_rva: u32,
-    pe64: bool,
-) -> Vec<String> {
-    let Some(mut offset) = pe_rva_to_file_offset(sections, import_rva) else {
-        return Vec::new();
-    };
-    let mut functions = Vec::new();
-    for _ in 0..64 {
-        if offset + 20 > bytes.len() {
-            break;
-        }
-        let original_first_thunk = read_u32(bytes, offset).unwrap_or(0);
-        let name_rva = read_u32(bytes, offset + 12).unwrap_or(0);
-        let first_thunk = read_u32(bytes, offset + 16).unwrap_or(0);
-        if original_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
-            break;
-        }
-        let dll = pe_rva_to_file_offset(sections, name_rva)
-            .and_then(|name_offset| read_c_string(bytes, name_offset, 260))
-            .unwrap_or_default();
-        let thunk_rva = if original_first_thunk != 0 {
-            original_first_thunk
-        } else {
-            first_thunk
-        };
-        append_pe_import_thunks(bytes, sections, thunk_rva, pe64, &dll, &mut functions);
-        offset += 20;
-    }
-    functions
-}
-
-#[cfg(test)]
-fn append_pe_import_thunks(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    thunk_rva: u32,
-    pe64: bool,
-    dll: &str,
-    functions: &mut Vec<String>,
-) {
-    let Some(mut offset) = pe_rva_to_file_offset(sections, thunk_rva) else {
-        return;
-    };
-    let thunk_size = if pe64 { 8 } else { 4 };
-    for _ in 0..128 {
-        let value = if pe64 {
-            read_u64(bytes, offset).unwrap_or(0)
-        } else {
-            read_u32(bytes, offset).unwrap_or(0) as u64
-        };
-        if value == 0 {
-            break;
-        }
-        let ordinal_mask = if pe64 {
-            0x8000_0000_0000_0000
-        } else {
-            0x8000_0000
-        };
-        if value & ordinal_mask == 0 {
-            if let Some(name_offset) = pe_rva_to_file_offset(sections, value as u32) {
-                if let Some(name) = read_c_string(bytes, name_offset + 2, 260) {
-                    if !name.is_empty() {
-                        let qualified = if dll.is_empty() {
-                            name
-                        } else {
-                            format!("{dll}!{name}")
-                        };
-                        if !functions
-                            .iter()
-                            .any(|existing| existing.eq_ignore_ascii_case(&qualified))
-                        {
-                            functions.push(qualified);
-                        }
-                    }
-                }
-            }
-        } else {
-            let ordinal = value & 0xFFFF;
-            let qualified = if dll.is_empty() {
-                format!("#{ordinal}")
-            } else {
-                format!("{dll}!#{ordinal}")
-            };
-            if !functions
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(&qualified))
-            {
-                functions.push(qualified);
-            }
-        }
-        offset += thunk_size;
-    }
-}
-
-fn parse_pe_export_names(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    export_rva: u32,
-) -> Vec<String> {
-    let Some(offset) = pe_rva_to_file_offset(sections, export_rva) else {
-        return Vec::new();
-    };
-    if offset + 40 > bytes.len() {
-        return Vec::new();
-    }
-    let names = read_u32(bytes, offset + 24).unwrap_or(0).min(256) as usize;
-    let names_rva = read_u32(bytes, offset + 32).unwrap_or(0);
-    let Some(names_offset) = pe_rva_to_file_offset(sections, names_rva) else {
-        return Vec::new();
-    };
-    let mut exports = Vec::new();
-    for index in 0..names {
-        let Some(name_rva) = read_u32(bytes, names_offset + index * 4) else {
-            break;
-        };
-        if let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) {
-            if let Some(name) = read_c_string(bytes, name_offset, 260) {
-                if !name.is_empty() {
-                    exports.push(name);
-                }
-            }
-        }
-    }
-    exports
-}
-
-fn parse_pe_export_details(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    export_rva: u32,
-    export_size: u32,
-) -> Vec<String> {
-    let Some(offset) = pe_rva_to_file_offset(sections, export_rva) else {
-        return Vec::new();
-    };
-    if offset + 40 > bytes.len() {
-        return Vec::new();
-    }
-    let ordinal_base = read_u32(bytes, offset + 16).unwrap_or(0);
-    let function_count = read_u32(bytes, offset + 20).unwrap_or(0).min(4096) as usize;
-    let name_count = read_u32(bytes, offset + 24).unwrap_or(0).min(256) as usize;
-    let functions_rva = read_u32(bytes, offset + 28).unwrap_or(0);
-    let names_rva = read_u32(bytes, offset + 32).unwrap_or(0);
-    let ordinals_rva = read_u32(bytes, offset + 36).unwrap_or(0);
-    let Some(functions_offset) = pe_rva_to_file_offset(sections, functions_rva) else {
-        return Vec::new();
-    };
-    let Some(names_offset) = pe_rva_to_file_offset(sections, names_rva) else {
-        return Vec::new();
-    };
-    let Some(ordinals_offset) = pe_rva_to_file_offset(sections, ordinals_rva) else {
-        return Vec::new();
-    };
-    let mut details = Vec::new();
-    for index in 0..name_count {
-        let Some(name_rva) = read_u32(bytes, names_offset + index * 4) else {
-            break;
-        };
-        let Some(name_offset) = pe_rva_to_file_offset(sections, name_rva) else {
-            continue;
-        };
-        let Some(name) = read_c_string(bytes, name_offset, 260) else {
-            continue;
-        };
-        let ordinal_index = read_u16(bytes, ordinals_offset + index * 2).unwrap_or(0) as usize;
-        if ordinal_index >= function_count {
-            continue;
-        }
-        let function_rva = read_u32(bytes, functions_offset + ordinal_index * 4).unwrap_or(0);
-        let ordinal = ordinal_base + ordinal_index as u32;
-        if function_rva >= export_rva && function_rva < export_rva.saturating_add(export_size) {
-            if let Some(forwarder_offset) = pe_rva_to_file_offset(sections, function_rva) {
-                if let Some(forwarder) = read_c_string(bytes, forwarder_offset, 260) {
-                    details.push(format!("{name} #{ordinal} -> {forwarder}"));
-                    continue;
-                }
-            }
-        }
-        details.push(format!("{name} #{ordinal} @ 0x{function_rva:08X}"));
-    }
-    details
-}
-
-fn pe_find_resource_data(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    resource_root: usize,
-    typ: u16,
-) -> Option<(usize, usize)> {
-    pe_find_resource_data_in_directory(bytes, sections, resource_root, resource_root, typ, 0)
-}
-
-fn pe_find_resource_data_in_directory(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    root: usize,
-    directory: usize,
-    typ: u16,
-    depth: usize,
-) -> Option<(usize, usize)> {
-    if depth > 2 || directory + 16 > bytes.len() {
-        return None;
-    }
-    let named = read_u16(bytes, directory + 12).unwrap_or(0) as usize;
-    let ids = read_u16(bytes, directory + 14).unwrap_or(0) as usize;
-    let entries = named.saturating_add(ids).min(256);
-    for index in 0..entries {
-        let entry = directory + 16 + index * 8;
-        if entry + 8 > bytes.len() {
-            break;
-        }
-        let id = read_u32(bytes, entry).unwrap_or(0);
-        if depth == 0 && (id & 0x8000_0000 != 0 || (id & 0xFFFF) as u16 != typ) {
-            continue;
-        }
-        let target = read_u32(bytes, entry + 4).unwrap_or(0);
-        if target & 0x8000_0000 != 0 {
-            let child = root + (target & 0x7FFF_FFFF) as usize;
-            if let Some(found) =
-                pe_find_resource_data_in_directory(bytes, sections, root, child, typ, depth + 1)
-            {
-                return Some(found);
-            }
-        } else {
-            let data_entry = root + target as usize;
-            if data_entry + 16 > bytes.len() {
-                continue;
-            }
-            let data_rva = read_u32(bytes, data_entry).unwrap_or(0);
-            let size = read_u32(bytes, data_entry + 4).unwrap_or(0) as usize;
-            if let Some(data_offset) = pe_rva_to_file_offset(sections, data_rva) {
-                return Some((data_offset, size));
-            }
-        }
-    }
-    None
-}
-
-fn parse_pe_version_strings(bytes: &[u8]) -> Vec<(String, String)> {
-    let mut strings = Vec::new();
-    parse_pe_version_node(bytes, 0, bytes.len(), &mut strings);
-    strings.sort_by(|a, b| a.0.cmp(&b.0));
-    strings.dedup_by(|a, b| a.0 == b.0);
-    strings
-}
-
-fn parse_pe_fixed_version(bytes: &[u8]) -> Option<PeFixedVersion> {
-    if bytes.len() < 6 {
-        return None;
-    }
-    let length = read_u16(bytes, 0)? as usize;
-    let value_len = read_u16(bytes, 2)? as usize;
-    let typ = read_u16(bytes, 4).unwrap_or(0);
-    if length == 0 || length > bytes.len() || typ != 0 || value_len < 52 {
-        return None;
-    }
-    let (key, key_end) = read_utf16_z(bytes, 6, length)?;
-    if key != "VS_VERSION_INFO" {
-        return None;
-    }
-    let value_offset = align4(key_end);
-    if value_offset + 52 > length || read_u32(bytes, value_offset)? != 0xFEEF_04BD {
-        return None;
-    }
-    let file_ms = read_u32(bytes, value_offset + 8)?;
-    let file_ls = read_u32(bytes, value_offset + 12)?;
-    let product_ms = read_u32(bytes, value_offset + 16)?;
-    let product_ls = read_u32(bytes, value_offset + 20)?;
-    let flags_mask = read_u32(bytes, value_offset + 24).unwrap_or(0);
-    let flags = read_u32(bytes, value_offset + 28).unwrap_or(0) & flags_mask;
-    let file_type = read_u32(bytes, value_offset + 36).unwrap_or(0);
-    Some(PeFixedVersion {
-        file_version: format_pe_version(file_ms, file_ls),
-        product_version: format_pe_version(product_ms, product_ls),
-        flags,
-        file_type: pe_version_file_type(file_type),
-    })
-}
-
-fn format_pe_version(ms: u32, ls: u32) -> String {
-    format!("{}.{}.{}.{}", ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
-}
-
-fn pe_version_file_type(value: u32) -> &'static str {
-    match value {
-        1 => "application",
-        2 => "DLL",
-        3 => "driver",
-        4 => "font",
-        5 => "VxD",
-        7 => "static library",
-        _ => "unknown",
-    }
-}
-
-fn parse_pe_version_node(
-    bytes: &[u8],
-    offset: usize,
-    limit: usize,
-    strings: &mut Vec<(String, String)>,
-) -> Option<usize> {
-    if offset + 6 > limit || offset + 6 > bytes.len() {
-        return None;
-    }
-    let length = read_u16(bytes, offset)? as usize;
-    if length == 0 || offset + length > limit || offset + length > bytes.len() {
-        return None;
-    }
-    let value_len = read_u16(bytes, offset + 2)? as usize;
-    let typ = read_u16(bytes, offset + 4).unwrap_or(0);
-    let (key, key_end) = read_utf16_z(bytes, offset + 6, offset + length)?;
-    let value_offset = align4(key_end);
-    let value_bytes = if typ == 1 {
-        value_len.saturating_mul(2)
-    } else {
-        value_len
-    };
-    if typ == 1 && value_len > 0 && is_version_string_key(&key) {
-        let value_end = value_offset
-            .saturating_add(value_bytes)
-            .min(offset + length);
-        if let Some(raw) = bytes.get(value_offset..value_end) {
-            let value = decode_utf16le_string(raw);
-            if !value.is_empty() {
-                strings.push((key.clone(), value));
-            }
-        }
-    }
-    let mut child = align4(value_offset.saturating_add(value_bytes));
-    while child + 6 <= offset + length {
-        let Some(next) = parse_pe_version_node(bytes, child, offset + length, strings) else {
-            break;
-        };
-        if next <= child {
-            break;
-        }
-        child = next;
-    }
-    Some(align4(offset + length))
-}
-
-fn is_version_string_key(key: &str) -> bool {
-    matches!(
-        key,
-        "CompanyName"
-            | "FileDescription"
-            | "FileVersion"
-            | "InternalName"
-            | "OriginalFilename"
-            | "ProductName"
-            | "ProductVersion"
-    )
-}
-
-fn read_utf16_z(bytes: &[u8], offset: usize, limit: usize) -> Option<(String, usize)> {
-    let mut pos = offset;
-    let mut units = Vec::new();
-    while pos + 2 <= limit && pos + 2 <= bytes.len() {
-        let unit = read_u16(bytes, pos)?;
-        pos += 2;
-        if unit == 0 {
-            return Some((String::from_utf16_lossy(&units), pos));
-        }
-        units.push(unit);
-    }
-    None
-}
-
-fn decode_utf16le_string(bytes: &[u8]) -> String {
-    let units = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    String::from_utf16_lossy(&units)
-        .trim_matches('\0')
-        .trim()
-        .to_string()
-}
-
-fn align4(value: usize) -> usize {
-    (value + 3) & !3
-}
-
-fn parse_pe_certificate(bytes: &[u8], file_offset: u32) -> Option<PeCertificateSummary> {
-    let offset = file_offset as usize;
-    if offset + 8 > bytes.len() {
-        return None;
-    }
-    let length = read_u32(bytes, offset).unwrap_or(0) as usize;
-    let (issuers, subjects) = parse_authenticode_certificate_subjects(bytes, offset, length);
-    Some(PeCertificateSummary {
-        length: read_u32(bytes, offset)?,
-        revision: read_u16(bytes, offset + 4)?,
-        typ: read_u16(bytes, offset + 6)?,
-        digest_algorithms: parse_authenticode_digest_algorithms(bytes, offset, length),
-        signature_algorithms: parse_authenticode_signature_algorithms(bytes, offset, length),
-        signers: parse_authenticode_signers(bytes, offset, length),
-        names: parse_authenticode_certificate_names(bytes, offset, length),
-        issuers,
-        subjects,
-    })
-}
-
-fn parse_authenticode_digest_algorithms(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
-    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
-        return Vec::new();
-    };
-    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let oid_patterns: [(&str, &[u8]); 4] = [
-        ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]),
-        (
-            "SHA-256",
-            &[
-                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-            ],
-        ),
-        (
-            "SHA-384",
-            &[
-                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-            ],
-        ),
-        (
-            "SHA-512",
-            &[
-                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
-            ],
-        ),
-    ];
-    let mut algorithms = Vec::new();
-    for (name, pattern) in oid_patterns {
-        if payload
-            .windows(pattern.len())
-            .any(|window| window == pattern)
-        {
-            algorithms.push(name.to_string());
-        }
-    }
-    algorithms
-}
-
-fn parse_authenticode_signers(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
-    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
-        return Vec::new();
-    };
-    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let signed_data_oid = [
-        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02,
-    ];
-    if !payload
-        .windows(signed_data_oid.len())
-        .any(|window| window == signed_data_oid)
-    {
-        return Vec::new();
-    }
-    let digest = first_oid_name(
-        payload,
-        &[
-            ("SHA-1", &[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A][..]),
-            (
-                "SHA-256",
-                &[
-                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-                ][..],
-            ),
-            (
-                "SHA-384",
-                &[
-                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
-                ][..],
-            ),
-            (
-                "SHA-512",
-                &[
-                    0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
-                ][..],
-            ),
-        ],
-    );
-    let signature = first_oid_name(
-        payload,
-        &[
-            (
-                "SHA-1 with RSA",
-                &[
-                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05,
-                ][..],
-            ),
-            (
-                "SHA-256 with RSA",
-                &[
-                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
-                ][..],
-            ),
-            (
-                "SHA-384 with RSA",
-                &[
-                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C,
-                ][..],
-            ),
-            (
-                "SHA-512 with RSA",
-                &[
-                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D,
-                ][..],
-            ),
-            (
-                "RSA",
-                &[
-                    0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
-                ][..],
-            ),
-            (
-                "ECDSA with SHA-256",
-                &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02][..],
-            ),
-            (
-                "ECDSA with SHA-384",
-                &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03][..],
-            ),
-        ],
-    );
-    match (digest, signature) {
-        (Some(digest), Some(signature)) => vec![format!("digest {digest}; signature {signature}")],
-        (Some(digest), None) => vec![format!("digest {digest}")],
-        (None, Some(signature)) => vec![format!("signature {signature}")],
-        (None, None) => Vec::new(),
-    }
-}
-
-fn first_oid_name(bytes: &[u8], patterns: &[(&'static str, &[u8])]) -> Option<&'static str> {
-    patterns.iter().find_map(|(name, pattern)| {
-        bytes
-            .windows(pattern.len())
-            .any(|window| window == *pattern)
-            .then_some(*name)
-    })
-}
-
-fn parse_authenticode_certificate_names(bytes: &[u8], offset: usize, length: usize) -> Vec<String> {
-    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
-        return Vec::new();
-    };
-    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let name_oids: [(&str, &[u8]); 3] = [
-        ("CN", &[0x06, 0x03, 0x55, 0x04, 0x03]),
-        ("O", &[0x06, 0x03, 0x55, 0x04, 0x0A]),
-        ("OU", &[0x06, 0x03, 0x55, 0x04, 0x0B]),
-    ];
-    let mut names = Vec::new();
-    for (label, oid) in name_oids {
-        let mut search = 0usize;
-        while search + oid.len() + 2 <= payload.len() && names.len() < 12 {
-            let Some(position) = payload[search..]
-                .windows(oid.len())
-                .position(|window| window == oid)
-            else {
-                break;
-            };
-            let value_offset = search + position + oid.len();
-            if let Some(value) = read_der_string(payload, value_offset) {
-                let entry = format!("{label}={value}");
-                if !names.iter().any(|existing| existing == &entry) {
-                    names.push(entry);
-                }
-            }
-            search = value_offset.saturating_add(1);
-        }
-    }
-    names
-}
-
-fn parse_authenticode_certificate_subjects(
-    bytes: &[u8],
-    offset: usize,
-    length: usize,
-) -> (Vec<String>, Vec<String>) {
-    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
-        return (Vec::new(), Vec::new());
-    };
-    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let mut issuers = Vec::new();
-    let mut subjects = Vec::new();
-    let mut search = 0usize;
-    while search + 4 < payload.len() && subjects.len() < 4 {
-        let Some(position) = payload[search..].iter().position(|byte| *byte == 0x30) else {
-            break;
-        };
-        let cert_offset = search + position;
-        if let Some((issuer, subject, cert_end)) =
-            parse_x509_certificate_names(payload, cert_offset)
-        {
-            if !issuer.is_empty() && !issuers.contains(&issuer) {
-                issuers.push(issuer);
-            }
-            if !subject.is_empty() && !subjects.contains(&subject) {
-                subjects.push(subject);
-            }
-            search = cert_end.max(cert_offset + 1);
-        } else {
-            search = cert_offset + 1;
-        }
-    }
-    (issuers, subjects)
-}
-
-fn parse_x509_certificate_names(bytes: &[u8], offset: usize) -> Option<(String, String, usize)> {
-    let (cert_content, cert_end) = der_tlv_content(bytes, offset, 0x30)?;
-    let cert = bytes.get(cert_content..cert_end)?;
-    let (tbs_content, tbs_end_rel) = der_tlv_content(cert, 0, 0x30)?;
-    let tbs = cert.get(tbs_content..tbs_end_rel)?;
-    let mut cursor = 0usize;
-    if tbs.get(cursor) == Some(&0xA0) {
-        let (_, next) = der_tlv_content(tbs, cursor, 0xA0)?;
-        cursor = next;
-    }
-    for _ in 0..2 {
-        let (_, next) = der_any_tlv_content(tbs, cursor)?;
-        cursor = next;
-    }
-    let (issuer_content, issuer_end) = der_tlv_content(tbs, cursor, 0x30)?;
-    let issuer = parse_x509_name(&tbs[issuer_content..issuer_end]);
-    cursor = issuer_end;
-    let (_, next) = der_tlv_content(tbs, cursor, 0x30)?;
-    cursor = next;
-    let (subject_content, subject_end) = der_tlv_content(tbs, cursor, 0x30)?;
-    let subject = parse_x509_name(&tbs[subject_content..subject_end]);
-    Some((issuer, subject, cert_end))
-}
-
-fn parse_x509_name(bytes: &[u8]) -> String {
-    let name_oids: [(&str, &[u8]); 3] = [
-        ("CN", &[0x06, 0x03, 0x55, 0x04, 0x03]),
-        ("O", &[0x06, 0x03, 0x55, 0x04, 0x0A]),
-        ("OU", &[0x06, 0x03, 0x55, 0x04, 0x0B]),
-    ];
-    let mut parts = Vec::new();
-    for (label, oid) in name_oids {
-        let mut search = 0usize;
-        while search + oid.len() + 2 <= bytes.len() && parts.len() < 8 {
-            let Some(position) = bytes[search..]
-                .windows(oid.len())
-                .position(|window| window == oid)
-            else {
-                break;
-            };
-            let value_offset = search + position + oid.len();
-            if let Some(value) = read_der_string(bytes, value_offset) {
-                let entry = format!("{label}={value}");
-                if !parts.contains(&entry) {
-                    parts.push(entry);
-                }
-            }
-            search = value_offset.saturating_add(1);
-        }
-    }
-    parts.join("/")
-}
-
-fn der_any_tlv_content(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
-    let _tag = *bytes.get(offset)?;
-    der_tlv_bounds(bytes, offset).map(|(content, end)| (content, end))
-}
-
-fn der_tlv_content(bytes: &[u8], offset: usize, tag: u8) -> Option<(usize, usize)> {
-    (*bytes.get(offset)? == tag).then_some(())?;
-    der_tlv_bounds(bytes, offset)
-}
-
-fn der_tlv_bounds(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
-    let len_byte = *bytes.get(offset + 1)?;
-    if len_byte & 0x80 == 0 {
-        let content = offset + 2;
-        let end = content.checked_add(len_byte as usize)?;
-        return (end <= bytes.len()).then_some((content, end));
-    }
-    let len_len = (len_byte & 0x7F) as usize;
-    if len_len == 0 || len_len > 2 || offset + 2 + len_len > bytes.len() {
-        return None;
-    }
-    let mut len = 0usize;
-    for byte in &bytes[offset + 2..offset + 2 + len_len] {
-        len = (len << 8) | *byte as usize;
-    }
-    if len > 4096 {
-        return None;
-    }
-    let content = offset + 2 + len_len;
-    let end = content.checked_add(len)?;
-    (end <= bytes.len()).then_some((content, end))
-}
-
-fn read_der_string(bytes: &[u8], offset: usize) -> Option<String> {
-    let tag = *bytes.get(offset)?;
-    if !matches!(tag, 0x0C | 0x13 | 0x14 | 0x16) {
-        return None;
-    }
-    let len = *bytes.get(offset + 1)? as usize;
-    if len & 0x80 != 0 || len > 128 {
-        return None;
-    }
-    let raw = bytes.get(offset + 2..offset + 2 + len)?;
-    let value = String::from_utf8_lossy(raw).trim().to_string();
-    (!value.is_empty()).then_some(value)
-}
-
-fn parse_authenticode_signature_algorithms(
-    bytes: &[u8],
-    offset: usize,
-    length: usize,
-) -> Vec<String> {
-    let Some(end) = offset.checked_add(length).filter(|end| *end <= bytes.len()) else {
-        return Vec::new();
-    };
-    let payload = bytes.get(offset + 8..end).unwrap_or(&[]);
-    let oid_patterns: [(&str, &[u8]); 7] = [
-        (
-            "RSA",
-            &[
-                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01,
-            ],
-        ),
-        (
-            "SHA-1 with RSA",
-            &[
-                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05,
-            ],
-        ),
-        (
-            "SHA-256 with RSA",
-            &[
-                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B,
-            ],
-        ),
-        (
-            "SHA-384 with RSA",
-            &[
-                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C,
-            ],
-        ),
-        (
-            "SHA-512 with RSA",
-            &[
-                0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D,
-            ],
-        ),
-        (
-            "ECDSA with SHA-256",
-            &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02],
-        ),
-        (
-            "ECDSA with SHA-384",
-            &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03],
-        ),
-    ];
-    let mut algorithms = Vec::new();
-    for (name, pattern) in oid_patterns {
-        if payload
-            .windows(pattern.len())
-            .any(|window| window == pattern)
-        {
-            algorithms.push(name.to_string());
-        }
-    }
-    algorithms
-}
-
-fn parse_pe_clr_header(
-    bytes: &[u8],
-    sections: &[PeSectionSummary],
-    offset: usize,
-) -> Option<PeClrSummary> {
-    if offset + 24 > bytes.len() || read_u32(bytes, offset)? < 24 {
-        return None;
-    }
-    let metadata_rva = read_u32(bytes, offset + 8)?;
-    let metadata_size = read_u32(bytes, offset + 12)?;
-    let metadata = pe_rva_to_file_offset(sections, metadata_rva).and_then(|metadata_offset| {
-        parse_clr_metadata_root(bytes, metadata_offset, metadata_size as usize)
-    });
-    Some(PeClrSummary {
-        major: read_u16(bytes, offset + 4)?,
-        minor: read_u16(bytes, offset + 6)?,
-        metadata_rva,
-        metadata_size,
-        flags: read_u32(bytes, offset + 16)?,
-        metadata_version: metadata
-            .as_ref()
-            .map(|root| root.version.clone())
-            .unwrap_or_default(),
-        metadata_streams: metadata
-            .as_ref()
-            .map(|root| root.streams.clone())
-            .unwrap_or_default(),
-        metadata_tables: metadata
-            .as_ref()
-            .map(|root| root.tables.clone())
-            .unwrap_or_default(),
-        assembly_refs: metadata
-            .as_ref()
-            .map(|root| root.assembly_refs.clone())
-            .unwrap_or_default(),
-        type_defs: metadata
-            .as_ref()
-            .map(|root| root.type_defs.clone())
-            .unwrap_or_default(),
-        custom_attributes: metadata
-            .as_ref()
-            .map(|root| root.custom_attributes)
-            .unwrap_or(0),
-        assembly: metadata.and_then(|root| root.assembly),
-    })
-}
-
-struct ClrMetadataRoot {
-    version: String,
-    streams: Vec<String>,
-    tables: Vec<String>,
-    assembly: Option<String>,
-    assembly_refs: Vec<String>,
-    type_defs: Vec<String>,
-    custom_attributes: u32,
-}
-
-fn parse_clr_metadata_root(bytes: &[u8], offset: usize, size: usize) -> Option<ClrMetadataRoot> {
-    let end = offset.checked_add(size)?.min(bytes.len());
-    if offset + 20 > end || read_u32(bytes, offset)? != 0x424A_5342 {
-        return None;
-    }
-    let version_len = read_u32(bytes, offset + 12)? as usize;
-    let version_start = offset + 16;
-    let version_end = version_start.checked_add(version_len)?.min(end);
-    let version = String::from_utf8_lossy(bytes.get(version_start..version_end)?)
-        .trim_matches('\0')
-        .trim()
-        .to_string();
-    let mut stream_offset = align4(version_end) + 4;
-    if stream_offset > end {
-        return Some(ClrMetadataRoot {
-            version,
-            streams: Vec::new(),
-            tables: Vec::new(),
-            assembly: None,
-            assembly_refs: Vec::new(),
-            type_defs: Vec::new(),
-            custom_attributes: 0,
-        });
-    }
-    let streams = read_u16(bytes, stream_offset - 2).unwrap_or(0).min(64) as usize;
-    let mut names = Vec::new();
-    let mut strings_heap = None;
-    let mut tables_stream = None;
-    for _ in 0..streams {
-        if stream_offset + 8 > end {
-            break;
-        }
-        let relative_offset = read_u32(bytes, stream_offset)? as usize;
-        let stream_size = read_u32(bytes, stream_offset + 4)? as usize;
-        let (name, name_end) = read_ascii_z(bytes, stream_offset + 8, end)?;
-        let data_offset = offset.checked_add(relative_offset)?;
-        names.push(name.clone());
-        if name == "#Strings" {
-            strings_heap = bytes.get(data_offset..data_offset.saturating_add(stream_size).min(end));
-        } else if name == "#~" {
-            tables_stream =
-                bytes.get(data_offset..data_offset.saturating_add(stream_size).min(end));
-        }
-        stream_offset = align4(name_end);
-    }
-    let assembly = tables_stream
-        .zip(strings_heap)
-        .and_then(|(tables, strings)| parse_clr_assembly_identity(tables, strings));
-    let assembly_refs = tables_stream
-        .zip(strings_heap)
-        .map(|(tables, strings)| parse_clr_assembly_refs(tables, strings))
-        .unwrap_or_default();
-    let type_defs = tables_stream
-        .zip(strings_heap)
-        .map(|(tables, strings)| parse_clr_type_defs(tables, strings))
-        .unwrap_or_default();
-    let custom_attributes = tables_stream
-        .and_then(clr_tables_layout)
-        .map(|layout| layout.rows[12])
-        .unwrap_or(0);
-    let tables = tables_stream
-        .map(parse_clr_table_counts)
-        .unwrap_or_default();
-    Some(ClrMetadataRoot {
-        version,
-        streams: names,
-        tables,
-        assembly,
-        assembly_refs,
-        type_defs,
-        custom_attributes,
-    })
-}
-
-fn parse_clr_table_counts(tables: &[u8]) -> Vec<String> {
-    if tables.len() < 24 {
-        return Vec::new();
-    }
-    let valid = read_u64(tables, 8).unwrap_or(0);
-    let mut offset = 24usize;
-    let mut counts = Vec::new();
-    for table in 0..64 {
-        if valid & (1u64 << table) == 0 {
-            continue;
-        }
-        if offset + 4 > tables.len() {
-            break;
-        }
-        let rows = read_u32(tables, offset).unwrap_or(0);
-        if rows > 0 {
-            counts.push(format!("{}={rows}", clr_table_name(table)));
-        }
-        offset += 4;
-        if counts.len() >= 32 {
-            break;
-        }
-    }
-    counts
-}
-
-fn clr_table_name(index: usize) -> &'static str {
-    match index {
-        0 => "Module",
-        1 => "TypeRef",
-        2 => "TypeDef",
-        4 => "Field",
-        6 => "MethodDef",
-        8 => "Param",
-        9 => "InterfaceImpl",
-        10 => "MemberRef",
-        11 => "Constant",
-        12 => "CustomAttribute",
-        13 => "FieldMarshal",
-        14 => "DeclSecurity",
-        15 => "ClassLayout",
-        16 => "FieldLayout",
-        17 => "StandAloneSig",
-        18 => "EventMap",
-        20 => "Event",
-        21 => "PropertyMap",
-        23 => "Property",
-        24 => "MethodSemantics",
-        25 => "MethodImpl",
-        26 => "ModuleRef",
-        27 => "TypeSpec",
-        28 => "ImplMap",
-        29 => "FieldRVA",
-        32 => "Assembly",
-        35 => "AssemblyRef",
-        39 => "ExportedType",
-        40 => "ManifestResource",
-        41 => "NestedClass",
-        42 => "GenericParam",
-        43 => "MethodSpec",
-        44 => "GenericParamConstraint",
-        _ => "Table",
-    }
-}
-
-fn parse_clr_assembly_identity(tables: &[u8], strings: &[u8]) -> Option<String> {
-    let layout = clr_tables_layout(tables)?;
-    if *layout.rows.get(32)? == 0 {
-        return None;
-    }
-    let string_index_size = layout.string_index_size;
-    let blob_index_size = layout.blob_index_size;
-    let row = *layout.offsets.get(32)?;
-    let major = read_u16(tables, row + 4)?;
-    let minor = read_u16(tables, row + 6)?;
-    let build = read_u16(tables, row + 8)?;
-    let revision = read_u16(tables, row + 10)?;
-    let name_index_offset = row + 16 + blob_index_size;
-    let name_index = if string_index_size == 4 {
-        read_u32(tables, name_index_offset)? as usize
-    } else {
-        read_u16(tables, name_index_offset)? as usize
-    };
-    let name = read_c_string(strings, name_index, 260)?;
-    (!name.is_empty()).then(|| format!("{name} {major}.{minor}.{build}.{revision}"))
-}
-
-fn parse_clr_assembly_refs(tables: &[u8], strings: &[u8]) -> Vec<String> {
-    let Some(layout) = clr_tables_layout(tables) else {
-        return Vec::new();
-    };
-    let rows = layout.rows.get(35).copied().unwrap_or(0).min(16) as usize;
-    let mut refs = Vec::new();
-    let mut row = layout.offsets.get(35).copied().unwrap_or(0);
-    for _ in 0..rows {
-        if row + 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size
-            > tables.len()
-        {
-            break;
-        }
-        let major = read_u16(tables, row).unwrap_or(0);
-        let minor = read_u16(tables, row + 2).unwrap_or(0);
-        let build = read_u16(tables, row + 4).unwrap_or(0);
-        let revision = read_u16(tables, row + 6).unwrap_or(0);
-        let name_index_offset = row + 12 + layout.blob_index_size;
-        let name_index = read_clr_index(tables, name_index_offset, layout.string_index_size)
-            .unwrap_or(0) as usize;
-        if let Some(name) = read_c_string(strings, name_index, 260).filter(|name| !name.is_empty())
-        {
-            refs.push(format!("{name} {major}.{minor}.{build}.{revision}"));
-        }
-        row += 12 + layout.blob_index_size + layout.string_index_size * 2 + layout.blob_index_size;
-    }
-    refs
-}
-
-fn parse_clr_type_defs(tables: &[u8], strings: &[u8]) -> Vec<String> {
-    let Some(layout) = clr_tables_layout(tables) else {
-        return Vec::new();
-    };
-    let rows = layout.rows.get(2).copied().unwrap_or(0).min(24) as usize;
-    let mut types = Vec::new();
-    let mut row = layout.offsets.get(2).copied().unwrap_or(0);
-    for _ in 0..rows {
-        if row + 4 + layout.string_index_size * 2 > tables.len() {
-            break;
-        }
-        let name_index =
-            read_clr_index(tables, row + 4, layout.string_index_size).unwrap_or(0) as usize;
-        let namespace_index = read_clr_index(
-            tables,
-            row + 4 + layout.string_index_size,
-            layout.string_index_size,
-        )
-        .unwrap_or(0) as usize;
-        let name = read_c_string(strings, name_index, 260).unwrap_or_default();
-        if !name.is_empty() {
-            let namespace = read_c_string(strings, namespace_index, 260).unwrap_or_default();
-            if namespace.is_empty() {
-                types.push(name);
-            } else {
-                types.push(format!("{namespace}.{name}"));
-            }
-        }
-        row += clr_table_row_size(2, layout.string_index_size, 2, layout.blob_index_size)
-            .unwrap_or(14);
-    }
-    types
-}
-
-struct ClrTablesLayout {
-    rows: [u32; 64],
-    offsets: [usize; 64],
-    string_index_size: usize,
-    blob_index_size: usize,
-}
-
-fn clr_tables_layout(tables: &[u8]) -> Option<ClrTablesLayout> {
-    if tables.len() < 24 {
-        return None;
-    }
-    let heap_sizes = *tables.get(6)?;
-    let valid = read_u64(tables, 8)?;
-    let string_index_size = if heap_sizes & 0x01 != 0 { 4 } else { 2 };
-    let guid_index_size = if heap_sizes & 0x02 != 0 { 4 } else { 2 };
-    let blob_index_size = if heap_sizes & 0x04 != 0 { 4 } else { 2 };
-    let mut rows = [0u32; 64];
-    let mut offset = 24usize;
-    for table in 0..64 {
-        if valid & (1u64 << table) == 0 {
-            continue;
-        }
-        rows[table] = read_u32(tables, offset)?;
-        offset += 4;
-    }
-    let mut offsets = [0usize; 64];
-    for table in 0..64 {
-        if rows[table] == 0 {
-            continue;
-        }
-        offsets[table] = offset;
-        let row_size =
-            clr_table_row_size(table, string_index_size, guid_index_size, blob_index_size)?;
-        offset = offset.checked_add(row_size.checked_mul(rows[table] as usize)?)?;
-    }
-    Some(ClrTablesLayout {
-        rows,
-        offsets,
-        string_index_size,
-        blob_index_size,
-    })
-}
-
-fn clr_table_row_size(
-    table: usize,
-    string_index_size: usize,
-    guid_index_size: usize,
-    blob_index_size: usize,
-) -> Option<usize> {
-    match table {
-        0 => Some(2 + string_index_size + guid_index_size * 3),
-        2 => Some(4 + string_index_size * 2 + 2 + 2 + 2),
-        12 => Some(2 + 2 + blob_index_size),
-        32 => Some(16 + blob_index_size + string_index_size * 2),
-        35 => Some(12 + blob_index_size + string_index_size * 2 + blob_index_size),
-        _ => None,
-    }
-}
-
-fn read_clr_index(bytes: &[u8], offset: usize, size: usize) -> Option<u32> {
-    match size {
-        2 => read_u16(bytes, offset).map(u32::from),
-        4 => read_u32(bytes, offset),
-        _ => None,
-    }
-}
-
-fn read_ascii_z(bytes: &[u8], offset: usize, limit: usize) -> Option<(String, usize)> {
-    let end = bytes
-        .get(offset..limit)?
-        .iter()
-        .position(|byte| *byte == 0)
-        .map(|len| offset + len)?;
-    let value = String::from_utf8_lossy(bytes.get(offset..end)?)
-        .trim()
-        .to_string();
-    Some((value, end + 1))
-}
-
-fn pe_rva_to_file_offset(sections: &[PeSectionSummary], rva: u32) -> Option<usize> {
-    for section in sections {
-        let span = section.virtual_size.max(section.raw_size).max(1);
-        if rva >= section.virtual_address && rva < section.virtual_address.saturating_add(span) {
-            return Some(
-                section
-                    .raw_pointer
-                    .saturating_add(rva - section.virtual_address) as usize,
-            );
-        }
-    }
-    None
-}
-
-fn read_c_string(bytes: &[u8], offset: usize, max_len: usize) -> Option<String> {
-    let end = bytes
-        .get(offset..offset + max_len.min(bytes.len().saturating_sub(offset)))?
-        .iter()
-        .position(|byte| *byte == 0)
-        .map(|len| offset + len)
-        .unwrap_or_else(|| offset + max_len.min(bytes.len().saturating_sub(offset)));
-    let value = String::from_utf8_lossy(bytes.get(offset..end)?)
-        .trim()
-        .to_string();
-    Some(value)
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    Some(u16::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    Some(u32::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    Some(u64::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    Some(u16::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    Some(u32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u64_be(bytes: &[u8], offset: usize) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    Some(u64::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_i32_be(bytes: &[u8], offset: usize) -> Option<i32> {
-    let end = offset.checked_add(4)?;
-    Some(i32::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_i16_be(bytes: &[u8], offset: usize) -> Option<i16> {
-    let end = offset.checked_add(2)?;
-    Some(i16::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_i64_be(bytes: &[u8], offset: usize) -> Option<i64> {
-    let end = offset.checked_add(8)?;
-    Some(i64::from_be_bytes(bytes.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_i32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<i32> {
-    let end = offset.checked_add(4)?;
-    let chunk: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
-    Some(if endian == 2 {
-        i32::from_be_bytes(chunk)
-    } else {
-        i32::from_le_bytes(chunk)
-    })
-}
-
-fn read_u16_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u16> {
-    if endian == 2 {
-        read_u16_be(bytes, offset)
-    } else {
-        read_u16(bytes, offset)
-    }
-}
-
-fn read_u32_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u32> {
-    if endian == 2 {
-        read_u32_be(bytes, offset)
-    } else {
-        read_u32(bytes, offset)
-    }
-}
-
-fn read_u64_endian(bytes: &[u8], offset: usize, endian: u8) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    let chunk: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
-    Some(if endian == 2 {
-        u64::from_be_bytes(chunk)
-    } else {
-        u64::from_le_bytes(chunk)
-    })
-}
-
-fn machine_name(machine: u16) -> &'static str {
-    match machine {
-        0x014C => "x86",
-        0x8664 => "x64",
-        0x01C0 => "ARM",
-        0x01C4 => "ARMv7",
-        0xAA64 => "ARM64",
-        0x0200 => "IA64",
-        _ => "unknown",
-    }
-}
-
-fn subsystem_name(subsystem: u16) -> &'static str {
-    match subsystem {
-        1 => "native",
-        2 => "Windows GUI",
-        3 => "Windows console",
-        5 => "OS/2 console",
-        7 => "POSIX console",
-        9 => "Windows CE GUI",
-        10 => "EFI application",
-        11 => "EFI boot service driver",
-        12 => "EFI runtime driver",
-        13 => "EFI ROM",
-        14 => "Xbox",
-        16 => "Windows boot application",
-        _ => "unknown",
-    }
-}
-
-// ── Ebook preview ───────────────────────────────────────────────────────────
-
-pub fn render_ebook(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    let file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return String::new(),
-    };
-    let metadata = match file.metadata() {
-        Ok(metadata) => metadata,
-        Err(_) => return String::new(),
-    };
-    let modified_unix = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or(0);
-    render_ebook_reader(file, path, metadata.len(), modified_unix, cancel_cb)
-        .unwrap_or_default()
-}
-
-pub fn render_ebook_reader<R: Read + Seek>(
-    mut reader: R,
-    logical_name: &str,
-    source_len: u64,
-    modified_unix: i64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<String, ReaderPreviewError> {
-    if source_len > MAX_EBOOK_HANDLE_INPUT_BYTES {
-        return Err(ReaderPreviewError::LimitExceeded);
-    }
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    let lower = logical_name.to_ascii_lowercase();
-    if lower.ends_with(".epub") {
-        let mut zip = open_validated_zip(
-            reader,
-            source_len,
-            MAX_EBOOK_ZIP_ENTRIES as u64,
-            cancel_cb,
-        )?;
-        return render_epub_from_zip(&mut zip, logical_name, cancel_cb);
-    }
-
-    prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
-    if lower.ends_with(".fb2") {
-        render_fb2_reader(&mut reader, logical_name, cancel_cb)
-    } else {
-        let size = i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?;
-        Ok(render_binary_ebook_info(
-            logical_name,
-            size,
-            modified_unix,
-        ))
-    }
-}
-
-#[derive(Default)]
-struct EpubOpf {
-    title: String,
-    creator: String,
-    language: String,
-    publisher: String,
-    identifier: String,
-    date: String,
-    description: String,
-    manifest: BTreeMap<String, EpubManifestItem>,
-    spine: Vec<String>,
-}
-
-#[derive(Clone)]
-struct EpubManifestItem {
-    href: String,
-    media_type: String,
-}
-
-struct EbookContext {
-    remaining_decompressed_bytes: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-}
-
-impl EbookContext {
-    fn new(cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
-        Self {
-            remaining_decompressed_bytes: MAX_EBOOK_DECOMPRESSED_BYTES,
-            cancel_cb,
-        }
-    }
-
-    fn check_cancelled(&self) -> Result<(), ReaderPreviewError> {
-        if preview_cancelled(self.cancel_cb) {
-            Err(ReaderPreviewError::Cancelled)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn consume(&mut self, bytes: u64) -> Result<(), ReaderPreviewError> {
-        self.check_cancelled()?;
-        if bytes > self.remaining_decompressed_bytes {
-            return Err(ReaderPreviewError::LimitExceeded);
-        }
-        self.remaining_decompressed_bytes -= bytes;
-        Ok(())
-    }
-
-    fn check_xml_event(&self, event_count: usize) -> Result<(), ReaderPreviewError> {
-        if event_count % 256 == 0 {
-            self.check_cancelled()?;
-        }
-        Ok(())
-    }
-}
-
-fn render_epub_from_zip<R: Read + Seek>(
-    zip: &mut ZipArchive<R>,
-    logical_name: &str,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<String, ReaderPreviewError> {
-    let filename = file_name(logical_name);
-    let mut context = EbookContext::new(cancel_cb);
-    let container = read_ebook_zip_text(
-        &mut context,
-        zip,
-        "META-INF/container.xml",
-        MAX_EBOOK_XML_BYTES,
-    )?;
-    let container_rootfile = container
-        .as_deref()
-        .map(|xml| parse_epub_rootfile_with_context(&context, xml))
-        .transpose()?
-        .flatten();
-    let rootfile = match container_rootfile {
-        Some(rootfile) => Some(rootfile),
-        None => find_epub_opf_path(&context, zip)?,
-    }
-        .unwrap_or_else(|| "content.opf".to_string());
-
-    let Some(opf_xml) =
-        read_ebook_zip_text(&mut context, zip, &rootfile, MAX_EBOOK_XML_BYTES)?
-    else {
-        return render_zip_archive_from_zip(zip, logical_name, "", cancel_cb);
-    };
-    context.check_cancelled()?;
-    let opf = match parse_epub_opf_with_context(&context, &opf_xml) {
-        Ok(opf)
-            if !opf.manifest.is_empty()
-                && opf.spine.iter().any(|idref| opf.manifest.contains_key(idref)) => opf,
-        Ok(_) | Err(ReaderPreviewError::Malformed) => {
-            return render_zip_archive_from_zip(zip, logical_name, "", cancel_cb);
-        }
-        Err(error) => return Err(error),
-    };
-    let title = first_non_empty_owned([opf.title.as_str(), filename]).to_string();
-    let base_dir = rootfile
-        .rsplit_once('/')
-        .map(|(dir, _)| format!("{dir}/"))
-        .unwrap_or_default();
-
-    let mut markdown = String::new();
-    markdown.push_str("# ");
-    markdown.push_str(&markdown_escape_line(&title));
-    markdown.push_str("\n\n");
-    append_metadata_line(&mut markdown, "Author", &opf.creator);
-    append_metadata_line(&mut markdown, "Language", &opf.language);
-    append_metadata_line(&mut markdown, "Publisher", &opf.publisher);
-    append_metadata_line(&mut markdown, "Identifier", &opf.identifier);
-    append_metadata_line(&mut markdown, "Date", &opf.date);
-    if !opf.description.trim().is_empty() {
-        markdown.push_str("\n> ");
-        markdown.push_str(&collapse_ws(&opf.description));
-        markdown.push('\n');
-    }
-
-    if !opf.spine.is_empty() {
-        markdown.push_str("\n## Contents\n\n");
-        for idref in opf.spine.iter().take(40) {
-            context.check_cancelled()?;
-            if let Some(item) = opf.manifest.get(idref) {
-                markdown.push_str("- ");
-                markdown.push_str(&markdown_escape_line(&ebook_item_label(&item.href)));
-                markdown.push('\n');
-            }
-        }
-    }
-
-    let mut extracted = 0usize;
-    for idref in &opf.spine {
-        context.check_cancelled()?;
-        if extracted >= MAX_EBOOK_CHAPTERS || markdown.chars().count() >= MAX_EBOOK_TEXT_CHARS {
-            break;
-        }
-        let Some(item) = opf.manifest.get(idref) else {
-            continue;
-        };
-        if !is_epub_document_item(item) {
-            continue;
-        }
-        let chapter_path = normalize_zip_target(&base_dir, &item.href);
-        let Some(chapter_xml) = read_ebook_zip_text(
-            &mut context,
-            zip,
-            &chapter_path,
-            MAX_EBOOK_CHAPTER_BYTES,
-        )?
-        else {
-            continue;
-        };
-        context.check_cancelled()?;
-        let chapter = extract_xhtml_markdown_with_context(
-            &context,
-            &chapter_xml,
-            &ebook_item_label(&item.href),
-        )?;
-        if chapter.trim().is_empty() {
-            continue;
-        }
-        markdown.push_str("\n\n");
-        push_markdown_limited(&mut markdown, &chapter, MAX_EBOOK_TEXT_CHARS);
-        extracted += 1;
-    }
-
-    if extracted == 0 {
-        markdown.push_str("\n\n_No readable spine chapters were found. The archive listing is still available by opening the EPUB as a ZIP-compatible file._\n");
-    }
-
-    Ok(ebook_markdown_json("epub", &title, markdown))
-}
-
-fn read_ebook_zip_text<R: Read + Seek>(
-    context: &mut EbookContext,
-    zip: &mut ZipArchive<R>,
-    name: &str,
-    max_size: u64,
-) -> Result<Option<String>, ReaderPreviewError> {
-    context.check_cancelled()?;
-    if let Ok(mut entry) = zip.by_name(name) {
-        if entry.size() > max_size {
-            return Err(ReaderPreviewError::LimitExceeded);
-        }
-        let bytes = read_ebook_limited_to_end(context, &mut entry, max_size)?;
-        return Ok(Some(String::from_utf8_lossy(&bytes).to_string()));
-    }
-    context.check_cancelled()?;
-
-    for index in 0..zip.len().min(MAX_EBOOK_ZIP_ENTRIES) {
-        context.check_cancelled()?;
-        let mut entry = match zip.by_index(index) {
-            Ok(entry) => entry,
-            Err(_) if preview_cancelled(context.cancel_cb) => {
-                return Err(ReaderPreviewError::Cancelled)
-            }
-            Err(_) => continue,
-        };
-        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
-            continue;
-        }
-        if entry.size() > max_size {
-            return Err(ReaderPreviewError::LimitExceeded);
-        }
-        let bytes = read_ebook_limited_to_end(context, &mut entry, max_size)?;
-        return Ok(Some(String::from_utf8_lossy(&bytes).to_string()));
-    }
-    Ok(None)
-}
-
-fn read_ebook_limited_to_end<R: Read>(
-    context: &mut EbookContext,
-    reader: &mut R,
-    max_size: u64,
-) -> Result<Vec<u8>, ReaderPreviewError> {
-    let mut bytes = Vec::with_capacity(max_size.min(64 * 1024) as usize);
-    let mut buffer = [0u8; 32 * 1024];
-    loop {
-        context.check_cancelled()?;
-        let max_read = buffer.len().min(
-            max_size
-                .saturating_add(1)
-                .saturating_sub(bytes.len() as u64) as usize,
-        );
-        if max_read == 0 {
-            return Err(ReaderPreviewError::LimitExceeded);
-        }
-        let read = match reader.read(&mut buffer[..max_read]) {
-            Ok(read) => read,
-            Err(_) if preview_cancelled(context.cancel_cb) => {
-                return Err(ReaderPreviewError::Cancelled)
-            }
-            Err(_) => return Err(ReaderPreviewError::Malformed),
-        };
-        if read == 0 {
-            return Ok(bytes);
-        }
-        context.consume(read as u64)?;
-        bytes.extend_from_slice(&buffer[..read]);
-    }
-}
-
-#[cfg(test)]
-fn parse_epub_rootfile(xml: &str) -> Option<String> {
-    parse_epub_rootfile_with_context(&EbookContext::new(None), xml)
-        .ok()
-        .flatten()
-}
-
-fn parse_epub_rootfile_with_context(
-    context: &EbookContext,
-    xml: &str,
-) -> Result<Option<String>, ReaderPreviewError> {
-    let mut reader = Reader::from_str(xml);
-    let mut first = None;
-    let mut event_count = 0usize;
-    loop {
-        event_count = event_count.saturating_add(1);
-        context.check_xml_event(event_count)?;
-        match reader.read_event() {
-            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
-                if local_xml_name(e.name().as_ref()) != "rootfile" {
-                    continue;
-                }
-                let Some(full_path) = attr_value(&e, "full-path") else {
-                    continue;
-                };
-                if first.is_none() {
-                    first = Some(full_path.clone());
-                }
-                let media_type = attr_value(&e, "media-type").unwrap_or_default();
-                if media_type.contains("oebps-package") || full_path.ends_with(".opf") {
-                    return Ok(Some(full_path));
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => return Err(ReaderPreviewError::Malformed),
-            _ => {}
-        }
-    }
-    Ok(first)
-}
-
-fn find_epub_opf_path<R: Read + Seek>(
-    context: &EbookContext,
-    zip: &mut ZipArchive<R>,
-) -> Result<Option<String>, ReaderPreviewError> {
-    for i in 0..zip.len().min(512) {
-        context.check_cancelled()?;
-        let Ok(entry) = zip.by_index_raw(i) else {
-            if preview_cancelled(context.cancel_cb) {
-                return Err(ReaderPreviewError::Cancelled);
-            }
-            continue;
-        };
-        let name = entry.name().replace('\\', "/");
-        if name.to_ascii_lowercase().ends_with(".opf") {
-            return Ok(Some(name));
-        }
-    }
-    Ok(None)
-}
-
-#[cfg(test)]
-fn parse_epub_opf(xml: &str) -> EpubOpf {
-    parse_epub_opf_with_context(&EbookContext::new(None), xml).unwrap_or_default()
-}
-
-fn parse_epub_opf_with_context(
-    context: &EbookContext,
-    xml: &str,
-) -> Result<EpubOpf, ReaderPreviewError> {
-    let mut reader = Reader::from_str(xml);
-    let mut opf = EpubOpf::default();
-    let mut in_metadata = false;
-    let mut current_meta = String::new();
-    let mut current_meta_value = String::new();
-    let mut event_count = 0usize;
-
-    loop {
-        event_count = event_count.saturating_add(1);
-        context.check_xml_event(event_count)?;
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                match name.as_str() {
-                    "metadata" => in_metadata = true,
-                    "item" => add_epub_manifest_item(&mut opf, &e),
-                    "itemref" => {
-                        if let Some(idref) = attr_value(&e, "idref") {
-                            opf.spine.push(idref);
-                        }
-                    }
-                    _ if in_metadata => {
-                        current_meta = name;
-                        current_meta_value.clear();
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Empty(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                match name.as_str() {
-                    "item" => add_epub_manifest_item(&mut opf, &e),
-                    "itemref" => {
-                        if let Some(idref) = attr_value(&e, "idref") {
-                            opf.spine.push(idref);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Text(e)) if in_metadata && !current_meta.is_empty() => {
-                current_meta_value.push_str(&xml_unescape_bytes(e.as_ref()));
-            }
-            Ok(Event::GeneralRef(e)) if in_metadata && !current_meta.is_empty() => {
-                current_meta_value.push_str(&xml_general_ref(e.as_ref()));
-            }
-            Ok(Event::CData(e)) if in_metadata && !current_meta.is_empty() => {
-                current_meta_value.push_str(&String::from_utf8_lossy(e.as_ref()));
-            }
-            Ok(Event::End(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                if name == "metadata" {
-                    in_metadata = false;
-                }
-                if name == current_meta {
-                    set_epub_metadata(&mut opf, &current_meta, &current_meta_value);
-                    current_meta.clear();
-                    current_meta_value.clear();
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-    }
-    Ok(opf)
-}
-
-fn add_epub_manifest_item(opf: &mut EpubOpf, e: &BytesStart<'_>) {
-    let Some(id) = attr_value(e, "id") else {
-        return;
-    };
-    let Some(href) = attr_value(e, "href") else {
-        return;
-    };
-    let media_type = attr_value(e, "media-type").unwrap_or_default();
-    opf.manifest
-        .insert(id, EpubManifestItem { href, media_type });
-}
-
-fn set_epub_metadata(opf: &mut EpubOpf, name: &str, value: &str) {
-    let value = collapse_ws(value);
-    if value.is_empty() {
-        return;
-    }
-    match name {
-        "title" if opf.title.is_empty() => opf.title = value,
-        "creator" if opf.creator.is_empty() => opf.creator = value,
-        "language" if opf.language.is_empty() => opf.language = value,
-        "publisher" if opf.publisher.is_empty() => opf.publisher = value,
-        "identifier" if opf.identifier.is_empty() => opf.identifier = value,
-        "date" if opf.date.is_empty() => opf.date = value,
-        "description" if opf.description.is_empty() => opf.description = value,
-        _ => {}
-    }
-}
-
-fn is_epub_document_item(item: &EpubManifestItem) -> bool {
-    let href = item.href.to_ascii_lowercase();
-    item.media_type.contains("html")
-        || href.ends_with(".xhtml")
-        || href.ends_with(".html")
-        || href.ends_with(".htm")
-}
-
-#[cfg(test)]
-fn extract_xhtml_markdown(xml: &str, fallback_title: &str) -> String {
-    extract_xhtml_markdown_with_context(&EbookContext::new(None), xml, fallback_title)
-        .unwrap_or_default()
-}
-
-fn extract_xhtml_markdown_with_context(
-    context: &EbookContext,
-    xml: &str,
-    fallback_title: &str,
-) -> Result<String, ReaderPreviewError> {
-    let mut reader = Reader::from_str(xml);
-    let mut out = String::new();
-    let mut in_body = false;
-    let mut ignored_depth = 0usize;
-    let mut list_depth = 0usize;
-    let mut current_block = String::new();
-    let mut heading_level = 0usize;
-    let mut saw_heading = false;
-    let mut event_count = 0usize;
-    let mut output_chars = 0usize;
-
-    loop {
-        event_count = event_count.saturating_add(1);
-        context.check_xml_event(event_count)?;
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                if name == "body" {
-                    in_body = true;
-                    continue;
-                }
-                if !in_body {
-                    continue;
-                }
-                if matches!(name.as_str(), "script" | "style" | "svg" | "head") {
-                    ignored_depth += 1;
-                    continue;
-                }
-                if ignored_depth > 0 {
-                    continue;
-                }
-                match name.as_str() {
-                    "h1" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
-                        heading_level = 2;
-                    }
-                    "h2" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
-                        heading_level = 3;
-                    }
-                    "h3" | "h4" | "h5" | "h6" => {
-                        flush_ebook_block(&mut out, &mut current_block, 1, &mut saw_heading, &mut output_chars);
-                        heading_level = 4;
-                    }
-                    "p" | "div" | "section" | "blockquote" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
-                    }
-                    "br" => current_block.push('\n'),
-                    "ul" | "ol" => list_depth += 1,
-                    "li" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
-                        current_block.push_str("- ");
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Empty(e)) => {
-                if !in_body || ignored_depth > 0 {
-                    continue;
-                }
-                let name = local_xml_name(e.name().as_ref());
-                if name == "br" {
-                    current_block.push('\n');
-                }
-            }
-            Ok(Event::Text(e)) if in_body && ignored_depth == 0 => {
-                current_block.push_str(&xml_unescape_bytes(e.as_ref()));
-            }
-            Ok(Event::GeneralRef(e)) if in_body && ignored_depth == 0 => {
-                current_block.push_str(&xml_general_ref(e.as_ref()));
-            }
-            Ok(Event::CData(e)) if in_body && ignored_depth == 0 => {
-                current_block.push_str(&String::from_utf8_lossy(e.as_ref()));
-            }
-            Ok(Event::End(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                if name == "body" {
-                    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
-                    break;
-                }
-                if ignored_depth > 0 {
-                    if matches!(name.as_str(), "script" | "style" | "svg" | "head") {
-                        ignored_depth = ignored_depth.saturating_sub(1);
-                    }
-                    continue;
-                }
-                match name.as_str() {
-                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                        flush_ebook_block(
-                            &mut out,
-                            &mut current_block,
-                            heading_level,
-                            &mut saw_heading,
-                            &mut output_chars,
-                        );
-                        heading_level = 0;
-                    }
-                    "p" | "div" | "section" | "blockquote" | "li" => {
-                        flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
-                    }
-                    "ul" | "ol" => list_depth = list_depth.saturating_sub(1),
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        if output_chars >= MAX_EBOOK_TEXT_CHARS {
-            break;
-        }
-        let _ = list_depth;
-    }
-
-    flush_ebook_block(&mut out, &mut current_block, 0, &mut saw_heading, &mut output_chars);
-    if !saw_heading && !out.trim().is_empty() {
-        let mut rendered = format!("## {}\n\n", markdown_escape_line(fallback_title));
-        let remaining = MAX_EBOOK_TEXT_CHARS.saturating_sub(rendered.chars().count());
-        rendered.extend(out.trim().chars().take(remaining));
-        Ok(rendered)
-    } else {
-        Ok(out.trim().to_string())
-    }
-}
-
-fn flush_ebook_block(
-    out: &mut String,
-    current: &mut String,
-    heading_level: usize,
-    saw_heading: &mut bool,
-    output_chars: &mut usize,
-) {
-    let text = collapse_ws(current);
-    current.clear();
-    if text.is_empty() {
-        return;
-    }
-    let mut block = String::new();
-    if !out.ends_with("\n\n") && !out.is_empty() {
-        block.push_str("\n\n");
-    }
-    if heading_level > 0 {
-        *saw_heading = true;
-        block.push_str(&"#".repeat(heading_level));
-        block.push(' ');
-        block.push_str(&markdown_escape_line(&text));
-    } else {
-        block.push_str(&text);
-    }
-    block.push_str("\n\n");
-    let remaining = MAX_EBOOK_TEXT_CHARS.saturating_sub(*output_chars);
-    if remaining == 0 {
-        return;
-    }
-    let block_chars = block.chars().count();
-    if block_chars <= remaining {
-        out.push_str(&block);
-        *output_chars += block_chars;
-    } else {
-        out.extend(block.chars().take(remaining));
-        *output_chars = MAX_EBOOK_TEXT_CHARS;
-    }
-}
-
-fn render_fb2_reader<R: Read>(
-    reader: &mut R,
-    logical_name: &str,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<String, ReaderPreviewError> {
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    let filename = file_name(logical_name);
-    let bytes =
-        read_reader_prefix_cancelable(reader, MAX_EBOOK_XML_BYTES as usize, cancel_cb)?;
-    let xml = String::from_utf8_lossy(&bytes);
-    let mut reader = Reader::from_str(&xml);
-    let context = EbookContext::new(cancel_cb);
-    let mut title = String::new();
-    let mut lang = String::new();
-    let mut author_parts = Vec::<String>::new();
-    let mut current_meta = String::new();
-    let mut current_meta_value = String::new();
-    let mut in_title_info = false;
-    let mut in_body = false;
-    let mut current_block = String::new();
-    let mut markdown = String::new();
-    let mut saw_body_heading = false;
-    let mut event_count = 0usize;
-    let mut markdown_chars = 0usize;
-
-    loop {
-        event_count = event_count.saturating_add(1);
-        context.check_xml_event(event_count)?;
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                match name.as_str() {
-                    "title-info" => in_title_info = true,
-                    "body" => in_body = true,
-                    "section" if in_body => flush_ebook_block(
-                        &mut markdown,
-                        &mut current_block,
-                        0,
-                        &mut saw_body_heading,
-                        &mut markdown_chars,
-                    ),
-                    "title" if in_body => {
-                        flush_ebook_block(
-                            &mut markdown,
-                            &mut current_block,
-                            0,
-                            &mut saw_body_heading,
-                            &mut markdown_chars,
-                        );
-                        current_meta = "body-title".to_string();
-                    }
-                    "p" if in_body => flush_ebook_block(
-                        &mut markdown,
-                        &mut current_block,
-                        0,
-                        &mut saw_body_heading,
-                        &mut markdown_chars,
-                    ),
-                    _ if in_title_info => {
-                        current_meta = name;
-                        current_meta_value.clear();
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Text(e)) => {
-                let value = xml_unescape_bytes(e.as_ref());
-                if in_body {
-                    current_block.push_str(&value);
-                } else if in_title_info && !current_meta.is_empty() {
-                    current_meta_value.push_str(&value);
-                }
-            }
-            Ok(Event::GeneralRef(e)) => {
-                let value = xml_general_ref(e.as_ref());
-                if in_body {
-                    current_block.push_str(&value);
-                } else if in_title_info && !current_meta.is_empty() {
-                    current_meta_value.push_str(&value);
-                }
-            }
-            Ok(Event::CData(e)) => {
-                let value = String::from_utf8_lossy(e.as_ref());
-                if in_body {
-                    current_block.push_str(&value);
-                } else if in_title_info && !current_meta.is_empty() {
-                    current_meta_value.push_str(&value);
-                }
-            }
-            Ok(Event::End(e)) => {
-                let name = local_xml_name(e.name().as_ref());
-                match name.as_str() {
-                    "title-info" => in_title_info = false,
-                    "body" => {
-                        flush_ebook_block(
-                            &mut markdown,
-                            &mut current_block,
-                            0,
-                            &mut saw_body_heading,
-                            &mut markdown_chars,
-                        );
-                        in_body = false;
-                    }
-                    "title" if current_meta == "body-title" => {
-                        flush_ebook_block(
-                            &mut markdown,
-                            &mut current_block,
-                            2,
-                            &mut saw_body_heading,
-                            &mut markdown_chars,
-                        );
-                        current_meta.clear();
-                    }
-                    "p" if in_body => flush_ebook_block(
-                        &mut markdown,
-                        &mut current_block,
-                        0,
-                        &mut saw_body_heading,
-                        &mut markdown_chars,
-                    ),
-                    _ if name == current_meta => {
-                        set_fb2_metadata(
-                            &mut title,
-                            &mut lang,
-                            &mut author_parts,
-                            &current_meta,
-                            &current_meta_value,
-                        );
-                        current_meta.clear();
-                        current_meta_value.clear();
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        if markdown_chars >= MAX_EBOOK_TEXT_CHARS {
-            break;
-        }
-    }
-
-    let title = first_non_empty_owned([title.as_str(), filename]).to_string();
-    let author = author_parts.join(" ");
-    let mut out = String::new();
-    out.push_str("# ");
-    out.push_str(&markdown_escape_line(&title));
-    out.push_str("\n\n");
-    append_metadata_line(&mut out, "Author", &author);
-    append_metadata_line(&mut out, "Language", &lang);
-    out.push('\n');
-    push_markdown_limited(&mut out, markdown.trim(), MAX_EBOOK_TEXT_CHARS);
-    Ok(ebook_markdown_json("fb2", &title, out))
-}
-
-fn set_fb2_metadata(
-    title: &mut String,
-    lang: &mut String,
-    author_parts: &mut Vec<String>,
-    name: &str,
-    value: &str,
-) {
-    let value = collapse_ws(value);
-    if value.is_empty() {
-        return;
-    }
-    match name {
-        "book-title" if title.is_empty() => *title = value,
-        "lang" if lang.is_empty() => *lang = value,
-        "first-name" | "middle-name" | "last-name" | "nickname" => author_parts.push(value),
-        _ => {}
-    }
-}
-
-fn render_binary_ebook_info(logical_name: &str, size: i64, modified_unix: i64) -> String {
-    let filename = file_name(logical_name);
-    let ext = Path::new(logical_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    let mut text = base_info_text(filename, "ebook", size, modified_unix);
-    text.push_str(&format!("\nFormat: {ext} ebook"));
-    text.push_str("\nContent preview: metadata only for this binary ebook container");
-    to_json(&PreviewReadyDto {
-        kind: "ebook".to_string(),
-        title: format!("{filename} - ebook"),
-        format: Some("plain".to_string()),
-        language: Some("text".to_string()),
-        text: Some(text),
-        office_layout: None,
-        listing: None,
-        table: None,
-        markdown: None,
-    })
-}
-
-fn ebook_markdown_json(format: &str, title: &str, markdown: String) -> String {
-    to_json(&PreviewReadyDto {
-        kind: "ebook".to_string(),
-        title: format!("{title} - {format}"),
-        format: Some("markdown".to_string()),
-        language: Some("markdown".to_string()),
-        text: Some(markdown),
-        office_layout: None,
-        listing: None,
-        table: None,
-        markdown: None,
-    })
-}
-
-fn append_metadata_line(markdown: &mut String, label: &str, value: &str) {
-    let value = collapse_ws(value);
-    if !value.is_empty() {
-        markdown.push_str(&format!("**{label}:** {value}\n\n"));
-    }
-}
-
-fn collapse_ws(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn markdown_escape_line(value: &str) -> String {
-    value.replace('\n', " ").trim().to_string()
-}
-
-fn ebook_item_label(href: &str) -> String {
-    let filename = href.rsplit('/').next().unwrap_or(href);
-    let stem = filename
-        .rsplit_once('.')
-        .map(|(s, _)| s)
-        .unwrap_or(filename);
-    collapse_ws(&stem.replace(['_', '-'], " "))
-}
-
-fn push_markdown_limited(out: &mut String, value: &str, max_chars: usize) {
-    let current = out.chars().count();
-    if current >= max_chars {
-        return;
-    }
-    let remaining = max_chars - current;
-    let value_chars = value.chars().count();
-    if value_chars <= remaining {
-        out.push_str(value);
-        return;
-    }
-    out.extend(value.chars().take(remaining));
-    out.push_str("\n\n_Preview truncated._");
-}
-
-fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
-    values
-        .into_iter()
-        .find(|value| !value.trim().is_empty())
-        .unwrap_or("")
-}
-
 // ── Archive preview ──────────────────────────────────────────────────────────
 
 const MAX_ARCHIVE_ENTRIES: usize = 5000;
@@ -14016,7 +9370,7 @@ const ZIP_EOCD_MIN_BYTES: u64 = 22;
 const ZIP_EOCD_MAX_TAIL_BYTES: u64 = ZIP_EOCD_MIN_BYTES + u16::MAX as u64;
 const MAX_TAR_SCAN_BYTES: u64 = 512 * 1024 * 1024;
 const TAR_SCAN_DEADLINE: Duration = Duration::from_secs(4);
-const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_ARCHIVE_EXTRACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE_EXTRACT_RATIO: u64 = 1000;
 const ARCHIVE_EXTRACT_DEADLINE: Duration = Duration::from_secs(4);
@@ -14584,13 +9938,59 @@ pub fn extract_archive_entry_to_temp(
 }
 
 pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
-    mut reader: R,
+    reader: R,
     source_len: u64,
     logical_name: &str,
     entry_path: &str,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Result<String, ReaderPreviewError> {
+    let normalized =
+        normalize_archive_entry_path(entry_path).ok_or(ReaderPreviewError::Malformed)?;
+    let root = create_archive_extract_root().ok_or(ReaderPreviewError::Io)?;
+    let target = root.join(archive_extract_output_name(&normalized));
+    let result = (|| {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|_| ReaderPreviewError::Io)?;
+        extract_archive_entry_to_writer_reader(
+            reader,
+            source_len,
+            logical_name,
+            &normalized,
+            &mut output,
+            MAX_ARCHIVE_EXTRACT_BYTES,
+            cancel_cb,
+        )?;
+        target
+            .to_str()
+            .map(str::to_string)
+            .ok_or(ReaderPreviewError::Io)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&root);
+    }
+    result
+}
+
+/// Stream one bounded ZIP entry into a caller-provided writer.
+///
+/// The destination is not path-derived and receives no bytes beyond `output_capacity`. A failed or
+/// cancelled call may leave a partial prefix in the caller's object; the caller must discard it.
+pub fn extract_archive_entry_to_writer_reader<R: Read + Seek, W: Write>(
+    mut reader: R,
+    source_len: u64,
+    logical_name: &str,
+    entry_path: &str,
+    output: &mut W,
+    output_capacity: u64,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<u64, ReaderPreviewError> {
     if source_len > MAX_ARCHIVE_HANDLE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if output_capacity > MAX_ARCHIVE_EXTRACT_BYTES {
         return Err(ReaderPreviewError::LimitExceeded);
     }
     if preview_cancelled(cancel_cb) {
@@ -14650,12 +10050,13 @@ pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
     if entry.is_dir()
         || entry.encrypted()
         || !archive_entry_within_extract_budget(entry.size(), entry.compressed_size())
+        || entry.size() > output_capacity
     {
         return Err(ReaderPreviewError::LimitExceeded);
     }
 
     let started = Instant::now();
-    let mut bytes = Vec::with_capacity((entry.size() as usize).min(1024 * 1024));
+    let mut written = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
         if preview_cancelled(cancel_cb) {
@@ -14672,47 +10073,26 @@ pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
         if read == 0 {
             break;
         }
-        if bytes
-            .len()
-            .checked_add(read)
-            .is_none_or(|length| length > MAX_ARCHIVE_EXTRACT_BYTES as usize)
-        {
+        let Some(next_written) = written.checked_add(read as u64) else {
+            return Err(ReaderPreviewError::LimitExceeded);
+        };
+        if next_written > output_capacity || next_written > MAX_ARCHIVE_EXTRACT_BYTES {
             return Err(ReaderPreviewError::LimitExceeded);
         }
-        bytes.extend_from_slice(&buffer[..read]);
+        output
+            .write_all(&buffer[..read])
+            .map_err(|_| ReaderPreviewError::Io)?;
+        written = next_written;
     }
     drop(entry);
     if preview_cancelled(cancel_cb) {
         return Err(ReaderPreviewError::Cancelled);
     }
-
-    let root = create_archive_extract_root().ok_or(ReaderPreviewError::Io)?;
-    let target = root.join(archive_extract_output_name(&normalized));
-    let result = (|| {
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .map_err(|_| ReaderPreviewError::Io)?;
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        output
-            .write_all(&bytes)
-            .map_err(|_| ReaderPreviewError::Io)?;
-        drop(output);
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        target
-            .to_str()
-            .map(str::to_string)
-            .ok_or(ReaderPreviewError::Io)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&root);
+    output.flush().map_err(|_| ReaderPreviewError::Io)?;
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
     }
-    result
+    Ok(written)
 }
 
 pub(crate) fn discard_archive_extract_path(path: &str) {
@@ -14789,6 +10169,77 @@ fn read_office_zip_bytes<R: Read + Seek>(
     }
 
     Ok(None)
+}
+
+fn read_office_layout_image_reference<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    requested_ref: &str,
+    expected_root: &str,
+) -> OfficeResult<Option<(String, u64)>> {
+    let Some(requested_ref) =
+        canonical_office_media_ref(requested_ref, Some(expected_root))
+    else {
+        return Ok(None);
+    };
+    let mut exact_match: Option<(usize, String, u64)> = None;
+    let mut exact_ambiguous = false;
+    let mut folded_match: Option<(usize, String, u64)> = None;
+    let mut folded_ambiguous = false;
+
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        context.check_cancelled()?;
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
+        let Some(actual_ref) =
+            canonical_office_media_ref(entry.name(), Some(expected_root))
+        else {
+            continue;
+        };
+        if actual_ref == requested_ref {
+            if exact_match.is_some() {
+                exact_ambiguous = true;
+            } else {
+                exact_match = Some((i, actual_ref, entry.size()));
+            }
+        } else if actual_ref.eq_ignore_ascii_case(&requested_ref) {
+            if folded_match.is_some() {
+                folded_ambiguous = true;
+            } else {
+                folded_match = Some((i, actual_ref, entry.size()));
+            }
+        }
+    }
+
+    let selected = if exact_ambiguous {
+        None
+    } else if exact_match.is_some() {
+        exact_match
+    } else if folded_ambiguous {
+        None
+    } else {
+        folded_match
+    };
+    let Some((index, image_ref, declared_length)) = selected else {
+        return Ok(None);
+    };
+    if declared_length == 0 || declared_length > MAX_OFFICE_INLINE_IMAGE_BYTES {
+        return Ok(None);
+    }
+    let mut entry = match zip.by_index(index) {
+        Ok(entry) => entry,
+        Err(_) => return Ok(None),
+    };
+    let Some(bytes) =
+        read_office_limited_to_end(context, &mut entry, MAX_OFFICE_INLINE_IMAGE_BYTES)?
+    else {
+        return Ok(None);
+    };
+    if bytes.is_empty() || bytes.len() as u64 != declared_length {
+        return Ok(None);
+    }
+    Ok(Some((image_ref, bytes.len() as u64)))
 }
 
 fn read_office_limited_to_end<R: Read>(
@@ -15302,6 +10753,211 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
 
     best.map(|(_, width, height, bgra)| (width, height, bgra))
         .ok_or(ReaderPreviewError::Malformed)
+}
+
+pub(crate) fn office_layout_image_ref_is_valid(
+    logical_name: &str,
+    image_ref: &str,
+) -> bool {
+    let Some(expected_root) = office_media_root_for_path(logical_name) else {
+        return false;
+    };
+    canonical_office_media_ref(image_ref, Some(expected_root))
+        .is_some_and(|normalized| normalized == image_ref)
+}
+
+pub(crate) fn extract_office_layout_image_bgra_reader<R: Read + Seek>(
+    reader: R,
+    source_len: u64,
+    logical_name: &str,
+    image_ref: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(u32, u32, Vec<u8>), ReaderPreviewError> {
+    if source_len > MAX_OFFICE_INPUT_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if target_width == 0
+        || target_height == 0
+        || target_width > MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
+        || target_height > MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
+    {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let Some(expected_root) = office_media_root_for_path(logical_name) else {
+        return Err(ReaderPreviewError::Malformed);
+    };
+    let Some(canonical_ref) =
+        canonical_office_media_ref(image_ref, Some(expected_root))
+    else {
+        return Err(ReaderPreviewError::Malformed);
+    };
+    if canonical_ref != image_ref {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let Some(required_format) = office_image_format(&canonical_ref) else {
+        return Err(ReaderPreviewError::Malformed);
+    };
+
+    let mut zip = open_validated_zip(
+        reader,
+        source_len,
+        MAX_OFFICE_ZIP_ENTRIES as u64,
+        cancel_cb,
+    )?;
+    let mut selected: Option<(usize, u64)> = None;
+    for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
+        if entry.name() != canonical_ref {
+            continue;
+        }
+        if canonical_office_media_ref(entry.name(), Some(expected_root)).as_deref()
+            != Some(canonical_ref.as_str())
+            || selected.is_some()
+        {
+            return Err(ReaderPreviewError::Malformed);
+        }
+        selected = Some((i, entry.size()));
+    }
+    let Some((index, declared_length)) = selected else {
+        return Err(ReaderPreviewError::Malformed);
+    };
+    if declared_length == 0 || declared_length > MAX_OFFICE_INLINE_IMAGE_BYTES {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+
+    let mut context = OfficeContext::new(cancel_cb);
+    let mut entry = zip
+        .by_index(index)
+        .map_err(|_| ReaderPreviewError::Malformed)?;
+    let bytes = read_office_limited_to_end(
+        &mut context,
+        &mut entry,
+        MAX_OFFICE_INLINE_IMAGE_BYTES,
+    )
+    .map_err(office_reader_error)?
+    .ok_or(ReaderPreviewError::LimitExceeded)?;
+    if bytes.is_empty() || bytes.len() as u64 != declared_length {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+
+    let image_reader = ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+        .with_guessed_format()
+        .map_err(|_| ReaderPreviewError::Malformed)?;
+    if image_reader.format() != Some(required_format) {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let (width, height) = image_reader
+        .into_dimensions()
+        .map_err(|_| ReaderPreviewError::Malformed)?;
+    if width == 0
+        || height == 0
+        || width > MAX_EMBEDDED_IMAGE_DIMENSION
+        || height > MAX_EMBEDDED_IMAGE_DIMENSION
+        || u64::from(width)
+            .checked_mul(u64::from(height))
+            .is_none_or(|pixels| pixels > MAX_EMBEDDED_IMAGE_PIXELS)
+    {
+        return Err(ReaderPreviewError::LimitExceeded);
+    }
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let image = image::load_from_memory_with_format(&bytes, required_format)
+        .map_err(|_| ReaderPreviewError::Malformed)?;
+    if image.dimensions() != (width, height) {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    office_layout_image_to_bgra(
+        image,
+        target_width,
+        target_height,
+        cancel_cb,
+    )
+}
+
+fn office_image_format(image_ref: &str) -> Option<ImageFormat> {
+    let lower = image_ref.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        Some(ImageFormat::Png)
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some(ImageFormat::Jpeg)
+    } else if lower.ends_with(".ico") {
+        Some(ImageFormat::Ico)
+    } else if lower.ends_with(".webp") {
+        Some(ImageFormat::WebP)
+    } else if lower.ends_with(".bmp") {
+        Some(ImageFormat::Bmp)
+    } else {
+        None
+    }
+}
+
+fn office_layout_image_to_bgra(
+    image: DynamicImage,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<extern "C" fn() -> bool>,
+) -> Result<(u32, u32, Vec<u8>), ReaderPreviewError> {
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+    let (original_width, original_height) = image.dimensions();
+    if original_width == 0 || original_height == 0 {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    let scale = (target_width as f64 / original_width as f64)
+        .min(target_height as f64 / original_height as f64)
+        .min(1.0);
+    let width = ((original_width as f64 * scale).round() as u32).max(1);
+    let height = ((original_height as f64 * scale).round() as u32).max(1);
+    let raster = if (width, height) == (original_width, original_height) {
+        image
+    } else {
+        image.resize_exact(width, height, image::imageops::FilterType::Triangle)
+    };
+    if preview_cancelled(cancel_cb) {
+        return Err(ReaderPreviewError::Cancelled);
+    }
+
+    let rgba = raster.to_rgba8();
+    let output_length = usize::try_from(
+        u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(ReaderPreviewError::LimitExceeded)?,
+    )
+    .map_err(|_| ReaderPreviewError::LimitExceeded)?;
+    let mut bgra = Vec::with_capacity(output_length);
+    for (index, pixel) in rgba.chunks_exact(4).enumerate() {
+        if index % 65_536 == 0 && preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let red = pixel[0] as u32;
+        let green = pixel[1] as u32;
+        let blue = pixel[2] as u32;
+        let alpha = pixel[3] as u32;
+        bgra.push(((blue * alpha + 127) / 255) as u8);
+        bgra.push(((green * alpha + 127) / 255) as u8);
+        bgra.push(((red * alpha + 127) / 255) as u8);
+        bgra.push(alpha as u8);
+    }
+    if bgra.len() != output_length {
+        return Err(ReaderPreviewError::Malformed);
+    }
+    Ok((width, height, bgra))
 }
 
 fn office_media_roots_for_path(path: &str) -> &'static [&'static str] {
@@ -16324,303 +11980,6 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
     Some((width, height, bgra))
 }
 
-// ── Torrent preview ─────────────────────────────────────────────────────────
-
-pub fn render_torrent(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    if preview_cancelled(cancel_cb) {
-        return String::new();
-    }
-    let (size, modified_unix) = file_size_modified(path);
-    if size < 0 || size as u64 > MAX_TORRENT_BYTES {
-        return render_info(path, "torrent", size, modified_unix);
-    }
-    let Ok(mut file) = fs::File::open(path) else {
-        return String::new();
-    };
-    render_torrent_reader(&mut file, path, size, modified_unix, cancel_cb).unwrap_or_default()
-}
-
-pub fn render_torrent_reader<R: Read>(
-    reader: &mut R,
-    logical_name: &str,
-    size: i64,
-    modified_unix: i64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<String, ReaderPreviewError> {
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    if size < 0 || size as u64 > MAX_TORRENT_BYTES {
-        return Ok(render_info(logical_name, "torrent", size, modified_unix));
-    }
-
-    let bytes =
-        read_reader_exact_bounded_cancelable(reader, size as u64, MAX_TORRENT_BYTES, cancel_cb)?;
-    let root = match parse_bencode(&bytes, cancel_cb) {
-        Some((value, _)) => value,
-        None if preview_cancelled(cancel_cb) => return Err(ReaderPreviewError::Cancelled),
-        None => return Err(ReaderPreviewError::Malformed),
-    };
-    let dict = match root {
-        BValue::Dict(d) => d,
-        _ => return Err(ReaderPreviewError::Malformed),
-    };
-
-    let filename = Path::new(logical_name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let announce = dict_get_string(&dict, b"announce").unwrap_or_default();
-    let created_by = dict_get_string(&dict, b"created by").unwrap_or_default();
-    let creation_date = dict_get_int(&dict, b"creation date").unwrap_or(0);
-    let comment = dict_get_string(&dict, b"comment").unwrap_or_default();
-    let info = match dict.get(b"info".as_slice()) {
-        Some(BValue::Dict(d)) => d,
-        _ => return Err(ReaderPreviewError::Malformed),
-    };
-
-    let name = dict_get_string(info, b"name").unwrap_or_else(|| filename.to_string());
-    let piece_length = dict_get_int(info, b"piece length").unwrap_or(0);
-    let pieces = match info.get(b"pieces".as_slice()) {
-        Some(BValue::Bytes(b)) => b.len() / 20,
-        _ => 0,
-    };
-
-    let mut entries: BTreeMap<String, ArchiveListingEntry> = BTreeMap::new();
-    let mut total_size = 0i64;
-    let mut file_count = 0u64;
-    let mut partial = false;
-
-    if let Some(BValue::List(files)) = info.get(b"files".as_slice()) {
-        for file in files {
-            if preview_cancelled(cancel_cb) {
-                return Err(ReaderPreviewError::Cancelled);
-            }
-            let BValue::Dict(file_dict) = file else {
-                continue;
-            };
-            let size = dict_get_int(file_dict, b"length").unwrap_or(0);
-            let path_parts = match file_dict.get(b"path".as_slice()) {
-                Some(BValue::List(parts)) => parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        BValue::Bytes(b) => Some(bytes_to_lossy(b)),
-                        _ => None,
-                    })
-                    .filter(|p| !p.is_empty())
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            };
-            if path_parts.is_empty() {
-                continue;
-            }
-            let full_name = path_parts.join("/");
-            total_size = total_size.saturating_add(size);
-            file_count = file_count.saturating_add(1);
-            if entries.len() >= MAX_ARCHIVE_ENTRIES {
-                partial = true;
-                continue;
-            }
-            add_parent_folders(&full_name, &mut entries);
-            if entries.len() >= MAX_ARCHIVE_ENTRIES {
-                partial = true;
-                continue;
-            }
-            let item_name = path_parts
-                .last()
-                .cloned()
-                .unwrap_or_else(|| full_name.clone());
-            entries.insert(
-                full_name.clone(),
-                (item_name, parent_of(&full_name), false, size, 0, 0, false),
-            );
-        }
-    } else if let Some(length) = dict_get_int(info, b"length") {
-        total_size = length;
-        file_count = 1;
-        entries.insert(
-            name.clone(),
-            (name.clone(), String::new(), false, length, 0, 0, false),
-        );
-    }
-
-    let mut text = String::new();
-    text.push_str(&format!("Name: {name}\n"));
-    text.push_str(&format!("Files: {}\n", format_number(file_count as i64)));
-    text.push_str(&format!("Total size: {}\n", format_bytes(total_size)));
-    if piece_length > 0 {
-        text.push_str(&format!("Piece length: {}\n", format_bytes(piece_length)));
-    }
-    if pieces > 0 {
-        text.push_str(&format!("Pieces: {}\n", format_number(pieces as i64)));
-    }
-    if !announce.is_empty() {
-        text.push_str(&format!("Tracker: {announce}\n"));
-    }
-    if creation_date > 0 {
-        text.push_str(&format!("Created: {}\n", format_timestamp(creation_date)));
-    }
-    if !created_by.is_empty() {
-        text.push_str(&format!("Created by: {created_by}\n"));
-    }
-    if !comment.is_empty() {
-        text.push_str(&format!("Comment: {comment}\n"));
-    }
-
-    let mut items = Vec::with_capacity(entries.len());
-    for (path, (name, parent, is_folder, size, packed, modified, is_encrypted)) in &entries {
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        items.push(PreviewListingItemDto {
-            name: name.clone(),
-            path: path.clone(),
-            parent_path: parent.clone(),
-            is_folder: *is_folder,
-            size: *size,
-            packed_size: *packed,
-            modified_unix: *modified,
-            typ: if *is_folder {
-                "Folder".to_string()
-            } else {
-                type_for_ext(name).to_string()
-            },
-            native_path: None,
-            is_encrypted: *is_encrypted,
-        });
-    }
-
-    let mut summary = format!(
-        "{} files - {}",
-        format_number(file_count as i64),
-        format_bytes(total_size)
-    );
-    if !announce.is_empty() {
-        summary.push_str(&format!(" - {announce}"));
-    }
-
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    Ok(to_json(&PreviewReadyDto {
-        kind: "torrent".to_string(),
-        title: format!("{name} - {} files", format_number(file_count as i64)),
-        format: Some("plain".to_string()),
-        language: Some("text".to_string()),
-        text: Some(text),
-        office_layout: None,
-        listing: Some(PreviewListingDto {
-            root_name: name,
-            root_path: String::new(),
-            listing_kind: "torrent".to_string(),
-            summary,
-            is_partial: partial,
-            can_preview_entries: false,
-            encrypted_file_count: 0,
-            items,
-        }),
-        table: None,
-        markdown: None,
-    }))
-}
-
-fn parse_bencode(
-    bytes: &[u8],
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Option<(BValue, usize)> {
-    if preview_cancelled(cancel_cb) {
-        return None;
-    }
-    let mut remaining_nodes = MAX_BENCODE_NODES;
-    parse_bencode_at(bytes, 0, 0, &mut remaining_nodes, cancel_cb)
-}
-
-fn parse_bencode_at(
-    bytes: &[u8],
-    mut i: usize,
-    depth: usize,
-    remaining_nodes: &mut usize,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Option<(BValue, usize)> {
-    if preview_cancelled(cancel_cb) || depth > MAX_BENCODE_DEPTH || *remaining_nodes == 0 {
-        return None;
-    }
-    *remaining_nodes -= 1;
-    match *bytes.get(i)? {
-        b'i' => {
-            i += 1;
-            let end = bytes[i..].iter().position(|b| *b == b'e')? + i;
-            let n = std::str::from_utf8(&bytes[i..end])
-                .ok()?
-                .parse::<i64>()
-                .ok()?;
-            Some((BValue::Int(n), end + 1))
-        }
-        b'l' => {
-            i += 1;
-            let mut values = Vec::new();
-            while *bytes.get(i)? != b'e' {
-                if preview_cancelled(cancel_cb) { return None; }
-                let (value, next) = parse_bencode_at(bytes, i, depth + 1, remaining_nodes, cancel_cb)?;
-                values.push(value);
-                i = next;
-            }
-            Some((BValue::List(values), i + 1))
-        }
-        b'd' => {
-            i += 1;
-            let mut values = BTreeMap::new();
-            while *bytes.get(i)? != b'e' {
-                if preview_cancelled(cancel_cb) { return None; }
-                let (key, next) = parse_bytes_at(bytes, i)?;
-                let (value, next) = parse_bencode_at(bytes, next, depth + 1, remaining_nodes, cancel_cb)?;
-                values.insert(key, value);
-                i = next;
-            }
-            Some((BValue::Dict(values), i + 1))
-        }
-        b'0'..=b'9' => {
-            let (value, next) = parse_bytes_at(bytes, i)?;
-            Some((BValue::Bytes(value), next))
-        }
-        _ => None,
-    }
-}
-
-fn parse_bytes_at(bytes: &[u8], i: usize) -> Option<(Vec<u8>, usize)> {
-    let colon = bytes[i..].iter().position(|b| *b == b':')? + i;
-    let len = std::str::from_utf8(&bytes[i..colon])
-        .ok()?
-        .parse::<usize>()
-        .ok()?;
-    let start = colon + 1;
-    let end = start.checked_add(len)?;
-    if end > bytes.len() {
-        return None;
-    }
-    Some((bytes[start..end].to_vec(), end))
-}
-
-fn dict_get_int(dict: &BTreeMap<Vec<u8>, BValue>, key: &[u8]) -> Option<i64> {
-    match dict.get(key) {
-        Some(BValue::Int(n)) => Some(*n),
-        _ => None,
-    }
-}
-
-fn dict_get_string(dict: &BTreeMap<Vec<u8>, BValue>, key: &[u8]) -> Option<String> {
-    match dict.get(key) {
-        Some(BValue::Bytes(b)) => Some(bytes_to_lossy(b)),
-        _ => None,
-    }
-}
-
-fn bytes_to_lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .trim_matches(char::from(0))
-        .to_string()
-}
-
 fn render_zip_archive_from_zip<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     logical_name: &str,
@@ -17217,236 +12576,7 @@ fn parent_of(path: &str) -> String {
     }
 }
 
-fn type_for_ext(name: &str) -> &'static str {
-    let ext = Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    if ext.is_empty() {
-        return "File";
-    }
-    // Leak is fine — these are tiny static strings. But we can't return owned String,
-    // so we use a match on common extensions and fall back to "File".
-    match ext.to_ascii_lowercase().as_str() {
-        "txt" | "log" => "TXT File",
-        "md" => "MD File",
-        "json" => "JSON File",
-        "xml" => "XML File",
-        "png" => "PNG File",
-        "jpg" | "jpeg" => "JPEG File",
-        "gif" => "GIF File",
-        "bmp" => "BMP File",
-        "pdf" => "PDF File",
-        "zip" => "ZIP File",
-        "jar" => "JAR File",
-        "apk" => "APK File",
-        "apks" => "APKS File",
-        "aab" => "Android App Bundle",
-        "msix" => "MSIX Package",
-        "msixbundle" => "MSIX Bundle",
-        "appx" => "APPX Package",
-        "appxbundle" => "APPX Bundle",
-        "torrent" => "Torrent File",
-        "img" => "Disk Image",
-        "epub" => "EPUB Book",
-        "fb2" => "FB2 Book",
-        "mobi" => "MOBI Book",
-        "azw" | "azw3" => "Kindle Book",
-        "nupkg" => "NuGet Package",
-        "vsix" => "VSIX Package",
-        "whl" => "Python Wheel",
-        "cbz" => "CBZ File",
-        "xpi" => "XPI File",
-        "tar" => "TAR File",
-        "tgz" => "TGZ File",
-        "gz" => "GZIP File",
-        "docx" => "DOCX File",
-        "xlsx" => "XLSX File",
-        "pptx" => "PPTX File",
-        "mp4" => "MP4 File",
-        "mp3" => "MP3 File",
-        "exe" => "Application",
-        "dll" => "Application Extension",
-        "sys" => "System File",
-        "scr" => "Screen Saver",
-        "cs" => "CS File",
-        "rs" => "RS File",
-        "py" => "PY File",
-        "js" => "JS File",
-        "ts" => "TS File",
-        "html" | "htm" => "HTML File",
-        "css" => "CSS File",
-        _ => "File",
-    }
-}
-
-// ── Folder preview ───────────────────────────────────────────────────────────
-
-const MAX_FOLDER_ITEMS: usize = 5000;
-
-/// Produce JSON for a folder listing: `{"kind":"folder","title":"...","listing":{...}}`.
-pub fn render_folder(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) -> String {
-    let root_name = Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path);
-    let root_full = Path::new(path)
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| path.to_string());
-
-    let mut items = Vec::new();
-    let mut total_bytes = 0i64;
-    let mut file_count = 0u64;
-    let mut folder_count = 0u64;
-    let mut skipped = 0u64;
-    let mut partial = false;
-
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if preview_cancelled(cancel_cb) {
-                return String::new();
-            }
-            if items.len() >= MAX_FOLDER_ITEMS {
-                partial = true;
-                break;
-            }
-            let entry_path = entry.path();
-            let Ok(meta) = fs::symlink_metadata(&entry_path) else {
-                skipped += 1;
-                continue;
-            };
-            if meta.is_dir() || meta.is_file() {
-                let is_folder = meta.is_dir();
-                let size = if is_folder { 0 } else { meta.len() as i64 };
-                let name = entry_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let native = entry_path.to_string_lossy().to_string();
-                let modified = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                if is_folder {
-                    folder_count += 1;
-                } else {
-                    file_count += 1;
-                    total_bytes += size;
-                }
-                let virtual_path = if is_folder {
-                    format!("{}/", name)
-                } else {
-                    name.clone()
-                };
-                let typ = if is_folder {
-                    "Folder".to_string()
-                } else {
-                    type_for_ext(&name).to_string()
-                };
-                items.push(PreviewListingItemDto {
-                    name,
-                    path: virtual_path,
-                    parent_path: String::new(),
-                    is_folder,
-                    size,
-                    packed_size: 0,
-                    modified_unix: modified,
-                    typ,
-                    native_path: Some(native),
-                    is_encrypted: false,
-                });
-            }
-        }
-    } else {
-        skipped += 1;
-    }
-
-    // Sort: folders first, then by name (case-insensitive)
-    items.sort_by_cached_key(|item| (!item.is_folder, item.name.to_ascii_lowercase()));
-
-    let mut summary = format!(
-        "{} files, {} folders - {}",
-        format_number(file_count as i64),
-        format_number(folder_count as i64),
-        format_bytes(total_bytes)
-    );
-    if skipped > 0 {
-        summary.push_str(&format!(
-            " - {} inaccessible",
-            format_number(skipped as i64)
-        ));
-    }
-    if partial {
-        summary.push_str(" - partial");
-    }
-
-    to_json(&PreviewReadyDto {
-        kind: "folder".to_string(),
-        title: format!(
-            "{root_name} - {} files, {} folders",
-            format_number(file_count as i64),
-            format_number(folder_count as i64)
-        ),
-        format: None,
-        language: None,
-        text: None,
-        office_layout: None,
-        listing: Some(PreviewListingDto {
-            root_name: root_name.to_string(),
-            root_path: root_full,
-            listing_kind: "folder".to_string(),
-            summary,
-            is_partial: partial,
-            can_preview_entries: true,
-            encrypted_file_count: 0,
-            items,
-        }),
-        table: None,
-        markdown: None,
-    })
-}
-
 // ── Shared helpers ───────────────────────────────────────────────────────────
-
-fn format_number(n: i64) -> String {
-    // Thousands separator (comma)
-    let abs = n.unsigned_abs();
-    let s = abs.to_string();
-    let chars: Vec<char> = s.chars().rev().collect();
-    let mut out = String::new();
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*c);
-    }
-    let result: String = out.chars().rev().collect();
-    if n < 0 {
-        format!("-{}", result)
-    } else {
-        result
-    }
-}
-
-fn format_bytes(bytes: i64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} B", format_number(bytes))
-    } else {
-        format!("{:.2} {}", value, UNITS[unit])
-    }
-}
 
 fn format_timestamp(unix: i64) -> String {
     if unix == 0 {
@@ -17482,6 +12612,72 @@ fn days_to_date(days_since_epoch: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
     use std::io::{Cursor, Write};
+
+    fn animation_probe_gif(frame_count: usize) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut encoded, 1, 1, &[]).expect("GIF encoder");
+            for index in 0..frame_count {
+                let mut rgba = if index % 2 == 0 {
+                    vec![255, 0, 0, 255]
+                } else {
+                    vec![0, 0, 255, 255]
+                };
+                let mut frame = gif::Frame::from_rgba_speed(1, 1, &mut rgba, 10);
+                frame.delay = 2;
+                encoder.write_frame(&frame).expect("GIF frame");
+            }
+        }
+        encoded
+    }
+
+    #[test]
+    fn animation_probe_distinguishes_static_animated_and_unknown_gif() {
+        let static_gif = animation_probe_gif(1);
+        let animated_gif = animation_probe_gif(2);
+
+        assert_eq!(
+            probe_image_animation_reader(
+                &mut Cursor::new(&static_gif),
+                "static.gif",
+                static_gif.len() as u64,
+            ),
+            Some(ImageAnimationProbe {
+                is_animated: Some(false),
+            })
+        );
+        assert_eq!(
+            probe_image_animation_reader(
+                &mut Cursor::new(&animated_gif),
+                "animated.gif",
+                animated_gif.len() as u64,
+            ),
+            Some(ImageAnimationProbe {
+                is_animated: Some(true),
+            })
+        );
+        assert_eq!(
+            probe_image_animation_reader(
+                &mut Cursor::new(&static_gif),
+                "bounded.gif",
+                static_gif.len() as u64 + 1,
+            ),
+            Some(ImageAnimationProbe { is_animated: None })
+        );
+    }
+
+    #[test]
+    fn animation_probe_skips_non_animation_extensions_before_reading() {
+        let mut reader = Cursor::new(b"not an image".to_vec());
+        reader.set_position(5);
+        let source_size = reader.get_ref().len() as u64;
+
+        assert_eq!(
+            probe_image_animation_reader(&mut reader, "photo.jpg", source_size),
+            None
+        );
+        assert_eq!(reader.position(), 5);
+    }
 
     fn test_office_context() -> OfficeContext {
         OfficeContext::new(None)
@@ -18000,41 +13196,6 @@ mod tests {
     }
 
     #[test]
-    fn text_preview_decodes_windows_1252_config() {
-        let path = std::env::temp_dir().join(format!(
-            "quicklook-next-text-{}.ini",
-            std::process::id()
-        ));
-        std::fs::write(&path, b"name=caf\xE9").expect("write Windows-1252 config");
-        let json = render_text(path.to_str().unwrap(), None);
-        let _ = std::fs::remove_file(path);
-
-        assert!(json.contains("name=café"));
-        assert!(json.contains("\"language\":\"ini\""));
-    }
-
-    #[test]
-    fn utf8_text_truncation_stays_on_char_boundary() {
-        let mut bytes = vec![b'a'; MAX_TEXT_BYTES - 1];
-        bytes.extend_from_slice("中".as_bytes());
-        bytes.truncate(MAX_TEXT_BYTES);
-
-        trim_text_bytes_to_safe_boundary(&mut bytes);
-
-        assert_eq!(bytes.len(), MAX_TEXT_BYTES - 1);
-        assert!(std::str::from_utf8(&bytes).is_ok());
-    }
-
-    #[test]
-    fn utf16_text_truncation_drops_half_code_unit() {
-        let mut bytes = vec![0xFF, 0xFE, 0x41];
-
-        trim_text_bytes_to_safe_boundary(&mut bytes);
-
-        assert_eq!(bytes, vec![0xFF, 0xFE]);
-    }
-
-    #[test]
     fn xml_unescape_supports_named_and_numeric_entities() {
         assert_eq!(
             xml_unescape_str("A&#65;&#x41;&lt;&gt;&amp;&quot;&apos;&unknown;"),
@@ -18516,6 +13677,13 @@ mod tests {
         write_ascii_entry(&mut tiff, ifd0_entries, 1, 0x0110, "PhoneCam");
         write_short_entry(&mut tiff, ifd0_entries, 2, 0x0112, 6);
         write_ascii_entry(&mut tiff, ifd0_entries, 3, 0x0131, "QuickCamOS");
+        write_ascii_entry(
+            &mut tiff,
+            ifd0_entries,
+            6,
+            0x0132,
+            "2025:01:02 03:04:05",
+        );
 
         let exif_ifd = tiff.len() as u32;
         write_long_entry(&mut tiff, ifd0_entries, 4, 0x8769, exif_ifd);
@@ -18567,7 +13735,7 @@ mod tests {
         assert_eq!(metadata.lens_serial.as_deref(), Some("LENS-24"));
         assert!((metadata.latitude.unwrap() - 31.2304).abs() < 0.0001);
         assert!((metadata.longitude.unwrap() - 121.4737).abs() < 0.0001);
-        assert!((metadata.altitude.unwrap() - 12.5).abs() < 0.001);
+        assert!((metadata.altitude.unwrap() + 12.5).abs() < 0.001);
         assert!((metadata.direction.unwrap() - 180.0).abs() < 0.001);
 
         let path = std::env::temp_dir().join("quicklook-next-exif-smoke.jpg");
@@ -18587,6 +13755,12 @@ mod tests {
         bytes.extend_from_slice(&800u32.to_be_bytes());
         bytes.extend_from_slice(&600u32.to_be_bytes());
         bytes.extend_from_slice(&[8, 6, 0, 0, 1]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&9u32.to_be_bytes());
+        bytes.extend_from_slice(b"pHYs");
+        bytes.extend_from_slice(&3780u32.to_be_bytes());
+        bytes.extend_from_slice(&3780u32.to_be_bytes());
+        bytes.push(1);
         bytes.extend_from_slice(&0u32.to_be_bytes());
         bytes.extend_from_slice(&12u32.to_be_bytes());
         bytes.extend_from_slice(b"tEXt");
@@ -18608,6 +13782,54 @@ mod tests {
         assert_eq!(metadata.color_type.as_deref(), Some("truecolor with alpha"));
         assert_eq!(metadata.has_alpha, Some(true));
         assert_eq!(metadata.interlace.as_deref(), Some("Adam7"));
+        assert!((metadata.horizontal_resolution.unwrap() - 96.012).abs() < 0.001);
+        assert!((metadata.vertical_resolution.unwrap() - 96.012).abs() < 0.001);
+    }
+
+    #[test]
+    fn image_metadata_dispatches_by_magic_instead_of_the_logical_extension() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x89PNG\r\n\x1A\n");
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&2u32.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        let mut reader = std::io::Cursor::new(bytes);
+
+        let json = render_image_metadata_reader(&mut reader, "spoof.jpg", None)
+            .expect("magic-dispatched metadata");
+        let metadata: serde_json::Value =
+            serde_json::from_str(&json).expect("metadata json");
+
+        assert_eq!(metadata["format"], "PNG");
+        assert_eq!(metadata["width"], 2);
+        assert_eq!(metadata["height"], 1);
+    }
+
+    #[test]
+    fn jpeg_metadata_reads_frame_header_without_exif() {
+        let bytes = [
+            0xFF, 0xD8, // SOI
+            0xFF, 0xC0, // baseline SOF
+            0x00, 0x11, // segment length
+            0x08, // sample precision
+            0x00, 0x03, // height
+            0x00, 0x02, // width
+            0x03, // components
+            0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+            0xFF, 0xD9, // EOI
+        ];
+
+        let metadata =
+            parse_jpeg_exif_metadata_from_bytes(&bytes).expect("jpeg frame metadata");
+
+        assert_eq!(metadata.format.as_deref(), Some("JPEG"));
+        assert_eq!(metadata.width, Some(2));
+        assert_eq!(metadata.height, Some(3));
+        assert_eq!(metadata.bit_depth, Some(8));
+        assert_eq!(metadata.color_type.as_deref(), Some("YCbCr"));
     }
 
     #[test]
@@ -18690,10 +13912,13 @@ mod tests {
         bytes.extend_from_slice(&[0, 0, 0]);
         bytes.extend_from_slice(&799u32.to_le_bytes()[..3]);
         bytes.extend_from_slice(&599u32.to_le_bytes()[..3]);
-        bytes.extend_from_slice(b"ANMF");
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(b"ANMF");
-        bytes.extend_from_slice(&0u32.to_le_bytes());
+        for duration in [40u32, 60u32] {
+            bytes.extend_from_slice(b"ANMF");
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&[0; 12]);
+            bytes.extend_from_slice(&duration.to_le_bytes()[..3]);
+            bytes.push(0);
+        }
 
         let metadata = parse_webp_metadata_from_bytes(&bytes).expect("webp metadata");
 
@@ -18703,6 +13928,59 @@ mod tests {
         assert_eq!(metadata.has_alpha, Some(true));
         assert_eq!(metadata.animated, Some(true));
         assert_eq!(metadata.frame_count, Some(2));
+        assert_eq!(metadata.duration_ms, Some(100));
+    }
+
+    #[test]
+    fn webp_lossless_alpha_flag_is_not_inferred_from_the_codec_alone() {
+        let make_webp = |alpha: bool| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"RIFF");
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(b"WEBP");
+            bytes.extend_from_slice(b"VP8L");
+            bytes.extend_from_slice(&5u32.to_le_bytes());
+            bytes.extend_from_slice(&[0x2F, 0, 0, 0, if alpha { 0x10 } else { 0 }]);
+            bytes.push(0);
+            bytes
+        };
+
+        let opaque =
+            parse_webp_metadata_from_bytes(&make_webp(false)).expect("opaque lossless webp");
+        let alpha =
+            parse_webp_metadata_from_bytes(&make_webp(true)).expect("alpha lossless webp");
+
+        assert_eq!(opaque.has_alpha, Some(false));
+        assert_eq!(alpha.has_alpha, Some(true));
+    }
+
+    #[test]
+    fn partial_gif_metadata_does_not_claim_complete_animation_totals() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GIF89a");
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 0]);
+        bytes.push(0x2C);
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0x02]);
+        while bytes.len() < 1024 * 1024 + 512 {
+            bytes.push(255);
+            bytes.extend_from_slice(&[0; 255]);
+        }
+        let mut reader = std::io::Cursor::new(bytes);
+
+        let json = render_image_metadata_reader(&mut reader, "large.gif", None)
+            .expect("partial gif metadata");
+        let metadata: serde_json::Value =
+            serde_json::from_str(&json).expect("metadata json");
+
+        assert_eq!(metadata["format"], "GIF");
+        assert!(metadata["animated"].is_null());
+        assert!(metadata["frameCount"].is_null());
+        assert!(metadata["durationMs"].is_null());
     }
 
     #[test]
@@ -18720,10 +13998,29 @@ mod tests {
         bytes.extend_from_slice(b"WEBP");
         bytes.extend_from_slice(b"VP8X");
         bytes.extend_from_slice(&10u32.to_le_bytes());
-        bytes.push(0x14);
+        bytes.push(0x1C);
         bytes.extend_from_slice(&[0, 0, 0]);
         bytes.extend_from_slice(&639u32.to_le_bytes()[..3]);
         bytes.extend_from_slice(&479u32.to_le_bytes()[..3]);
+
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.resize(8 + 2 + 3 * 12 + 4, 0);
+        write_le_u16(&mut tiff, 8, 3);
+        write_ascii_entry(&mut tiff, 10, 0, 0x010F, "Acme");
+        write_rational_entry(&mut tiff, 10, 1, 0x829D, 18, 10);
+        write_long_entry(&mut tiff, 10, 2, 0x0100, 999);
+        let mut exif = b"Exif\0\0".to_vec();
+        exif.extend_from_slice(&tiff);
+        bytes.extend_from_slice(b"EXIF");
+        bytes.extend_from_slice(&(exif.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&exif);
+        if exif.len() % 2 == 1 {
+            bytes.push(0);
+        }
+
         bytes.extend_from_slice(b"XMP ");
         bytes.extend_from_slice(&(xmp.len() as u32).to_le_bytes());
         bytes.extend_from_slice(xmp);
@@ -18740,6 +14037,8 @@ mod tests {
         assert_eq!(metadata.title.as_deref(), Some("Layered WebP"));
         assert_eq!(metadata.comment.as_deref(), Some("Alpha artwork"));
         assert_eq!(metadata.software.as_deref(), Some("QuickDraw"));
+        assert_eq!(metadata.make.as_deref(), Some("Acme"));
+        assert!((metadata.f_number.unwrap() - 1.8).abs() < 0.001);
     }
 
     #[test]
@@ -18748,8 +14047,8 @@ mod tests {
         tiff.extend_from_slice(b"II");
         tiff.extend_from_slice(&42u16.to_le_bytes());
         tiff.extend_from_slice(&8u32.to_le_bytes());
-        tiff.resize(8 + 2 + 8 * 12 + 4, 0);
-        write_le_u16(&mut tiff, 8, 8);
+        tiff.resize(8 + 2 + 11 * 12 + 4, 0);
+        write_le_u16(&mut tiff, 8, 11);
         let entries = 10;
         write_long_entry(&mut tiff, entries, 0, 0x0100, 1024);
         write_long_entry(&mut tiff, entries, 1, 0x0101, 768);
@@ -18759,6 +14058,9 @@ mod tests {
         write_short_entry(&mut tiff, entries, 5, 0x0112, 6);
         write_ascii_entry(&mut tiff, entries, 6, 0x0131, "ScanSoft");
         write_ascii_entry(&mut tiff, entries, 7, 0x0132, "2026:07:08 10:11:12");
+        write_rational_entry(&mut tiff, entries, 8, 0x011A, 11811, 100);
+        write_rational_entry(&mut tiff, entries, 9, 0x011B, 11811, 100);
+        write_short_entry(&mut tiff, entries, 10, 0x0128, 3);
 
         let metadata = parse_tiff_exif_metadata(&tiff).expect("tiff metadata");
 
@@ -18766,10 +14068,34 @@ mod tests {
         assert_eq!(metadata.height, Some(768));
         assert_eq!(metadata.bit_depth, Some(16));
         assert_eq!(metadata.compression.as_deref(), Some("LZW"));
-        assert_eq!(metadata.color_type.as_deref(), Some("RGB"));
+        assert_eq!(
+            metadata.photometric_interpretation.as_deref(),
+            Some("RGB")
+        );
+        assert!((metadata.horizontal_resolution.unwrap() - 299.9994).abs() < 0.001);
+        assert!((metadata.vertical_resolution.unwrap() - 299.9994).abs() < 0.001);
         assert_eq!(metadata.orientation, Some(6));
         assert_eq!(metadata.software.as_deref(), Some("ScanSoft"));
         assert_eq!(metadata.date_time.as_deref(), Some("2026:07:08 10:11:12"));
+    }
+
+    #[test]
+    fn tiff_resolution_without_an_absolute_unit_is_not_reported_as_dpi() {
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.resize(8 + 2 + 3 * 12 + 4, 0);
+        write_le_u16(&mut tiff, 8, 3);
+        let entries = 10;
+        write_rational_entry(&mut tiff, entries, 0, 0x011A, 300, 1);
+        write_rational_entry(&mut tiff, entries, 1, 0x011B, 300, 1);
+        write_short_entry(&mut tiff, entries, 2, 0x0128, 1);
+
+        let metadata = parse_tiff_exif_metadata(&tiff).expect("tiff metadata");
+
+        assert_eq!(metadata.horizontal_resolution, None);
+        assert_eq!(metadata.vertical_resolution, None);
     }
 
     fn append_exif_ifd(tiff: &mut Vec<u8>) {
@@ -18816,7 +14142,7 @@ mod tests {
         write_rational3_entry(tiff, entries, 1, 2, [(31, 1), (13, 1), (4944, 100)]);
         write_ascii_entry(tiff, entries, 2, 3, "E");
         write_rational3_entry(tiff, entries, 3, 4, [(121, 1), (28, 1), (2532, 100)]);
-        write_short_entry(tiff, entries, 4, 5, 0);
+        write_byte_entry(tiff, entries, 4, 5, 1);
         write_rational_entry(tiff, entries, 5, 6, 25, 2);
         write_rational_entry(tiff, entries, 6, 17, 180, 1);
     }
@@ -18843,6 +14169,14 @@ mod tests {
         write_le_u16(tiff, entry + 2, 3);
         write_le_u32(tiff, entry + 4, 1);
         write_le_u16(tiff, entry + 8, value);
+    }
+
+    fn write_byte_entry(tiff: &mut [u8], entries: usize, index: usize, tag: u16, value: u8) {
+        let entry = entries + index * 12;
+        write_le_u16(tiff, entry, tag);
+        write_le_u16(tiff, entry + 2, 1);
+        write_le_u32(tiff, entry + 4, 1);
+        tiff[entry + 8] = value;
     }
 
     fn write_long_entry(tiff: &mut [u8], entries: usize, index: usize, tag: u16, value: u32) {
@@ -19041,92 +14375,6 @@ mod tests {
             styles.get(1).and_then(|style| style.text_color.as_deref()),
             Some("#9C0006")
         );
-    }
-
-    #[test]
-    fn markdown_parser_emits_heading_and_inline_ast() {
-        let (blocks, partial) = parse_markdown_blocks("# Hello **QuickLook** and `Rust`", None);
-
-        assert!(!partial);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, "heading");
-        assert_eq!(blocks[0].level, 1);
-        assert!(blocks[0].inlines.iter().any(|i| i.kind == "strong"));
-        assert!(blocks[0].inlines.iter().any(|i| i.kind == "code"));
-    }
-
-    #[test]
-    fn markdown_parser_does_not_panic_on_non_ascii() {
-        let (blocks, partial) =
-            parse_markdown_blocks("# 中文标题\n\n这是一个含有 **加粗** 的中文字符串。", None);
-        assert!(!partial);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].kind, "heading");
-        assert_eq!(blocks[0].text, "中文标题");
-        assert_eq!(blocks[1].kind, "paragraph");
-        assert!(blocks[1].inlines.iter().any(|i| i.kind == "strong"));
-    }
-
-    #[test]
-    fn markdown_parser_emits_lists_quotes_and_code() {
-        let (blocks, partial) =
-            parse_markdown_blocks("> note\n\n- one\n- two\n\n```rs\nfn main() {}\n```", None);
-
-        assert!(!partial);
-        assert_eq!(blocks[0].kind, "blockquote");
-        assert_eq!(blocks[1].kind, "unorderedList");
-        assert_eq!(blocks[1].children.len(), 2);
-        assert_eq!(blocks[2].kind, "code");
-        assert_eq!(blocks[2].language, "rs");
-    }
-
-    #[test]
-    fn markdown_parser_emits_tables() {
-        let (blocks, partial) = parse_markdown_blocks("| A | B |\n|---|---|\n| 1 | 2 |", None);
-
-        assert!(!partial);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, "table");
-        assert_eq!(
-            blocks[0].table_headers,
-            vec!["A".to_string(), "B".to_string()]
-        );
-        assert_eq!(
-            blocks[0].table_rows[0],
-            vec!["1".to_string(), "2".to_string()]
-        );
-    }
-
-    #[test]
-    fn markdown_json_omits_duplicate_source_text() {
-        let json = render_markdown_json("README.md", "# Title\n\nBody", false, None);
-        let value: serde_json::Value = serde_json::from_str(&json).expect("markdown JSON");
-
-        assert!(value.get("markdown").is_some_and(|markdown| !markdown.is_null()));
-        assert!(value.get("text").is_none());
-    }
-
-    #[test]
-    fn delimited_table_retention_obeys_global_model_budgets() {
-        let wide = "x".repeat(MAX_TABLE_CELL_CHARS);
-        let text = (0..(MAX_TABLE_ROWS + 100))
-            .map(|index| format!("{index},{wide}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let (records, total, columns, partial) = parse_delimited_records(&text, ',', None);
-        let retained_cells = records.iter().map(Vec::len).sum::<usize>();
-        let retained_chars = records
-            .iter()
-            .flat_map(|row| row.iter())
-            .map(|cell| cell.chars().count())
-            .sum::<usize>();
-
-        assert_eq!(total, MAX_TABLE_ROWS + 100);
-        assert_eq!(columns, 2);
-        assert!(partial);
-        assert!(records.len() <= MAX_TABLE_ROWS + 1);
-        assert!(retained_cells <= MAX_TABLE_RETAINED_CELLS);
-        assert!(retained_chars <= MAX_TABLE_RETAINED_CHARS);
     }
 
     #[test]
