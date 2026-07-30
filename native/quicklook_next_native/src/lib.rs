@@ -150,8 +150,7 @@ const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ANIMATION_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
 const QL_THUMBNAIL_FLAG_BOUNDED_SIZE: u32 = 2;
-const QL_THUMBNAIL_KNOWN_FLAGS: u32 =
-    QL_THUMBNAIL_FLAG_CACHE_ONLY | QL_THUMBNAIL_FLAG_BOUNDED_SIZE;
+const QL_THUMBNAIL_KNOWN_FLAGS: u32 = QL_THUMBNAIL_FLAG_CACHE_ONLY | QL_THUMBNAIL_FLAG_BOUNDED_SIZE;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
@@ -261,7 +260,10 @@ pub extern "C" fn ql_start() -> i32 {
 #[no_mangle]
 pub extern "C" fn ql_stop() -> i32 {
     ffi_boundary(|| {
-        let thread = HOOK_THREAD.lock().ok().and_then(|mut runtime| runtime.take());
+        let thread = HOOK_THREAD
+            .lock()
+            .ok()
+            .and_then(|mut runtime| runtime.take());
         let Some(thread) = thread else {
             return 1;
         };
@@ -310,7 +312,9 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
         let mut msg = MSG::default();
         loop {
             let result = GetMessageW(&mut msg, None, 0, 0).0;
-            if result == 0 { break; }
+            if result == 0 {
+                break;
+            }
             if result == -1 {
                 emit("HOOK_FAILED\tPUMP\t-1");
                 break;
@@ -397,11 +401,13 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
-            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst) {
+            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
+            {
                 let _ = PostThreadMessageW(tid, WM_QL_ZOOM_IN, WPARAM(0), LPARAM(0));
             }
         } else if matches!(kb.vkCode, VK_OEM_MINUS_U32 | VK_SUBTRACT_U32) {
-            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst) {
+            if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
+            {
                 let _ = PostThreadMessageW(tid, WM_QL_ZOOM_OUT, WPARAM(0), LPARAM(0));
             }
         } else if kb.vkCode == VK_F5_U32 {
@@ -634,8 +640,9 @@ unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     }
     let item = items.GetItemAt(0)?;
     let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
-    let path = pw.0.to_string()
-        .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?;
+    let path =
+        pw.0.to_string()
+            .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?;
     Ok(vec![path])
 }
 
@@ -764,9 +771,9 @@ fn probe_json(path: &str) -> Option<String> {
     };
     let magic_hex: String = magic.iter().map(|b| format!("{b:02X}")).collect();
     let animation = if kind == "image" {
-        fs::File::open(path).ok().and_then(|mut file| {
-            preview::probe_image_animation_reader(&mut file, file_name, size)
-        })
+        fs::File::open(path)
+            .ok()
+            .and_then(|mut file| preview::probe_image_animation_reader(&mut file, file_name, size))
     } else {
         None
     }
@@ -972,8 +979,7 @@ const IMAGE_WAVEFORM_CHANNELS: usize = 3;
 const IMAGE_WAVEFORM_SAMPLE_LIMIT: f64 = 1_000_000.0;
 const IMAGE_WAVEFORM_PLANE_BYTES: usize =
     IMAGE_WAVEFORM_WIDTH as usize * IMAGE_WAVEFORM_HEIGHT as usize;
-const IMAGE_WAVEFORM_DENSITY_BYTES: usize =
-    IMAGE_WAVEFORM_PLANE_BYTES * IMAGE_WAVEFORM_CHANNELS;
+const IMAGE_WAVEFORM_DENSITY_BYTES: usize = IMAGE_WAVEFORM_PLANE_BYTES * IMAGE_WAVEFORM_CHANNELS;
 const IMAGE_WAVEFORM_PACKET_HEADER_BYTES: usize = 40;
 const MAX_IMAGE_WAVEFORM_PACKET_BYTES: usize = IMAGE_WAVEFORM_PACKET_HEADER_BYTES
     + MAX_IMAGE_RASTER_DIMENSION as usize * MAX_IMAGE_RASTER_DIMENSION as usize * 4
@@ -1002,13 +1008,7 @@ impl ImageWaveformAccumulator {
     }
 
     fn add_straight_rgba(&mut self, pixel_index: usize, rgba: &[u8]) {
-        self.add_rgb(
-            pixel_index,
-            rgba[0],
-            rgba[1],
-            rgba[2],
-            rgba[3],
-        );
+        self.add_rgb(pixel_index, rgba[0], rgba[1], rgba[2], rgba[3]);
     }
 
     fn add_premultiplied_rgba(&mut self, pixel_index: usize, rgba: &[u8]) {
@@ -1025,14 +1025,7 @@ impl ImageWaveformAccumulator {
         );
     }
 
-    fn add_rgb(
-        &mut self,
-        pixel_index: usize,
-        red: u8,
-        green: u8,
-        blue: u8,
-        alpha: u8,
-    ) {
+    fn add_rgb(&mut self, pixel_index: usize, red: u8, green: u8, blue: u8, alpha: u8) {
         if alpha == 0 || self.image_width == 0 {
             return;
         }
@@ -1053,9 +1046,8 @@ impl ImageWaveformAccumulator {
         let row = IMAGE_WAVEFORM_HEIGHT as usize
             - 1
             - value as usize * (IMAGE_WAVEFORM_HEIGHT as usize - 1) / 255;
-        let index = channel * IMAGE_WAVEFORM_PLANE_BYTES
-            + row * IMAGE_WAVEFORM_WIDTH as usize
-            + column;
+        let index =
+            channel * IMAGE_WAVEFORM_PLANE_BYTES + row * IMAGE_WAVEFORM_WIDTH as usize + column;
         self.counts[index] = self.counts[index].saturating_add(1);
     }
 
@@ -1106,15 +1098,7 @@ pub extern "C" fn ql_decode_image_cancelable(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        ql_decode_image_sized_cancelable(
-            path_utf8,
-            path_len,
-            0,
-            0,
-            out,
-            out_cap,
-            cancel_cb,
-        )
+        ql_decode_image_sized_cancelable(path_utf8, path_len, 0, 0, out, out_cap, cancel_cb)
     })
 }
 
@@ -1303,17 +1287,25 @@ pub unsafe extern "C" fn ql_decode_image_handle(
                 Some(required_format),
             )
         };
-        let (width, height, original_width, original_height, decode_ms, resize_ms, convert_ms, bgra) =
-            match decoded {
-                Some(decoded) => decoded,
-                None => {
-                    return if cancel_requested(cancel_cb) {
-                        QL_ERROR_CANCELLED
-                    } else {
-                        QL_ERROR_MALFORMED
-                    }
+        let (
+            width,
+            height,
+            original_width,
+            original_height,
+            decode_ms,
+            resize_ms,
+            convert_ms,
+            bgra,
+        ) = match decoded {
+            Some(decoded) => decoded,
+            None => {
+                return if cancel_requested(cancel_cb) {
+                    QL_ERROR_CANCELLED
+                } else {
+                    QL_ERROR_MALFORMED
                 }
-            };
+            }
+        };
         let mut packet = Vec::with_capacity(28 + bgra.len());
         packet.extend_from_slice(&width.to_le_bytes());
         packet.extend_from_slice(&height.to_le_bytes());
@@ -1399,12 +1391,7 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
             if data.len() as u64 != expected_length {
                 return QL_ERROR_LENGTH_MISMATCH;
             }
-            decode_svg_bgra_bytes_with_waveform(
-                &data,
-                target_width,
-                target_height,
-                cancel_cb,
-            )
+            decode_svg_bgra_bytes_with_waveform(&data, target_width, target_height, cancel_cb)
         } else {
             let required_format = match extension.as_str() {
                 "png" => ImageFormat::Png,
@@ -1535,11 +1522,7 @@ unsafe fn write_image_waveform_packet(
     ];
     for (index, value) in header.into_iter().enumerate() {
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                value.to_le_bytes().as_ptr(),
-                out_buf.add(index * 4),
-                4,
-            );
+            std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), out_buf.add(index * 4), 4);
         }
     }
     unsafe {
@@ -1631,9 +1614,11 @@ unsafe fn decode_animation_frames_handle_v2(
     if gif_only && format != HandleAnimationFormat::Gif {
         return QL_ERROR_INVALID_ARGUMENT;
     }
-    if let Err(status) =
-        validate_handle_image_dimensions(&mut file, format.image_format(), MAX_ANIMATED_SOURCE_PIXELS)
-    {
+    if let Err(status) = validate_handle_image_dimensions(
+        &mut file,
+        format.image_format(),
+        MAX_ANIMATED_SOURCE_PIXELS,
+    ) {
         return status;
     }
 
@@ -1658,16 +1643,7 @@ unsafe fn decode_animation_frames_handle_v2(
             }
         }
     };
-    unsafe {
-        write_animation_frames_v2(
-            width,
-            height,
-            &frames,
-            out_buf,
-            out_cap,
-            out_required,
-        )
-    }
+    unsafe { write_animation_frames_v2(width, height, &frames, out_buf, out_cap, out_required) }
 }
 
 /// Decode bounded GIF animation frames from a borrowed Windows file handle.
@@ -2026,12 +2002,21 @@ fn decode_image_bgra_reader_internal<R: Read + Seek>(
         return None;
     }
 
-    let target_width = if target_width > 0 { target_width } else { MAX_IMAGE_RASTER_DIMENSION };
-    let target_height = if target_height > 0 { target_height } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_width = if target_width > 0 {
+        target_width
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
+    let target_height = if target_height > 0 {
+        target_height
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
     let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
     let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
     let scale = if oriented_width > target_width || oriented_height > target_height {
-        (target_width as f64 / oriented_width as f64).min(target_height as f64 / oriented_height as f64)
+        (target_width as f64 / oriented_width as f64)
+            .min(target_height as f64 / oriented_height as f64)
     } else {
         1.0
     };
@@ -2103,54 +2088,99 @@ fn decode_image_bgra_reader_internal<R: Read + Seek>(
     ))
 }
 
-fn decode_gif_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
-    if cancel_requested(cancel_cb) { return None; }
+fn decode_gif_frames_bgra(
+    path: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     decode_gif_frames_bgra_reader(file, target_width, target_height, cancel_cb)
 }
 
-fn decode_gif_frames_bgra_reader<R: Read>(reader: R, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
-    if cancel_requested(cancel_cb) { return None; }
+fn decode_gif_frames_bgra_reader<R: Read>(
+    reader: R,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     let mut reader = options.read_info(BufReader::new(reader)).ok()?;
     let original_width = u32::from(reader.width());
     let original_height = u32::from(reader.height());
     if should_skip_native_image_decode(original_width, original_height)
-        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS
+    {
         return None;
     }
 
-    let target_width = if target_width > 0 { target_width } else { MAX_ANIMATED_FRAME_DIMENSION };
-    let target_height = if target_height > 0 { target_height } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_width = if target_width > 0 {
+        target_width
+    } else {
+        MAX_ANIMATED_FRAME_DIMENSION
+    };
+    let target_height = if target_height > 0 {
+        target_height
+    } else {
+        MAX_ANIMATED_FRAME_DIMENSION
+    };
     let target_width = target_width.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
     let target_height = target_height.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
     let scale = if original_width > target_width || original_height > target_height {
-        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
+        (target_width as f64 / original_width as f64)
+            .min(target_height as f64 / original_height as f64)
     } else {
         1.0
     };
     let width = ((original_width as f64 * scale).round() as u32).max(1);
     let height = ((original_height as f64 * scale).round() as u32).max(1);
-    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let frame_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     let max_frames_by_bytes = (MAX_ANIMATED_FRAME_BYTES / (frame_bytes + 4)).max(1);
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
-    let mut canvas = vec![0u8; (original_width as usize).checked_mul(original_height as usize)?.checked_mul(4)?];
+    let mut canvas = vec![
+        0u8;
+        (original_width as usize)
+            .checked_mul(original_height as usize)?
+            .checked_mul(4)?
+    ];
     let mut previous_disposal = gif::DisposalMethod::Keep;
     let mut previous_rect = (0u16, 0u16, 0u16, 0u16);
     let mut previous_canvas: Option<Vec<u8>> = None;
     while decoded.len() < max_frames {
-        if cancel_requested(cancel_cb) { return None; }
-        apply_gif_disposal(&mut canvas, previous_disposal, previous_rect, previous_canvas.take(), original_width);
+        if cancel_requested(cancel_cb) {
+            return None;
+        }
+        apply_gif_disposal(
+            &mut canvas,
+            previous_disposal,
+            previous_rect,
+            previous_canvas.take(),
+            original_width,
+        );
         let frame = match reader.read_next_frame().ok()? {
             Some(frame) => frame,
             None => break,
         };
-        if cancel_requested(cancel_cb) { return None; }
+        if cancel_requested(cancel_cb) {
+            return None;
+        }
         let delay_ms = u32::from(frame.delay).saturating_mul(10).clamp(20, 1_000);
-        let saved_canvas = if frame.dispose == gif::DisposalMethod::Previous { Some(canvas.clone()) } else { None };
+        let saved_canvas = if frame.dispose == gif::DisposalMethod::Previous {
+            Some(canvas.clone())
+        } else {
+            None
+        };
         composite_rgba_over_at(
             &mut canvas,
             &frame.buffer,
@@ -2159,17 +2189,24 @@ fn decode_gif_frames_bgra_reader<R: Read>(reader: R, target_width: u32, target_h
             u32::from(frame.left),
             u32::from(frame.top),
             u32::from(frame.width),
-            u32::from(frame.height));
+            u32::from(frame.height),
+        );
         let rgba = image::RgbaImage::from_raw(original_width, original_height, canvas.clone())?;
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
         } else {
-            image::DynamicImage::ImageRgba8(rgba).resize_exact(width, height, image::imageops::FilterType::Triangle)
+            image::DynamicImage::ImageRgba8(rgba).resize_exact(
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
         };
         let rgba = raster.to_rgba8();
         let mut bgra = Vec::with_capacity(frame_bytes);
         for (index, px) in rgba.chunks_exact(4).enumerate() {
-            if index % 65_536 == 0 && cancel_requested(cancel_cb) { return None; }
+            if index % 65_536 == 0 && cancel_requested(cancel_cb) {
+                return None;
+            }
             let r = px[0] as u32;
             let g = px[1] as u32;
             let b = px[2] as u32;
@@ -2184,7 +2221,9 @@ fn decode_gif_frames_bgra_reader<R: Read>(reader: R, target_width: u32, target_h
         previous_rect = (frame.left, frame.top, frame.width, frame.height);
         previous_canvas = saved_canvas;
     }
-    if cancel_requested(cancel_cb) { return None; }
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     Some((width, height, decoded))
 }
 
@@ -2286,8 +2325,16 @@ fn decode_svg_bgra_bytes_timed_internal(
     }
     let decode_ms = elapsed_ms_u32(decode_start);
 
-    let target_width = if target_width > 0 { target_width } else { MAX_IMAGE_RASTER_DIMENSION };
-    let target_height = if target_height > 0 { target_height } else { MAX_IMAGE_RASTER_DIMENSION };
+    let target_width = if target_width > 0 {
+        target_width
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
+    let target_height = if target_height > 0 {
+        target_height
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
     let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
     let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
     let scale = (target_width as f64 / original.width() as f64)
@@ -2355,8 +2402,15 @@ fn svg_markup_budget_ok(data: &[u8], cancel_cb: Option<CancelCallback>) -> bool 
     true
 }
 
-fn decode_webp_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
-    if cancel_requested(cancel_cb) { return None; }
+fn decode_webp_frames_bgra(
+    path: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     if let Some(frames) =
         decode_webp_frames_bgra_reader(file, target_width, target_height, cancel_cb)
@@ -2392,8 +2446,15 @@ fn decode_webp_frames_bgra_reader<R: Read + Seek>(
     )
 }
 
-fn decode_png_frames_bgra(path: &str, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
-    if cancel_requested(cancel_cb) { return None; }
+fn decode_png_frames_bgra(
+    path: &str,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     decode_png_frames_bgra_reader(file, target_width, target_height, cancel_cb)
 }
@@ -2410,10 +2471,16 @@ fn decode_png_frames_bgra_reader<R: Read + Seek>(
     let decoder = image::codecs::png::PngDecoder::new(BufReader::new(reader)).ok()?;
     let (original_width, original_height) = decoder.dimensions();
     if !decoder.is_apng().ok()?
-        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS
+    {
         return None;
     }
-    decode_animation_frames_bgra(decoder.apng().ok()?.into_frames(), target_width, target_height, cancel_cb)
+    decode_animation_frames_bgra(
+        decoder.apng().ok()?.into_frames(),
+        target_width,
+        target_height,
+        cancel_cb,
+    )
 }
 
 fn write_animation_frames(
@@ -2486,9 +2553,7 @@ fn animation_frames_packet_length(
     }
     let frame_bytes = usize::try_from(width)
         .map_err(|_| AnimationPacketError::LimitExceeded)?
-        .checked_mul(
-            usize::try_from(height).map_err(|_| AnimationPacketError::LimitExceeded)?,
-        )
+        .checked_mul(usize::try_from(height).map_err(|_| AnimationPacketError::LimitExceeded)?)
         .and_then(|bytes| bytes.checked_mul(4))
         .ok_or(AnimationPacketError::LimitExceeded)?;
     if frames.iter().any(|(_, bgra)| bgra.len() != frame_bytes) {
@@ -2538,48 +2603,79 @@ fn write_animation_frames_packet(
     Ok(())
 }
 
-fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::ImageResult<image::Frame>>, target_width: u32, target_height: u32, cancel_cb: Option<CancelCallback>) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
-    if cancel_requested(cancel_cb) { return None; }
+fn decode_animation_frames_bgra(
+    frames: impl IntoIterator<Item = image::ImageResult<image::Frame>>,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     let mut frames = frames.into_iter();
     let first = frames.next()?.ok()?;
     let original_width = first.buffer().width();
     let original_height = first.buffer().height();
     if should_skip_native_image_decode(original_width, original_height)
-        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS {
+        || u64::from(original_width) * u64::from(original_height) > MAX_ANIMATED_SOURCE_PIXELS
+    {
         return None;
     }
 
-    let target_width = if target_width > 0 { target_width } else { MAX_ANIMATED_FRAME_DIMENSION };
-    let target_height = if target_height > 0 { target_height } else { MAX_ANIMATED_FRAME_DIMENSION };
+    let target_width = if target_width > 0 {
+        target_width
+    } else {
+        MAX_ANIMATED_FRAME_DIMENSION
+    };
+    let target_height = if target_height > 0 {
+        target_height
+    } else {
+        MAX_ANIMATED_FRAME_DIMENSION
+    };
     let target_width = target_width.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
     let target_height = target_height.clamp(1, MAX_ANIMATED_FRAME_DIMENSION);
     let scale = if original_width > target_width || original_height > target_height {
-        (target_width as f64 / original_width as f64).min(target_height as f64 / original_height as f64)
+        (target_width as f64 / original_width as f64)
+            .min(target_height as f64 / original_height as f64)
     } else {
         1.0
     };
     let width = ((original_width as f64 * scale).round() as u32).max(1);
     let height = ((original_height as f64 * scale).round() as u32).max(1);
-    let frame_bytes = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let frame_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     let max_frames_by_bytes = (MAX_ANIMATED_FRAME_BYTES / (frame_bytes + 4)).max(1);
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
     for frame in std::iter::once(Ok(first)).chain(frames).take(max_frames) {
         let frame = frame.ok()?;
-        if cancel_requested(cancel_cb) { return None; }
+        if cancel_requested(cancel_cb) {
+            return None;
+        }
         let (num, den) = frame.delay().numer_denom_ms();
-        let delay_ms = if den == 0 { 100 } else { (num / den).clamp(20, 1_000) };
+        let delay_ms = if den == 0 {
+            100
+        } else {
+            (num / den).clamp(20, 1_000)
+        };
         let rgba = frame.into_buffer();
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
         } else {
-            image::DynamicImage::ImageRgba8(rgba).resize_exact(width, height, image::imageops::FilterType::Triangle)
+            image::DynamicImage::ImageRgba8(rgba).resize_exact(
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            )
         };
         let rgba = raster.to_rgba8();
         let mut bgra = Vec::with_capacity(frame_bytes);
         for (index, px) in rgba.chunks_exact(4).enumerate() {
-            if index % 65_536 == 0 && cancel_requested(cancel_cb) { return None; }
+            if index % 65_536 == 0 && cancel_requested(cancel_cb) {
+                return None;
+            }
             let r = px[0] as u32;
             let g = px[1] as u32;
             let b = px[2] as u32;
@@ -2591,7 +2687,9 @@ fn decode_animation_frames_bgra(frames: impl IntoIterator<Item = image::ImageRes
         }
         decoded.push((delay_ms, bgra));
     }
-    if cancel_requested(cancel_cb) { return None; }
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
     Some((width, height, decoded))
 }
 
@@ -2702,14 +2800,26 @@ fn apply_icc_to_srgb_rgba(rgba: &mut [u8], profile: &[u8]) -> bool {
         return true;
     }
     let output = qcms::Profile::new_sRGB();
-    let Some(transform) = qcms::Transform::new_to(&input, &output, qcms::DataType::RGBA8, qcms::DataType::RGBA8, qcms::Intent::Perceptual) else {
+    let Some(transform) = qcms::Transform::new_to(
+        &input,
+        &output,
+        qcms::DataType::RGBA8,
+        qcms::DataType::RGBA8,
+        qcms::Intent::Perceptual,
+    ) else {
         return false;
     };
     transform.apply(rgba);
     true
 }
 
-fn apply_gif_disposal(canvas: &mut [u8], disposal: gif::DisposalMethod, rect: (u16, u16, u16, u16), previous_canvas: Option<Vec<u8>>, canvas_width: u32) {
+fn apply_gif_disposal(
+    canvas: &mut [u8],
+    disposal: gif::DisposalMethod,
+    rect: (u16, u16, u16, u16),
+    previous_canvas: Option<Vec<u8>>,
+    canvas_width: u32,
+) {
     match disposal {
         gif::DisposalMethod::Background => {
             let (left, top, width, height) = rect;
@@ -2734,7 +2844,16 @@ fn apply_gif_disposal(canvas: &mut [u8], disposal: gif::DisposalMethod, rect: (u
     }
 }
 
-fn composite_rgba_over_at(canvas: &mut [u8], frame: &[u8], canvas_width: u32, canvas_height: u32, left: u32, top: u32, frame_width: u32, frame_height: u32) {
+fn composite_rgba_over_at(
+    canvas: &mut [u8],
+    frame: &[u8],
+    canvas_width: u32,
+    canvas_height: u32,
+    left: u32,
+    top: u32,
+    frame_width: u32,
+    frame_height: u32,
+) {
     let copy_width = frame_width.min(canvas_width.saturating_sub(left)) as usize;
     let copy_height = frame_height.min(canvas_height.saturating_sub(top)) as usize;
     let canvas_stride = canvas_width as usize * 4;
@@ -2753,7 +2872,9 @@ fn composite_rgba_over_at(canvas: &mut [u8], frame: &[u8], canvas_width: u32, ca
             }
             let inv_a = 255 - a;
             for channel in 0..3 {
-                let blended = (frame[src + channel] as u32 * a + canvas[dst + channel] as u32 * inv_a + 127) / 255;
+                let blended =
+                    (frame[src + channel] as u32 * a + canvas[dst + channel] as u32 * inv_a + 127)
+                        / 255;
                 canvas[dst + channel] = blended as u8;
             }
             canvas[dst + 3] = (a + canvas[dst + 3] as u32 * inv_a / 255).min(255) as u8;
@@ -2803,12 +2924,25 @@ fn tiff_orientation(tiff: &[u8]) -> Option<u16> {
 
 fn read_u16(bytes: &[u8], offset: usize, endian: u8) -> Option<u16> {
     let raw = [*bytes.get(offset)?, *bytes.get(offset + 1)?];
-    Some(if endian == 0 { u16::from_le_bytes(raw) } else { u16::from_be_bytes(raw) })
+    Some(if endian == 0 {
+        u16::from_le_bytes(raw)
+    } else {
+        u16::from_be_bytes(raw)
+    })
 }
 
 fn read_u32(bytes: &[u8], offset: usize, endian: u8) -> Option<u32> {
-    let raw = [*bytes.get(offset)?, *bytes.get(offset + 1)?, *bytes.get(offset + 2)?, *bytes.get(offset + 3)?];
-    Some(if endian == 0 { u32::from_le_bytes(raw) } else { u32::from_be_bytes(raw) })
+    let raw = [
+        *bytes.get(offset)?,
+        *bytes.get(offset + 1)?,
+        *bytes.get(offset + 2)?,
+        *bytes.get(offset + 3)?,
+    ];
+    Some(if endian == 0 {
+        u32::from_le_bytes(raw)
+    } else {
+        u32::from_be_bytes(raw)
+    })
 }
 
 fn elapsed_ms_u32(start: Instant) -> u32 {
@@ -2878,13 +3012,25 @@ mod tests {
 
         assert_eq!(
             ql_decode_gif_frames_sized_cancelable(
-                path.as_ptr(), path.len(), 0, 0, output.as_mut_ptr(), output.len(), Some(always_cancel),
+                path.as_ptr(),
+                path.len(),
+                0,
+                0,
+                output.as_mut_ptr(),
+                output.len(),
+                Some(always_cancel),
             ),
             -3
         );
         assert_eq!(
             ql_decode_webp_frames_sized_cancelable(
-                path.as_ptr(), path.len(), 0, 0, output.as_mut_ptr(), output.len(), Some(always_cancel),
+                path.as_ptr(),
+                path.len(),
+                0,
+                0,
+                output.as_mut_ptr(),
+                output.len(),
+                Some(always_cancel),
             ),
             -3
         );
@@ -2977,16 +3123,36 @@ mod tests {
 
     #[test]
     fn classify_accepts_known_and_sniffed_config_text() {
-        assert_eq!(classify("app.config", ".config", b"<configuration>", false), "text");
-        assert_eq!(classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n", false), "text");
-        assert_eq!(classify("vendor.custom", ".custom", b"feature.enabled=true\r\n", false), "text");
+        assert_eq!(
+            classify("app.config", ".config", b"<configuration>", false),
+            "text"
+        );
+        assert_eq!(
+            classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n", false),
+            "text"
+        );
+        assert_eq!(
+            classify(
+                "vendor.custom",
+                ".custom",
+                b"feature.enabled=true\r\n",
+                false
+            ),
+            "text"
+        );
         assert_eq!(classify("settings", "", b"root = true\r\n", false), "text");
-        assert_eq!(classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n", false), "text");
+        assert_eq!(
+            classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n", false),
+            "text"
+        );
     }
 
     #[test]
     fn classify_routes_svg_to_image_preview() {
-        assert_eq!(classify("drawing.svg", ".svg", b"<svg xmlns=", false), "image");
+        assert_eq!(
+            classify("drawing.svg", ".svg", b"<svg xmlns=", false),
+            "image"
+        );
     }
 
     #[test]
@@ -3001,21 +3167,11 @@ mod tests {
     #[test]
     fn classify_requires_rar_magic_instead_of_trusting_the_extension() {
         assert_eq!(
-            classify(
-                "archive.rar",
-                ".rar",
-                rar_listing::RAR5_SIGNATURE,
-                false
-            ),
+            classify("archive.rar", ".rar", rar_listing::RAR5_SIGNATURE, false),
             "archive"
         );
         assert_eq!(
-            classify(
-                "legacy.bin",
-                ".bin",
-                rar_listing::RAR4_SIGNATURE,
-                false
-            ),
+            classify("legacy.bin", ".bin", rar_listing::RAR4_SIGNATURE, false),
             "archive"
         );
         assert_eq!(
@@ -3047,16 +3203,34 @@ mod tests {
         let utf16_be = [0xFE, 0xFF, 0, b'W', 0, b'i', 0, b'n'];
         let utf16_localized = [0xFF, 0xFE, 0x4D, 0x50, 0x3D, 0, 0x3C, 0x50];
         assert_eq!(classify("settings.reg", ".reg", &utf16_le, false), "text");
-        assert_eq!(classify("settings.unknown", ".unknown", &utf16_be, false), "text");
-        assert_eq!(classify("settings.unknown", ".unknown", &utf16_localized, false), "text");
+        assert_eq!(
+            classify("settings.unknown", ".unknown", &utf16_be, false),
+            "text"
+        );
+        assert_eq!(
+            classify("settings.unknown", ".unknown", &utf16_localized, false),
+            "text"
+        );
     }
 
     #[test]
     fn classify_does_not_treat_binary_prefixes_as_text() {
-        assert_eq!(classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4], false), "binary");
-        assert_eq!(classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80], false), "binary");
-        assert_eq!(classify("file.bin", ".bin", b"d4:fake4:datae", false), "binary");
-        assert_eq!(classify("file.unknown", ".unknown", b"MZprintable header", false), "executable");
+        assert_eq!(
+            classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4], false),
+            "binary"
+        );
+        assert_eq!(
+            classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80], false),
+            "binary"
+        );
+        assert_eq!(
+            classify("file.bin", ".bin", b"d4:fake4:datae", false),
+            "binary"
+        );
+        assert_eq!(
+            classify("file.unknown", ".unknown", b"MZprintable header", false),
+            "executable"
+        );
     }
 
     #[test]
@@ -3144,11 +3318,7 @@ mod tests {
 
         let overflowing_dimensions = vec![(20, Vec::new())];
         assert_eq!(
-            animation_frames_packet_length(
-                u32::MAX,
-                u32::MAX,
-                &overflowing_dimensions,
-            ),
+            animation_frames_packet_length(u32::MAX, u32::MAX, &overflowing_dimensions,),
             Err(AnimationPacketError::LimitExceeded)
         );
     }
@@ -3192,7 +3362,8 @@ mod tests {
         )
         .expect("write svg");
 
-        let decoded = decode_image_bgra(path.to_str().unwrap(), 100, 100, None).expect("decode svg");
+        let decoded =
+            decode_image_bgra(path.to_str().unwrap(), 100, 100, None).expect("decode svg");
         let _ = fs::remove_file(path);
 
         assert_eq!((decoded.0, decoded.1), (100, 50));
@@ -3205,8 +3376,14 @@ mod tests {
     fn native_svg_decode_does_not_read_external_images() {
         let path = temp_image_path("svg");
         let external_path = path.with_extension("png");
-        image::save_buffer(&external_path, &[255u8, 0, 0, 255], 1, 1, image::ColorType::Rgba8)
-            .expect("write external image");
+        image::save_buffer(
+            &external_path,
+            &[255u8, 0, 0, 255],
+            1,
+            1,
+            image::ColorType::Rgba8,
+        )
+        .expect("write external image");
         let external_name = external_path.file_name().unwrap().to_string_lossy();
         fs::write(
             &path,
@@ -3253,7 +3430,9 @@ mod tests {
     #[test]
     fn jpeg_icc_profile_from_bytes_reassembles_segments() {
         let jpeg = jpeg_with_split_icc_segments();
-        let profile = jpeg_icc_profile_from_bytes(&jpeg).expect("parse jpeg").expect("icc profile");
+        let profile = jpeg_icc_profile_from_bytes(&jpeg)
+            .expect("parse jpeg")
+            .expect("icc profile");
 
         assert_eq!(profile, b"quicklook-next-test-icc");
     }
@@ -3286,7 +3465,8 @@ mod tests {
         let jpeg = jpeg_with_adobe_transform_segment();
         std::fs::write(&path, jpeg).expect("write adobe jpeg");
 
-        let decoded = decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode adobe jpeg");
+        let decoded =
+            decode_image_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode adobe jpeg");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.0, 2);
@@ -3328,7 +3508,8 @@ mod tests {
         let pixels = [10u8, 20, 30, 255, 200, 210, 220, 255];
         image::save_buffer(&path, &pixels, 2, 1, image::ColorType::Rgba8).expect("write webp");
 
-        let decoded = decode_webp_frames_bgra(path.to_str().unwrap(), 0, 0, None).expect("decode webp frames");
+        let decoded = decode_webp_frames_bgra(path.to_str().unwrap(), 0, 0, None)
+            .expect("decode webp frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.0, 2);
@@ -3348,23 +3529,45 @@ mod tests {
         for file in ["jpeg-cmyk.jpg", "jpeg-wide-gamut-icc.jpg"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                let decoded = decode_image_bgra(path.to_str().unwrap(), 1024, 1024, None).expect("decode external jpeg sample");
-                assert_eq!(jpeg_external_golden(file), Some((decoded.0, decoded.1, decoded.7.len(), fnv1a64(&decoded.7))));
+                let decoded = decode_image_bgra(path.to_str().unwrap(), 1024, 1024, None)
+                    .expect("decode external jpeg sample");
+                assert_eq!(
+                    jpeg_external_golden(file),
+                    Some((decoded.0, decoded.1, decoded.7.len(), fnv1a64(&decoded.7)))
+                );
             }
         }
         for file in ["gif-disposal-background.gif", "gif-disposal-previous.gif"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                let frames = decode_gif_frames_bgra(path.to_str().unwrap(), 512, 512, None).expect("decode external gif sample");
+                let frames = decode_gif_frames_bgra(path.to_str().unwrap(), 512, 512, None)
+                    .expect("decode external gif sample");
                 assert!(!frames.2.is_empty());
             }
         }
-        for file in ["webp-animated.webp", "webp-animated-alpha.webp", "webp-animated-blend.webp"] {
+        for file in [
+            "webp-animated.webp",
+            "webp-animated-alpha.webp",
+            "webp-animated-blend.webp",
+        ] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512, None).expect("decode external webp sample");
-                assert!(frames.2.len() > 1, "animated WebP sample should decode multiple frames: {file}");
-                assert_eq!(webp_external_golden(file), Some((frames.0, frames.1, frames.2.len(), fnv1a64(&frames.2[0].1), fnv1a64(&frames.2.last().unwrap().1))));
+                let frames = decode_webp_frames_bgra(path.to_str().unwrap(), 512, 512, None)
+                    .expect("decode external webp sample");
+                assert!(
+                    frames.2.len() > 1,
+                    "animated WebP sample should decode multiple frames: {file}"
+                );
+                assert_eq!(
+                    webp_external_golden(file),
+                    Some((
+                        frames.0,
+                        frames.1,
+                        frames.2.len(),
+                        fnv1a64(&frames.2[0].1),
+                        fnv1a64(&frames.2.last().unwrap().1)
+                    ))
+                );
 
                 use std::os::windows::io::AsRawHandle;
                 let mut source = fs::File::open(&path).expect("open external WebP handle");
@@ -3420,7 +3623,10 @@ mod tests {
         for file in ["avif-still.avif", "heic-still.heic", "jxl-still.jxl"] {
             let path = corpus_dir.join(file);
             if path.exists() {
-                assert!(decode_image_bgra(path.to_str().unwrap(), 512, 512, None).is_none(), "modern format unexpectedly gained Rust native decode: {file}");
+                assert!(
+                    decode_image_bgra(path.to_str().unwrap(), 512, 512, None).is_none(),
+                    "modern format unexpectedly gained Rust native decode: {file}"
+                );
             }
         }
     }
@@ -3437,8 +3643,12 @@ mod tests {
     fn webp_external_golden(file: &str) -> Option<(u32, u32, usize, u64, u64)> {
         match file {
             "webp-animated.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
-            "webp-animated-alpha.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
-            "webp-animated-blend.webp" => Some((483, 512, 8, 16886177616233196080, 12174948178456794470)),
+            "webp-animated-alpha.webp" => {
+                Some((483, 512, 8, 16886177616233196080, 12174948178456794470))
+            }
+            "webp-animated-blend.webp" => {
+                Some((483, 512, 8, 16886177616233196080, 12174948178456794470))
+            }
             _ => None,
         }
     }
@@ -3481,7 +3691,8 @@ mod tests {
     fn native_gif_frame_extraction_returns_bounded_frames() {
         let path = write_two_frame_gif();
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 1, 1, None).expect("decode gif frames");
+        let decoded =
+            decode_gif_frames_bgra(path.to_str().unwrap(), 1, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.0, 1);
@@ -3495,7 +3706,8 @@ mod tests {
     fn native_gif_frame_extraction_honors_background_disposal() {
         let path = write_disposal_gif(gif::DisposalMethod::Background);
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
+        let decoded =
+            decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.2.len(), 3);
@@ -3506,7 +3718,8 @@ mod tests {
     fn native_gif_frame_extraction_honors_previous_disposal() {
         let path = write_disposal_gif(gif::DisposalMethod::Previous);
 
-        let decoded = decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
+        let decoded =
+            decode_gif_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode gif frames");
         let _ = std::fs::remove_file(path);
 
         assert_eq!(decoded.2.len(), 3);
@@ -3543,7 +3756,9 @@ mod tests {
         let path = temp_image_path("gif");
         let file = std::fs::File::create(&path).expect("create gif");
         let mut encoder = gif::Encoder::new(file, 2, 1, &[]).expect("gif encoder");
-        encoder.set_repeat(gif::Repeat::Infinite).expect("set repeat");
+        encoder
+            .set_repeat(gif::Repeat::Infinite)
+            .expect("set repeat");
 
         let mut first_pixels = vec![255, 0, 0, 255, 255, 0, 0, 255];
         let mut first = gif::Frame::from_rgba_speed(2, 1, &mut first_pixels, 10);
@@ -3571,7 +3786,12 @@ mod tests {
         let mut jpeg = Vec::new();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
         encoder
-            .encode(&[255, 0, 0, 0, 0, 255], 1, 2, image::ExtendedColorType::Rgb8)
+            .encode(
+                &[255, 0, 0, 0, 0, 255],
+                1,
+                2,
+                image::ExtendedColorType::Rgb8,
+            )
             .expect("encode jpeg");
         drop(encoder);
 
@@ -3618,13 +3838,17 @@ mod tests {
         encoder.set_animated(2, 0).expect("enable APNG");
         let mut writer = encoder.write_header().expect("write APNG header");
         writer.set_frame_delay(1, 10).expect("first delay");
-        writer.write_image_data(&[255, 0, 0, 255, 255, 0, 0, 255]).expect("first frame");
+        writer
+            .write_image_data(&[255, 0, 0, 255, 255, 0, 0, 255])
+            .expect("first frame");
         writer.set_frame_delay(2, 10).expect("second delay");
-        writer.write_image_data(&[0, 255, 0, 255, 0, 255, 0, 255]).expect("second frame");
+        writer
+            .write_image_data(&[0, 255, 0, 255, 0, 255, 0, 255])
+            .expect("second frame");
         writer.finish().expect("finish APNG");
 
-        let (width, height, frames) = decode_png_frames_bgra(path.to_str().unwrap(), 2, 1, None)
-            .expect("decode APNG");
+        let (width, height, frames) =
+            decode_png_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode APNG");
         let _ = std::fs::remove_file(path);
 
         assert_eq!((width, height, frames.len()), (2, 1, 2));
@@ -3642,7 +3866,12 @@ mod tests {
         let mut jpeg = Vec::new();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
         encoder
-            .encode(&[255, 0, 0, 0, 255, 0], 2, 1, image::ExtendedColorType::Rgb8)
+            .encode(
+                &[255, 0, 0, 0, 255, 0],
+                2,
+                1,
+                image::ExtendedColorType::Rgb8,
+            )
             .expect("encode jpeg");
         drop(encoder);
 
@@ -3667,7 +3896,12 @@ mod tests {
         let mut jpeg = Vec::new();
         let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut jpeg);
         encoder
-            .encode(&[255, 255, 0, 0, 255, 255], 2, 1, image::ExtendedColorType::Rgb8)
+            .encode(
+                &[255, 255, 0, 0, 255, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgb8,
+            )
             .expect("encode jpeg");
         drop(encoder);
 
@@ -3822,12 +4056,7 @@ fn checked_raster_packet_length(width: u32, height: u32, bgra_len: usize) -> Opt
     8usize.checked_add(expected_bgra_len)
 }
 
-fn write_checked_raster_packet(
-    width: u32,
-    height: u32,
-    bgra: &[u8],
-    output: &mut [u8],
-) -> bool {
+fn write_checked_raster_packet(width: u32, height: u32, bgra: &[u8], output: &mut [u8]) -> bool {
     let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
         return false;
     };
@@ -3840,13 +4069,7 @@ fn write_checked_raster_packet(
     true
 }
 
-fn write_raster_packet(
-    width: u32,
-    height: u32,
-    bgra: &[u8],
-    out: *mut u8,
-    out_cap: usize,
-) -> i32 {
+fn write_raster_packet(width: u32, height: u32, bgra: &[u8], out: *mut u8, out_cap: usize) -> i32 {
     let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
         return -2;
     };
@@ -4006,7 +4229,9 @@ unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32
         (false, true) => Default::default(),
         (false, false) => SIIGBF_BIGGERSIZEOK,
     };
-    let hbm = factory.GetImage(SIZE { cx: size, cy: size }, shell_flags).ok()?;
+    let hbm = factory
+        .GetImage(SIZE { cx: size, cy: size }, shell_flags)
+        .ok()?;
     let result = hbitmap_to_bgra(hbm);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbm.into());
     result
@@ -4098,9 +4323,7 @@ pub extern "C" fn ql_preview_text(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
-        ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None)
-    })
+    ffi_boundary(|| ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
 #[no_mangle]
@@ -4207,9 +4430,7 @@ pub extern "C" fn ql_preview_executable(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
-        ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
-    })
+    ffi_boundary(|| ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
 /// Render a bounded database metadata preview with cancellation support.
@@ -4257,10 +4478,9 @@ unsafe fn reopen_handle_input_v2(
     if cancel_requested(cancel_cb) {
         return Err(QL_ERROR_CANCELLED);
     }
-    let logical_name = unsafe {
-        owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES)
-    }
-    .ok_or(QL_ERROR_INVALID_ARGUMENT)?;
+    let logical_name =
+        unsafe { owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES) }
+            .ok_or(QL_ERROR_INVALID_ARGUMENT)?;
     let logical_name = std::path::Path::new(&logical_name)
         .file_name()
         .and_then(|value| value.to_str())
@@ -4717,14 +4937,7 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_raster_packet_v2(
-            width,
-            height,
-            &bgra,
-            out_buf,
-            out_cap,
-            out_required,
-        )
+        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
     })
 }
 
@@ -4775,41 +4988,30 @@ pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
             Ok(input) => input,
             Err(status) => return status,
         };
-        let image_ref = match owned_utf8_arg(
-            image_ref_utf8,
-            image_ref_len,
-            MAX_OFFICE_IMAGE_REF_BYTES,
-        ) {
-            Some(image_ref) if !image_ref.is_empty() => image_ref,
-            _ => return QL_ERROR_INVALID_ARGUMENT,
-        };
+        let image_ref =
+            match owned_utf8_arg(image_ref_utf8, image_ref_len, MAX_OFFICE_IMAGE_REF_BYTES) {
+                Some(image_ref) if !image_ref.is_empty() => image_ref,
+                _ => return QL_ERROR_INVALID_ARGUMENT,
+            };
         if !preview::office_layout_image_ref_is_valid(&logical_name, &image_ref) {
             return QL_ERROR_INVALID_ARGUMENT;
         }
-        let (width, height, bgra) =
-            match preview::extract_office_layout_image_bgra_reader(
-                &mut file,
-                expected_length,
-                &logical_name,
-                &image_ref,
-                target_width,
-                target_height,
-                cancel_cb,
-            ) {
-                Ok(image) => image,
-                Err(error) => return reader_preview_status(error),
-            };
+        let (width, height, bgra) = match preview::extract_office_layout_image_bgra_reader(
+            &mut file,
+            expected_length,
+            &logical_name,
+            &image_ref,
+            target_width,
+            target_height,
+            cancel_cb,
+        ) {
+            Ok(image) => image,
+            Err(error) => return reader_preview_status(error),
+        };
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_raster_packet_v2(
-            width,
-            height,
-            &bgra,
-            out_buf,
-            out_cap,
-            out_required,
-        )
+        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
     })
 }
 
@@ -4860,14 +5062,7 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_raster_packet_v2(
-            width,
-            height,
-            &bgra,
-            out_buf,
-            out_cap,
-            out_required,
-        )
+        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
     })
 }
 
@@ -5048,16 +5243,15 @@ pub extern "C" fn ql_extract_archive_entry(
         {
             return 0;
         }
-        let archive_path =
-            match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
-                Some(s) => s,
-                None => return 0,
-            };
-        let entry_path =
-            match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-                Some(s) => s,
-                None => return 0,
-            };
+        let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES)
+        {
+            Some(s) => s,
+            None => return 0,
+        };
+        let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
         let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, None)
         else {
             return 0;
@@ -5087,16 +5281,15 @@ pub extern "C" fn ql_extract_archive_entry_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let archive_path =
-            match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) {
-                Some(s) => s,
-                None => return 0,
-            };
-        let entry_path =
-            match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-                Some(s) => s,
-                None => return 0,
-            };
+        let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES)
+        {
+            Some(s) => s,
+            None => return 0,
+        };
+        let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
+            Some(s) => s,
+            None => return 0,
+        };
         let Some(path) =
             preview::extract_archive_entry_to_temp(archive_path, entry_path, cancel_cb)
         else {
@@ -5175,12 +5368,7 @@ pub unsafe extern "C" fn ql_extract_archive_entry_handle(
             preview::discard_archive_extract_path(&extracted);
             return QL_ERROR_CANCELLED;
         }
-        let status = write_v2_out(
-            extracted.as_bytes(),
-            out_buf,
-            out_cap,
-            out_required,
-        );
+        let status = write_v2_out(extracted.as_bytes(), out_buf, out_cap, out_required);
         if status != QL_OK || cancel_requested(cancel_cb) {
             preview::discard_archive_extract_path(&extracted);
             return if cancel_requested(cancel_cb) {
@@ -5299,9 +5487,7 @@ pub extern "C" fn ql_preview_ebook(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
-        ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None)
-    })
+    ffi_boundary(|| ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
 #[no_mangle]
@@ -5339,9 +5525,7 @@ pub extern "C" fn ql_preview_torrent(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
-        ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None)
-    })
+    ffi_boundary(|| ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
 #[no_mangle]
@@ -6472,7 +6656,8 @@ mod handle_v2_tests {
     #[test]
     fn handle_probe_obeys_buffer_contract_without_moving_caller_position() {
         let (path, mut file) = create_input("svg", br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#);
-        file.seek(SeekFrom::Start(7)).expect("position caller handle");
+        file.seek(SeekFrom::Start(7))
+            .expect("position caller handle");
         let position = file.stream_position().unwrap();
         let logical_name = b"renamed.svg";
         let length = file.metadata().unwrap().len();
@@ -6671,7 +6856,8 @@ mod handle_v2_tests {
             ("Assets/icon.png", icon.as_slice()),
         ]);
         let (path, mut file) = create_input("bin", &package);
-        file.seek(SeekFrom::Start(11)).expect("position package handle");
+        file.seek(SeekFrom::Start(11))
+            .expect("position package handle");
         let position = file.stream_position().unwrap();
         let expected_length = file.metadata().unwrap().len();
         let logical_name = br"Z:\missing\nonexistent.appx";
@@ -6709,7 +6895,10 @@ mod handle_v2_tests {
         let json: serde_json::Value = serde_json::from_slice(&json[..required]).unwrap();
         assert_eq!(json["kind"], "package");
         assert_eq!(json["title"], "Handle Package - 1.2.3.4");
-        assert!(json["text"].as_str().unwrap().contains("Preview image: found"));
+        assert!(json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Preview image: found"));
 
         required = 0;
         assert_eq!(
@@ -6913,13 +7102,10 @@ mod handle_v2_tests {
             ("root.bin", b"\x01\x02"),
         ]);
         let (path, mut file) = create_input("bin", &bytes);
-        file.seek(SeekFrom::Start(11)).expect("position archive handle");
+        file.seek(SeekFrom::Start(11))
+            .expect("position archive handle");
         let position = file.stream_position().unwrap();
-        let json = preview_json_with(
-            call_archive_handle,
-            &file,
-            r"C:\does-not-exist\logical.zip",
-        );
+        let json = preview_json_with(call_archive_handle, &file, r"C:\does-not-exist\logical.zip");
         assert_eq!(json["kind"], "archive");
         assert_eq!(json["listing"]["rootName"], "logical.zip");
         assert_eq!(json["listing"]["rootPath"], "");
@@ -7001,16 +7187,16 @@ mod handle_v2_tests {
             ("word/media/image1.png", &png),
         ]);
         let (path, mut file) = create_input("bin", &bytes);
-        file.seek(SeekFrom::Start(13)).expect("position Office handle");
+        file.seek(SeekFrom::Start(13))
+            .expect("position Office handle");
         let position = file.stream_position().unwrap();
 
-        let json = preview_json_with(
-            call_office_handle,
-            &file,
-            r"C:\missing\logical.docx",
-        );
+        let json = preview_json_with(call_office_handle, &file, r"C:\missing\logical.docx");
         assert_eq!(json["kind"], "office");
-        assert!(json["text"].as_str().unwrap().contains("Office HANDLE marker"));
+        assert!(json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Office HANDLE marker"));
         assert_eq!(file.stream_position().unwrap(), position);
 
         let logical_name = b"logical.docx";
@@ -7074,11 +7260,7 @@ mod handle_v2_tests {
             (r"word\media\backslash.png", b"unsafe"),
         ]);
         let (path, file) = create_input("bin", &bytes);
-        let json = preview_json_with(
-            call_office_handle,
-            &file,
-            r"C:\missing\layout.docx",
-        );
+        let json = preview_json_with(call_office_handle, &file, r"C:\missing\layout.docx");
         let items = json["officeLayout"]["pages"][0]["items"]
             .as_array()
             .expect("Office layout items");
@@ -7125,7 +7307,8 @@ mod handle_v2_tests {
         assert!(image.len() > 256 * 1024);
         assert!(image.len() <= 768 * 1024);
 
-        let mut slide = String::from(r#"<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r"><p:cSld><p:spTree>"#);
+        let mut slide =
+            String::from(r#"<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r"><p:cSld><p:spTree>"#);
         let mut relationships = String::from(r#"<Relationships xmlns="rels">"#);
         for index in 1..=18 {
             slide.push_str(&format!(
@@ -7572,7 +7755,8 @@ mod handle_v2_tests {
         .write_to(&mut encoded, image::ImageFormat::Ico)
         .expect("encode ICO");
         let (path, mut file) = create_input("bin", &encoded.into_inner());
-        file.seek(SeekFrom::Start(7)).expect("position image handle");
+        file.seek(SeekFrom::Start(7))
+            .expect("position image handle");
         let position = file.stream_position().unwrap();
         let logical_name = b"logical.ico";
         let mut required = 0usize;
@@ -8177,8 +8361,8 @@ mod handle_v2_tests {
         assert_eq!(header[8], IMAGE_WAVEFORM_HEIGHT);
         assert_eq!(header[9] as usize, IMAGE_WAVEFORM_DENSITY_BYTES);
 
-        let raster = &packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES
-            ..IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 16];
+        let raster =
+            &packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES..IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 16];
         assert_eq!(
             raster,
             &[
@@ -8337,11 +8521,9 @@ mod handle_v2_tests {
         );
         assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 20);
         assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 10);
-        assert!(
-            packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 20 * 10 * 4..]
-                .iter()
-                .any(|value| *value != 0)
-        );
+        assert!(packet[IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 20 * 10 * 4..]
+            .iter()
+            .any(|value| *value != 0));
         assert_eq!(file.stream_position().unwrap(), position);
 
         required = usize::MAX;
@@ -8452,7 +8634,8 @@ mod handle_v2_tests {
     fn archive_entry_handle_extracts_original_zip_index_without_logical_path() {
         let bytes = zip_bytes(&[(r"folder\item.txt", b"entry from pinned ZIP")]);
         let (path, mut file) = create_input("bin", &bytes);
-        file.seek(SeekFrom::Start(9)).expect("position archive entry handle");
+        file.seek(SeekFrom::Start(9))
+            .expect("position archive entry handle");
         let position = file.stream_position().unwrap();
         let logical_name = br"C:\missing\renamed.zip";
         let entry_path = b"folder/item.txt";
@@ -8739,11 +8922,8 @@ mod handle_v2_tests {
             .seek(SeekFrom::Start(13))
             .expect("position EPUB handle");
         let epub_position = epub_file.stream_position().unwrap();
-        let epub_json = preview_json_with(
-            call_ebook_handle,
-            &epub_file,
-            r"C:\missing\renamed.epub",
-        );
+        let epub_json =
+            preview_json_with(call_ebook_handle, &epub_file, r"C:\missing\renamed.epub");
         assert_eq!(epub_json["kind"], "ebook");
         assert_eq!(epub_json["title"], "Handle Book - epub");
         assert!(epub_json["text"]
@@ -8758,8 +8938,7 @@ mod handle_v2_tests {
 
         let fb2 = br#"<?xml version="1.0"?><FictionBook><description><title-info><book-title>Handle FB2</book-title><lang>en</lang></title-info></description><body><section><title><p>Chapter One</p></title><p>FB2 reader text.</p></section></body></FictionBook>"#;
         let (fb2_path, fb2_file) = create_input("bin", fb2);
-        let fb2_json =
-            preview_json_with(call_ebook_handle, &fb2_file, r"C:\missing\logical.fb2");
+        let fb2_json = preview_json_with(call_ebook_handle, &fb2_file, r"C:\missing\logical.fb2");
         assert_eq!(fb2_json["kind"], "ebook");
         assert_eq!(fb2_json["title"], "Handle FB2 - fb2");
         assert!(fb2_json["text"]
@@ -8772,10 +8951,7 @@ mod handle_v2_tests {
             preview_json_with(call_ebook_handle, &binary_file, r"C:\missing\logical.mobi");
         assert_eq!(binary_json["kind"], "ebook");
         assert_eq!(binary_json["title"], "logical.mobi - ebook");
-        assert!(binary_json["text"]
-            .as_str()
-            .unwrap()
-            .contains("Size: 12"));
+        assert!(binary_json["text"].as_str().unwrap().contains("Size: 12"));
 
         drop(epub_file);
         drop(fb2_file);

@@ -31,45 +31,44 @@ mod types;
 pub(crate) use animation_probe::probe_image_animation_reader;
 #[cfg(test)]
 use animation_probe::ImageAnimationProbe;
-pub(crate) use folder::render_folder;
-pub use ebook::{render_ebook, render_ebook_reader};
-pub use executable::{render_executable, render_executable_reader};
-use executable::{align4, format_pe_version, pe_version_file_type, PeFixedVersion};
+use common::{
+    format_bytes, format_number, read_c_string, read_i16_be, read_i32_be, read_i32_endian,
+    read_i64_be, read_u16, read_u16_be, read_u16_endian, read_u32, read_u32_be, read_u32_endian,
+    read_u64, read_u64_be, read_u64_endian, type_for_ext,
+};
 #[cfg(test)]
 use ebook::{
     ebook_item_label, extract_xhtml_markdown, parse_epub_opf, parse_epub_rootfile,
     read_ebook_limited_to_end, EbookContext,
 };
+pub use ebook::{render_ebook, render_ebook_reader};
+use executable::{align4, format_pe_version, pe_version_file_type, PeFixedVersion};
 #[cfg(test)]
 use executable::{
     parse_authenticode_certificate_subjects, parse_authenticode_signers, parse_pe_headers,
 };
+pub use executable::{render_executable, render_executable_reader};
+pub(crate) use folder::render_folder;
 pub use image_metadata::render_image_metadata;
 pub(crate) use image_metadata::render_image_metadata_reader;
-pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
-use torrent::parse_bencode;
-pub use torrent::{render_torrent, render_torrent_reader};
-#[cfg(test)]
-use torrent::{MAX_BENCODE_DEPTH, MAX_BENCODE_NODES};
-use common::{
-    format_bytes, format_number, read_c_string, read_i16_be, read_i32_be, read_i32_endian,
-    read_i64_be, read_u16, read_u16_be, read_u16_endian, read_u32, read_u32_be,
-    read_u32_endian, read_u64, read_u64_be, read_u64_endian, type_for_ext,
-};
 use image_metadata::{
-    parse_gif_metadata_from_bytes, parse_png_metadata_from_bytes,
-    parse_webp_metadata_from_bytes,
+    parse_gif_metadata_from_bytes, parse_png_metadata_from_bytes, parse_webp_metadata_from_bytes,
 };
 #[cfg(test)]
 use image_metadata::{
     parse_jpeg_exif_metadata, parse_jpeg_exif_metadata_from_bytes, parse_tiff_exif_metadata,
 };
-use types::{
-    to_json, OfficeCellDto, OfficeLayoutDto, OfficeLayoutItemDto, OfficePageDto,
-    PreviewListingDto, PreviewListingItemDto, PreviewReadyDto, PreviewTableDto,
-    PreviewTableRowDto, PreviewTableSheetDto,
-};
+pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
+use torrent::parse_bencode;
+pub use torrent::{render_torrent, render_torrent_reader};
+#[cfg(test)]
+use torrent::{MAX_BENCODE_DEPTH, MAX_BENCODE_NODES};
 pub(crate) use types::ReaderPreviewError;
+use types::{
+    to_json, OfficeCellDto, OfficeLayoutDto, OfficeLayoutItemDto, OfficePageDto, PreviewListingDto,
+    PreviewListingItemDto, PreviewReadyDto, PreviewTableDto, PreviewTableRowDto,
+    PreviewTableSheetDto,
+};
 
 fn preview_cancelled(cancel_cb: Option<extern "C" fn() -> bool>) -> bool {
     cancel_cb.map(|callback| callback()).unwrap_or(false)
@@ -331,7 +330,10 @@ pub fn render_office_reader<R: Read + Seek>(
         .unwrap_or("")
         .to_ascii_lowercase();
 
-    if !matches!(ext.as_str(), "docx" | "docm" | "xlsx" | "xlsm" | "pptx" | "pptm" | "odt" | "ods" | "odp") {
+    if !matches!(
+        ext.as_str(),
+        "docx" | "docm" | "xlsx" | "xlsm" | "pptx" | "pptm" | "odt" | "ods" | "odp"
+    ) {
         return Ok(render_info(
             logical_name,
             "office",
@@ -340,12 +342,7 @@ pub fn render_office_reader<R: Read + Seek>(
         ));
     }
 
-    let mut zip = open_validated_zip(
-        reader,
-        source_len,
-        MAX_OFFICE_ZIP_ENTRIES as u64,
-        cancel_cb,
-    )?;
+    let mut zip = open_validated_zip(reader, source_len, MAX_OFFICE_ZIP_ENTRIES as u64, cancel_cb)?;
     let mut context = OfficeContext::new(cancel_cb);
     let rendered = match ext.as_str() {
         "docx" | "docm" => render_docx(logical_name, &mut zip, &mut context),
@@ -376,8 +373,7 @@ fn render_docx<R: Read + Seek>(
     let filename = file_name(path);
     let media_entries = office_media_entries(context, zip, &["word/media/"])?;
     let header_footer_entries = docx_header_footer_entries(context, zip)?;
-    let xml = match read_office_zip_text(context, zip, "word/document.xml", 16 * 1024 * 1024)?
-    {
+    let xml = match read_office_zip_text(context, zip, "word/document.xml", 16 * 1024 * 1024)? {
         Some(xml) => xml,
         None => {
             return Ok(office_error_json(
@@ -387,8 +383,7 @@ fn render_docx<R: Read + Seek>(
             ))
         }
     };
-    let header_footer_text =
-        extract_docx_header_footer_text(context, zip, &header_footer_entries)?;
+    let header_footer_text = extract_docx_header_footer_text(context, zip, &header_footer_entries)?;
     let body = extract_wordprocessing_text(context, &xml)?;
     let layout = build_docx_layout(context, zip, &body, &media_entries)?;
     let mut text = format!("Name: {filename}\nKind: Word document\n");
@@ -411,7 +406,11 @@ fn render_docx<R: Read + Seek>(
     ))
 }
 
-fn render_pptx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_pptx<R: Read + Seek>(
+    path: &str,
+    zip: &mut ZipArchive<R>,
+    context: &mut OfficeContext,
+) -> OfficeResult<String> {
     let filename = file_name(path);
     let media_entries = office_media_entries(context, zip, &["ppt/media/"])?;
     let mut slides = Vec::new();
@@ -449,7 +448,11 @@ fn render_pptx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mu
     ))
 }
 
-fn render_xlsx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_xlsx<R: Read + Seek>(
+    path: &str,
+    zip: &mut ZipArchive<R>,
+    context: &mut OfficeContext,
+) -> OfficeResult<String> {
     let filename = file_name(path);
     let media_entries = office_media_entries(context, zip, &["xl/media/"])?;
     let shared_strings =
@@ -497,7 +500,11 @@ fn render_xlsx<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mu
     ))
 }
 
-fn render_odf<R: Read + Seek>(path: &str, zip: &mut ZipArchive<R>, context: &mut OfficeContext) -> OfficeResult<String> {
+fn render_odf<R: Read + Seek>(
+    path: &str,
+    zip: &mut ZipArchive<R>,
+    context: &mut OfficeContext,
+) -> OfficeResult<String> {
     let filename = file_name(path);
     let xml = match read_office_zip_text(context, zip, "content.xml", 16 * 1024 * 1024)? {
         Some(xml) => xml,
@@ -877,10 +884,7 @@ fn push_docx_page(
     });
 }
 
-fn parse_ppt_slide_size(
-    context: &OfficeContext,
-    xml: &str,
-) -> OfficeResult<Option<(f64, f64)>> {
+fn parse_ppt_slide_size(context: &OfficeContext, xml: &str) -> OfficeResult<Option<(f64, f64)>> {
     let mut reader = Reader::from_str(xml);
     let mut event_count = 0;
     loop {
@@ -1837,10 +1841,7 @@ fn parse_xlsx_sheet_images<R: Read + Seek>(
     )
 }
 
-fn parse_worksheet_drawing_rid(
-    context: &OfficeContext,
-    xml: &str,
-) -> OfficeResult<Option<String>> {
+fn parse_worksheet_drawing_rid(context: &OfficeContext, xml: &str) -> OfficeResult<Option<String>> {
     let mut reader = Reader::from_str(xml);
     let mut event_count = 0;
     loop {
@@ -2141,10 +2142,7 @@ struct XlsxMergeRegion {
     column_span: usize,
 }
 
-fn parse_xlsx_sheet_metrics(
-    context: &OfficeContext,
-    xml: &str,
-) -> OfficeResult<XlsxSheetMetrics> {
+fn parse_xlsx_sheet_metrics(context: &OfficeContext, xml: &str) -> OfficeResult<XlsxSheetMetrics> {
     let mut reader = Reader::from_str(xml);
     let mut metrics = XlsxSheetMetrics::default();
     let mut event_count = 0;
@@ -2437,11 +2435,7 @@ fn canonical_office_media_ref(path: &str, expected_root: Option<&str>) -> Option
 
     let mut segments = Vec::new();
     for segment in path.split('/') {
-        if segment.is_empty()
-            || segment == "."
-            || segment == ".."
-            || segment.contains(':')
-        {
+        if segment.is_empty() || segment == "." || segment == ".." || segment.contains(':') {
             return None;
         }
         segments.push(segment);
@@ -2460,9 +2454,7 @@ fn canonical_office_media_ref(path: &str, expected_root: Option<&str>) -> Option
             .copied()
             .find(|root| lower.starts_with(root))?,
     };
-    if !lower.starts_with(root)
-        || lower.len() <= root.len()
-        || !is_supported_zip_image_name(&lower)
+    if !lower.starts_with(root) || lower.len() <= root.len() || !is_supported_zip_image_name(&lower)
     {
         return None;
     }
@@ -3301,7 +3293,10 @@ fn render_database_bytes(
     } else if lower_path.ends_with("-shm") {
         text.push_str("\nFormat: SQLite shared-memory WAL index");
         text.push_str("\nRole: transient index for the associated SQLite WAL file");
-        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+        text.push_str(&format!(
+            "\nInspected: {}",
+            format_bytes(bytes.len() as i64)
+        ));
     } else if bytes.starts_with(b"SQLite format 3\0") {
         let page_size = read_u16_be(&bytes, 16)
             .map(|value| if value == 1 { 65536 } else { value as u32 })
@@ -3312,10 +3307,17 @@ fn render_database_bytes(
             text.push_str(&format!("\nPages: {}", format_number(pages as i64)));
             if page_size > 0 {
                 let header_size = pages as i64 * page_size as i64;
-                text.push_str(&format!("\nDatabase size from header: {}", format_bytes(header_size)));
+                text.push_str(&format!(
+                    "\nDatabase size from header: {}",
+                    format_bytes(header_size)
+                ));
                 if size >= 0 && header_size != size {
                     let difference = size.abs_diff(header_size);
-                    let relation = if header_size > size { "larger" } else { "smaller" };
+                    let relation = if header_size > size {
+                        "larger"
+                    } else {
+                        "smaller"
+                    };
                     text.push_str(&format!(
                         "\nSize status: header is {relation} than the file by {difference} bytes (the database may be incomplete or have uncheckpointed WAL data)"
                     ));
@@ -3335,7 +3337,10 @@ fn render_database_bytes(
             text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
         }
         append_sqlite_header_details(&mut text, &bytes);
-        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+        text.push_str(&format!(
+            "\nInspected: {}",
+            format_bytes(bytes.len() as i64)
+        ));
         for note in snapshot_notes {
             text.push_str("\n");
             text.push_str(note);
@@ -3629,7 +3634,10 @@ fn append_sqlite_wal_summary(text: &mut String, bytes: &[u8], size: i64) {
     let magic = read_u32_be(bytes, 0).unwrap_or(0);
     if !matches!(magic, 0x377F_0682 | 0x377F_0683) {
         text.push_str("\nHeader: unrecognized or incomplete");
-        text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+        text.push_str(&format!(
+            "\nInspected: {}",
+            format_bytes(bytes.len() as i64)
+        ));
         return;
     }
     if let Some(version) = read_u32_be(bytes, 4) {
@@ -3648,7 +3656,10 @@ fn append_sqlite_wal_summary(text: &mut String, bytes: &[u8], size: i64) {
     if let Some(sequence) = read_u32_be(bytes, 12) {
         text.push_str(&format!("\nCheckpoint sequence: {}", sequence));
     }
-    text.push_str(&format!("\nInspected: {}", format_bytes(bytes.len() as i64)));
+    text.push_str(&format!(
+        "\nInspected: {}",
+        format_bytes(bytes.len() as i64)
+    ));
 }
 
 fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
@@ -4271,7 +4282,8 @@ fn build_sqlite_table_preview(
     page_size: usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<SqliteTablePreview> {
-    let schema = parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS, cancel_cb);
+    let schema =
+        parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS, cancel_cb);
     let business_tables = schema.rows.iter().filter(|row| {
         row.typ.eq_ignore_ascii_case("table")
             && row.root_page > 0
@@ -4291,14 +4303,20 @@ fn build_sqlite_table_preview(
             &mut retained_chars,
             cancel_cb,
         ) {
-            sheets.push(PreviewTableSheetDto { name: row.name.clone(), table });
+            sheets.push(PreviewTableSheetDto {
+                name: row.name.clone(),
+                table,
+            });
         }
     }
     let first = sheets.first()?;
     let first_name = first.name.clone();
     let mut first_table = first.table.clone();
     first_table.sheets = sheets;
-    Some(SqliteTablePreview { name: first_name, table: first_table })
+    Some(SqliteTablePreview {
+        name: first_name,
+        table: first_table,
+    })
 }
 
 fn build_sqlite_sheet_table(
@@ -4410,18 +4428,20 @@ fn sample_sqlite_table_rows(
                         partial = true;
                         break;
                     }
-                    let Some(cell_offset) = read_u16_be(page, header + 8 + index * 2).map(usize::from) else {
+                    let Some(cell_offset) =
+                        read_u16_be(page, header + 8 + index * 2).map(usize::from)
+                    else {
                         partial = true;
                         break;
                     };
-                    if let Some((cells, record_columns)) = parse_sqlite_table_leaf_cell(
-                        page,
-                        cell_offset,
-                        column_count,
-                        text_encoding,
-                    ) {
-                        let row_chars = cells.iter().map(|cell| cell.chars().count()).sum::<usize>();
-                        if *retained_chars > MAX_SQLITE_SAMPLE_RETAINED_CHARS.saturating_sub(row_chars) {
+                    if let Some((cells, record_columns)) =
+                        parse_sqlite_table_leaf_cell(page, cell_offset, column_count, text_encoding)
+                    {
+                        let row_chars =
+                            cells.iter().map(|cell| cell.chars().count()).sum::<usize>();
+                        if *retained_chars
+                            > MAX_SQLITE_SAMPLE_RETAINED_CHARS.saturating_sub(row_chars)
+                        {
                             partial = true;
                             break;
                         }
@@ -4437,7 +4457,11 @@ fn sample_sqlite_table_rows(
             _ => return None,
         }
     }
-    Some(SqliteTableSample { rows, total_columns, partial })
+    Some(SqliteTableSample {
+        rows,
+        total_columns,
+        partial,
+    })
 }
 
 fn parse_sqlite_table_leaf_cell(
@@ -4496,7 +4520,8 @@ fn sqlite_record_display_value(
         1..=6 | 8 | 9 => sqlite_record_integer(payload, pos, serial).map(|value| value.to_string()),
         7 => {
             let end = pos.checked_add(8)?;
-            let value = f64::from_bits(u64::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?));
+            let value =
+                f64::from_bits(u64::from_be_bytes(payload.get(*pos..end)?.try_into().ok()?));
             *pos = end;
             Some(value.to_string())
         }
@@ -4517,7 +4542,10 @@ fn truncate_sqlite_cell(value: &str) -> String {
     if value.chars().count() <= MAX_SQLITE_SAMPLE_CELL_CHARS {
         return value.to_string();
     }
-    let mut out = value.chars().take(MAX_SQLITE_SAMPLE_CELL_CHARS).collect::<String>();
+    let mut out = value
+        .chars()
+        .take(MAX_SQLITE_SAMPLE_CELL_CHARS)
+        .collect::<String>();
     out.push_str("...");
     out
 }
@@ -4528,12 +4556,8 @@ fn append_sqlite_schema_summary(
     page_size: usize,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) {
-    let summary = parse_sqlite_schema_summary(
-        bytes,
-        page_size,
-        MAX_SQLITE_SCHEMA_OBJECTS,
-        cancel_cb,
-    );
+    let summary =
+        parse_sqlite_schema_summary(bytes, page_size, MAX_SQLITE_SCHEMA_OBJECTS, cancel_cb);
     if summary.rows.is_empty() {
         return;
     }
@@ -4590,7 +4614,11 @@ fn append_sqlite_schema_group(
     let shown = matching.len().min(MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP);
     text.push_str(&format!(
         "\n{heading}{}:",
-        if matching.len() > shown { " (partial)" } else { "" }
+        if matching.len() > shown {
+            " (partial)"
+        } else {
+            ""
+        }
     ));
     for row in matching.into_iter().take(shown) {
         if preview_cancelled(cancel_cb) {
@@ -4756,13 +4784,8 @@ fn parse_sqlite_schema_summary(
         let header = if page_no == 1 { 100usize } else { 0usize };
         match page.get(header).copied().unwrap_or(0) {
             0x0D => {
-                partial |= parse_sqlite_schema_leaf_page(
-                    page,
-                    header,
-                    limit,
-                    text_encoding,
-                    &mut rows,
-                )
+                partial |=
+                    parse_sqlite_schema_leaf_page(page, header, limit, text_encoding, &mut rows)
             }
             0x05 => {
                 for child in sqlite_table_interior_children(page, header) {
@@ -5097,7 +5120,11 @@ fn decode_sqlite_utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
             u16::from_be_bytes([unit[0], unit[1]])
         }
     });
-    Some(char::decode_utf16(units).map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER)).collect())
+    Some(
+        char::decode_utf16(units)
+            .map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect(),
+    )
 }
 
 fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option<i64> {
@@ -5135,7 +5162,11 @@ fn sqlite_record_integer(payload: &[u8], pos: &mut usize, serial: u64) -> Option
 fn sqlite_record_signed_integer(payload: &[u8], pos: &mut usize, len: usize) -> Option<i64> {
     let end = pos.checked_add(len)?;
     let bytes = payload.get(*pos..end)?;
-    let mut value = if bytes.first()? & 0x80 != 0 { -1i64 } else { 0i64 };
+    let mut value = if bytes.first()? & 0x80 != 0 {
+        -1i64
+    } else {
+        0i64
+    };
     for byte in bytes {
         value = (value << 8) | i64::from(*byte);
     }
@@ -9450,20 +9481,15 @@ fn validate_zip_container<R: Read + Seek>(
     let eocd_offset = source_len - tail_len + eocd_index as u64;
     let disk = read_u16(&tail, eocd_index + 4).ok_or(ReaderPreviewError::Malformed)?;
     let central_disk = read_u16(&tail, eocd_index + 6).ok_or(ReaderPreviewError::Malformed)?;
-    let entries_on_disk =
-        read_u16(&tail, eocd_index + 8).ok_or(ReaderPreviewError::Malformed)?;
+    let entries_on_disk = read_u16(&tail, eocd_index + 8).ok_or(ReaderPreviewError::Malformed)?;
     let entries = read_u16(&tail, eocd_index + 10).ok_or(ReaderPreviewError::Malformed)?;
-    let central_size =
-        read_u32(&tail, eocd_index + 12).ok_or(ReaderPreviewError::Malformed)?;
-    let central_offset =
-        read_u32(&tail, eocd_index + 16).ok_or(ReaderPreviewError::Malformed)?;
+    let central_size = read_u32(&tail, eocd_index + 12).ok_or(ReaderPreviewError::Malformed)?;
+    let central_offset = read_u32(&tail, eocd_index + 16).ok_or(ReaderPreviewError::Malformed)?;
     if disk != 0 || central_disk != 0 || entries_on_disk != entries {
         return Err(ReaderPreviewError::Malformed);
     }
 
-    let is_zip64 = entries == u16::MAX
-        || central_size == u32::MAX
-        || central_offset == u32::MAX;
+    let is_zip64 = entries == u16::MAX || central_size == u32::MAX || central_offset == u32::MAX;
     let (entries, central_size, central_offset, central_end_limit) = if is_zip64 {
         let locator_offset = eocd_offset
             .checked_sub(20)
@@ -9652,21 +9678,22 @@ fn render_rar_entries<R: Read + Seek>(
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Result<String, ReaderPreviewError> {
     let mut cancelable = CancelableSeekReader::new(reader, cancel_cb);
-    let listing = rar_listing::scan_rar(&mut cancelable, source_len, || {
-        preview_cancelled(cancel_cb)
-    })
-    .map_err(|error| match error {
-        RarScanError::Cancelled => ReaderPreviewError::Cancelled,
-        RarScanError::Io(_) if preview_cancelled(cancel_cb) => ReaderPreviewError::Cancelled,
-        RarScanError::Io(_) => ReaderPreviewError::Io,
-        RarScanError::HeaderTooLarge | RarScanError::SizeOverflow => {
-            ReaderPreviewError::LimitExceeded
-        }
-        RarScanError::InvalidMagic
-        | RarScanError::Truncated
-        | RarScanError::Malformed(_)
-        | RarScanError::HeaderCrcMismatch => ReaderPreviewError::Malformed,
-    })?;
+    let listing =
+        rar_listing::scan_rar(&mut cancelable, source_len, || preview_cancelled(cancel_cb))
+            .map_err(|error| match error {
+                RarScanError::Cancelled => ReaderPreviewError::Cancelled,
+                RarScanError::Io(_) if preview_cancelled(cancel_cb) => {
+                    ReaderPreviewError::Cancelled
+                }
+                RarScanError::Io(_) => ReaderPreviewError::Io,
+                RarScanError::HeaderTooLarge | RarScanError::SizeOverflow => {
+                    ReaderPreviewError::LimitExceeded
+                }
+                RarScanError::InvalidMagic
+                | RarScanError::Truncated
+                | RarScanError::Malformed(_)
+                | RarScanError::HeaderCrcMismatch => ReaderPreviewError::Malformed,
+            })?;
 
     let filename = Path::new(logical_name)
         .file_name()
@@ -9809,15 +9836,8 @@ pub fn render_archive(path: &str, cancel_cb: Option<extern "C" fn() -> bool>) ->
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0);
-    render_archive_reader_with_root(
-        file,
-        path,
-        path,
-        metadata.len(),
-        modified_unix,
-        cancel_cb,
-    )
-    .unwrap_or_default()
+    render_archive_reader_with_root(file, path, path, metadata.len(), modified_unix, cancel_cb)
+        .unwrap_or_default()
 }
 
 pub fn render_archive_reader<R: Read + Seek>(
@@ -9858,13 +9878,7 @@ fn render_archive_reader_with_root<R: Read + Seek>(
 
     let is_rar = reader_starts_with_rar_magic(&mut reader, source_len, cancel_cb)?;
     let json = if is_rar {
-        render_rar_entries(
-            &mut reader,
-            logical_name,
-            root_path,
-            source_len,
-            cancel_cb,
-        )?
+        render_rar_entries(&mut reader, logical_name, root_path, source_len, cancel_cb)?
     } else if TAR_GZ_EXTS
         .iter()
         .any(|extension| lower.ends_with(extension))
@@ -9877,15 +9891,10 @@ fn render_archive_reader_with_root<R: Read + Seek>(
             GzDecoder::new(reader),
             cancel_cb,
         )
-    } else if TAR_EXTS
-        .iter()
-        .any(|extension| lower.ends_with(extension))
-    {
+    } else if TAR_EXTS.iter().any(|extension| lower.ends_with(extension)) {
         prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
         render_tar_entries(logical_name, root_path, "archive", reader, cancel_cb)
-    } else if GZ_EXTS
-        .iter()
-        .any(|extension| lower.ends_with(extension))
+    } else if GZ_EXTS.iter().any(|extension| lower.ends_with(extension))
         && !lower.ends_with(".tar.gz")
     {
         prepare_seekable_reader(&mut reader, source_len, cancel_cb)?;
@@ -9898,12 +9907,7 @@ fn render_archive_reader_with_root<R: Read + Seek>(
             cancel_cb,
         )?
     } else {
-        let mut zip = open_validated_zip(
-            reader,
-            source_len,
-            MAX_ARCHIVE_ZIP_ENTRIES,
-            cancel_cb,
-        )?;
+        let mut zip = open_validated_zip(reader, source_len, MAX_ARCHIVE_ZIP_ENTRIES, cancel_cb)?;
         render_zip_archive_from_zip(&mut zip, logical_name, root_path, cancel_cb)?
     };
 
@@ -9927,14 +9931,7 @@ pub fn extract_archive_entry_to_temp(
     }
     let file = fs::File::open(archive_path).ok()?;
     let source_len = file.metadata().ok()?.len();
-    extract_archive_entry_to_temp_reader(
-        file,
-        source_len,
-        archive_path,
-        entry_path,
-        cancel_cb,
-    )
-    .ok()
+    extract_archive_entry_to_temp_reader(file, source_len, archive_path, entry_path, cancel_cb).ok()
 }
 
 pub fn extract_archive_entry_to_temp_reader<R: Read + Seek>(
@@ -9999,9 +9996,7 @@ pub fn extract_archive_entry_to_writer_reader<R: Read + Seek, W: Write>(
     let lower = logical_name.to_ascii_lowercase();
     let is_rar = reader_starts_with_rar_magic(&mut reader, source_len, cancel_cb)?;
     if is_rar
-        || RAR_EXTS
-            .iter()
-            .any(|extension| lower.ends_with(extension))
+        || RAR_EXTS.iter().any(|extension| lower.ends_with(extension))
         || TAR_EXTS.iter().any(|extension| lower.ends_with(extension))
         || TAR_GZ_EXTS
             .iter()
@@ -10014,12 +10009,7 @@ pub fn extract_archive_entry_to_writer_reader<R: Read + Seek, W: Write>(
 
     let normalized =
         normalize_archive_entry_path(entry_path).ok_or(ReaderPreviewError::Malformed)?;
-    let mut zip = open_validated_zip(
-        reader,
-        source_len,
-        MAX_ARCHIVE_ZIP_ENTRIES,
-        cancel_cb,
-    )?;
+    let mut zip = open_validated_zip(reader, source_len, MAX_ARCHIVE_ZIP_ENTRIES, cancel_cb)?;
     let mut found_index = None;
     for index in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
         if preview_cancelled(cancel_cb) {
@@ -10177,9 +10167,7 @@ fn read_office_layout_image_reference<R: Read + Seek>(
     requested_ref: &str,
     expected_root: &str,
 ) -> OfficeResult<Option<(String, u64)>> {
-    let Some(requested_ref) =
-        canonical_office_media_ref(requested_ref, Some(expected_root))
-    else {
+    let Some(requested_ref) = canonical_office_media_ref(requested_ref, Some(expected_root)) else {
         return Ok(None);
     };
     let mut exact_match: Option<(usize, String, u64)> = None;
@@ -10192,9 +10180,7 @@ fn read_office_layout_image_reference<R: Read + Seek>(
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        let Some(actual_ref) =
-            canonical_office_media_ref(entry.name(), Some(expected_root))
-        else {
+        let Some(actual_ref) = canonical_office_media_ref(entry.name(), Some(expected_root)) else {
             continue;
         };
         if actual_ref == requested_ref {
@@ -10667,7 +10653,9 @@ pub fn extract_office_image_bgra(
     path: &str,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<(u32, u32, Vec<u8>)> {
-    if preview_cancelled(cancel_cb) { return None; }
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let file = fs::File::open(path).ok()?;
     let source_len = file.metadata().ok()?.len();
     extract_office_image_bgra_reader(file, source_len, path, cancel_cb).ok()
@@ -10685,12 +10673,7 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
     if preview_cancelled(cancel_cb) {
         return Err(ReaderPreviewError::Cancelled);
     }
-    let mut zip = open_validated_zip(
-        reader,
-        source_len,
-        MAX_OFFICE_ZIP_ENTRIES as u64,
-        cancel_cb,
-    )?;
+    let mut zip = open_validated_zip(reader, source_len, MAX_OFFICE_ZIP_ENTRIES as u64, cancel_cb)?;
     let roots = office_media_roots_for_path(logical_name);
     if roots.is_empty() {
         return Err(ReaderPreviewError::Malformed);
@@ -10698,7 +10681,9 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
 
     let mut candidates = Vec::new();
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -10721,21 +10706,21 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     let mut context = OfficeContext::new(cancel_cb);
     for (path_score, name) in candidates.into_iter().take(24) {
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
-        let bytes = match read_office_zip_bytes(
-            &mut context,
-            &mut zip,
-            &name,
-            MAX_OFFICE_MEDIA_BYTES,
-        ) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => continue,
-            Err(error) => return Err(office_reader_error(error)),
-        };
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
+        let bytes =
+            match read_office_zip_bytes(&mut context, &mut zip, &name, MAX_OFFICE_MEDIA_BYTES) {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => continue,
+                Err(error) => return Err(office_reader_error(error)),
+            };
         let Some(image) = load_bounded_embedded_image(&bytes) else {
             continue;
         };
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let (original_width, original_height) = image.dimensions();
         if original_width < 8 || original_height < 8 {
             continue;
@@ -10755,10 +10740,7 @@ pub fn extract_office_image_bgra_reader<R: Read + Seek>(
         .ok_or(ReaderPreviewError::Malformed)
 }
 
-pub(crate) fn office_layout_image_ref_is_valid(
-    logical_name: &str,
-    image_ref: &str,
-) -> bool {
+pub(crate) fn office_layout_image_ref_is_valid(logical_name: &str, image_ref: &str) -> bool {
     let Some(expected_root) = office_media_root_for_path(logical_name) else {
         return false;
     };
@@ -10791,9 +10773,7 @@ pub(crate) fn extract_office_layout_image_bgra_reader<R: Read + Seek>(
     let Some(expected_root) = office_media_root_for_path(logical_name) else {
         return Err(ReaderPreviewError::Malformed);
     };
-    let Some(canonical_ref) =
-        canonical_office_media_ref(image_ref, Some(expected_root))
-    else {
+    let Some(canonical_ref) = canonical_office_media_ref(image_ref, Some(expected_root)) else {
         return Err(ReaderPreviewError::Malformed);
     };
     if canonical_ref != image_ref {
@@ -10803,12 +10783,7 @@ pub(crate) fn extract_office_layout_image_bgra_reader<R: Read + Seek>(
         return Err(ReaderPreviewError::Malformed);
     };
 
-    let mut zip = open_validated_zip(
-        reader,
-        source_len,
-        MAX_OFFICE_ZIP_ENTRIES as u64,
-        cancel_cb,
-    )?;
+    let mut zip = open_validated_zip(reader, source_len, MAX_OFFICE_ZIP_ENTRIES as u64, cancel_cb)?;
     let mut selected: Option<(usize, u64)> = None;
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         if preview_cancelled(cancel_cb) {
@@ -10839,13 +10814,9 @@ pub(crate) fn extract_office_layout_image_bgra_reader<R: Read + Seek>(
     let mut entry = zip
         .by_index(index)
         .map_err(|_| ReaderPreviewError::Malformed)?;
-    let bytes = read_office_limited_to_end(
-        &mut context,
-        &mut entry,
-        MAX_OFFICE_INLINE_IMAGE_BYTES,
-    )
-    .map_err(office_reader_error)?
-    .ok_or(ReaderPreviewError::LimitExceeded)?;
+    let bytes = read_office_limited_to_end(&mut context, &mut entry, MAX_OFFICE_INLINE_IMAGE_BYTES)
+        .map_err(office_reader_error)?
+        .ok_or(ReaderPreviewError::LimitExceeded)?;
     if bytes.is_empty() || bytes.len() as u64 != declared_length {
         return Err(ReaderPreviewError::Malformed);
     }
@@ -10880,12 +10851,7 @@ pub(crate) fn extract_office_layout_image_bgra_reader<R: Read + Seek>(
     if image.dimensions() != (width, height) {
         return Err(ReaderPreviewError::Malformed);
     }
-    office_layout_image_to_bgra(
-        image,
-        target_width,
-        target_height,
-        cancel_cb,
-    )
+    office_layout_image_to_bgra(image, target_width, target_height, cancel_cb)
 }
 
 fn office_image_format(image_ref: &str) -> Option<ImageFormat> {
@@ -10995,7 +10961,9 @@ pub fn extract_package_icon_bgra(
     path: &str,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<(u32, u32, Vec<u8>)> {
-    if preview_cancelled(cancel_cb) { return None; }
+    if preview_cancelled(cancel_cb) {
+        return None;
+    }
     let file = fs::File::open(path).ok()?;
     let source_len = file.metadata().ok()?.len();
     extract_package_icon_bgra_reader(file, source_len, path, cancel_cb).ok()
@@ -11034,7 +11002,9 @@ pub fn extract_package_icon_bgra_reader<R: Read + Seek>(
         .unwrap_or_default();
 
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
@@ -11053,7 +11023,9 @@ pub fn extract_package_icon_bgra_reader<R: Read + Seek>(
 
     let mut best: Option<(i32, u32, u32, Vec<u8>)> = None;
     for (path_score, name) in candidates.into_iter().take(32) {
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let Ok(mut entry) = zip.by_name(&name) else {
             continue;
         };
@@ -11075,7 +11047,9 @@ pub fn extract_package_icon_bgra_reader<R: Read + Seek>(
         let Some(image) = load_bounded_embedded_image(&bytes) else {
             continue;
         };
-        if preview_cancelled(cancel_cb) { return Err(ReaderPreviewError::Cancelled); }
+        if preview_cancelled(cancel_cb) {
+            return Err(ReaderPreviewError::Cancelled);
+        }
         let (original_width, original_height) = image.dimensions();
         if original_width < 16 || original_height < 16 {
             continue;
@@ -11117,7 +11091,11 @@ fn extract_android_package_icon<R: Read + Seek>(
     image_to_bgra(image, 512)
 }
 
-fn read_zip_bytes<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, limit: u64) -> Option<Vec<u8>> {
+fn read_zip_bytes<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Option<Vec<u8>> {
     let mut entry = zip.by_name(name).ok()?;
     if entry.size() > limit {
         return None;
@@ -11161,7 +11139,9 @@ fn decode_android_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> 
 
 fn decode_android_binary_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<String> {
     let (document_type, header_size, _) = android_chunk_header(bytes, 0)?;
-    if document_type != 0x0003 { return None; }
+    if document_type != 0x0003 {
+        return None;
+    }
     let string_pool_offset = android_find_chunk(bytes, header_size, 0x0001)?;
     let strings = android_string_pool(bytes, string_pool_offset)?;
     let (_, _, string_pool_size) = android_chunk_header(bytes, string_pool_offset)?;
@@ -11176,13 +11156,17 @@ fn decode_android_binary_xml(bytes: &[u8], resources: Option<&[u8]>) -> Option<S
                 let attribute_start = android_u16(bytes, offset + 24)? as usize;
                 let attribute_size = android_u16(bytes, offset + 26)? as usize;
                 let attribute_count = android_u16(bytes, offset + 28)? as usize;
-                if attribute_size < 20 || attribute_count > 4096 { return None; }
+                if attribute_size < 20 || attribute_count > 4096 {
+                    return None;
+                }
                 xml.push('<');
                 xml.push_str(name);
                 let attributes = offset.checked_add(16 + attribute_start)?;
                 for index in 0..attribute_count {
                     let attribute = attributes.checked_add(index.checked_mul(attribute_size)?)?;
-                    if attribute.checked_add(20)? > offset + chunk_size { return None; }
+                    if attribute.checked_add(20)? > offset + chunk_size {
+                        return None;
+                    }
                     let key = android_u32(bytes, attribute + 4)
                         .and_then(|value| strings.get(value as usize))?;
                     let raw = android_u32(bytes, attribute + 8)?;
@@ -11222,9 +11206,11 @@ fn android_typed_value(
     resources: Option<&[u8]>,
 ) -> Option<String> {
     match value_type {
-        0x01 => Some(resources
-            .and_then(|table| android_resource_reference_by_id(table, data))
-            .unwrap_or_else(|| format!("@0x{data:08x}"))),
+        0x01 => Some(
+            resources
+                .and_then(|table| android_resource_reference_by_id(table, data))
+                .unwrap_or_else(|| format!("@0x{data:08x}")),
+        ),
         0x03 => strings.get(data as usize).cloned(),
         0x04 => Some(f32::from_bits(data).to_string()),
         0x10 => Some(data.to_string()),
@@ -11243,7 +11229,9 @@ fn android_manifest_icon_reference(xml: &str) -> Option<String> {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"application" => {
                 for attr in e.attributes().flatten() {
                     let key = attr.key.as_ref();
-                    let Ok(value) = attr.normalized_value(XmlVersion::Implicit1_0) else { continue; };
+                    let Ok(value) = attr.normalized_value(XmlVersion::Implicit1_0) else {
+                        continue;
+                    };
                     if key == b"android:icon" || key == b"icon" {
                         return Some(value.into_owned());
                     }
@@ -11271,16 +11259,32 @@ fn load_android_resource_image<R: Read + Seek>(
         return None;
     }
     if let Some(color) = parse_android_color(reference) {
-        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color)));
+        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            512, 512, color,
+        )));
     }
     if let Some(table) = resources {
         for value in resolve_android_resource_values(table, reference) {
             let resolved = match value {
-                AndroidResourceValue::Path(path) => load_android_archive_image(zip, resources, &path, depth, decode_attempts, cancel_cb),
-                AndroidResourceValue::Color(color) => Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color))),
-                AndroidResourceValue::Reference(reference) => {
-                    load_android_resource_image(zip, resources, &reference, depth + 1, decode_attempts, cancel_cb)
-                }
+                AndroidResourceValue::Path(path) => load_android_archive_image(
+                    zip,
+                    resources,
+                    &path,
+                    depth,
+                    decode_attempts,
+                    cancel_cb,
+                ),
+                AndroidResourceValue::Color(color) => Some(DynamicImage::ImageRgba8(
+                    RgbaImage::from_pixel(512, 512, color),
+                )),
+                AndroidResourceValue::Reference(reference) => load_android_resource_image(
+                    zip,
+                    resources,
+                    &reference,
+                    depth + 1,
+                    decode_attempts,
+                    cancel_cb,
+                ),
             };
             if resolved.is_some() {
                 return resolved;
@@ -11290,8 +11294,17 @@ fn load_android_resource_image<R: Read + Seek>(
     let (kind, name) = parse_android_resource_reference(reference)?;
     let candidates = android_resource_candidates(zip, kind, name);
     for candidate in candidates {
-        if preview_cancelled(cancel_cb) { return None; }
-        if let Some(image) = load_android_archive_image(zip, resources, &candidate, depth, decode_attempts, cancel_cb) {
+        if preview_cancelled(cancel_cb) {
+            return None;
+        }
+        if let Some(image) = load_android_archive_image(
+            zip,
+            resources,
+            &candidate,
+            depth,
+            decode_attempts,
+            cancel_cb,
+        ) {
             return Some(image);
         }
     }
@@ -11337,12 +11350,14 @@ fn android_resource_reference_by_id(table: &[u8], resource_id: u32) -> Option<St
                     .and_then(|value| android_string_pool(table, offset + value as usize))?;
                 let key_strings = android_u32(table, offset + 276)
                     .and_then(|value| android_string_pool(table, offset + value as usize))?;
-                let type_name = wanted_type.checked_sub(1)
+                let type_name = wanted_type
+                    .checked_sub(1)
                     .and_then(|index| type_strings.get(index as usize))?;
                 let end = offset + chunk_size;
                 let mut child = offset + header_size;
                 while child < end {
-                    let (child_type, child_header, child_size) = android_chunk_header(table, child)?;
+                    let (child_type, child_header, child_size) =
+                        android_chunk_header(table, child)?;
                     if child_type == 0x0201 && table.get(child + 8).copied() == Some(wanted_type) {
                         let count = android_u32(table, child + 12)? as usize;
                         if wanted_entry < count {
@@ -11379,9 +11394,15 @@ fn android_resource_reference_by_id(table: &[u8], resource_id: u32) -> Option<St
 }
 
 fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<AndroidResourceValue> {
-    let Some((kind, name)) = parse_android_resource_reference(reference) else { return Vec::new(); };
-    let Some(global_pool_offset) = android_find_chunk(table, 12, 0x0001) else { return Vec::new(); };
-    let Some(global_strings) = android_string_pool(table, global_pool_offset) else { return Vec::new(); };
+    let Some((kind, name)) = parse_android_resource_reference(reference) else {
+        return Vec::new();
+    };
+    let Some(global_pool_offset) = android_find_chunk(table, 12, 0x0001) else {
+        return Vec::new();
+    };
+    let Some(global_strings) = android_string_pool(table, global_pool_offset) else {
+        return Vec::new();
+    };
     let mut values = Vec::new();
     let mut offset = 12usize;
     while let Some((chunk_type, header_size, chunk_size)) = android_chunk_header(table, offset) {
@@ -11391,18 +11412,33 @@ fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<Android
             let (Some(type_strings), Some(key_strings)) = (
                 type_offset.and_then(|at| android_string_pool(table, at)),
                 key_offset.and_then(|at| android_string_pool(table, at)),
-            ) else { offset += chunk_size; continue; };
+            ) else {
+                offset += chunk_size;
+                continue;
+            };
             let end = offset.saturating_add(chunk_size).min(table.len());
             let mut child = offset + header_size;
             while child < end {
-                let Some((child_type, child_header, child_size)) = android_chunk_header(table, child) else { break; };
+                let Some((child_type, child_header, child_size)) =
+                    android_chunk_header(table, child)
+                else {
+                    break;
+                };
                 if child_type == 0x0201 && child_header >= 20 {
                     let type_id = table.get(child + 8).copied().unwrap_or(0);
-                    let type_name = type_id.checked_sub(1).and_then(|id| type_strings.get(id as usize));
+                    let type_name = type_id
+                        .checked_sub(1)
+                        .and_then(|id| type_strings.get(id as usize));
                     if type_name.map(String::as_str) == Some(kind) {
                         collect_android_type_values(
-                            table, child, child_header, child_size, &key_strings, name,
-                            &global_strings, &mut values,
+                            table,
+                            child,
+                            child_header,
+                            child_size,
+                            &key_strings,
+                            name,
+                            &global_strings,
+                            &mut values,
                         );
                     }
                 }
@@ -11430,8 +11466,13 @@ fn collect_android_type_values(
     global_strings: &[String],
     output: &mut Vec<AndroidResourceValue>,
 ) {
-    let Some(entry_count) = android_u32(table, chunk + 12).map(|value| value as usize) else { return; };
-    let Some(entries_start) = android_u32(table, chunk + 16).map(|value| chunk + value as usize) else { return; };
+    let Some(entry_count) = android_u32(table, chunk + 12).map(|value| value as usize) else {
+        return;
+    };
+    let Some(entries_start) = android_u32(table, chunk + 16).map(|value| chunk + value as usize)
+    else {
+        return;
+    };
     let offsets_start = chunk + header_size;
     let chunk_end = chunk.saturating_add(chunk_size).min(table.len());
     let sparse = table.get(chunk + 9).copied().unwrap_or(0) & 0x01 != 0;
@@ -11442,19 +11483,31 @@ fn collect_android_type_values(
     };
     for index in 0..offset_count {
         let relative = if sparse {
-            let Some(value) = android_u16(table, offsets_start + index * 4 + 2) else { break; };
+            let Some(value) = android_u16(table, offsets_start + index * 4 + 2) else {
+                break;
+            };
             u32::from(value) * 4
         } else {
-            let Some(value) = android_u32(table, offsets_start + index * 4) else { break; };
-            if value == u32::MAX { continue; }
+            let Some(value) = android_u32(table, offsets_start + index * 4) else {
+                break;
+            };
+            if value == u32::MAX {
+                continue;
+            }
             value
         };
         let entry = entries_start.saturating_add(relative as usize);
-        if entry + 16 > chunk_end { continue; }
+        if entry + 16 > chunk_end {
+            continue;
+        }
         let flags = android_u16(table, entry + 2).unwrap_or(0);
-        if flags & 1 != 0 { continue; }
+        if flags & 1 != 0 {
+            continue;
+        }
         let key = android_u32(table, entry + 4).and_then(|value| keys.get(value as usize));
-        if key.map(String::as_str) != Some(wanted_name) { continue; }
+        if key.map(String::as_str) != Some(wanted_name) {
+            continue;
+        }
         let value_type = table[entry + 11];
         let data = android_u32(table, entry + 12).unwrap_or(0);
         match value_type {
@@ -11482,7 +11535,9 @@ fn collect_android_type_values(
 fn android_find_chunk(bytes: &[u8], mut offset: usize, wanted: u16) -> Option<usize> {
     while offset < bytes.len() {
         let (chunk_type, _, chunk_size) = android_chunk_header(bytes, offset)?;
-        if chunk_type == wanted { return Some(offset); }
+        if chunk_type == wanted {
+            return Some(offset);
+        }
         offset = offset.checked_add(chunk_size)?;
     }
     None
@@ -11492,15 +11547,21 @@ fn android_chunk_header(bytes: &[u8], offset: usize) -> Option<(u16, usize, usiz
     let chunk_type = android_u16(bytes, offset)?;
     let header_size = android_u16(bytes, offset + 2)? as usize;
     let chunk_size = android_u32(bytes, offset + 4)? as usize;
-    (header_size >= 8 && chunk_size >= header_size && offset.checked_add(chunk_size)? <= bytes.len())
-        .then_some((chunk_type, header_size, chunk_size))
+    (header_size >= 8
+        && chunk_size >= header_size
+        && offset.checked_add(chunk_size)? <= bytes.len())
+    .then_some((chunk_type, header_size, chunk_size))
 }
 
 fn android_string_pool(bytes: &[u8], offset: usize) -> Option<Vec<String>> {
     let (chunk_type, header_size, chunk_size) = android_chunk_header(bytes, offset)?;
-    if chunk_type != 0x0001 || header_size < 28 { return None; }
+    if chunk_type != 0x0001 || header_size < 28 {
+        return None;
+    }
     let count = android_u32(bytes, offset + 8)? as usize;
-    if count > 1_000_000 { return None; }
+    if count > 1_000_000 {
+        return None;
+    }
     let flags = android_u32(bytes, offset + 16)?;
     let strings_start = offset.checked_add(android_u32(bytes, offset + 20)? as usize)?;
     let end = offset + chunk_size;
@@ -11530,53 +11591,87 @@ fn android_utf8_string(bytes: &[u8], mut offset: usize, end: usize) -> Option<St
 
 fn android_length8(bytes: &[u8], offset: usize, end: usize) -> Option<(usize, usize)> {
     let first = *bytes.get(offset)?;
-    if offset >= end { return None; }
-    if first & 0x80 == 0 { Some((first as usize, offset + 1)) }
-    else { Some(((((first & 0x7f) as usize) << 8) | *bytes.get(offset + 1)? as usize, offset + 2)) }
+    if offset >= end {
+        return None;
+    }
+    if first & 0x80 == 0 {
+        Some((first as usize, offset + 1))
+    } else {
+        Some((
+            (((first & 0x7f) as usize) << 8) | *bytes.get(offset + 1)? as usize,
+            offset + 2,
+        ))
+    }
 }
 
 fn android_utf16_string(bytes: &[u8], mut offset: usize, end: usize) -> Option<String> {
     let first = android_u16(bytes, offset)?;
     offset += 2;
-    let length = if first & 0x8000 == 0 { first as usize } else {
+    let length = if first & 0x8000 == 0 {
+        first as usize
+    } else {
         let second = android_u16(bytes, offset)?;
         offset += 2;
         (((first & 0x7fff) as usize) << 16) | second as usize
     };
     let byte_length = length.checked_mul(2)?;
-    if offset.checked_add(byte_length)? > end { return None; }
+    if offset.checked_add(byte_length)? > end {
+        return None;
+    }
     let units = bytes[offset..offset + byte_length]
         .chunks_exact(2)
         .map(|unit| u16::from_le_bytes([unit[0], unit[1]]));
-    Some(char::decode_utf16(units).map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER)).collect())
+    Some(
+        char::decode_utf16(units)
+            .map(|value| value.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect(),
+    )
 }
 
 fn android_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?))
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
 }
 
 fn android_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?))
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset + 4)?.try_into().ok()?,
+    ))
 }
 
 fn parse_android_resource_reference(reference: &str) -> Option<(&str, &str)> {
     let value = reference.trim().strip_prefix('@')?;
-    let value = value.split_once(':').map(|(_, value)| value).unwrap_or(value);
+    let value = value
+        .split_once(':')
+        .map(|(_, value)| value)
+        .unwrap_or(value);
     let (kind, name) = value.split_once('/')?;
     (!kind.is_empty() && !name.is_empty()).then_some((kind, name))
 }
 
-fn android_resource_candidates<R: Read + Seek>(zip: &mut ZipArchive<R>, kind: &str, name: &str) -> Vec<String> {
+fn android_resource_candidates<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    kind: &str,
+    name: &str,
+) -> Vec<String> {
     let mut candidates = Vec::new();
     for i in 0..zip.len().min(MAX_ARCHIVE_SCAN_ENTRIES) {
-        let Ok(entry) = zip.by_index_raw(i) else { continue; };
+        let Ok(entry) = zip.by_index_raw(i) else {
+            continue;
+        };
         let path = entry.name().replace('\\', "/");
         let lower = path.to_ascii_lowercase();
-        let Some(file_name) = lower.rsplit('/').next() else { continue; };
-        let Some((stem, extension)) = file_name.rsplit_once('.') else { continue; };
-        let directory_match = lower.starts_with(&format!("res/{kind}"))
-            || lower.contains(&format!("/res/{kind}"));
-        if directory_match && stem == name.to_ascii_lowercase()
+        let Some(file_name) = lower.rsplit('/').next() else {
+            continue;
+        };
+        let Some((stem, extension)) = file_name.rsplit_once('.') else {
+            continue;
+        };
+        let directory_match =
+            lower.starts_with(&format!("res/{kind}")) || lower.contains(&format!("/res/{kind}"));
+        if directory_match
+            && stem == name.to_ascii_lowercase()
             && matches!(extension, "png" | "webp" | "jpg" | "jpeg" | "bmp" | "xml")
             && entry.size() <= MAX_PACKAGE_ICON_BYTES
         {
@@ -11588,14 +11683,23 @@ fn android_resource_candidates<R: Read + Seek>(zip: &mut ZipArchive<R>, kind: &s
 }
 
 fn android_density_score(path: &str) -> i32 {
-    if path.contains("anydpi-v26") { 1000 }
-    else if path.contains("anydpi") { 900 }
-    else if path.contains("xxxhdpi") { 640 }
-    else if path.contains("xxhdpi") { 480 }
-    else if path.contains("xhdpi") { 320 }
-    else if path.contains("hdpi") { 240 }
-    else if path.contains("mdpi") { 160 }
-    else { 0 }
+    if path.contains("anydpi-v26") {
+        1000
+    } else if path.contains("anydpi") {
+        900
+    } else if path.contains("xxxhdpi") {
+        640
+    } else if path.contains("xxhdpi") {
+        480
+    } else if path.contains("xhdpi") {
+        320
+    } else if path.contains("hdpi") {
+        240
+    } else if path.contains("mdpi") {
+        160
+    } else {
+        0
+    }
 }
 
 fn render_android_icon_xml<R: Read + Seek>(
@@ -11607,14 +11711,22 @@ fn render_android_icon_xml<R: Read + Seek>(
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Option<DynamicImage> {
     if xml.contains("<adaptive-icon") {
-        let background = android_xml_drawable_reference(xml, "background")
-            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb));
-        let foreground = android_xml_drawable_reference(xml, "foreground")
-            .and_then(|value| load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb))?;
+        let background = android_xml_drawable_reference(xml, "background").and_then(|value| {
+            load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb)
+        });
+        let foreground = android_xml_drawable_reference(xml, "foreground").and_then(|value| {
+            load_android_resource_image(zip, resources, &value, depth, decode_attempts, cancel_cb)
+        })?;
         let mut canvas = background
-            .map(|image| image.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8())
+            .map(|image| {
+                image
+                    .resize_exact(512, 512, image::imageops::FilterType::Lanczos3)
+                    .to_rgba8()
+            })
             .unwrap_or_else(|| RgbaImage::new(512, 512));
-        let foreground = foreground.resize_exact(512, 512, image::imageops::FilterType::Lanczos3).to_rgba8();
+        let foreground = foreground
+            .resize_exact(512, 512, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
         image::imageops::overlay(&mut canvas, &foreground, 0, 0);
         return Some(DynamicImage::ImageRgba8(mask_android_adaptive_icon(canvas)));
     }
@@ -11623,16 +11735,14 @@ fn render_android_icon_xml<R: Read + Seek>(
         loop {
             match reader.read_event() {
                 Ok(Event::Text(text)) => {
-                    if let Some(color) = text
-                        .decode()
-                        .ok()
-                        .and_then(|value| {
-                            quick_xml::escape::unescape(&value)
-                                .ok()
-                                .and_then(|unescaped| parse_android_color(&unescaped))
-                        })
-                    {
-                        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(512, 512, color)));
+                    if let Some(color) = text.decode().ok().and_then(|value| {
+                        quick_xml::escape::unescape(&value)
+                            .ok()
+                            .and_then(|unescaped| parse_android_color(&unescaped))
+                    }) {
+                        return Some(DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+                            512, 512, color,
+                        )));
                     }
                 }
                 Ok(Event::Eof) | Err(_) => break,
@@ -11649,8 +11759,10 @@ fn mask_android_adaptive_icon(canvas: RgbaImage) -> RgbaImage {
     let crop_size = canvas.width().min(canvas.height()) * 2 / 3;
     let crop_x = (canvas.width() - crop_size) / 2;
     let crop_y = (canvas.height() - crop_size) / 2;
-    let cropped = image::imageops::crop_imm(&canvas, crop_x, crop_y, crop_size, crop_size).to_image();
-    let mut output = image::imageops::resize(&cropped, 512, 512, image::imageops::FilterType::Lanczos3);
+    let cropped =
+        image::imageops::crop_imm(&canvas, crop_x, crop_y, crop_size, crop_size).to_image();
+    let mut output =
+        image::imageops::resize(&cropped, 512, 512, image::imageops::FilterType::Lanczos3);
     let center = 255.5_f32;
     let radius = 255.5_f32;
     for (x, y, pixel) in output.enumerate_pixels_mut() {
@@ -11665,9 +11777,14 @@ fn android_xml_drawable_reference(xml: &str, element: &str) -> Option<String> {
     let mut reader = Reader::from_str(xml);
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == element.as_bytes() => {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if e.name().as_ref() == element.as_bytes() =>
+            {
                 for attr in e.attributes().flatten() {
-                    if matches!(attr.key.as_ref(), b"android:drawable" | b"drawable" | b"android:color" | b"color") {
+                    if matches!(
+                        attr.key.as_ref(),
+                        b"android:drawable" | b"drawable" | b"android:color" | b"color"
+                    ) {
                         return attr
                             .normalized_value(XmlVersion::Implicit1_0)
                             .ok()
@@ -11685,14 +11802,26 @@ fn parse_android_color(value: &str) -> Option<Rgba<u8>> {
     let hex = value.trim().strip_prefix('#')?;
     let raw = u32::from_str_radix(hex, 16).ok()?;
     match hex.len() {
-        6 => Some(Rgba([((raw >> 16) & 0xff) as u8, ((raw >> 8) & 0xff) as u8, (raw & 0xff) as u8, 255])),
-        8 => Some(Rgba([((raw >> 16) & 0xff) as u8, ((raw >> 8) & 0xff) as u8, (raw & 0xff) as u8, ((raw >> 24) & 0xff) as u8])),
+        6 => Some(Rgba([
+            ((raw >> 16) & 0xff) as u8,
+            ((raw >> 8) & 0xff) as u8,
+            (raw & 0xff) as u8,
+            255,
+        ])),
+        8 => Some(Rgba([
+            ((raw >> 16) & 0xff) as u8,
+            ((raw >> 8) & 0xff) as u8,
+            (raw & 0xff) as u8,
+            ((raw >> 24) & 0xff) as u8,
+        ])),
         _ => None,
     }
 }
 
 fn render_android_vector(xml: &str) -> Option<DynamicImage> {
-    if !xml.contains("<vector") { return None; }
+    if !xml.contains("<vector") {
+        return None;
+    }
     let mut reader = Reader::from_str(xml);
     let mut viewport_width = 24.0_f32;
     let mut viewport_height = 24.0_f32;
@@ -11701,8 +11830,10 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"vector" => {
-                viewport_width = android_float_attribute(&e, b"android:viewportWidth").unwrap_or(viewport_width);
-                viewport_height = android_float_attribute(&e, b"android:viewportHeight").unwrap_or(viewport_height);
+                viewport_width =
+                    android_float_attribute(&e, b"android:viewportWidth").unwrap_or(viewport_width);
+                viewport_height = android_float_attribute(&e, b"android:viewportHeight")
+                    .unwrap_or(viewport_height);
             }
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.name().as_ref() == b"path" => {
                 let data = android_string_attribute(&e, b"android:pathData")?;
@@ -11712,10 +11843,18 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
                 let stroke = android_string_attribute(&e, b"android:strokeColor")
                     .filter(|value| parse_android_color(value).is_some());
                 if fill != "none" || stroke.is_some() {
-                    paths.push_str(&format!("<path d=\"{}\" fill=\"{}\"", xml_escape(&data), fill));
+                    paths.push_str(&format!(
+                        "<path d=\"{}\" fill=\"{}\"",
+                        xml_escape(&data),
+                        fill
+                    ));
                     if let Some(stroke) = stroke {
-                        let width = android_float_attribute(&e, b"android:strokeWidth").unwrap_or(1.0);
-                        paths.push_str(&format!(" stroke=\"{}\" stroke-width=\"{}\"", stroke, width));
+                        let width =
+                            android_float_attribute(&e, b"android:strokeWidth").unwrap_or(1.0);
+                        paths.push_str(&format!(
+                            " stroke=\"{}\" stroke-width=\"{}\"",
+                            stroke, width
+                        ));
                     }
                     paths.push_str("/>");
                 }
@@ -11733,13 +11872,18 @@ fn render_android_vector(xml: &str) -> Option<DynamicImage> {
             _ => {}
         }
     }
-    for _ in 0..group_depth { paths.push_str("</g>"); }
-    if paths.is_empty() || viewport_width <= 0.0 || viewport_height <= 0.0 { return None; }
+    for _ in 0..group_depth {
+        paths.push_str("</g>");
+    }
+    if paths.is_empty() || viewport_width <= 0.0 || viewport_height <= 0.0 {
+        return None;
+    }
     let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {viewport_width} {viewport_height}\">{paths}</svg>");
     let options = resvg::usvg::Options::default();
     let tree = resvg::usvg::Tree::from_data(svg.as_bytes(), &options).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(512, 512)?;
-    let transform = resvg::tiny_skia::Transform::from_scale(512.0 / viewport_width, 512.0 / viewport_height);
+    let transform =
+        resvg::tiny_skia::Transform::from_scale(512.0 / viewport_width, 512.0 / viewport_height);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let mut rgba = pixmap.data().to_vec();
     for pixel in rgba.chunks_exact_mut(4) {
@@ -11774,8 +11918,13 @@ fn android_svg_group_start(element: &BytesStart<'_>) -> String {
 }
 
 fn android_string_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
-    element.attributes().flatten()
-        .find(|attr| attr.key.as_ref() == name || attr.key.as_ref() == name.strip_prefix(b"android:").unwrap_or(name))
+    element
+        .attributes()
+        .flatten()
+        .find(|attr| {
+            attr.key.as_ref() == name
+                || attr.key.as_ref() == name.strip_prefix(b"android:").unwrap_or(name)
+        })
         .and_then(|attr| {
             attr.normalized_value(XmlVersion::Implicit1_0)
                 .ok()
@@ -11784,11 +11933,18 @@ fn android_string_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<Str
 }
 
 fn android_float_attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<f32> {
-    android_string_attribute(element, name)?.trim_end_matches("dp").parse().ok()
+    android_string_attribute(element, name)?
+        .trim_end_matches("dp")
+        .parse()
+        .ok()
 }
 
 fn xml_escape(value: &str) -> String {
-    value.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn expand_appx_icon_candidates(paths: &[String]) -> Vec<String> {
@@ -11965,7 +12121,12 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
     };
 
     let rgba = raster.to_rgba8();
-    let output_bytes = usize::try_from(u64::from(width).checked_mul(u64::from(height))?.checked_mul(4)?).ok()?;
+    let output_bytes = usize::try_from(
+        u64::from(width)
+            .checked_mul(u64::from(height))?
+            .checked_mul(4)?,
+    )
+    .ok()?;
     let mut bgra = Vec::with_capacity(output_bytes);
     for px in rgba.chunks_exact(4) {
         let r = px[0] as u32;
@@ -12068,7 +12229,15 @@ fn render_zip_archive_from_zip<R: Read + Seek>(
                     .to_string();
                 entries.insert(
                     full_name.clone(),
-                    (name, parent_of(&full_name), false, size, packed, modified, is_encrypted),
+                    (
+                        name,
+                        parent_of(&full_name),
+                        false,
+                        size,
+                        packed,
+                        modified,
+                        is_encrypted,
+                    ),
                 );
                 seen += 1;
             } else {
@@ -12277,8 +12446,7 @@ fn render_gzip_member_reader<R: Read + Seek>(
         .map_err(|_| ReaderPreviewError::Io)?;
     let mut trailer = [0u8; 4];
     read_exact_cancelable(reader, &mut trailer, cancel_cb)?;
-    let compressed =
-        i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?;
+    let compressed = i64::try_from(source_len).map_err(|_| ReaderPreviewError::LengthMismatch)?;
     let uncompressed = u32::from_le_bytes(trailer) as i64;
     let mut entries = BTreeMap::new();
     entries.insert(
@@ -12435,9 +12603,7 @@ fn archive_largest_file_summary(entries: &BTreeMap<String, ArchiveListingEntry>)
     )
 }
 
-fn archive_type_summary(
-    entries: &BTreeMap<String, ArchiveListingEntry>,
-) -> Option<String> {
+fn archive_type_summary(entries: &BTreeMap<String, ArchiveListingEntry>) -> Option<String> {
     let mut counts = BTreeMap::<String, usize>::new();
     for (name, _, is_folder, _, _, _, _) in entries.values() {
         if *is_folder {
@@ -12460,9 +12626,7 @@ fn archive_type_summary(
     )
 }
 
-fn archive_project_summary(
-    entries: &BTreeMap<String, ArchiveListingEntry>,
-) -> Option<String> {
+fn archive_project_summary(entries: &BTreeMap<String, ArchiveListingEntry>) -> Option<String> {
     let mut markers = Vec::<String>::new();
     for (name, _, is_folder, _, _, _, _) in entries.values() {
         if *is_folder {
@@ -12497,10 +12661,7 @@ fn archive_project_summary(
     }
 }
 
-fn add_parent_folders(
-    path: &str,
-    entries: &mut BTreeMap<String, ArchiveListingEntry>,
-) {
+fn add_parent_folders(path: &str, entries: &mut BTreeMap<String, ArchiveListingEntry>) {
     let mut start = 0;
     while let Some(idx) = path[start..].find('/') {
         let full_idx = start + idx;
@@ -12882,8 +13043,7 @@ mod tests {
             Some(ReaderPreviewError::LimitExceeded)
         );
 
-        let central_too_large =
-            synthetic_zip64_end(0, MAX_ZIP_CENTRAL_DIRECTORY_BYTES + 1);
+        let central_too_large = synthetic_zip64_end(0, MAX_ZIP_CENTRAL_DIRECTORY_BYTES + 1);
         assert_eq!(
             validate_zip_container(
                 &mut Cursor::new(central_too_large.clone()),
@@ -12984,7 +13144,9 @@ mod tests {
         let mut writer = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
             .with_aes_encryption(zip::AesMode::Aes128, "test-password");
-        writer.start_file("secret.txt", options).expect("start encrypted entry");
+        writer
+            .start_file("secret.txt", options)
+            .expect("start encrypted entry");
         writer.write_all(b"secret").expect("write encrypted entry");
         writer.finish().expect("finish encrypted zip");
 
@@ -13001,8 +13163,14 @@ mod tests {
     fn package_icon_candidates_accept_arbitrary_android_mipmap_names() {
         assert!(package_icon_candidate_score("res/mipmap-xxxhdpi/product_mark.png") > 0);
         assert!(package_icon_candidate_score("base/res/mipmap-hdpi/brand_asset.webp") > 0);
-        assert_eq!(package_icon_candidate_score("res/drawable/random_photo.png"), 0);
-        assert_eq!(package_icon_candidate_score("res/mipmap-anydpi-v26/product_mark.xml"), 0);
+        assert_eq!(
+            package_icon_candidate_score("res/drawable/random_photo.png"),
+            0
+        );
+        assert_eq!(
+            package_icon_candidate_score("res/mipmap-anydpi-v26/product_mark.xml"),
+            0
+        );
     }
 
     #[test]
@@ -13017,11 +13185,8 @@ mod tests {
         assert!(oversized.len() < 1024);
         assert!(load_bounded_embedded_image(&oversized).is_none());
 
-        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-            32,
-            16,
-            Rgba([20, 40, 60, 255]),
-        ));
+        let image =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(32, 16, Rgba([20, 40, 60, 255])));
         let mut png = Cursor::new(Vec::new());
         image
             .write_to(&mut png, image::ImageFormat::Png)
@@ -13058,24 +13223,42 @@ mod tests {
         let file = fs::File::create(&path).expect("create adaptive icon APK");
         let mut writer = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
-        writer.start_file("AndroidManifest.xml", options).expect("start manifest");
+        writer
+            .start_file("AndroidManifest.xml", options)
+            .expect("start manifest");
         writer.write_all(br#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:icon="@mipmap/product_mark"/></manifest>"#).expect("write manifest");
-        writer.start_file("res/mipmap-anydpi-v26/product_mark.xml", options).expect("start adaptive icon");
+        writer
+            .start_file("res/mipmap-anydpi-v26/product_mark.xml", options)
+            .expect("start adaptive icon");
         writer.write_all(br##"<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="#112233"/><foreground android:drawable="@drawable/product_foreground"/></adaptive-icon>"##).expect("write adaptive icon");
-        let foreground = DynamicImage::ImageRgba8(RgbaImage::from_pixel(32, 32, Rgba([20, 220, 40, 255])));
+        let foreground =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(32, 32, Rgba([20, 220, 40, 255])));
         let mut foreground_png = Cursor::new(Vec::new());
-        foreground.write_to(&mut foreground_png, image::ImageFormat::Png).expect("encode foreground");
-        writer.start_file("res/drawable-xxxhdpi/product_foreground.png", options).expect("start foreground");
-        writer.write_all(foreground_png.get_ref()).expect("write foreground");
-        let unrelated = DynamicImage::ImageRgba8(RgbaImage::from_pixel(256, 256, Rgba([240, 10, 10, 255])));
+        foreground
+            .write_to(&mut foreground_png, image::ImageFormat::Png)
+            .expect("encode foreground");
+        writer
+            .start_file("res/drawable-xxxhdpi/product_foreground.png", options)
+            .expect("start foreground");
+        writer
+            .write_all(foreground_png.get_ref())
+            .expect("write foreground");
+        let unrelated =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(256, 256, Rgba([240, 10, 10, 255])));
         let mut unrelated_png = Cursor::new(Vec::new());
-        unrelated.write_to(&mut unrelated_png, image::ImageFormat::Png).expect("encode unrelated image");
-        writer.start_file("res/mipmap-xxxhdpi/unrelated.png", options).expect("start unrelated image");
-        writer.write_all(unrelated_png.get_ref()).expect("write unrelated image");
+        unrelated
+            .write_to(&mut unrelated_png, image::ImageFormat::Png)
+            .expect("encode unrelated image");
+        writer
+            .start_file("res/mipmap-xxxhdpi/unrelated.png", options)
+            .expect("start unrelated image");
+        writer
+            .write_all(unrelated_png.get_ref())
+            .expect("write unrelated image");
         writer.finish().expect("finish adaptive icon APK");
 
-        let (width, height, bgra) = extract_package_icon_bgra(path.to_str().unwrap(), None)
-            .expect("extract adaptive icon");
+        let (width, height, bgra) =
+            extract_package_icon_bgra(path.to_str().unwrap(), None).expect("extract adaptive icon");
         let _ = fs::remove_file(path);
 
         assert_eq!((width, height), (512, 512));
@@ -13101,7 +13284,9 @@ mod tests {
                 data.extend_from_slice(value.as_bytes());
                 data.push(0);
             }
-            while data.len() % 4 != 0 { data.push(0); }
+            while data.len() % 4 != 0 {
+                data.push(0);
+            }
             let header_size = 28usize;
             let size = header_size + offsets.len() * 4 + data.len();
             let mut pool = vec![0; size];
@@ -13155,7 +13340,9 @@ mod tests {
         table.extend_from_slice(&package);
 
         let values = resolve_android_resource_values(&table, "@mipmap/product_mark");
-        assert!(matches!(values.as_slice(), [AndroidResourceValue::Path(path)] if path == "res/9w.png"));
+        assert!(
+            matches!(values.as_slice(), [AndroidResourceValue::Path(path)] if path == "res/9w.png")
+        );
     }
 
     #[test]
@@ -13174,7 +13361,10 @@ mod tests {
         ).expect("render grouped Android vector").to_rgba8();
         let colors = image.pixels().map(|pixel| pixel.0).collect::<BTreeSet<_>>();
 
-        assert!(colors.len() > 2, "grouped vector should include foreground and antialiased edges");
+        assert!(
+            colors.len() > 2,
+            "grouped vector should include foreground and antialiased edges"
+        );
         assert!(image.get_pixel(256, 256).0[3] > 0);
     }
 
@@ -13383,7 +13573,8 @@ mod tests {
     #[test]
     fn ppt_text_extraction_preserves_paragraphs_tabs_and_breaks() {
         let context = test_office_context();
-        let text = extract_ppt_text(&context,
+        let text = extract_ppt_text(
+            &context,
             r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp><p:txBody>
                     <a:p><a:r><a:t>Title</a:t></a:r></a:p>
@@ -13471,7 +13662,8 @@ mod tests {
     #[test]
     fn docx_text_extraction_marks_headings() {
         let context = test_office_context();
-        let text = extract_wordprocessing_text(&context,
+        let text = extract_wordprocessing_text(
+            &context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Overview</w:t></w:r></w:p>
                 <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Details</w:t></w:r></w:p>
@@ -13486,7 +13678,8 @@ mod tests {
     #[test]
     fn docx_text_extraction_formats_table_rows() {
         let context = test_office_context();
-        let text = extract_wordprocessing_text(&context,
+        let text = extract_wordprocessing_text(
+            &context,
             r#"<w:document xmlns:w="w"><w:body>
                 <w:tbl>
                     <w:tr>
@@ -13586,15 +13779,39 @@ mod tests {
         );
         entries.insert(
             "src/main.rs".to_string(),
-            ("main.rs".to_string(), "src/".to_string(), false, 10, 8, 0, false),
+            (
+                "main.rs".to_string(),
+                "src/".to_string(),
+                false,
+                10,
+                8,
+                0,
+                false,
+            ),
         );
         entries.insert(
             "src/lib.rs".to_string(),
-            ("lib.rs".to_string(), "src/".to_string(), false, 10, 8, 0, false),
+            (
+                "lib.rs".to_string(),
+                "src/".to_string(),
+                false,
+                10,
+                8,
+                0,
+                false,
+            ),
         );
         entries.insert(
             "README.md".to_string(),
-            ("README.md".to_string(), "".to_string(), false, 10, 8, 0, false),
+            (
+                "README.md".to_string(),
+                "".to_string(),
+                false,
+                10,
+                8,
+                0,
+                false,
+            ),
         );
 
         assert_eq!(
@@ -13642,19 +13859,51 @@ mod tests {
         let mut entries = BTreeMap::new();
         entries.insert(
             "small.txt".to_string(),
-            ("small.txt".to_string(), "".to_string(), false, 10, 8, 0, false),
+            (
+                "small.txt".to_string(),
+                "".to_string(),
+                false,
+                10,
+                8,
+                0,
+                false,
+            ),
         );
         entries.insert(
             "assets/large.bin".to_string(),
-            ("large.bin".to_string(), "assets/".to_string(), false, 4096, 100, 0, false),
+            (
+                "large.bin".to_string(),
+                "assets/".to_string(),
+                false,
+                4096,
+                100,
+                0,
+                false,
+            ),
         );
         entries.insert(
             "assets/medium.bin".to_string(),
-            ("medium.bin".to_string(), "assets/".to_string(), false, 2048, 100, 0, false),
+            (
+                "medium.bin".to_string(),
+                "assets/".to_string(),
+                false,
+                2048,
+                100,
+                0,
+                false,
+            ),
         );
         entries.insert(
             "assets/tiny.bin".to_string(),
-            ("tiny.bin".to_string(), "assets/".to_string(), false, 1, 1, 0, false),
+            (
+                "tiny.bin".to_string(),
+                "assets/".to_string(),
+                false,
+                1,
+                1,
+                0,
+                false,
+            ),
         );
 
         let summary = archive_largest_file_summary(&entries).expect("largest files");
@@ -13677,13 +13926,7 @@ mod tests {
         write_ascii_entry(&mut tiff, ifd0_entries, 1, 0x0110, "PhoneCam");
         write_short_entry(&mut tiff, ifd0_entries, 2, 0x0112, 6);
         write_ascii_entry(&mut tiff, ifd0_entries, 3, 0x0131, "QuickCamOS");
-        write_ascii_entry(
-            &mut tiff,
-            ifd0_entries,
-            6,
-            0x0132,
-            "2025:01:02 03:04:05",
-        );
+        write_ascii_entry(&mut tiff, ifd0_entries, 6, 0x0132, "2025:01:02 03:04:05");
 
         let exif_ifd = tiff.len() as u32;
         write_long_entry(&mut tiff, ifd0_entries, 4, 0x8769, exif_ifd);
@@ -13800,8 +14043,7 @@ mod tests {
 
         let json = render_image_metadata_reader(&mut reader, "spoof.jpg", None)
             .expect("magic-dispatched metadata");
-        let metadata: serde_json::Value =
-            serde_json::from_str(&json).expect("metadata json");
+        let metadata: serde_json::Value = serde_json::from_str(&json).expect("metadata json");
 
         assert_eq!(metadata["format"], "PNG");
         assert_eq!(metadata["width"], 2);
@@ -13818,12 +14060,10 @@ mod tests {
             0x00, 0x03, // height
             0x00, 0x02, // width
             0x03, // components
-            0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
-            0xFF, 0xD9, // EOI
+            0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xFF, 0xD9, // EOI
         ];
 
-        let metadata =
-            parse_jpeg_exif_metadata_from_bytes(&bytes).expect("jpeg frame metadata");
+        let metadata = parse_jpeg_exif_metadata_from_bytes(&bytes).expect("jpeg frame metadata");
 
         assert_eq!(metadata.format.as_deref(), Some("JPEG"));
         assert_eq!(metadata.width, Some(2));
@@ -13947,8 +14187,7 @@ mod tests {
 
         let opaque =
             parse_webp_metadata_from_bytes(&make_webp(false)).expect("opaque lossless webp");
-        let alpha =
-            parse_webp_metadata_from_bytes(&make_webp(true)).expect("alpha lossless webp");
+        let alpha = parse_webp_metadata_from_bytes(&make_webp(true)).expect("alpha lossless webp");
 
         assert_eq!(opaque.has_alpha, Some(false));
         assert_eq!(alpha.has_alpha, Some(true));
@@ -13974,8 +14213,7 @@ mod tests {
 
         let json = render_image_metadata_reader(&mut reader, "large.gif", None)
             .expect("partial gif metadata");
-        let metadata: serde_json::Value =
-            serde_json::from_str(&json).expect("metadata json");
+        let metadata: serde_json::Value = serde_json::from_str(&json).expect("metadata json");
 
         assert_eq!(metadata["format"], "GIF");
         assert!(metadata["animated"].is_null());
@@ -14068,10 +14306,7 @@ mod tests {
         assert_eq!(metadata.height, Some(768));
         assert_eq!(metadata.bit_depth, Some(16));
         assert_eq!(metadata.compression.as_deref(), Some("LZW"));
-        assert_eq!(
-            metadata.photometric_interpretation.as_deref(),
-            Some("RGB")
-        );
+        assert_eq!(metadata.photometric_interpretation.as_deref(), Some("RGB"));
         assert!((metadata.horizontal_resolution.unwrap() - 299.9994).abs() < 0.001);
         assert!((metadata.vertical_resolution.unwrap() - 299.9994).abs() < 0.001);
         assert_eq!(metadata.orientation, Some(6));
@@ -14275,7 +14510,8 @@ mod tests {
     #[test]
     fn xlsx_merge_regions_preserve_spans() {
         let context = test_office_context();
-        let regions = parse_xlsx_merge_regions(&context,
+        let regions = parse_xlsx_merge_regions(
+            &context,
             r#"<worksheet><mergeCells><mergeCell ref="B2:D4"/></mergeCells></worksheet>"#,
         )
         .expect("merge regions");
@@ -14302,7 +14538,8 @@ mod tests {
     #[test]
     fn xlsx_style_number_formats_include_custom_and_builtin_formats() {
         let context = test_office_context();
-        let formats = parse_xlsx_style_number_formats(&context,
+        let formats = parse_xlsx_style_number_formats(
+            &context,
             r#"<styleSheet>
                 <numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts>
                 <cellXfs count="3">
@@ -14718,13 +14955,8 @@ mod tests {
         bad_header_checksum[24] ^= 0x80;
         let mut reader = Cursor::new(bad_header_checksum.clone());
         assert_eq!(
-            inspect_sqlite_wal_snapshot(
-                &mut reader,
-                bad_header_checksum.len() as u64,
-                512,
-                None,
-            )
-            .err(),
+            inspect_sqlite_wal_snapshot(&mut reader, bad_header_checksum.len() as u64, 512, None,)
+                .err(),
             Some(ReaderPreviewError::Malformed)
         );
 

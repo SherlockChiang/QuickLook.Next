@@ -5,13 +5,13 @@ use std::io::{Read, Seek, SeekFrom};
 
 use serde::Serialize;
 
+#[cfg(test)]
+use super::read_file_prefix;
 use super::types::{to_json, ReaderPreviewError};
 use super::{
     preview_cancelled, read_i32_endian, read_reader_prefix_cancelable, read_u16, read_u16_be,
     read_u16_endian, read_u32, read_u32_be, read_u32_endian, xml_unescape_str,
 };
-#[cfg(test)]
-use super::read_file_prefix;
 
 const MAX_EXIF_BYTES: usize = 256 * 1024;
 const MAX_ANIMATED_METADATA_BYTES: usize = 1024 * 1024;
