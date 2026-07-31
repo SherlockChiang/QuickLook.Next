@@ -21,6 +21,7 @@ foreach ($name in @(
     "VersionSuffix",
     "NoRestore",
     "Test",
+    "Package",
     "Install"))
 {
     if (-not $entry.Parameters.ContainsKey($name) -or
@@ -40,9 +41,11 @@ foreach ($rule in @(
     @('dotnet\s+restore[\s\S]*--disable-build-servers[\s\S]*dotnet\s+build[\s\S]*--disable-build-servers', "Local builds must bypass stale persistent build servers."),
     @('if\s*\(\$Test\)[\s\S]*cargo\s+test[\s\S]*if\s*\(\$Test\)[\s\S]*dotnet\s+test', "The Test switch must cover both Rust and .NET."),
     @('dotnet\s+test[\s\S]{0,220}--maxcpucount:1', "Host-launching integration test projects must run serially to preserve their hard timeout signal."),
-    @('\$Install\s+-and\s+-not\s+\$Test[\s\S]*\$Test\s*=\s*\$true', "Installing must automatically enable the full test path."),
-    @('if\s*\(\$Install\)[\s\S]*write-tested-release-proof\.ps1[\s\S]*update-local-msix\.ps1', "Installing must package only the build that just passed all tests."),
-    @('installed MSIX was not changed; pass -Install', "Normal local builds must explicitly state that installation is unchanged.")
+    @('\$packageRequested\s*=\s*\$Package\s+-or\s+\$Install', "Install must imply the shared local packaging path."),
+    @('\$packageRequested\s+-and\s+-not\s+\$Test[\s\S]*\$Test\s*=\s*\$true', "Packaging and installing must automatically enable the full test path."),
+    @('if\s*\(\$packageRequested\)[\s\S]*write-tested-release-proof\.ps1[\s\S]*update-local-msix\.ps1[\s\S]*-PackageOnly:\(-not \$Install\)', "Packaging must reuse tested outputs without requiring installation."),
+    @('elseif\s*\(\$Package\)[\s\S]*MSIX version:[\s\S]*Installer:', "Package-only builds must print both artifact paths and the four-part MSIX version."),
+    @('No MSIX was created; pass -Package to package or -Install', "Normal local builds must state that packaging and installation are opt-in.")
 )) {
     if (($entryText + "`n" + $workflowText) -notmatch $rule[0]) {
         throw $rule[1]

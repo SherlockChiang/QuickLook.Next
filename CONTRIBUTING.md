@@ -25,12 +25,14 @@ Use the focused local entry point from the repository root:
 .\build.ps1
 .\build.ps1 -NoRestore
 .\build.ps1 -Bump Patch -Test
+.\build.ps1 -Bump Patch -Package
 ```
 
 `VERSION` is authoritative; `tools/set-version.ps1` synchronizes the native crate manifest and
 `native/Cargo.lock`. `build.ps1` creates local binaries only and does not update an installed MSIX.
-Maintainers with the initialized fixed signing identity may explicitly pass `-Install`; this enables
-all tests and updates only the current user's package with an increasing four-part MSIX revision.
+Maintainers with the initialized fixed signing identity may pass `-Package` to enable all tests and
+create signed local artifacts without installation, or explicitly pass `-Install` to package and
+update only the current user's package with an increasing four-part MSIX revision.
 Local revisions occupy `1..32767`; beta and stable packages use higher reserved revisions so a
 formal same-base package can update a local installation.
 

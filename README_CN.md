@@ -123,6 +123,7 @@ Get-Content "$($zip.FullName).sha256"
 .\build.ps1                       # 同步 VERSION 并执行 Release 构建
 .\build.ps1 0.3.1                 # 设置并同步版本，然后构建
 .\build.ps1 -Bump Patch -Test     # 递增补丁版本并运行全部测试
+.\build.ps1 -Bump Patch -Package  # 递增版本，测试并生成本地安装包
 .\build.ps1 -NoRestore            # 依赖已还原时快速重复构建
 .\build.ps1 -Bump Patch -Install  # 测试、签名并更新当前用户的 MSIX
 ```
@@ -130,7 +131,9 @@ Get-Content "$($zip.FullName).sha256"
 `VERSION` 是唯一权威版本源。构建入口会在编译前把它同步到原生 crate manifest 和
 lock 文件，并输出 App 可执行文件路径。默认只生成本地二进制。显式使用 `-Install`
 时会自动启用全部测试，要求 `.signing/` 中已有固定签名证书，关闭正在运行的 App，
-然后更新当前用户的软件包。同一语义版本的重复安装会自动递增 MSIX 的第四段
+然后更新当前用户的软件包；使用 `-Package` 会执行相同的测试、签名与打包，但不会
+安装或关闭 App。`VERSION` 始终只写三段语义版本（例如 `0.3.1`）；输出的本地 MSIX
+使用四段版本（例如 `0.3.1.1`）。同一语义版本的重复打包会自动递增 MSIX 的第四段
 `X.Y.Z.N`，但不会修改 `VERSION`。第四段按渠道排序：本地构建使用 `1..32767`，
 beta 使用 `32768..65534`，stable 使用 `65535`，因此同一基础版本的后续 beta 或
 stable 可以直接升级本地构建；安装 beta 或 stable 后若要继续安装本地构建，请先

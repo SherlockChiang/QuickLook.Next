@@ -2,19 +2,22 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$VersionPrefix,
+    [switch]$PackageOnly,
     [string]$Root = (Split-Path $PSScriptRoot -Parent)
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$requestedWhatIf = $WhatIfPreference
-try {
-    $WhatIfPreference = $false
-    Import-Module Appx -ErrorAction Stop
-}
-finally {
-    $WhatIfPreference = $requestedWhatIf
+if (-not $PackageOnly) {
+    $requestedWhatIf = $WhatIfPreference
+    try {
+        $WhatIfPreference = $false
+        Import-Module Appx -ErrorAction Stop
+    }
+    finally {
+        $WhatIfPreference = $requestedWhatIf
+    }
 }
 
 $packageName = "SherlockChiang.QuickLookNext"
@@ -32,16 +35,18 @@ if (-not $expectedPublisher) {
     throw "The MSIX manifest publisher is missing."
 }
 
-$installedPackages = @(
-    Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue)
-if ($installedPackages.Count -gt 1) {
-    throw "More than one current-user package matched $packageName."
-}
 $installedVersion = ""
 $installedPublisher = ""
-if ($installedPackages.Count -eq 1) {
-    $installedVersion = $installedPackages[0].Version.ToString()
-    $installedPublisher = [string]$installedPackages[0].Publisher
+if (-not $PackageOnly) {
+    $installedPackages = @(
+        Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue)
+    if ($installedPackages.Count -gt 1) {
+        throw "More than one current-user package matched $packageName."
+    }
+    if ($installedPackages.Count -eq 1) {
+        $installedVersion = $installedPackages[0].Version.ToString()
+        $installedPublisher = [string]$installedPackages[0].Publisher
+    }
 }
 
 $artifacts = Join-Path $Root "artifacts"
@@ -73,10 +78,21 @@ if (-not $numericVersion) {
     throw "The local MSIX version could not be resolved."
 }
 
-$target = "$packageName $numericVersion for the current user"
+$target = if ($PackageOnly) {
+    "$packageName $numericVersion local artifacts"
+}
+else {
+    "$packageName $numericVersion for the current user"
+}
+$action = if ($PackageOnly) {
+    "sign and package"
+}
+else {
+    "sign, package, stop the running App, and install"
+}
 if (-not $PSCmdlet.ShouldProcess(
         $target,
-        "sign, package, stop the running App, and install")) {
+        $action)) {
     Write-Output $numericVersion
     return
 }
@@ -99,6 +115,17 @@ if (-not $signature.SignerCertificate -or
     $signature.SignerCertificate.Thumbprint -ne
         $expectedCertificate.Thumbprint) {
     throw "The local MSIX signer does not match the pinned release certificate."
+}
+if ($signature.Status -notin @(
+        [Management.Automation.SignatureStatus]::Valid,
+        [Management.Automation.SignatureStatus]::NotTrusted,
+        [Management.Automation.SignatureStatus]::UnknownError)) {
+    throw "The local MSIX signature is invalid: $($signature.Status)."
+}
+if ($PackageOnly) {
+    Write-Host "Local MSIX created: $msixPath" -ForegroundColor Green
+    Write-Output $numericVersion
+    return
 }
 if ($signature.Status -ne
     [Management.Automation.SignatureStatus]::Valid) {

@@ -9,6 +9,7 @@ param(
     [string]$VersionSuffix = "",
     [switch]$NoRestore,
     [switch]$Test,
+    [switch]$Package,
     [switch]$Install
 )
 

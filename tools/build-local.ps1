@@ -8,6 +8,7 @@ param(
     [string]$VersionSuffix = "",
     [switch]$NoRestore,
     [switch]$Test,
+    [switch]$Package,
     [switch]$Install,
     [string]$Root = (Split-Path $PSScriptRoot -Parent)
 )
@@ -18,15 +19,17 @@ Set-StrictMode -Version Latest
 if ($VersionSuffix -and $VersionSuffix -notmatch '^[0-9A-Za-z](?:[0-9A-Za-z.-]{0,63})$') {
     throw "VersionSuffix must be a short SemVer-compatible identifier."
 }
-if ($Install -and $Configuration -ne "Release") {
-    throw "Install requires a Release build."
+$packageRequested = $Package -or $Install
+if ($packageRequested -and $Configuration -ne "Release") {
+    throw "Package and Install require a Release build."
 }
-if ($Install -and $VersionSuffix) {
-    throw "Install does not support VersionSuffix; use a numeric version bump."
+if ($packageRequested -and $VersionSuffix) {
+    throw "Package and Install do not support VersionSuffix; use a numeric version bump."
 }
-if ($Install -and -not $Test) {
+$localAction = if ($Install) { "Install" } else { "Package" }
+if ($packageRequested -and -not $Test) {
     Write-Host (
-        "Install requested: enabling Rust and .NET tests before signing.") `
+        "$localAction requested: enabling Rust and .NET tests before signing.") `
         -ForegroundColor DarkGray
     $Test = $true
 }
@@ -86,16 +89,17 @@ if ($Test) {
     if ($LASTEXITCODE -ne 0) { throw "Solution tests failed." }
 }
 
-$installedPackageVersion = ""
-if ($Install) {
+$localPackageVersion = ""
+if ($packageRequested) {
     & (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
         -Root $Root `
         -VersionPrefix $resolvedVersion `
         -VersionSuffix $VersionSuffix | Out-Null
-    $installedPackageVersion = @(
+    $localPackageVersion = @(
         & (Join-Path $PSScriptRoot "update-local-msix.ps1") `
             -Root $Root `
-            -VersionPrefix $resolvedVersion
+            -VersionPrefix $resolvedVersion `
+            -PackageOnly:(-not $Install)
     )[-1]
 }
 
@@ -114,11 +118,20 @@ Write-Host ""
 Write-Host "Local build ready: QuickLook Next $displayVersion" -ForegroundColor Green
 Write-Host "App: $appPath" -ForegroundColor Green
 if ($Install) {
-    Write-Host "Installed MSIX: $installedPackageVersion" -ForegroundColor Green
+    Write-Host "Installed MSIX: $localPackageVersion" -ForegroundColor Green
+}
+elseif ($Package) {
+    $msixPath = Join-Path (
+        $Root) "artifacts\QuickLook.Next-$localPackageVersion-win-x64.msix"
+    $installerPath = Join-Path (
+        $Root) "artifacts\QuickLook.Next-Installer-$localPackageVersion-win-x64.zip"
+    Write-Host "MSIX version: $localPackageVersion" -ForegroundColor Green
+    Write-Host "MSIX: $msixPath" -ForegroundColor Green
+    Write-Host "Installer: $installerPath" -ForegroundColor Green
 }
 else {
     Write-Host (
-        "The installed MSIX was not changed; pass -Install to update it.") `
+        "No MSIX was created; pass -Package to package or -Install to update it.") `
         -ForegroundColor DarkGray
 }
 Write-Host "Use tools/release.ps1 for formal release packaging." `

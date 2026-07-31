@@ -123,6 +123,7 @@ You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected 
 .\build.ps1                       # Sync VERSION and make a Release build
 .\build.ps1 0.3.1                 # Set/sync a version, then build
 .\build.ps1 -Bump Patch -Test     # Increment the patch version and run all tests
+.\build.ps1 -Bump Patch -Package  # Bump, test, and create local installer artifacts
 .\build.ps1 -NoRestore            # Fast repeat after dependencies are restored
 .\build.ps1 -Bump Patch -Install  # Test, sign, and update the current-user MSIX
 ```
@@ -131,8 +132,11 @@ You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected 
 lock file before compiling, and prints the resulting App executable path. It creates local binaries
 only by default. The explicit `-Install` path enables all tests, requires the initialized fixed
 certificate in `.signing/`, stops the running App, and updates the current user's package. Repeated
-installs of the same semantic version receive increasing MSIX revisions (`X.Y.Z.N`) without changing
-`VERSION`. Revisions are ordered by channel: local builds use `1..32767`, beta packages use
+`-Package` runs the same test, signing, and packaging path without installing or stopping the App.
+`VERSION` always contains a three-part semantic version such as `0.3.1`; a local MSIX uses a
+four-part version such as `0.3.1.1`. Repeated packages of the same semantic version receive
+increasing MSIX revisions (`X.Y.Z.N`) without changing `VERSION`. Revisions are ordered by channel:
+local builds use `1..32767`, beta packages use
 `32768..65534`, and the stable package uses `65535`. A later beta or stable package can therefore
 upgrade a same-base local build; after installing a beta or stable package, bump the patch version
 before installing another local build. `tools/release.ps1` remains the authoritative formal signing
