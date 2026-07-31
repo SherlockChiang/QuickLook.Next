@@ -29,6 +29,7 @@ jobs:
         with:
           toolchain: 1.96.0
           targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
 
       - name: Run release checks
         shell: pwsh

@@ -104,7 +104,7 @@ impl EbookContext {
     }
 
     fn check_xml_event(&self, event_count: usize) -> Result<(), ReaderPreviewError> {
-        if event_count % 256 == 0 {
+        if event_count.is_multiple_of(256) {
             self.check_cancelled()?;
         }
         Ok(())
@@ -946,7 +946,7 @@ fn push_markdown_limited(out: &mut String, value: &str, max_chars: usize) {
     out.push_str("\n\n_Preview truncated._");
 }
 
-fn first_non_empty_owned<'a, const N: usize>(values: [&'a str; N]) -> &'a str {
+fn first_non_empty_owned<const N: usize>(values: [&str; N]) -> &str {
     values
         .into_iter()
         .find(|value| !value.trim().is_empty())

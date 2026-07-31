@@ -271,7 +271,7 @@ impl OfficeContext {
     }
 
     fn check_xml_event(&self, event_count: usize) -> OfficeResult<()> {
-        if event_count % 256 == 0 {
+        if event_count.is_multiple_of(256) {
             self.check_cancelled()?;
         }
         Ok(())
@@ -2871,29 +2871,29 @@ fn format_table_rows(rows: &[Vec<String>]) -> Vec<String> {
 
     let mut widths = vec![3usize; col_count];
     for row in rows {
-        for i in 0..col_count {
+        for (i, width) in widths.iter_mut().enumerate() {
             let value = row
                 .get(i)
                 .map(|cell| clean_table_cell(cell))
                 .unwrap_or_default();
             let len = value.chars().count().min(MAX_OFFICE_TABLE_CELL_WIDTH);
-            widths[i] = widths[i].max(len);
+            *width = (*width).max(len);
         }
     }
 
     rows.iter()
         .map(|row| {
             let mut parts = Vec::with_capacity(col_count);
-            for i in 0..col_count {
+            for (i, width) in widths.iter().copied().enumerate() {
                 let value = row
                     .get(i)
                     .map(|cell| clean_table_cell(cell))
                     .unwrap_or_default();
-                let cell = truncate_table_cell(&value, widths[i]);
+                let cell = truncate_table_cell(&value, width);
                 if i + 1 == col_count {
                     parts.push(cell);
                 } else {
-                    parts.push(format!("{cell:<width$}", width = widths[i]));
+                    parts.push(format!("{cell:<width$}"));
                 }
             }
             parts.join("  ").trim_end().to_string()
@@ -3198,9 +3198,9 @@ pub fn render_database_info(
 pub fn render_database_reader<R: Read>(
     reader: &mut R,
     main_length: u64,
-    mut wal_reader: Option<&mut dyn Read>,
+    wal_reader: Option<&mut dyn Read>,
     wal_length: u64,
-    mut shm_reader: Option<&mut dyn Read>,
+    shm_reader: Option<&mut dyn Read>,
     shm_length: u64,
     logical_name: &str,
     modified_unix: i64,
@@ -3232,7 +3232,7 @@ pub fn render_database_reader<R: Read>(
     }
     let companion_page_size = if wal_reader.is_some() || shm_reader.is_some() {
         let page_size = sqlite_database_page_size(&bytes).ok_or(ReaderPreviewError::Malformed)?;
-        if main_length < page_size as u64 || main_length % page_size as u64 != 0 {
+        if main_length < page_size as u64 || !main_length.is_multiple_of(page_size as u64) {
             return Err(ReaderPreviewError::Malformed);
         }
         Some(page_size)
@@ -3240,7 +3240,7 @@ pub fn render_database_reader<R: Read>(
         None
     };
     let mut snapshot_notes = Vec::new();
-    if let Some(wal) = wal_reader.as_deref_mut() {
+    if let Some(wal) = wal_reader {
         if wal_length == 0 {
             snapshot_notes.push(
                 "WAL HANDLE: empty; the main database view is already checkpointed".to_string(),
@@ -3252,7 +3252,7 @@ pub fn render_database_reader<R: Read>(
             snapshot_notes.push(snapshot.summary());
         }
     }
-    if let Some(shm) = shm_reader.as_deref_mut() {
+    if let Some(shm) = shm_reader {
         snapshot_notes.push(inspect_sqlite_shm(shm, shm_length, cancel_cb)?);
     }
     if preview_cancelled(cancel_cb) {
@@ -3289,7 +3289,7 @@ fn render_database_bytes(
     let mut text = base_info_text(filename, "database", size, modified_unix);
     let lower_path = path.to_ascii_lowercase();
     if lower_path.ends_with("-wal") {
-        append_sqlite_wal_summary(&mut text, &bytes, size);
+        append_sqlite_wal_summary(&mut text, bytes, size);
     } else if lower_path.ends_with("-shm") {
         text.push_str("\nFormat: SQLite shared-memory WAL index");
         text.push_str("\nRole: transient index for the associated SQLite WAL file");
@@ -3298,12 +3298,12 @@ fn render_database_bytes(
             format_bytes(bytes.len() as i64)
         ));
     } else if bytes.starts_with(b"SQLite format 3\0") {
-        let page_size = read_u16_be(&bytes, 16)
+        let page_size = read_u16_be(bytes, 16)
             .map(|value| if value == 1 { 65536 } else { value as u32 })
             .unwrap_or(0);
         text.push_str("\nFormat: SQLite 3");
         text.push_str(&format!("\nPage size: {} bytes", page_size));
-        if let Some(pages) = read_u32_be(&bytes, 28) {
+        if let Some(pages) = read_u32_be(bytes, 28) {
             text.push_str(&format!("\nPages: {}", format_number(pages as i64)));
             if page_size > 0 {
                 let header_size = pages as i64 * page_size as i64;
@@ -3324,29 +3324,29 @@ fn render_database_bytes(
                 }
             }
         }
-        if let Some(encoding) = read_u32_be(&bytes, 56) {
+        if let Some(encoding) = read_u32_be(bytes, 56) {
             text.push_str(&format!(
                 "\nText encoding: {}",
                 sqlite_encoding_name(encoding)
             ));
         }
-        if let Some(user_version) = read_u32_be(&bytes, 60) {
+        if let Some(user_version) = read_u32_be(bytes, 60) {
             text.push_str(&format!("\nUser version: {}", user_version));
         }
-        if let Some(app_id) = read_u32_be(&bytes, 68) {
+        if let Some(app_id) = read_u32_be(bytes, 68) {
             text.push_str(&format!("\nApplication ID: 0x{app_id:08X}"));
         }
-        append_sqlite_header_details(&mut text, &bytes);
+        append_sqlite_header_details(&mut text, bytes);
         text.push_str(&format!(
             "\nInspected: {}",
             format_bytes(bytes.len() as i64)
         ));
         for note in snapshot_notes {
-            text.push_str("\n");
+            text.push('\n');
             text.push_str(note);
         }
-        append_sqlite_schema_summary(&mut text, &bytes, page_size as usize, cancel_cb);
-        if let Some(mut table) = build_sqlite_table_preview(&bytes, page_size as usize, cancel_cb) {
+        append_sqlite_schema_summary(&mut text, bytes, page_size as usize, cancel_cb);
+        if let Some(mut table) = build_sqlite_table_preview(bytes, page_size as usize, cancel_cb) {
             if !snapshot_notes.is_empty() {
                 let snapshot_summary = snapshot_notes.join("; ");
                 match table.table.summary.as_mut() {
@@ -3376,7 +3376,7 @@ fn render_database_bytes(
     }
     if !bytes.starts_with(b"SQLite format 3\0") {
         for note in snapshot_notes {
-            text.push_str("\n");
+            text.push('\n');
             text.push_str(note);
         }
     }
@@ -5093,7 +5093,7 @@ fn sqlite_record_text(
     serial: u64,
     text_encoding: u32,
 ) -> Option<String> {
-    if serial < 13 || serial % 2 == 0 {
+    if serial < 13 || serial.is_multiple_of(2) {
         sqlite_skip_record_value(payload, pos, serial)?;
         return Some(String::new());
     }
@@ -5110,7 +5110,7 @@ fn sqlite_record_text(
 }
 
 fn decode_sqlite_utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let units = bytes.chunks_exact(2).map(|unit| {
@@ -5342,10 +5342,9 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 fn mail_attachment_filenames(content: &str) -> Vec<String> {
     content
         .lines()
-        .filter_map(|line| {
+        .filter(|line| {
             line.to_ascii_lowercase()
                 .contains("content-disposition: attachment")
-                .then_some(line)
         })
         .filter_map(mail_attachment_filename_from_disposition)
         .map(|name| decode_mail_header_value(&name))
@@ -5370,7 +5369,7 @@ fn mail_mime_part_summaries_inner(
     }
     let marker = format!("--{boundary}");
     for part in content.split(&marker).skip(1).take(32) {
-        let trimmed = part.trim_start_matches(|ch| ch == '\r' || ch == '\n');
+        let trimmed = part.trim_start_matches(['\r', '\n']);
         if summaries.len() >= 32 || trimmed.starts_with("--") || trimmed.trim().is_empty() {
             continue;
         }
@@ -5408,10 +5407,7 @@ fn mail_mime_part_summaries_inner(
         if let Some(encoding) = &encoding {
             summary.push_str(&format!(" encoding={encoding}"));
         }
-        let body_len = body
-            .trim_matches(|ch| ch == '\r' || ch == '\n')
-            .as_bytes()
-            .len();
+        let body_len = body.trim_matches(|ch| ch == '\r' || ch == '\n').len();
         summary.push_str(&format!(" body={body_len} bytes"));
         if let Some(decoded_len) = encoding
             .as_deref()
@@ -7497,7 +7493,7 @@ fn parse_esds_detail(payload: &[u8]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-fn find_mpeg4_descriptor<'a>(bytes: &'a [u8], target: u8) -> Option<&'a [u8]> {
+fn find_mpeg4_descriptor(bytes: &[u8], target: u8) -> Option<&[u8]> {
     let mut offset = 0usize;
     while offset < bytes.len() {
         let Some((tag, descriptor, next)) = read_mpeg4_descriptor(bytes, offset) else {
@@ -7611,8 +7607,8 @@ fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
 
 fn parse_avcc_sps_summary(payload: &[u8]) -> Option<String> {
     let sps_count = (*payload.get(5)? & 0x1F) as usize;
-    let mut offset = 6usize;
-    for _ in 0..sps_count.min(1) {
+    if sps_count > 0 {
+        let mut offset = 6usize;
         let len = read_u16_be(payload, offset)? as usize;
         offset += 2;
         let sps = payload.get(offset..offset.checked_add(len)?)?;
@@ -9159,7 +9155,7 @@ fn decode_id3_comment_frame(bytes: &[u8]) -> Option<String> {
     let (&encoding, rest) = bytes.split_first()?;
     let payload = rest.get(3..).unwrap_or_default();
     let comment = if encoding == 1 || encoding == 2 {
-        let content = strip_id3_utf16_description(payload, encoding == 2);
+        let content = strip_id3_utf16_description(payload);
         decode_id3_text_payload(encoding, content)
     } else {
         let content = payload
@@ -9172,7 +9168,7 @@ fn decode_id3_comment_frame(bytes: &[u8]) -> Option<String> {
     (!comment.is_empty()).then_some(comment)
 }
 
-fn strip_id3_utf16_description(bytes: &[u8], big_endian_without_bom: bool) -> &[u8] {
+fn strip_id3_utf16_description(bytes: &[u8]) -> &[u8] {
     let mut index = 0usize;
     while index + 1 < bytes.len() {
         if bytes[index] == 0 && bytes[index + 1] == 0 {
@@ -9180,11 +9176,7 @@ fn strip_id3_utf16_description(bytes: &[u8], big_endian_without_bom: bool) -> &[
         }
         index += 2;
     }
-    if big_endian_without_bom {
-        bytes
-    } else {
-        bytes
-    }
+    bytes
 }
 
 fn decode_id3_text_payload(encoding: u8, bytes: &[u8]) -> String {
@@ -9567,7 +9559,7 @@ impl<R> CancelableSeekReader<R> {
     }
 
     fn cancelled_error() -> io::Error {
-        io::Error::new(io::ErrorKind::Other, "preview cancelled")
+        io::Error::other("preview cancelled")
     }
 }
 
@@ -10645,7 +10637,7 @@ fn parse_appx_manifest_summary(xml: &str) -> Option<AppxManifestSummary> {
     Some(summary)
 }
 
-fn first_non_empty<'a, const N: usize>(values: [Option<&'a str>; N]) -> Option<&'a str> {
+fn first_non_empty<const N: usize>(values: [Option<&str>; N]) -> Option<&str> {
     values.into_iter().flatten().find(|v| !v.trim().is_empty())
 }
 
@@ -12001,7 +11993,7 @@ fn manifest_icon_candidate_score(name: &str, manifest_icons: &[String]) -> i32 {
     let Some((stem, _)) = lower.rsplit_once('.') else {
         return 0;
     };
-    manifest_icons
+    if manifest_icons
         .iter()
         .filter_map(|candidate| {
             candidate
@@ -12009,8 +12001,11 @@ fn manifest_icon_candidate_score(name: &str, manifest_icons: &[String]) -> i32 {
                 .map(|(candidate_stem, _)| candidate_stem)
         })
         .any(|candidate_stem| stem.starts_with(candidate_stem))
-        .then_some(260)
-        .unwrap_or(0)
+    {
+        260
+    } else {
+        0
+    }
 }
 
 fn package_icon_candidate_score(name: &str) -> i32 {
@@ -12185,10 +12180,10 @@ fn render_zip_archive_from_zip<R: Read + Seek>(
             .last_modified()
             .map(|d| {
                 // zip::DateTime → unix seconds (approximate: no leap seconds, no TZ)
-                let secs = ((d.year() as i64 - 1970) * 365 * 86400)
+
+                ((d.year() as i64 - 1970) * 365 * 86400)
                     + ((d.month() as i64 - 1) * 30 * 86400)
-                    + ((d.day() as i64 - 1) * 86400);
-                secs
+                    + ((d.day() as i64 - 1) * 86400)
             })
             .unwrap_or(0);
         drop(entry);
@@ -12323,8 +12318,7 @@ fn render_tar_entries<R: Read>(
         Err(_) => return String::new(),
     };
 
-    let mut scanned = 0usize;
-    for entry in archive_entries {
+    for (scanned, entry) in archive_entries.enumerate() {
         if preview_cancelled(cancel_cb) {
             return String::new();
         }
@@ -12332,7 +12326,6 @@ fn render_tar_entries<R: Read>(
             partial = true;
             break;
         }
-        scanned += 1;
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => {
@@ -12745,7 +12738,7 @@ fn format_timestamp(unix: i64) -> String {
     }
     // Simple conversion without chrono: compute date from unix seconds.
     // Use Windows GetLocalTime for accuracy.
-    let secs = unix as i64;
+    let secs = unix;
     let days = secs / 86400;
     let time_of_day = secs % 86400;
     let hour = (time_of_day / 3600).rem_euclid(24);
@@ -13543,7 +13536,9 @@ mod tests {
 
     #[test]
     fn office_input_budget_is_below_archive_extract_budget() {
-        assert!(MAX_OFFICE_INPUT_BYTES > MAX_OFFICE_MEDIA_BYTES);
+        const {
+            assert!(MAX_OFFICE_INPUT_BYTES > MAX_OFFICE_MEDIA_BYTES);
+        }
         assert_eq!(MAX_OFFICE_INPUT_BYTES, 128 * 1024 * 1024);
     }
 
@@ -14551,7 +14546,7 @@ mod tests {
         )
         .expect("style number formats");
 
-        assert_eq!(formats.get(0), Some(&None));
+        assert_eq!(formats.first(), Some(&None));
         assert_eq!(formats.get(1), Some(&Some("m/d/yy".to_string())));
         assert_eq!(formats.get(2), Some(&Some("yyyy-mm-dd".to_string())));
     }
@@ -14579,7 +14574,7 @@ mod tests {
         .expect("styles");
 
         assert_eq!(
-            styles.get(0).and_then(|style| style.fill_color.as_deref()),
+            styles.first().and_then(|style| style.fill_color.as_deref()),
             None
         );
         assert_eq!(
@@ -15579,7 +15574,7 @@ mod tests {
             }
             fn finish(mut self) -> Vec<u8> {
                 self.bit(true);
-                while self.bits.len() % 8 != 0 {
+                while !self.bits.len().is_multiple_of(8) {
                     self.bit(false);
                 }
                 self.bits
@@ -15659,7 +15654,7 @@ mod tests {
             }
             fn finish(mut self) -> Vec<u8> {
                 self.bit(true);
-                while self.bits.len() % 8 != 0 {
+                while !self.bits.len().is_multiple_of(8) {
                     self.bit(false);
                 }
                 self.bits
@@ -16541,7 +16536,7 @@ mod tests {
         }
 
         fn align_vec(bytes: &mut Vec<u8>) {
-            while bytes.len() % 4 != 0 {
+            while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
             }
         }

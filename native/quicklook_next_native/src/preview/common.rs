@@ -100,32 +100,6 @@ pub(super) fn type_for_ext(name: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn number_and_byte_formatting_preserve_preview_contract() {
-        assert_eq!(format_number(0), "0");
-        assert_eq!(format_number(1_234_567), "1,234,567");
-        assert_eq!(format_number(-9_876), "-9,876");
-        assert_eq!(format_number(i64::MIN), "-9,223,372,036,854,775,808");
-
-        assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1023), "1,023 B");
-        assert_eq!(format_bytes(1024), "1.00 KB");
-        assert_eq!(format_bytes(1_572_864), "1.50 MB");
-    }
-
-    #[test]
-    fn file_type_labels_are_case_insensitive_and_fail_closed() {
-        assert_eq!(type_for_ext("PHOTO.JPEG"), "JPEG File");
-        assert_eq!(type_for_ext("archive.tar"), "TAR File");
-        assert_eq!(type_for_ext("README"), "File");
-        assert_eq!(type_for_ext("unknown.custom"), "File");
-    }
-}
-
 // Bounded byte readers shared by binary preview families.
 
 pub(super) fn read_c_string(bytes: &[u8], offset: usize, max_len: usize) -> Option<String> {
@@ -220,4 +194,30 @@ pub(super) fn read_u64_endian(bytes: &[u8], offset: usize, endian: u8) -> Option
     } else {
         u64::from_le_bytes(chunk)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn number_and_byte_formatting_preserve_preview_contract() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(1_234_567), "1,234,567");
+        assert_eq!(format_number(-9_876), "-9,876");
+        assert_eq!(format_number(i64::MIN), "-9,223,372,036,854,775,808");
+
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1,023 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1_572_864), "1.50 MB");
+    }
+
+    #[test]
+    fn file_type_labels_are_case_insensitive_and_fail_closed() {
+        assert_eq!(type_for_ext("PHOTO.JPEG"), "JPEG File");
+        assert_eq!(type_for_ext("archive.tar"), "TAR File");
+        assert_eq!(type_for_ext("README"), "File");
+        assert_eq!(type_for_ext("unknown.custom"), "File");
+    }
 }

@@ -7,7 +7,8 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors Condition="'$(TreatWarningsAsErrors)' == '' and ('$(ContinuousIntegrationBuild)' == 'true' or '$(Configuration)' == 'Release')">true</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors Condition="'$(TreatWarningsAsErrors)' == ''">false</TreatWarningsAsErrors>
     <Company>QuickLook Next</Company>
     <Authors>SherlockChiang</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

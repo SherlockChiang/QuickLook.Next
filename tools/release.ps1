@@ -36,9 +36,23 @@ if (-not $CertificatePassword) {
 
 & (Join-Path $PSScriptRoot "test-release-version.ps1") -ExpectedVersion $version
 
+Write-Host "== checking Rust formatting ==" -ForegroundColor Cyan
+cargo fmt --all --manifest-path (Join-Path $root "native\Cargo.toml") -- --check
+if ($LASTEXITCODE -ne 0) { throw "Rust formatting check failed." }
+
 Write-Host "== restoring locked dependencies ==" -ForegroundColor Cyan
 dotnet restore (Join-Path $root "QuickLook.Next.slnx") --locked-mode
 if ($LASTEXITCODE -ne 0) { throw "Dependency restore failed." }
+
+Write-Host "== checking .NET formatting ==" -ForegroundColor Cyan
+dotnet format (Join-Path $root "QuickLook.Next.slnx") `
+    --verify-no-changes --no-restore --verbosity minimal
+if ($LASTEXITCODE -ne 0) { throw ".NET formatting check failed." }
+
+Write-Host "== running Clippy ==" -ForegroundColor Cyan
+cargo clippy --workspace --all-targets --all-features --locked `
+    --manifest-path (Join-Path $root "native\Cargo.toml") -- -D warnings
+if ($LASTEXITCODE -ne 0) { throw "Clippy check failed." }
 
 Write-Host "== testing native library ==" -ForegroundColor Cyan
 cargo test --workspace --locked --manifest-path (Join-Path $root "native\Cargo.toml")

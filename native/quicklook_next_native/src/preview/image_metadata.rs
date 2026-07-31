@@ -314,11 +314,12 @@ fn merge_missing_metadata(target: &mut ExifMetadata, source: ExifMetadata) {
 
 fn parse_xmp_metadata(bytes: &[u8]) -> Option<ExifMetadata> {
     let text = String::from_utf8_lossy(bytes);
-    let mut metadata = ExifMetadata::default();
-    metadata.title = extract_xml_text(&text, &["dc:title", "title"]);
-    metadata.comment =
-        extract_xml_text(&text, &["dc:description", "description", "xmp:Description"]);
-    metadata.software = extract_xml_text(&text, &["xmp:CreatorTool", "CreatorTool", "software"]);
+    let metadata = ExifMetadata {
+        title: extract_xml_text(&text, &["dc:title", "title"]),
+        comment: extract_xml_text(&text, &["dc:description", "description", "xmp:Description"]),
+        software: extract_xml_text(&text, &["xmp:CreatorTool", "CreatorTool", "software"]),
+        ..Default::default()
+    };
     (metadata.title.is_some() || metadata.comment.is_some() || metadata.software.is_some())
         .then_some(metadata)
 }

@@ -78,6 +78,15 @@ if ($releaseScript -notmatch
         'dotnet\s+test[\s\S]{0,260}--maxcpucount:1') {
     throw "Formal release integration test projects must run serially."
 }
+if ($ci -notmatch 'components:\s*rustfmt,\s*clippy' -or
+    $releaseScript -notmatch
+        'cargo\s+fmt[\s\S]{0,180}--\s+--check' -or
+    $releaseScript -notmatch
+        'dotnet\s+format[\s\S]{0,180}--verify-no-changes[\s\S]{0,100}--no-restore' -or
+    $releaseScript -notmatch
+        'cargo\s+clippy[\s\S]{0,260}--all-targets[\s\S]{0,160}-D\s+warnings') {
+    throw "CI releases must enforce Rust/.NET formatting and warning-free Clippy."
+}
 if ($packageAction -notmatch 'actions/cache@[0-9a-f]{40}' -or
     $packageAction -notmatch 'new-release-metadata\.ps1' -or
     $packageAction -notmatch 'Stable release has no user-visible changes') {

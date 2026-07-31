@@ -316,7 +316,6 @@ fn read_rar5_block<R: Read + Seek>(
     }
 
     let specific_start = fields.position();
-    drop(fields);
     let storage = payload;
     let extra_start = specific_end;
     Ok(Rar5Block {

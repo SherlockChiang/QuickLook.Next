@@ -42,7 +42,7 @@ fn trim_text_bytes_to_safe_boundary(bytes: &mut Vec<u8>) {
     }
 
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        if (bytes.len() - 2) % 2 != 0 {
+        if !(bytes.len() - 2).is_multiple_of(2) {
             bytes.pop();
         }
         return;
@@ -216,11 +216,11 @@ pub(crate) fn render_text_reader<R: Read>(
     }
 
     // BOM-aware Unicode first, then strict UTF-8 and Windows-1252 for legacy configuration files.
-    let text = if bytes.len() >= 3 && &bytes[..3] == &[0xEF, 0xBB, 0xBF] {
+    let text = if bytes.len() >= 3 && bytes[..3] == [0xEF, 0xBB, 0xBF] {
         encoding_rs::UTF_8.decode(&bytes[3..]).0
-    } else if bytes.len() >= 2 && &bytes[..2] == &[0xFF, 0xFE] {
+    } else if bytes.len() >= 2 && bytes[..2] == [0xFF, 0xFE] {
         encoding_rs::UTF_16LE.decode(&bytes[2..]).0
-    } else if bytes.len() >= 2 && &bytes[..2] == &[0xFE, 0xFF] {
+    } else if bytes.len() >= 2 && bytes[..2] == [0xFE, 0xFF] {
         encoding_rs::UTF_16BE.decode(&bytes[2..]).0
     } else if std::str::from_utf8(&bytes).is_ok() {
         encoding_rs::UTF_8.decode(&bytes).0
@@ -987,7 +987,7 @@ fn is_probably_windows_1252_text(bytes: &[u8]) -> bool {
 }
 
 fn is_probably_utf16_text(bytes: &[u8], little_endian: bool) -> bool {
-    if bytes.len() < 2 || bytes.len() % 2 != 0 {
+    if bytes.len() < 2 || !bytes.len().is_multiple_of(2) {
         return false;
     }
     let units: Vec<u16> = bytes

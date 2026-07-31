@@ -1804,6 +1804,13 @@ if ($failures.Count -gt 0) {
 
 Write-Host "architecture guard passed" -ForegroundColor Green
 
+$rustFfiSafetyTest = Join-Path $PSScriptRoot "test-rust-ffi-safety.ps1"
+if (-not (Test-Path -LiteralPath $rustFfiSafetyTest -PathType Leaf)) {
+    throw "Missing Rust FFI safety guard: $rustFfiSafetyTest"
+}
+& $rustFfiSafetyTest -Root $Root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
 if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
     throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"

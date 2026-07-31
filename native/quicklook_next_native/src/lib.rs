@@ -341,7 +341,7 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
             let _ = KillTimer(None, SWITCH_TIMER_ID);
         }
         let _ = UnhookWindowsHookEx(keyboard_hook);
-        if mouse_hook.0 != std::ptr::null_mut() {
+        if !mouse_hook.0.is_null() {
             let _ = UnhookWindowsHookEx(mouse_hook);
         }
         HOOK_TID.store(0, Ordering::SeqCst);
@@ -505,8 +505,12 @@ fn is_explorer_window_class_name(name: &str) -> bool {
 }
 
 /// Test-only ABI used by smoke-native.ps1 to lock the Explorer rename guard's class filter.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: usize) -> i32 {
+pub unsafe extern "C" fn ql_test_is_text_input_class(
+    class_utf8: *const u8,
+    class_len: usize,
+) -> i32 {
     ffi_boundary(|| {
         let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
             return 0;
@@ -519,8 +523,12 @@ pub extern "C" fn ql_test_is_text_input_class(class_utf8: *const u8, class_len: 
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_test_is_explorer_window_class(class_utf8: *const u8, class_len: usize) -> i32 {
+pub unsafe extern "C" fn ql_test_is_explorer_window_class(
+    class_utf8: *const u8,
+    class_len: usize,
+) -> i32 {
     ffi_boundary(|| {
         let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
             return 0;
@@ -701,8 +709,13 @@ fn probe_cache_evict(cache: &mut HashMap<String, ProbeCacheEntry>) {
 
 /// Probe a file (UTF-8 path) and write its FileProbe JSON (UTF-8) into `out`.
 /// Returns the JSON byte length, `-needed` if the buffer is too small, or a negative error.
+///
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
 #[no_mangle]
-pub extern "C" fn ql_probe_file(
+pub unsafe extern "C" fn ql_probe_file(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
@@ -1031,7 +1044,7 @@ impl ImageWaveformAccumulator {
         }
         let x = pixel_index % self.image_width;
         let y = pixel_index / self.image_width;
-        if x % self.sample_step != 0 || y % self.sample_step != 0 {
+        if !x.is_multiple_of(self.sample_step) || !y.is_multiple_of(self.sample_step) {
             return;
         }
 
@@ -1079,31 +1092,45 @@ fn unpremultiply_channel(value: u8, alpha: u8) -> u8 {
     }
 }
 
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
 #[no_mangle]
-pub extern "C" fn ql_decode_image(
+pub unsafe extern "C" fn ql_decode_image(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None))
+    ffi_boundary(|| unsafe { ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None) })
 }
 
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn ql_decode_image_cancelable(
+pub unsafe extern "C" fn ql_decode_image_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    ffi_boundary(|| {
+    ffi_boundary(|| unsafe {
         ql_decode_image_sized_cancelable(path_utf8, path_len, 0, 0, out, out_cap, cancel_cb)
     })
 }
 
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn ql_decode_image_sized_cancelable(
+pub unsafe extern "C" fn ql_decode_image_sized_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -1744,8 +1771,9 @@ fn validate_handle_image_dimensions<R: Read + Seek>(
     Ok(())
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_decode_gif_frames_sized(
+pub unsafe extern "C" fn ql_decode_gif_frames_sized(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -1766,8 +1794,9 @@ pub extern "C" fn ql_decode_gif_frames_sized(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_decode_gif_frames_sized_cancelable(
+pub unsafe extern "C" fn ql_decode_gif_frames_sized_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -1796,8 +1825,9 @@ pub extern "C" fn ql_decode_gif_frames_sized_cancelable(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_decode_webp_frames_sized(
+pub unsafe extern "C" fn ql_decode_webp_frames_sized(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -1818,8 +1848,9 @@ pub extern "C" fn ql_decode_webp_frames_sized(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_decode_webp_frames_sized_cancelable(
+pub unsafe extern "C" fn ql_decode_webp_frames_sized_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -1848,8 +1879,9 @@ pub extern "C" fn ql_decode_webp_frames_sized_cancelable(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_decode_png_frames_sized_cancelable(
+pub unsafe extern "C" fn ql_decode_png_frames_sized_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     target_width: u32,
@@ -2655,11 +2687,7 @@ fn decode_animation_frames_bgra(
             return None;
         }
         let (num, den) = frame.delay().numer_denom_ms();
-        let delay_ms = if den == 0 {
-            100
-        } else {
-            (num / den).clamp(20, 1_000)
-        };
+        let delay_ms = num.checked_div(den).unwrap_or(100).clamp(20, 1_000);
         let rgba = frame.into_buffer();
         let raster = if width == original_width && height == original_height {
             image::DynamicImage::ImageRgba8(rgba)
@@ -2790,7 +2818,7 @@ fn is_jpeg_sof_marker(marker: u8) -> bool {
 }
 
 fn apply_icc_to_srgb_rgba(rgba: &mut [u8], profile: &[u8]) -> bool {
-    if rgba.is_empty() || rgba.len() % 4 != 0 || profile.len() > 4 * 1024 * 1024 {
+    if rgba.is_empty() || !rgba.len().is_multiple_of(4) || profile.len() > 4 * 1024 * 1024 {
         return false;
     }
     let Some(input) = qcms::Profile::new_from_slice(profile, false) else {
@@ -2993,13 +3021,15 @@ mod tests {
 
         for call in calls {
             assert_eq!(
-                call(
-                    path.as_ptr(),
-                    path.len(),
-                    output.as_mut_ptr(),
-                    output.len(),
-                    Some(always_cancel),
-                ),
+                unsafe {
+                    call(
+                        path.as_ptr(),
+                        path.len(),
+                        output.as_mut_ptr(),
+                        output.len(),
+                        Some(always_cancel),
+                    )
+                },
                 -3
             );
         }
@@ -3011,27 +3041,31 @@ mod tests {
         let mut output = [0u8; 16];
 
         assert_eq!(
-            ql_decode_gif_frames_sized_cancelable(
-                path.as_ptr(),
-                path.len(),
-                0,
-                0,
-                output.as_mut_ptr(),
-                output.len(),
-                Some(always_cancel),
-            ),
+            unsafe {
+                ql_decode_gif_frames_sized_cancelable(
+                    path.as_ptr(),
+                    path.len(),
+                    0,
+                    0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    Some(always_cancel),
+                )
+            },
             -3
         );
         assert_eq!(
-            ql_decode_webp_frames_sized_cancelable(
-                path.as_ptr(),
-                path.len(),
-                0,
-                0,
-                output.as_mut_ptr(),
-                output.len(),
-                Some(always_cancel),
-            ),
+            unsafe {
+                ql_decode_webp_frames_sized_cancelable(
+                    path.as_ptr(),
+                    path.len(),
+                    0,
+                    0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    Some(always_cancel),
+                )
+            },
             -3
         );
     }
@@ -3044,15 +3078,17 @@ mod tests {
         let path = b"Z:\\missing\\cancelled.db";
         let mut out = vec![0u8; 1024];
 
-        let result = ql_preview_database_cancelable(
-            path.as_ptr(),
-            path.len(),
-            0,
-            0,
-            out.as_mut_ptr(),
-            out.len(),
-            Some(cancelled),
-        );
+        let result = unsafe {
+            ql_preview_database_cancelable(
+                path.as_ptr(),
+                path.len(),
+                0,
+                0,
+                out.as_mut_ptr(),
+                out.len(),
+                Some(cancelled),
+            )
+        };
 
         assert_eq!(result, 0);
     }
@@ -3064,15 +3100,17 @@ mod tests {
         let mut output = [0u8; 16];
 
         assert_eq!(
-            ql_extract_archive_entry_cancelable(
-                archive.as_ptr(),
-                archive.len(),
-                entry.as_ptr(),
-                entry.len(),
-                output.as_mut_ptr(),
-                output.len(),
-                Some(always_cancel),
-            ),
+            unsafe {
+                ql_extract_archive_entry_cancelable(
+                    archive.as_ptr(),
+                    archive.len(),
+                    entry.as_ptr(),
+                    entry.len(),
+                    output.as_mut_ptr(),
+                    output.len(),
+                    Some(always_cancel),
+                )
+            },
             -3
         );
     }
@@ -3088,13 +3126,15 @@ mod tests {
 
         for call in calls {
             assert_eq!(
-                call(
-                    path.as_ptr(),
-                    path.len(),
-                    output.as_mut_ptr(),
-                    output.len(),
-                    Some(always_cancel),
-                ),
+                unsafe {
+                    call(
+                        path.as_ptr(),
+                        path.len(),
+                        output.as_mut_ptr(),
+                        output.len(),
+                        Some(always_cancel),
+                    )
+                },
                 -3
             );
         }
@@ -3471,7 +3511,7 @@ mod tests {
 
         assert_eq!(decoded.0, 2);
         assert_eq!(decoded.1, 1);
-        assert_eq!(decoded.7.len(), 2 * 1 * 4);
+        assert_eq!(decoded.7.len(), 2 * 4);
     }
 
     #[test]
@@ -3928,21 +3968,31 @@ mod tests {
 // return them as top-down premultiplied-ish BGRA. Output layout: [w:u32 LE][h:u32 LE][BGRA bytes].
 
 /// Get a shell thumbnail for `path` at roughly `size` px. Returns total bytes written, or `-needed`.
+///
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
 #[no_mangle]
-pub extern "C" fn ql_get_thumbnail(
+pub unsafe extern "C" fn ql_get_thumbnail(
     path_utf8: *const u8,
     path_len: usize,
     size: i32,
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
+    ffi_boundary(|| unsafe {
         ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
     })
 }
 
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn ql_get_thumbnail_cancelable(
+pub unsafe extern "C" fn ql_get_thumbnail_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     size: i32,
@@ -3950,15 +4000,20 @@ pub extern "C" fn ql_get_thumbnail_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
-    ffi_boundary(|| {
+    ffi_boundary(|| unsafe {
         ql_get_thumbnail_cancelable_with_flags(
             path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
         )
     })
 }
 
+/// # Safety
+///
+/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
+/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
+/// call.
 #[no_mangle]
-pub extern "C" fn ql_get_thumbnail_cancelable_with_flags(
+pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     path_utf8: *const u8,
     path_len: usize,
     size: i32,
@@ -4117,8 +4172,9 @@ unsafe fn write_raster_packet_v2(
 
 /// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).
 /// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_package_icon(
+pub unsafe extern "C" fn ql_extract_package_icon(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
@@ -4138,8 +4194,9 @@ pub extern "C" fn ql_extract_package_icon(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_package_icon_cancelable(
+pub unsafe extern "C" fn ql_extract_package_icon_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
@@ -4167,8 +4224,9 @@ pub extern "C" fn ql_extract_package_icon_cancelable(
 
 /// Extract the first useful embedded image from an OOXML Office document.
 /// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_office_image(
+pub unsafe extern "C" fn ql_extract_office_image(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
@@ -4188,8 +4246,9 @@ pub extern "C" fn ql_extract_office_image(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_office_image_cancelable(
+pub unsafe extern "C" fn ql_extract_office_image_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out: *mut u8,
@@ -4316,8 +4375,9 @@ fn json_escape(s: &str) -> String {
 // ── Native preview providers (Text/Info/Archive/Folder) (FFI) ────────────────
 
 /// Render a text file preview. Returns JSON length in `out_buf`, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_text(
+pub unsafe extern "C" fn ql_preview_text(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -4326,8 +4386,9 @@ pub extern "C" fn ql_preview_text(
     ffi_boundary(|| ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_text_cancelable(
+pub unsafe extern "C" fn ql_preview_text_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -4354,8 +4415,9 @@ pub extern "C" fn ql_preview_text_cancelable(
 }
 
 /// Render an info-only preview (size + mtime). Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_info(
+pub unsafe extern "C" fn ql_preview_info(
     path_utf8: *const u8,
     path_len: usize,
     kind_utf8: *const u8,
@@ -4380,8 +4442,9 @@ pub extern "C" fn ql_preview_info(
 }
 
 /// Render an Office document preview. OOXML/ODF paths are parsed in Rust; legacy OLE formats fall back to info.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_office(
+pub unsafe extern "C" fn ql_preview_office(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -4402,8 +4465,9 @@ pub extern "C" fn ql_preview_office(
 }
 
 /// Render bounded Rust-native image metadata. Returns JSON length, 0 on failure/no metadata.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_image_metadata(
+pub unsafe extern "C" fn ql_preview_image_metadata(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -4423,8 +4487,9 @@ pub extern "C" fn ql_preview_image_metadata(
 }
 
 /// Render a PE executable metadata preview. Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_executable(
+pub unsafe extern "C" fn ql_preview_executable(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -4434,8 +4499,9 @@ pub extern "C" fn ql_preview_executable(
 }
 
 /// Render a bounded database metadata preview with cancellation support.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_database_cancelable(
+pub unsafe extern "C" fn ql_preview_database_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     size: i64,
@@ -5176,8 +5242,9 @@ pub unsafe extern "C" fn ql_preview_sqlite_handles(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_executable_cancelable(
+pub unsafe extern "C" fn ql_preview_executable_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5204,8 +5271,9 @@ pub extern "C" fn ql_preview_executable_cancelable(
 }
 
 /// Render an archive listing. Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_archive(
+pub unsafe extern "C" fn ql_preview_archive(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5226,8 +5294,9 @@ pub extern "C" fn ql_preview_archive(
 }
 
 /// Extract a previewable archive entry into a bounded temp cache. Returns UTF-8 path length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_archive_entry(
+pub unsafe extern "C" fn ql_extract_archive_entry(
     archive_path_utf8: *const u8,
     archive_path_len: usize,
     entry_path_utf8: *const u8,
@@ -5260,8 +5329,9 @@ pub extern "C" fn ql_extract_archive_entry(
     })
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_extract_archive_entry_cancelable(
+pub unsafe extern "C" fn ql_extract_archive_entry_cancelable(
     archive_path_utf8: *const u8,
     archive_path_len: usize,
     entry_path_utf8: *const u8,
@@ -5480,8 +5550,9 @@ pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle(
 }
 
 /// Render an ebook preview. Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_ebook(
+pub unsafe extern "C" fn ql_preview_ebook(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5490,8 +5561,9 @@ pub extern "C" fn ql_preview_ebook(
     ffi_boundary(|| ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_ebook_cancelable(
+pub unsafe extern "C" fn ql_preview_ebook_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5518,8 +5590,9 @@ pub extern "C" fn ql_preview_ebook_cancelable(
 }
 
 /// Render a torrent metadata preview. Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_torrent(
+pub unsafe extern "C" fn ql_preview_torrent(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5528,8 +5601,9 @@ pub extern "C" fn ql_preview_torrent(
     ffi_boundary(|| ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None))
 }
 
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_torrent_cancelable(
+pub unsafe extern "C" fn ql_preview_torrent_cancelable(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5556,8 +5630,9 @@ pub extern "C" fn ql_preview_torrent_cancelable(
 }
 
 /// Render a folder listing. Returns JSON length, 0 on failure.
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_preview_folder(
+pub unsafe extern "C" fn ql_preview_folder(
     path_utf8: *const u8,
     path_len: usize,
     out_buf: *mut u8,
@@ -5578,8 +5653,9 @@ pub extern "C" fn ql_preview_folder(
 }
 
 /// Check if a file is text-like (for routing in the App).
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_is_text(
+pub unsafe extern "C" fn ql_is_text(
     ext_utf8: *const u8,
     ext_len: usize,
     magic: *const u8,
@@ -5600,8 +5676,9 @@ pub extern "C" fn ql_is_text(
 }
 
 /// Check if a file is an archive (for routing).
+#[doc = include_str!("ffi_pointer_safety.md")]
 #[no_mangle]
-pub extern "C" fn ql_is_archive(
+pub unsafe extern "C" fn ql_is_archive(
     ext_utf8: *const u8,
     ext_len: usize,
     kind_utf8: *const u8,

@@ -466,7 +466,11 @@ fn parse_pe_data_directories(bytes: &[u8], offset: usize, count: u32) -> Vec<PeD
         "Reserved",
     ];
     let mut directories = Vec::new();
-    for index in 0..count.min(names.len() as u32) as usize {
+    for (index, name) in names
+        .iter()
+        .enumerate()
+        .take(count.min(names.len() as u32) as usize)
+    {
         let entry = offset + index * 8;
         let Some(address) = read_u32(bytes, entry) else {
             break;
@@ -476,7 +480,7 @@ fn parse_pe_data_directories(bytes: &[u8], offset: usize, count: u32) -> Vec<PeD
         };
         if address != 0 || size != 0 {
             directories.push(PeDataDirectory {
-                name: names[index],
+                name,
                 address,
                 size,
             });
@@ -1225,7 +1229,7 @@ fn parse_x509_name(bytes: &[u8]) -> String {
 
 fn der_any_tlv_content(bytes: &[u8], offset: usize) -> Option<(usize, usize)> {
     let _tag = *bytes.get(offset)?;
-    der_tlv_bounds(bytes, offset).map(|(content, end)| (content, end))
+    der_tlv_bounds(bytes, offset)
 }
 
 fn der_tlv_content(bytes: &[u8], offset: usize, tag: u8) -> Option<(usize, usize)> {
@@ -1630,22 +1634,22 @@ fn clr_tables_layout(tables: &[u8]) -> Option<ClrTablesLayout> {
     let blob_index_size = if heap_sizes & 0x04 != 0 { 4 } else { 2 };
     let mut rows = [0u32; 64];
     let mut offset = 24usize;
-    for table in 0..64 {
+    for (table, row_count) in rows.iter_mut().enumerate() {
         if valid & (1u64 << table) == 0 {
             continue;
         }
-        rows[table] = read_u32(tables, offset)?;
+        *row_count = read_u32(tables, offset)?;
         offset += 4;
     }
     let mut offsets = [0usize; 64];
-    for table in 0..64 {
-        if rows[table] == 0 {
+    for (table, (row_count, table_offset)) in rows.iter().zip(offsets.iter_mut()).enumerate() {
+        if *row_count == 0 {
             continue;
         }
-        offsets[table] = offset;
+        *table_offset = offset;
         let row_size =
             clr_table_row_size(table, string_index_size, guid_index_size, blob_index_size)?;
-        offset = offset.checked_add(row_size.checked_mul(rows[table] as usize)?)?;
+        offset = offset.checked_add(row_size.checked_mul(*row_count as usize)?)?;
     }
     Some(ClrTablesLayout {
         rows,
