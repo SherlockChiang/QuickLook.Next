@@ -6,22 +6,11 @@ and commit so changes remain independently reviewable and revertible.
 
 ## 0.3.1 optimization batches
 
-- [ ] Batch 1: make packaged and unpackaged auto-start queries and updates asynchronous so the
-  Settings window and tray window procedure never wait synchronously for WinRT, registry, file, or
-  shortcut work.
-- [ ] Batch 2: keep the long-cycle harness in its current PowerShell host and document PowerShell 7
-  commands consistently, instead of launching Windows PowerShell 5.1 for nested checks.
-- [ ] Batch 3: synchronize review-facing PDF cache documentation with the implemented bounded
-  five-page offscreen surface cache.
 - [ ] Release batch: synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.1,
   then run the version guards and complete build/test suite.
 
 ## P0: Immediate safety and usability
 
-- [ ] Establish a staged formatting and static-analysis baseline: block new `dotnet format`,
-  `cargo fmt`, and Clippy regressions in CI before paying down the existing backlog by module.
-- [ ] Make every public native FFI function that dereferences caller-owned raw pointers expose and
-  document an explicit Rust `unsafe` contract.
 - [ ] Move the live release signing key out of the workspace and rotate it if
   exposure cannot be ruled out. This requires owner confirmation and external
   credential storage; do not delete or move the current key automatically.
@@ -66,6 +55,51 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Establish a zero-warning formatting and static-analysis baseline. Formal release/CI checks
+  now require canonical `rustfmt`, unchanged `dotnet format`, warning-free Clippy across all
+  targets/features, and warnings-as-errors for Release/CI .NET builds. Every one of the 55
+  raw-pointer native exports is now an explicit documented `unsafe extern` contract, protected by
+  a structural architecture guard.
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore /p:ContinuousIntegrationBuild=true`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (218 passed,
+    1 external corpus test ignored)
+  - Guard: `pwsh -NoProfile -File tools/test-rust-ffi-safety.ps1`
+  - Commits: `df65526`, `0610063`, `9fb2ae5`
+
+- [x] Keep supervised RasterHost, ParserHost, and ShellBroker crashes non-interactive without
+  disabling WER/local-dump evidence. Apply the shared process policy before initialization and log
+  the exact RasterHost process/exit code before restart.
+  - Verification: `dotnet build QuickLook.Next.slnx -c Debug --no-restore`
+  - Guard: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commit: `5d771ee`
+
+- [x] Add an opt-in `build.ps1 -Package` path that runs the release-oriented tests and creates
+  signed local MSIX/installer artifacts without inspecting, stopping, or updating the installed
+  AppX. Formal release resolution now synchronizes `VERSION`, the native manifest, and `Cargo.lock`
+  transactionally instead of writing only `VERSION`.
+  - Guards: `tools/test-build-local.ps1`, `tools/test-local-msix-update.ps1`,
+    `tools/test-local-msix-version.ps1`, `tools/test-formal-msix-version.ps1`,
+    `tools/test-set-version.ps1`, `tools/test-release-workflows.ps1`
+  - Commits: `d6aa6a3`, `a2eaca2`
+
+- [x] Make packaged and unpackaged auto-start queries and updates asynchronous so Settings and tray
+  interactions never synchronously wait for WinRT, registry, file, or shortcut work.
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore`
+  - Commit: `eec7f66`
+
+- [x] Keep nested long-cycle checks in the active PowerShell 7 host and document `pwsh` commands
+  consistently, avoiding UTF-8 parsing failures from Windows PowerShell 5.1.
+  - Guard: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commit: `0eb4675`
+
+- [x] Reconcile review-facing PDF cache documentation with the implemented bounded five-page
+  offscreen surface cache and the existing disk-cache behavior.
+  - Verification: documentation review plus `tools/guard-architecture.ps1`
+  - Commit: `b1694d3`
 
 - [x] Generate and package complete third-party dependency notices for the .NET publish graph,
   Windows App SDK redistribution, and statically linked Rust dependencies. Release payload guards
