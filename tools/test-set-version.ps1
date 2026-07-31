@@ -11,7 +11,7 @@ try {
         (Join-Path $fixtureRoot "native\quicklook_next_native")) | Out-Null
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRoot "VERSION"),
-        "1.2.3`n")
+        "1.2.3.0`n")
     [IO.File]::WriteAllText(
         (Join-Path $fixtureRoot "native\quicklook_next_native\Cargo.toml"),
         "[package]`nname = `"quicklook_next_native`"`nversion = `"1.2.3`"`n")
@@ -20,9 +20,24 @@ try {
         "version = 4`n`n[[package]]`nname = `"quicklook_next_native`"`nversion = `"1.2.3`"`n")
 
     $setVersion = Join-Path $Root "tools\set-version.ps1"
+    $rejected = $false
+    try {
+        & $setVersion -Root $fixtureRoot -Bump Patch | Out-Null
+    }
+    catch {
+        $rejected = $true
+        if ($_.Exception.Message -notmatch
+            'MSIX fourth component is assigned automatically') {
+            throw "A four-part VERSION must explain the automatic MSIX revision."
+        }
+    }
+    if (-not $rejected) {
+        throw "A four-part VERSION must not be accepted as a semantic version."
+    }
+
     $version = & $setVersion -Root $fixtureRoot -Version "v2.4.6"
     if (@($version)[-1] -ne "2.4.6") {
-        throw "Explicit version did not return its normalized value."
+        throw "Explicit version did not repair and return its normalized value."
     }
     $version = & $setVersion -Root $fixtureRoot -Bump Patch
     if (@($version)[-1] -ne "2.4.7") {

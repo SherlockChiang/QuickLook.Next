@@ -29,6 +29,12 @@ function ConvertTo-VersionParts([string]$Value) {
         $normalized = $normalized.Substring(1)
     }
     if ($normalized -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+        if ($normalized -match '^(\d+)\.(\d+)\.(\d+)\.(\d+)$') {
+            $semanticVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+            throw ("Version must use semantic X.Y.Z format; the MSIX fourth " +
+                "component is assigned automatically. Use '$semanticVersion' " +
+                "instead of '$Value'.")
+        }
         throw "Version must use semantic X.Y.Z format. Current value: '$Value'"
     }
     $parts = @(
@@ -43,11 +49,10 @@ function ConvertTo-VersionParts([string]$Value) {
 }
 
 $currentVersion = (Get-Content -LiteralPath $versionPath -Raw).Trim()
-$currentParts = ConvertTo-VersionParts $currentVersion
 $targetParts = if ($Version) {
     ConvertTo-VersionParts $Version
 } else {
-    @($currentParts)
+    @(ConvertTo-VersionParts $currentVersion)
 }
 
 switch ($Bump) {

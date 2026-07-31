@@ -91,6 +91,12 @@ if ($packageAction -notmatch 'resolve-formal-msix-version\.ps1[\s\S]*msix_versio
     $packageAction -match 'msix_version=\$version\.0') {
     throw "Formal beta and stable packages must use strictly ordered MSIX revisions."
 }
+if ($packageAction -notmatch
+        'set-version\.ps1\s+-Version\s+\$version' -or
+    $packageAction -match
+        '\$version\s*\|\s*Set-Content\s+-LiteralPath\s+VERSION') {
+    throw "Resolved release versions must synchronize every authoritative version source."
+}
 if ($stable -match '(?m)^\s*secrets:\s*inherit\s*$' -or $beta -match '(?m)^\s*secrets:\s*inherit\s*$') {
     throw "Release signing secrets must come from channel-specific GitHub Environments."
 }

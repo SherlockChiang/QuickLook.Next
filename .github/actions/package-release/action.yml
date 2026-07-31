@@ -75,7 +75,7 @@ runs:
           $msixVersion = ./tools/resolve-formal-msix-version.ps1 `
             -VersionPrefix $version `
             -VersionSuffix $suffix
-          $version | Set-Content -LiteralPath VERSION -Encoding ascii
+          ./tools/set-version.ps1 -Version $version | Out-Host
           "version=$packageVersion" >> $env:GITHUB_OUTPUT
           "tag=v$packageVersion" >> $env:GITHUB_OUTPUT
           "artifact_name=QuickLook.Next-$packageVersion-win-x64" >> $env:GITHUB_OUTPUT
