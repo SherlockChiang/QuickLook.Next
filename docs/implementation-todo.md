@@ -4,9 +4,10 @@ This file tracks the ordered hardening and product-improvement work identified
 by the July 2026 repository review. Each completed item records its verification
 and commit so changes remain independently reviewable and revertible.
 
-## 0.3.1 optimization batches
+## Optimization batches
 
-All planned 0.3.1 batches are complete. Remaining work below is ordered for later versions.
+All planned 0.3.1 batches are complete. The 0.3.2 cycle is now in progress;
+remaining work below stays ordered by risk and user-visible impact.
 
 ## P0: Immediate safety and usability
 
@@ -20,8 +21,10 @@ All planned 0.3.1 batches are complete. Remaining work below is ordered for late
   consuming CPU before a synchronous FFI call returns.
 - [ ] Persist first-paint p50/p95 latency, resident memory, HANDLE count, and host recycle timing for
   a bounded preview-switch corpus, with lightweight pull-request and fuller nightly budgets.
-- [ ] Replace fixed custom-title-bar caption padding with `AppWindow.TitleBar` insets and add visual
-  checks at compact width, 200% scaling, Simplified Chinese, and high contrast.
+- [ ] Execute and retain the tracked custom-title-bar visual evidence matrix at compact width, across
+  a live 100%-to-200% display move, in Simplified Chinese, and in Windows High Contrast. Dynamic
+  system-inset layout, scale conversion, automated policy tests, and the evidence gate are complete;
+  do not claim a manual visual pass until all required screenshots and run records exist.
 - [ ] Replace the remaining `PdfDocument` projection with an API that exposes a native close
   contract. Until Windows provides that boundary, RasterHost now deterministically tracks and drains
   every underlying render task before releasing session-owned HANDLE streams; a 12-second drain
@@ -54,6 +57,19 @@ All planned 0.3.1 batches are complete. Remaining work below is ordered for late
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Replace fixed 140/144 DIP custom-title-bar padding in Main, Settings, and Welcome with one
+  lifecycle-safe controller driven by `AppWindow.TitleBar.LeftInset/RightInset` and
+  `XamlRoot.RasterizationScale`. Coalesce AppWindow/XamlRoot updates on the Dispatcher, detach every
+  event on close, and preserve the windows' symmetric design padding. A pure Core policy covers
+  invalid inputs, fractional conversion, and equivalent 100%/150%/200% physical insets; the
+  architecture guard locks all three window integrations and the traceable manual evidence gate.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore` (234 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore /p:ContinuousIntegrationBuild=true` (0 warnings, 0 errors)
+  - Guard: `pwsh -NoProfile -File tools/test-titlebar-insets.ps1`
+  - Guard: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Manual evidence contract: `docs/titlebar-visual-check.md` (not yet claimed as executed)
+  - Commit: `9018b4c`
 
 - [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.1 after the exact
   release harness passes formatting, warning-free Clippy, native debug/release builds, 218 native
