@@ -58,6 +58,15 @@ remaining work below stays ordered by risk and user-visible impact.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.2 after the exact
+  release harness passes canonical formatting, warning-free Clippy, native debug/release builds,
+  218 native tests with one external-corpus test ignored in the ordinary suite, all 316 .NET tests,
+  the separate 10-file external image corpus, restricted-host smoke, and every architecture/release
+  guard including the new title-bar inset contract.
+  - Verification: `pwsh -NoProfile -File tools/release.ps1 -ExpectedVersion 0.3.2 -SkipPackage -SkipSystemImageSmoke`
+  - Verification: `pwsh -NoProfile -File tools/test-release-version.ps1 -ExpectedVersion 0.3.2`
+  - Commit: `1b93ce5`
+
 - [x] Replace fixed 140/144 DIP custom-title-bar padding in Main, Settings, and Welcome with one
   lifecycle-safe controller driven by `AppWindow.TitleBar.LeftInset/RightInset` and
   `XamlRoot.RasterizationScale`. Coalesce AppWindow/XamlRoot updates on the Dispatcher, detach every
