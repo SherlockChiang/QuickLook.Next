@@ -6,8 +6,7 @@ and commit so changes remain independently reviewable and revertible.
 
 ## 0.3.1 optimization batches
 
-- [ ] Release batch: synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.1,
-  then run the version guards and complete build/test suite.
+All planned 0.3.1 batches are complete. Remaining work below is ordered for later versions.
 
 ## P0: Immediate safety and usability
 
@@ -55,6 +54,13 @@ and commit so changes remain independently reviewable and revertible.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.1 after the exact
+  release harness passes formatting, warning-free Clippy, native debug/release builds, 218 native
+  tests, all 297 .NET tests, the 10-file external image corpus, and every architecture/release guard.
+  - Verification: `pwsh -NoProfile -File tools/release.ps1 -SkipPackage -SkipSystemImageSmoke`
+  - Verification: `pwsh -NoProfile -File tools/test-release-version.ps1 -ExpectedVersion 0.3.1`
+  - Commit: `a3d1639`
 
 - [x] Establish a zero-warning formatting and static-analysis baseline. Formal release/CI checks
   now require canonical `rustfmt`, unchanged `dotnet format`, warning-free Clippy across all
