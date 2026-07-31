@@ -9,7 +9,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid x:Name="TitleBar" Padding="16,0,140,0">
+        <Grid x:Name="TitleBar" Padding="16,0">
             <TextBlock x:Name="TitleBarText" VerticalAlignment="Center"
                        Style="{StaticResource BodyStrongTextBlockStyle}" />
         </Grid>

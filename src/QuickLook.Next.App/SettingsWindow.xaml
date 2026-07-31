@@ -9,7 +9,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Grid x:Name="TitleBar" Height="48" Padding="16,0,140,0">
+        <Grid x:Name="TitleBar" Height="48" Padding="16,0">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                 <FontIcon Glyph="&#xE713;" FontSize="16" />
                 <TextBlock x:Name="TitleBarText" Style="{StaticResource BodyStrongTextBlockStyle}" />

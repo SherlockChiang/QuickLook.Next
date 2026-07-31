@@ -8,12 +8,14 @@ namespace QuickLook.Next.App;
 public sealed partial class WelcomeWindow : Window
 {
     private static WelcomeWindow? _current;
+    private readonly TitleBarInsetController _titleBarInsetController;
 
     private WelcomeWindow(Func<string> resolveIconPath)
     {
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
+        _titleBarInsetController = new TitleBarInsetController(this, TitleBar);
         Title = UiStrings.WelcomeTitle;
         TitleBarText.Text = UiStrings.AppName;
         HeadingText.Text = UiStrings.WelcomeHeading;

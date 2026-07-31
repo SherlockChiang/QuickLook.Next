@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
     private readonly NativeThumbnailScheduler _thumbnailScheduler;
     private readonly FolderListingCache _folderListingCache;
     private readonly PreviewWindowController _windowController;
+    private readonly TitleBarInsetController _titleBarInsetController;
     private TextPreviewPresenter? _textPresenter;
     private TablePreviewPresenter? _tablePresenter;
     private ListingPreviewPresenter? _listingPresenter;
@@ -301,6 +302,7 @@ public sealed partial class MainWindow : Window
             LoadListingIconAsync);
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        _titleBarInsetController = new TitleBarInsetController(this, AppTitleBar);
         Title = UiStrings.AppName;
         TrySetBackdrop();
         try { _uiSettings.ColorValuesChanged += (_, _) => DispatcherQueue.TryEnqueue(ApplyAccessibilityVisuals); }

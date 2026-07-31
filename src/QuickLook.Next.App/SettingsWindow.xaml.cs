@@ -20,6 +20,7 @@ public sealed partial class SettingsWindow : Window
     private readonly Action _settingsChanged;
     private readonly Func<NativeHookStatus?> _getHookStatus;
     private readonly Func<bool> _retryHook;
+    private readonly TitleBarInsetController _titleBarInsetController;
     private bool _initializing = true;
     private bool _resizePending;
     private bool _diagnosticsBusy;
@@ -40,6 +41,7 @@ public sealed partial class SettingsWindow : Window
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
+        _titleBarInsetController = new TitleBarInsetController(this, TitleBar);
         Title = UiStrings.SettingsTitle;
         ApplyStrings();
         ApplyWindowAppearance();

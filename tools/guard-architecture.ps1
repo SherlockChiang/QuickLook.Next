@@ -1905,3 +1905,10 @@ $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
 if (Test-Path $imageCorpusGuard) {
     & $imageCorpusGuard -Root $Root -SkipSystemImageSmoke:$SkipSystemImageSmoke
 }
+
+$titleBarInsetsTest = Join-Path $PSScriptRoot "test-titlebar-insets.ps1"
+if (-not (Test-Path -LiteralPath $titleBarInsetsTest -PathType Leaf)) {
+    throw "Missing title-bar inset guard: $titleBarInsetsTest"
+}
+& $titleBarInsetsTest -Root $Root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
