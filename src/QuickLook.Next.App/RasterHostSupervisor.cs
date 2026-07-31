@@ -93,7 +93,11 @@ internal sealed class RasterHostSupervisor
             throw;
         }
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, _backgroundEfficiencyEnabled, "App");
-        if (_host is not null) { _host.EnableRaisingEvents = true; _host.Exited += (_, _) => OnHostExited(gen); }
+        if (_host is { } launchedHost)
+        {
+            launchedHost.Exited += (_, _) => OnHostExited(gen, launchedHost);
+            launchedHost.EnableRaisingEvents = true;
+        }
         DiagLog.Write("App", $"host pid={_host?.Id}; waiting for pipe connection");
 
         using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -675,15 +679,33 @@ internal sealed class RasterHostSupervisor
         ProcessPowerMode.SetProcessBackgroundEfficiency(_host, enabled, "App");
     }
 
-    private void OnHostExited(int gen)
+    private void OnHostExited(int gen, Process exitedHost)
     {
         if (_stopping || gen != _generation) return;
+        string exitCode;
+        try
+        {
+            int code = exitedHost.ExitCode;
+            exitCode = $"{code} (0x{unchecked((uint)code):X8})";
+        }
+        catch (Exception)
+        {
+            exitCode = "unavailable";
+        }
         (string? requestId, string? path) = GetRestartContext();
-        DiagLog.Write("App", $"host exited gen={gen}; request={requestId}; scheduling restart");
+        DiagLog.Write(
+            "App",
+            $"host exited gen={gen}; pid={TryGetProcessId(exitedHost)}; exitCode={exitCode}; request={requestId}; scheduling restart");
         _handleOpenSends.Clear();
         ClearCloudRequestState();
         _pending.FailAll(new InvalidOperationException("RasterHost exited"));
         _ = RestartAsync(gen, requestId, path);
+    }
+
+    private static string TryGetProcessId(Process process)
+    {
+        try { return process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture); }
+        catch (Exception) { return "unavailable"; }
     }
 
     private async Task RestartAsync(int gen, string? requestId, string? path)

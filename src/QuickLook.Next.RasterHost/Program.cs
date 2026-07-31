@@ -6,6 +6,8 @@ using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using QuickLook.Next.RasterHost;
 
+SupervisedHostProcessPolicy.SuppressInteractiveErrorUi();
+
 // RasterHost: the .NET surface process. It owns D3D shared-surface production plus Windows-only render
 // bridges (PDF pages and shell thumbnails). Preview business logic should live in Rust or the App UI.
 NativeImageDecoder.EnsureCompatible();

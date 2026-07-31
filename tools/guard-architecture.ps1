@@ -1804,6 +1804,13 @@ if ($failures.Count -gt 0) {
 
 Write-Host "architecture guard passed" -ForegroundColor Green
 
+$supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
+if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
+    throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"
+}
+& $supervisedHostErrorUiTest -Root $Root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $staleCallbackGuard = Join-Path $PSScriptRoot "guard-stale-callbacks.ps1"
 if (Test-Path $staleCallbackGuard) {
     & $staleCallbackGuard -Root $Root

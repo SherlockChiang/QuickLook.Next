@@ -3,6 +3,8 @@ using Microsoft.Win32.SafeHandles;
 using QuickLook.Next.Core;
 using QuickLook.Next.ShellBroker;
 
+SupervisedHostProcessPolicy.SuppressInteractiveErrorUi();
+
 string pipeName = GetArg(args, "--pipe") ?? "";
 string sessionToken = GetArg(args, "--session-token") ?? "";
 string writableRoot = GetArg(args, "--writable-root") ?? "";

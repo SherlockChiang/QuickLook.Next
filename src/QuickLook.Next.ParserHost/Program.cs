@@ -3,6 +3,8 @@ using System.IO.Pipes;
 using QuickLook.Next.Core;
 using QuickLook.Next.ParserHost;
 
+SupervisedHostProcessPolicy.SuppressInteractiveErrorUi();
+
 string pipeName = GetArg(args, "--pipe") ?? "quicklook_next_parser";
 string? sessionToken = GetArg(args, "--session-token");
 string writableRoot = GetArg(args, "--writable-root") ?? "";
