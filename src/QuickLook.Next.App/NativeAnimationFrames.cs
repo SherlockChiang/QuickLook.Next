@@ -2,8 +2,6 @@ using QuickLook.Next.Core;
 
 namespace QuickLook.Next.App;
 
-internal delegate void NativeAnimationFrameSpanAction(ReadOnlySpan<byte> bgra);
-
 internal readonly record struct NativeAnimationFrameDescriptor(
     int DelayMilliseconds,
     int PixelOffset);
@@ -14,8 +12,9 @@ internal readonly record struct NativeAnimationFrameDescriptor(
 /// </summary>
 internal sealed class NativeAnimationFrames : IDisposable
 {
-    private readonly object _lifetimeGate = new();
+    private readonly ReaderWriterLockSlim _lifetimeGate = new(LockRecursionPolicy.NoRecursion);
     private readonly NativeAnimationFrameDescriptor[] _frames;
+    private readonly ImageWaveform?[] _waveforms;
     private SharedSectionView? _view;
     private readonly int _frameByteLength;
 
@@ -49,6 +48,7 @@ internal sealed class NativeAnimationFrames : IDisposable
         Height = height;
         _view = view;
         _frames = frames;
+        _waveforms = new ImageWaveform?[frames.Length];
         _frameByteLength = frameByteLength;
     }
 
@@ -59,21 +59,26 @@ internal sealed class NativeAnimationFrames : IDisposable
     public int GetDelayMilliseconds(int index)
         => _frames[index].DelayMilliseconds;
 
-    public bool TryReadFrame(int index, NativeAnimationFrameSpanAction action)
+    public bool TryWriteFrame(int index, Stream destination)
     {
-        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(destination);
         if ((uint)index >= (uint)_frames.Length)
             return false;
 
-        lock (_lifetimeGate)
+        _lifetimeGate.EnterReadLock();
+        try
         {
             SharedSectionView? view = _view;
             if (view is null)
                 return false;
 
             NativeAnimationFrameDescriptor frame = _frames[index];
-            action(view.Bytes.Slice(frame.PixelOffset, _frameByteLength));
+            destination.Write(view.Bytes.Slice(frame.PixelOffset, _frameByteLength));
             return true;
+        }
+        finally
+        {
+            _lifetimeGate.ExitReadLock();
         }
     }
 
@@ -82,26 +87,42 @@ internal sealed class NativeAnimationFrames : IDisposable
         if ((uint)index >= (uint)_frames.Length)
             return null;
 
-        lock (_lifetimeGate)
+        _lifetimeGate.EnterReadLock();
+        try
         {
             SharedSectionView? view = _view;
             if (view is null)
                 return null;
 
+            ImageWaveform? cached = Volatile.Read(ref _waveforms[index]);
+            if (cached is not null)
+                return cached;
+
             NativeAnimationFrameDescriptor frame = _frames[index];
-            return ImageWaveformBuilder.Create(
+            var created = ImageWaveformBuilder.Create(
                 view.Bytes.Slice(frame.PixelOffset, _frameByteLength),
                 Width,
                 Height);
+            return Interlocked.CompareExchange(ref _waveforms[index], created, null) ?? created;
+        }
+        finally
+        {
+            _lifetimeGate.ExitReadLock();
         }
     }
 
     public void Dispose()
     {
-        lock (_lifetimeGate)
+        _lifetimeGate.EnterWriteLock();
+        try
         {
             _view?.Dispose();
             _view = null;
+            Array.Clear(_waveforms);
+        }
+        finally
+        {
+            _lifetimeGate.ExitWriteLock();
         }
     }
 }

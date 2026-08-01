@@ -1398,8 +1398,10 @@ if (Test-Path $animatedPresenterPath) {
     if ($animatedPresenterText -match 'File\.OpenRead\(' -or
         $animatedPresenterText -match 'TryReadAnimated(Size|PngSize|WebPSize)' -or
         $animatedPresenterText -notmatch 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]{0,500}probe\.IsAnimated' -or
-        $animatedPresenterText -notmatch 'frames\.TryReadFrame\(index,\s*bgra\s*=>\s*stream\.Write\(bgra\)\)' -or
-        $animatedPresenterText -notmatch 'Stopwatch\.StartNew\(\)[\s\S]*new\s+DispatcherTimer\(\)[\s\S]*AdvanceNativeFrame\(\)[\s\S]*ElapsedMilliseconds\s*%\s*_nativeAnimationDurationMs[\s\S]*FindFrameIndex\([\s\S]*ScheduleNextNativeFrame\(\)') {
+        $animatedPresenterText -notmatch 'frames\.TryWriteFrame\(index,\s*stream\)' -or
+        $animatedPresenterText -match 'DispatcherTimer' -or
+        $animatedPresenterText -notmatch 'Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(_nativeFrameClock\.ElapsedMilliseconds\)' -or
+        $animatedPresenterText -notmatch 'CompositionTarget\.Rendering\s*\+=\s*OnNativeFrameRendering[\s\S]*CompositionTarget\.Rendering\s*-=\s*OnNativeFrameRendering') {
         Add-Failure "App animation presenter must consume Rust metadata, advance a monotonic frame timeline, and avoid container re-parsing"
     }
 }
@@ -1408,9 +1410,10 @@ $nativeAnimationFramesPath = Join-Path $Root "src/QuickLook.Next.App/NativeAnima
 if (Test-Path $nativeAnimationFramesPath) {
     $nativeAnimationFramesText = Get-Content -LiteralPath $nativeAnimationFramesPath -Raw
     if ($nativeAnimationFramesText -notmatch 'SharedSectionView\?\s+_view' -or
-        $nativeAnimationFramesText -notmatch 'TryReadFrame\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*view\.Bytes\.Slice\(' -or
-        $nativeAnimationFramesText -notmatch 'CreateWaveform\([\s\S]*lock\s*\(_lifetimeGate\)' -or
-        $nativeAnimationFramesText -notmatch 'Dispose\(\)[\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*_view\?\.Dispose\(\)' -or
+        $nativeAnimationFramesText -notmatch 'ReaderWriterLockSlim' -or
+        $nativeAnimationFramesText -notmatch 'TryWriteFrame\([\s\S]*EnterReadLock\(\)[\s\S]*destination\.Write\(view\.Bytes\.Slice\(' -or
+        $nativeAnimationFramesText -notmatch 'CreateWaveform\([\s\S]*EnterReadLock\(\)[\s\S]*_waveforms\[index\]' -or
+        $nativeAnimationFramesText -notmatch 'Dispose\(\)[\s\S]*EnterWriteLock\(\)[\s\S]*_view\?\.Dispose\(\)' -or
         $nativeAnimationFramesText -match 'byte\[\]\s+(?:Bgra|Pixels|Frame)') {
         Add-Failure "App animation playback must retain one read-only shared-section view with synchronized frame reads and disposal"
     }

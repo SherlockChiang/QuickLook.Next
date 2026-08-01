@@ -25,4 +25,20 @@ public sealed class ImageWaveformBuilderTests
 
         Assert.All(waveform.RgbDensity, value => Assert.Equal(0, value));
     }
+
+    [Fact]
+    public void Create_reuses_histogram_workspace_without_large_object_heap_allocations()
+    {
+        var pixels = new byte[256 * 256 * 4];
+        _ = ImageWaveformBuilder.Create(pixels, 256, 256);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        ImageWaveform? waveform = null;
+        for (int i = 0; i < 4; i++)
+            waveform = ImageWaveformBuilder.Create(pixels, 256, 256);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.NotNull(waveform);
+        Assert.InRange(allocated, 0, 300_000);
+    }
 }

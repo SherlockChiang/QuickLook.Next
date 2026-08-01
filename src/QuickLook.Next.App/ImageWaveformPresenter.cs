@@ -8,8 +8,12 @@ namespace QuickLook.Next.App;
 
 internal sealed class ImageWaveformPresenter
 {
+    private const int PixelLength = ImageWaveformBuilder.ScopeWidth * ImageWaveformBuilder.ScopeHeight * 4;
+
     private readonly FrameworkElement _panel;
     private readonly Image _image;
+    private readonly byte[] _pixels = new byte[PixelLength];
+    private WriteableBitmap? _bitmap;
 
     public ImageWaveformPresenter(FrameworkElement panel, Image image)
     {
@@ -29,20 +33,20 @@ internal sealed class ImageWaveformPresenter
         int planeLength = checked(waveform.Width * waveform.Height);
         byte[] density = waveform.RgbDensity;
 
-        var pixels = new byte[checked(planeLength * 4)];
         for (int i = 0; i < planeLength; i++)
         {
-            pixels[i * 4] = density[planeLength * 2 + i];
-            pixels[i * 4 + 1] = density[planeLength + i];
-            pixels[i * 4 + 2] = density[i];
-            pixels[i * 4 + 3] = 255;
+            _pixels[i * 4] = density[planeLength * 2 + i];
+            _pixels[i * 4 + 1] = density[planeLength + i];
+            _pixels[i * 4 + 2] = density[i];
+            _pixels[i * 4 + 3] = 255;
         }
 
-        var bitmap = new WriteableBitmap(waveform.Width, waveform.Height);
-        using (var stream = bitmap.PixelBuffer.AsStream())
-            stream.Write(pixels);
-        bitmap.Invalidate();
-        _image.Source = bitmap;
+        _bitmap ??= new WriteableBitmap(waveform.Width, waveform.Height);
+        using (var stream = _bitmap.PixelBuffer.AsStream())
+            stream.Write(_pixels);
+        _bitmap.Invalidate();
+        if (!ReferenceEquals(_image.Source, _bitmap))
+            _image.Source = _bitmap;
         _panel.Visibility = Visibility.Visible;
     }
 

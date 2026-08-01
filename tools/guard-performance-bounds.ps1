@@ -208,6 +208,8 @@ $rasterPresenter = Join-Path $Root "src/QuickLook.Next.App/RasterPreviewPresente
 Require-Pattern $rasterPresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
     "Static image wheel zoom must remain anchored at the pointer."
 $animatedImagePresenter = Join-Path $Root "src/QuickLook.Next.App/AnimatedImagePreviewPresenter.cs"
+$animationPlaybackTimeline = Join-Path $Root "src/QuickLook.Next.Core/AnimationPlaybackTimeline.cs"
+$animationPlaybackTimelineTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/AnimationPlaybackTimelineTests.cs"
 $nativeAnimationFrames = Join-Path $Root "src/QuickLook.Next.App/NativeAnimationFrames.cs"
 $rasterSupervisor = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
 Require-Pattern $animatedImagePresenter 'private void ZoomAt\(double factor, Windows\.Foundation\.Point point\)' `
@@ -216,25 +218,38 @@ Require-Pattern $rasterPresenter 'public void PanBy\(double x, double y\)' `
     "Static images must retain bounded keyboard panning."
 Require-Pattern $animatedImagePresenter 'public void PanBy\(double x, double y\)' `
     "Animated images must retain bounded keyboard panning."
-Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100' `
-    "Animated image waveforms must remain throttled to at most ten updates per second."
-Require-Pattern $animatedImagePresenter 'Task\.Run\(\(\)\s*=>\s*frames\.CreateWaveform\(frameIndex\)\)' `
-    "Animated image waveform generation must remain off the UI thread."
-Require-Pattern $animatedImagePresenter 'version\s*!=\s*_waveformVersion' `
-    "Animated image waveform callbacks must reject stale presenter generations."
+Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100[\s\S]*Task\.Run\(\(\)\s*=>\s*frames\.CreateWaveform\(frameIndex\)\)[\s\S]*version\s*!=\s*_waveformVersion' `
+    "Animated image waveforms must remain throttled, asynchronous, and stale-generation safe."
 Require-Pattern $animatedImagePresenter 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]*probe\.IsAnimated' `
     "Animated image routing must consume bounded Rust FileProbe metadata."
 Require-Pattern $nativeAnimationProbe 'MAX_IMAGE_ANIMATION_PROBE_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
     "GIF/WebP/APNG metadata probes must remain capped at 4 MiB."
-Require-Pattern $animatedImagePresenter 'PixelBuffer\.AsStream\(\)[\s\S]*stream\.Position\s*=\s*0[\s\S]*stream\.Write\([\s\S]*\}\s*\r?\n\s*_nativeFrameBitmap\.Invalidate\(\)' `
+Require-Pattern $animatedImagePresenter 'PixelBuffer\.AsStream\(\)[\s\S]*stream\.Position\s*=\s*0[\s\S]*TryWriteFrame\(index,\s*stream\)[\s\S]*\}\s*\r?\n\s*_nativeFrameBitmap\.Invalidate\(\)' `
     "Animated native frames must release the WinRT pixel-buffer stream before invalidation."
-Require-Pattern $animatedImagePresenter 'frames\.TryReadFrame\(index,\s*bgra\s*=>\s*stream\.Write\(bgra\)\)' `
+Require-Pattern $animatedImagePresenter 'frames\.TryWriteFrame\(index,\s*stream\)' `
     "Animated native frames must upload directly from the retained read-only section span."
-Require-Pattern $animatedImagePresenter 'Stopwatch\.StartNew\(\)[\s\S]*new\s+DispatcherTimer\(\)[\s\S]*AdvanceNativeFrame\(\)[\s\S]*ElapsedMilliseconds\s*%\s*_nativeAnimationDurationMs[\s\S]*FindFrameIndex\([\s\S]*ScheduleNextNativeFrame\(\)' `
-    "Animated native frames must advance on a monotonic deadline timeline instead of remaining on the first frame."
-Require-Pattern $nativeAnimationFrames 'SharedSectionView\?\s+_view[\s\S]*TryReadFrame\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*view\.Bytes\.Slice\([\s\S]*CreateWaveform\([\s\S]*lock\s*\(_lifetimeGate\)[\s\S]*public\s+void\s+Dispose\(\)[\s\S]*lock\s*\(_lifetimeGate\)' `
-    "Animation section reads, waveform scans, and disposal must share one lifetime gate."
+Require-Pattern $animatedImagePresenter 'Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(_nativeFrameClock\.ElapsedMilliseconds\)[\s\S]*frameIndex\s*!=\s*_nativeFrameIndex' `
+    "Animated native frames must sample a monotonic timeline on compositor rendering callbacks and skip unchanged frames."
+Require-Pattern $animatedImagePresenter 'CompositionTarget\.Rendering\s*\+=\s*OnNativeFrameRendering' `
+    "Animated native frames must advance from compositor rendering callbacks."
+Require-Pattern $animatedImagePresenter 'CompositionTarget\.Rendering\s*-=\s*OnNativeFrameRendering[\s\S]*_nativeRenderingSubscribed\s*=\s*false' `
+    "Animated native playback must detach its compositor rendering callback when paused, cleared, or stopped."
+Require-Pattern $animatedImagePresenter 'if\s*\(!ReferenceEquals\(_image\.Source,\s*_nativeFrameBitmap\)\)\s*\r?\n\s*_image\.Source\s*=\s*_nativeFrameBitmap' `
+    "Animated playback must not reassign the same WriteableBitmap source on every frame."
+Require-Pattern $animationPlaybackTimeline 'elapsedMilliseconds\s*%\s*DurationMilliseconds[\s\S]*Array\.BinarySearch\(_frameEndMilliseconds,\s*position\s*\+\s*1\)' `
+    "Animation playback timing must resolve the current frame from absolute monotonic elapsed time."
+Require-Pattern $animationPlaybackTimelineTests 'GetFrameIndex_CatchesUpAfterDelayedRender[\s\S]*GetFrameIndex\(119\)[\s\S]*GetFrameIndex\(120\)[\s\S]*GetFrameIndex\(190\)' `
+    "Animation playback tests must cover delayed rendering and loop-boundary catch-up."
+Require-Pattern $nativeAnimationFrames 'ReaderWriterLockSlim[\s\S]*TryWriteFrame\([\s\S]*EnterReadLock\(\)[\s\S]*destination\.Write\(view\.Bytes\.Slice\([\s\S]*CreateWaveform\([\s\S]*EnterReadLock\(\)[\s\S]*Volatile\.Read\(ref _waveforms\[index\]\)[\s\S]*Interlocked\.CompareExchange\(ref _waveforms\[index\][\s\S]*Dispose\(\)[\s\S]*EnterWriteLock\(\)' `
+    "Animation frame uploads and cached waveform scans must share concurrent read access while disposal remains exclusive."
+Require-Pattern $imageWaveform 'ArrayPool<int>\.Shared\.Rent\(countLength\)[\s\S]*Return\(counts,\s*clearArray:\s*true\)' `
+    "Image waveform histogram workspaces must be pooled instead of allocating on the large-object heap."
+Require-Pattern $waveformPresenter 'byte\[\]\s+_pixels\s*=\s*new byte\[PixelLength\][\s\S]*_bitmap\s*\?\?=\s*new WriteableBitmap[\s\S]*ReferenceEquals\(_image\.Source,\s*_bitmap\)' `
+    "Image waveform presentation must reuse its staging pixels and WriteableBitmap."
 $animatedImagePresenterText = Get-Content -LiteralPath $animatedImagePresenter -Raw
+if ($animatedImagePresenterText -match 'DispatcherTimer') {
+    $failures.Add("Active animated playback must not use a dispatcher timer.")
+}
 if ($animatedImagePresenterText -match 'PixelBuffer\.AsStream\(\)[\s\S]{0,400}\.SetLength\(') {
     $failures.Add("Animated native frames must not resize the fixed WinRT pixel buffer.")
 }
