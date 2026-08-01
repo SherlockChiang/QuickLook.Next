@@ -21,6 +21,13 @@ remaining work below stays ordered by risk and user-visible impact.
   consuming CPU before a synchronous FFI call returns.
 - [ ] Persist first-paint p50/p95 latency, resident memory, HANDLE count, and host recycle timing for
   a bounded preview-switch corpus, with lightweight pull-request and fuller nightly budgets.
+- [ ] Eliminate the second full native animation decode when the exact frame section exceeds the
+  current 8 MiB first attempt. Preserve the 64 MiB section ceiling while measuring decode passes,
+  packet bytes, animation-ready latency, and first visible motion for bounded GIF/WebP/APNG corpora.
+- [ ] Version the animation packet so a bounded spatial downsample can preserve a complete timeline
+  without changing the intended display size, and so any true frame-count truncation is explicit and
+  never loops a silent prefix. The current 64 MiB budget derives a frame limit from output pixels;
+  the same animation can therefore become partial at a larger window size or DPI.
 - [ ] Execute and retain the tracked custom-title-bar visual evidence matrix at compact width, across
   a live 100%-to-200% display move, in Simplified Chinese, and in Windows High Contrast. Dynamic
   system-inset layout, scale conversion, automated policy tests, and the evidence gate are complete;
@@ -57,6 +64,19 @@ remaining work below stays ordered by risk and user-visible impact.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Remove the periodic native-animation playback stall reproduced with the 75-frame, 110 ms GIF.
+  Drive frame selection from `CompositionTarget.Rendering` and one absolute monotonic timeline so a
+  delayed UI callback catches up without timer drift. Keep the dynamic RGB scope while allowing its
+  immutable section scan to run concurrently with frame upload; pool the 216 KiB histogram workspace,
+  cache each sampled frame's scope, reuse the scope staging pixels and `WriteableBitmap`, avoid the
+  per-frame span closure, and stop reassigning the same animation bitmap source. Pause, clear, and stop
+  detach the compositor callback before releasing the mapped section.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore` (241 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Guard: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commit: `8cc0022`
 
 - [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.2 after the exact
   release harness passes canonical formatting, warning-free Clippy, native debug/release builds,
