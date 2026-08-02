@@ -6,7 +6,7 @@ and commit so changes remain independently reviewable and revertible.
 
 ## Optimization batches
 
-All planned 0.3.1 batches are complete. The 0.3.2 cycle is now in progress;
+All planned 0.3.1 batches and the focused 0.3.2/0.3.3 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
 ## P0: Immediate safety and usability
@@ -64,6 +64,19 @@ remaining work below stays ordered by risk and user-visible impact.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.3 after the exact
+  release harness passes canonical Rust/.NET formatting, warning-free Clippy, native debug/release
+  builds, 218 native tests with one external-corpus test ignored in the ordinary suite, all 323 .NET
+  tests, the separate 10-file external image corpus, restricted-host smoke, and every architecture,
+  performance, release, and title-bar guard. Produce signed local MSIX/installer artifacts from the
+  tested `b76a4ab` payload and install `0.3.3.1` for the current user with the pinned development
+  certificate; AppX reports publisher `CN=QuickLook Next Development` and status `Ok`.
+  - Verification: `pwsh -NoProfile -File tools/release.ps1 -ExpectedVersion 0.3.3 -SkipPackage -SkipSystemImageSmoke`
+  - Verification: `pwsh -NoProfile -File tools/test-release-version.ps1 -ExpectedVersion 0.3.3`
+  - Artifact: `artifacts/QuickLook.Next-0.3.3.1-win-x64.msix` (SHA-256 `8FA1B6C821074CBD168979047C85CA5A721AC5A4C4B9C13B03F08A935B73D014`)
+  - Artifact: `artifacts/QuickLook.Next-Installer-0.3.3.1-win-x64.zip` (SHA-256 `2BEA9C82180F163E38E169CDB1808404F055FFE30E9616D697BA527930D3DC8A`)
+  - Commit: `b76a4ab`
 
 - [x] Remove the periodic native-animation playback stall reproduced with the 75-frame, 110 ms GIF.
   Drive frame selection from `CompositionTarget.Rendering` and one absolute monotonic timeline so a
