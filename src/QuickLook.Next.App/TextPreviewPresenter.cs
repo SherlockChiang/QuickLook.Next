@@ -651,7 +651,6 @@ internal sealed class TextPreviewPresenter
     {
         _markdownItems = presentation.Items.Select(item => new MarkdownListItem(item)).ToArray();
         _markdownListView.ItemsSource = _markdownItems;
-        ApplyMarkdownViewportPadding(_markdownListView.ActualHeight);
         foreach (MarkdownListItem item in _markdownItems)
         {
             if (item.Item.Block.Kind != "heading")
@@ -660,6 +659,7 @@ internal sealed class TextPreviewPresenter
             if (title.Length > 0)
                 _outlineItems.Add(new MarkdownOutlineItem(title, Math.Clamp(item.Item.Block.Level, 1, 6), item.Item.Index));
         }
+        ApplyMarkdownViewportPadding(_markdownListView.ActualHeight);
     }
 
     private void OnMarkdownContainerChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
@@ -915,8 +915,9 @@ internal sealed class TextPreviewPresenter
         Thickness current = _markdownListView.Padding;
         double bottom = MarkdownViewportPolicy.TrailingPadding(
             viewportHeight,
-            current.Top,
-            MarkdownViewportPolicy.DefaultContentInset);
+            hasOutline: _markdownItems is not null && _outlineItems.Count > 0,
+            contentInset: current.Top,
+            minimumPadding: MarkdownViewportPolicy.DefaultContentInset);
         if (Math.Abs(current.Bottom - bottom) < 0.5)
             return;
         _markdownListView.Padding = new Thickness(current.Left, current.Top, current.Right, bottom);
@@ -1249,15 +1250,32 @@ internal sealed class TextPreviewPresenter
 
     private async Task AlignVirtualMarkdownHeadingAsync(MarkdownListItem item, int renderVersion)
     {
-        _markdownListView.ScrollIntoView(item, ScrollIntoViewAlignment.Leading);
-        _markdownListView.UpdateLayout();
-        await Task.Yield();
-        if (renderVersion != _renderVersion)
+        ListViewItem? container = null;
+        for (int attempt = 0; attempt < MarkdownViewportPolicy.MaximumRealizationAttempts; attempt++)
+        {
+            if (renderVersion != _renderVersion)
+                return;
+
+            _markdownListView.UpdateLayout();
+            _markdownListView.ScrollIntoView(item, ScrollIntoViewAlignment.Leading);
+            if (!await WaitForNextMarkdownUiTurnAsync(renderVersion))
+                return;
+
+            _markdownListView.UpdateLayout();
+            container = _markdownListView.ContainerFromItem(item) as ListViewItem;
+            if (container is not null)
+                break;
+            if (!MarkdownViewportPolicy.ShouldRetryRealization(
+                    attempt,
+                    containerRealized: false,
+                    renderIsCurrent: renderVersion == _renderVersion))
+            {
+                return;
+            }
+        }
+        if (container is null)
             return;
 
-        _markdownListView.UpdateLayout();
-        if (_markdownListView.ContainerFromItem(item) is not ListViewItem container)
-            return;
         _markdownScrollViewer ??= FindDescendant<ScrollViewer>(_markdownListView);
         if (_markdownScrollViewer is null)
             return;
@@ -1277,6 +1295,17 @@ internal sealed class TextPreviewPresenter
             _markdownScrollViewer.ScrollableHeight,
             _markdownListView.Padding.Top);
         _markdownScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+    }
+
+    private Task<bool> WaitForNextMarkdownUiTurnAsync(int renderVersion)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_markdownListView.DispatcherQueue.TryEnqueue(
+                () => completion.TrySetResult(renderVersion == _renderVersion)))
+        {
+            completion.TrySetResult(false);
+        }
+        return completion.Task;
     }
 
     private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
