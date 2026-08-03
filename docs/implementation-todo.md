@@ -21,9 +21,9 @@ remaining work below stays ordered by risk and user-visible impact.
   consuming CPU before a synchronous FFI call returns.
 - [ ] Persist first-paint p50/p95 latency, resident memory, HANDLE count, and host recycle timing for
   a bounded preview-switch corpus, with lightweight pull-request and fuller nightly budgets.
-- [ ] Eliminate the second full native animation decode when the exact frame section exceeds the
-  current 8 MiB first attempt. Preserve the 64 MiB section ceiling while measuring decode passes,
-  packet bytes, animation-ready latency, and first visible motion for bounded GIF/WebP/APNG corpora.
+- [ ] Extend the exact-size, single-decode shared-section handoff now used by GIF to bounded WebP
+  and APNG corpora. Preserve the 64 MiB section ceiling while measuring packet bytes,
+  animation-ready latency, and first visible motion for those remaining formats.
 - [ ] Version the animation packet so a bounded spatial downsample can preserve a complete timeline
   without changing the intended display size, and so any true frame-count truncation is explicit and
   never loops a silent prefix. The current 64 MiB budget derives a frame limit from output pixels;
@@ -64,6 +64,44 @@ remaining work below stays ordered by risk and user-visible impact.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Remove the GIF initial-motion stall reproduced with the 8,258,096-byte, 652x909, 75-frame
+  user sample. RasterHost now starts the exact-object static first frame and an independent GIF
+  animation decode concurrently only when the App requests animation preparation. Optional ABI 3
+  capability bit 20 allocates the final anonymous section at its exact size after one native decode;
+  older ABI 3 libraries retain the stable path/HANDLE fallback. The App keeps the static surface
+  visible until the first animation bitmap is populated, then advances the absolute playback
+  timeline by the handoff time instead of replaying frame zero. Rust, RasterHost, Shell fallback,
+  and App presentation all bypass RGB-waveform work for GIF while animated WebP/APNG scopes remain.
+  At the 395x551 application target the real sample retained all 75 frames in a 65,293,812-byte
+  packet (62.27 MiB), below the unchanged 64 MiB payload ceiling; the static HANDLE first frame
+  remained waveform-free and was ready in 20-25 ms during the concurrent-chain measurements.
+  - Verification: `cargo test --workspace --release --locked --manifest-path native/Cargo.toml` (224 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore` (258 passed)
+  - Verification: focused RasterHost GIF/static-image integration tests (9 passed)
+  - Guards: `tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`,
+    `tools/guard-performance-bounds.ps1`
+  - Commit: `e85623d`
+
+- [x] Restore structured Markdown body visibility in both light and dark modes by applying dynamic
+  theme resources to virtualized prose, lists, code, links, tables, and fallback content. Outline
+  clicks now realize the stable virtual item through at most three render-version-safe UI turns and
+  align the selected heading's top edge to the viewport inset; bounded trailing space makes even the
+  last heading align without creating a blank tail for documents that have no outline.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore` (258 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Guard: `tools/guard-performance-bounds.ps1`
+  - Commits: `2568c6b`, `727d9ff`
+
+- [x] Parse PowerPoint page titles from explicit title placeholders and from slide-layout/master
+  placeholder inheritance, including `title`, `ctrTitle`, and `vertTitle` families plus inherited
+  geometry. A bounded top-text fallback rejects footer/date/slide-number auxiliaries, and the title
+  is removed once from the page summary without removing its rendered layout item. PPTX and PPTM
+  cross-process coverage now asserts the parsed page title rather than `Slide N`.
+  - Verification: `cargo test --release --locked --manifest-path native/quicklook_next_native/Cargo.toml ppt_` (9 passed)
+  - Verification: ParserHost integration filter `Generated_xlsx_pptx_and_pptm_return_office_layouts` (1 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Commits: `24f5d5d`, `ffe8041`
 
 - [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.3 after the exact
   release harness passes canonical Rust/.NET formatting, warning-free Clippy, native debug/release
