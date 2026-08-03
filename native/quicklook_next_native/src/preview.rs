@@ -255,6 +255,32 @@ struct PptPlaceholderInfo {
     height: Option<f64>,
 }
 
+impl PptPlaceholderInfo {
+    fn inherit_missing(&mut self, parent: &Self) {
+        if self.placeholder_type.is_none() {
+            self.placeholder_type.clone_from(&parent.placeholder_type);
+        }
+        if self.x.is_none() {
+            self.x = parent.x;
+        }
+        if self.y.is_none() {
+            self.y = parent.y;
+        }
+        if self.width.is_none() {
+            self.width = parent.width;
+        }
+        if self.height.is_none() {
+            self.height = parent.height;
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PptPlaceholderCache {
+    layouts: BTreeMap<String, BTreeMap<String, PptPlaceholderInfo>>,
+    masters: BTreeMap<String, BTreeMap<String, PptPlaceholderInfo>>,
+}
+
 impl OfficeContext {
     fn new(cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
         Self {
@@ -437,10 +463,10 @@ fn render_pptx<R: Read + Seek>(
         if !text.trim().is_empty() {
             let slide_title = layout
                 .as_ref()
-                .and_then(|layout| layout.pages.get(slide_idx - 1))
+                .and_then(|layout| layout.pages.iter().find(|page| page.index == slide_idx))
                 .map(|page| page.title.clone())
                 .unwrap_or_else(|| format!("Slide {slide_idx}"));
-            slides.push(format!("{slide_title}\n{}", text.trim()));
+            slides.push(ppt_slide_summary(&slide_title, &text));
         }
     }
 
@@ -640,6 +666,8 @@ fn build_pptx_layout<R: Read + Seek>(
 
     let mut pages = Vec::new();
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES;
+    let mut placeholder_cache = PptPlaceholderCache::default();
+    let empty_placeholders = BTreeMap::new();
     for slide_idx in 1..=MAX_OFFICE_SLIDES {
         let slide_name = format!("ppt/slides/slide{slide_idx}.xml");
         let Some(slide_xml) = read_office_zip_text(context, zip, &slide_name, 8 * 1024 * 1024)?
@@ -651,11 +679,35 @@ fn build_pptx_layout<R: Read + Seek>(
         };
 
         let rels_name = format!("ppt/slides/_rels/slide{slide_idx}.xml.rels");
-        let rels = read_office_zip_text(context, zip, &rels_name, 2 * 1024 * 1024)?
-            .map(|xml| parse_relationships(context, &xml))
+        let rels_xml = read_office_zip_text(context, zip, &rels_name, 2 * 1024 * 1024)?;
+        let rels = rels_xml
+            .as_deref()
+            .map(|xml| parse_relationships(context, xml))
             .transpose()?
             .unwrap_or_default();
-        let placeholders = ppt_slide_layout_placeholders(context, zip, &rels)?;
+        let layout_path = rels_xml
+            .as_deref()
+            .map(|xml| {
+                ppt_part_relationship_target(
+                    context,
+                    xml,
+                    "ppt/slides/",
+                    "slideLayout",
+                    "ppt/slidelayouts/",
+                )
+            })
+            .transpose()?
+            .flatten();
+        let placeholder_cache_key = layout_path
+            .as_deref()
+            .map(|path| {
+                cache_ppt_slide_layout_placeholders(context, zip, path, &mut placeholder_cache)
+            })
+            .transpose()?;
+        let placeholders = placeholder_cache_key
+            .as_ref()
+            .and_then(|key| placeholder_cache.layouts.get(key))
+            .unwrap_or(&empty_placeholders);
         let background_color = parse_ppt_slide_background(context, &slide_xml)?;
         let items = parse_ppt_slide_items(
             context,
@@ -663,7 +715,7 @@ fn build_pptx_layout<R: Read + Seek>(
             "ppt/slides/",
             &slide_xml,
             &rels,
-            &placeholders,
+            placeholders,
             slide_width,
             slide_height,
             &mut image_budget,
@@ -1147,10 +1199,9 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         let normalized = normalize_preview_lines(&text);
                         if !normalized.is_empty()
                             && (width <= 2.0 || height <= 2.0)
-                            && placeholder_type.as_ref().is_some_and(|placeholder| {
-                                placeholder.eq_ignore_ascii_case("title")
-                                    || placeholder.eq_ignore_ascii_case("ctrTitle")
-                            })
+                            && placeholder_type
+                                .as_deref()
+                                .is_some_and(ppt_is_title_placeholder)
                         {
                             x = slide_width * 0.05;
                             y = slide_height * 0.05;
@@ -1233,23 +1284,164 @@ fn parse_ppt_slide_items<R: Read + Seek>(
     Ok(items)
 }
 
-fn ppt_slide_layout_placeholders<R: Read + Seek>(
+fn ppt_part_relationship_target(
+    context: &OfficeContext,
+    xml: &str,
+    base_dir: &str,
+    relationship_kind: &str,
+    expected_root: &str,
+) -> OfficeResult<Option<String>> {
+    let mut reader = Reader::from_str(xml);
+    let mut event_count = 0;
+    loop {
+        let event = reader.read_event();
+        event_count += 1;
+        context.check_xml_event(event_count)?;
+        match event {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e))
+                if local_xml_name(e.name().as_ref()) == "relationship" =>
+            {
+                if attr_value(&e, "targetmode")
+                    .is_some_and(|mode| !mode.eq_ignore_ascii_case("internal"))
+                {
+                    continue;
+                }
+                let is_expected_type = attr_value(&e, "type").is_some_and(|value| {
+                    value
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case(relationship_kind))
+                });
+                if !is_expected_type {
+                    continue;
+                }
+                let Some(target) = attr_value(&e, "target") else {
+                    continue;
+                };
+                let path = normalize_zip_target(base_dir, &target);
+                let lower = path.to_ascii_lowercase();
+                if lower.starts_with(expected_root) && lower.ends_with(".xml") {
+                    return Ok(Some(path));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+fn ppt_part_cache_key(path: &str) -> String {
+    normalize_zip_target("", path)
+}
+
+fn cache_ppt_slide_layout_placeholders<R: Read + Seek>(
     context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
-    relationships: &BTreeMap<String, String>,
-) -> OfficeResult<BTreeMap<String, PptPlaceholderInfo>> {
-    let Some(layout_path) = relationships.values().find_map(|target| {
-        let path = normalize_zip_target("ppt/slides/", target);
-        let lower = path.to_ascii_lowercase();
-        (lower.starts_with("ppt/slidelayouts/") && lower.ends_with(".xml")).then_some(path)
-    }) else {
-        return Ok(BTreeMap::new());
-    };
-    let Some(layout_xml) = read_office_zip_text(context, zip, &layout_path, 4 * 1024 * 1024)?
-    else {
-        return Ok(BTreeMap::new());
-    };
-    parse_ppt_placeholders(context, &layout_xml)
+    layout_path: &str,
+    cache: &mut PptPlaceholderCache,
+) -> OfficeResult<String> {
+    let cache_key = ppt_part_cache_key(layout_path);
+    if cache.layouts.contains_key(&cache_key) {
+        return Ok(cache_key);
+    }
+
+    let mut placeholders = read_office_zip_text(context, zip, layout_path, 4 * 1024 * 1024)?
+        .map(|xml| parse_ppt_placeholders(context, &xml))
+        .transpose()?
+        .unwrap_or_default();
+
+    let rels_path = rels_path_for_part(layout_path);
+    let rels_xml = read_office_zip_text(context, zip, &rels_path, 2 * 1024 * 1024)?;
+    let master_path = rels_xml
+        .as_deref()
+        .map(|xml| {
+            ppt_part_relationship_target(
+                context,
+                xml,
+                &part_base_dir(layout_path),
+                "slideMaster",
+                "ppt/slidemasters/",
+            )
+        })
+        .transpose()?
+        .flatten();
+    if let Some(master_path) = master_path {
+        let master_key = cache_ppt_slide_master_placeholders(context, zip, &master_path, cache)?;
+        if let Some(master_placeholders) = cache.masters.get(&master_key) {
+            inherit_ppt_layout_placeholders(&mut placeholders, master_placeholders);
+        }
+    }
+
+    cache.layouts.insert(cache_key.clone(), placeholders);
+    Ok(cache_key)
+}
+
+fn cache_ppt_slide_master_placeholders<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    master_path: &str,
+    cache: &mut PptPlaceholderCache,
+) -> OfficeResult<String> {
+    let cache_key = ppt_part_cache_key(master_path);
+    if cache.masters.contains_key(&cache_key) {
+        return Ok(cache_key);
+    }
+    let placeholders = read_office_zip_text(context, zip, master_path, 4 * 1024 * 1024)?
+        .map(|xml| parse_ppt_placeholders(context, &xml))
+        .transpose()?
+        .unwrap_or_default();
+    cache.masters.insert(cache_key.clone(), placeholders);
+    Ok(cache_key)
+}
+
+fn inherit_ppt_layout_placeholders(
+    placeholders: &mut BTreeMap<String, PptPlaceholderInfo>,
+    master_placeholders: &BTreeMap<String, PptPlaceholderInfo>,
+) {
+    for (index, placeholder) in placeholders {
+        let explicit_type = placeholder.placeholder_type.as_deref();
+        let parent = explicit_type
+            .and_then(|placeholder_type| {
+                master_placeholders.values().find(|master| {
+                    master
+                        .placeholder_type
+                        .as_deref()
+                        .is_some_and(|master_type| {
+                            master_type.eq_ignore_ascii_case(placeholder_type)
+                        })
+                })
+            })
+            .or_else(|| {
+                explicit_type.and_then(|placeholder_type| {
+                    master_placeholders.values().find(|master| {
+                        master
+                            .placeholder_type
+                            .as_deref()
+                            .is_some_and(|master_type| {
+                                ppt_placeholder_family_matches(placeholder_type, master_type)
+                            })
+                    })
+                })
+            })
+            .or_else(|| master_placeholders.get(index));
+        if let Some(parent) = parent {
+            placeholder.inherit_missing(parent);
+        }
+    }
+}
+
+fn ppt_placeholder_family_matches(left: &str, right: &str) -> bool {
+    (ppt_is_title_placeholder(left) && ppt_is_title_placeholder(right))
+        || (ppt_is_body_placeholder(left) && ppt_is_body_placeholder(right))
+}
+
+fn ppt_is_body_placeholder(value: &str) -> bool {
+    value.eq_ignore_ascii_case("body")
+        || value.eq_ignore_ascii_case("obj")
+        || value.eq_ignore_ascii_case("vertBody")
+        || value.eq_ignore_ascii_case("subTitle")
 }
 
 fn parse_ppt_placeholders(
@@ -1288,7 +1480,7 @@ fn parse_ppt_placeholders(
                 if in_shape {
                     shape_depth += 1;
                     if local == "ph" {
-                        index = attr_value(&e, "idx");
+                        index = Some(ppt_placeholder_index(&e));
                         placeholder_type =
                             attr_value(&e, "type").filter(|value| !value.trim().is_empty());
                     } else if local == "off" {
@@ -1303,7 +1495,7 @@ fn parse_ppt_placeholders(
             Ok(Event::Empty(e)) if in_shape => {
                 let local = local_xml_name(e.name().as_ref());
                 if local == "ph" {
-                    index = attr_value(&e, "idx");
+                    index = Some(ppt_placeholder_index(&e));
                     placeholder_type =
                         attr_value(&e, "type").filter(|value| !value.trim().is_empty());
                 } else if local == "off" {
@@ -1343,7 +1535,7 @@ fn ppt_placeholder(
     element: &BytesStart<'_>,
     inherited_placeholders: &BTreeMap<String, PptPlaceholderInfo>,
 ) -> (Option<String>, Option<PptPlaceholderInfo>) {
-    let index = attr_value(element, "idx").unwrap_or_else(|| "0".to_string());
+    let index = ppt_placeholder_index(element);
     let inherited = inherited_placeholders.get(&index).cloned();
     let placeholder_type = attr_value(element, "type")
         .filter(|value| !value.trim().is_empty())
@@ -1352,8 +1544,18 @@ fn ppt_placeholder(
                 .as_ref()
                 .and_then(|placeholder| placeholder.placeholder_type.clone())
         })
-        .or_else(|| Some("body".to_string()));
+        .or_else(|| Some("obj".to_string()));
     (placeholder_type, inherited)
+}
+
+fn ppt_placeholder_index(element: &BytesStart<'_>) -> String {
+    let Some(index) = attr_value(element, "idx") else {
+        return "0".to_string();
+    };
+    index
+        .parse::<u32>()
+        .map(|value| value.to_string())
+        .unwrap_or(index)
 }
 
 fn ppt_slide_title(items: &[OfficeLayoutItemDto], slide_index: usize, slide_height: f64) -> String {
@@ -1361,10 +1563,10 @@ fn ppt_slide_title(items: &[OfficeLayoutItemDto], slide_index: usize, slide_heig
         item.text
             .as_ref()
             .is_some_and(|text| !text.trim().is_empty())
-            && item.placeholder_type.as_ref().is_some_and(|placeholder| {
-                placeholder.eq_ignore_ascii_case("title")
-                    || placeholder.eq_ignore_ascii_case("ctrTitle")
-            })
+            && item
+                .placeholder_type
+                .as_deref()
+                .is_some_and(ppt_is_title_placeholder)
     });
 
     let fallback_title = items
@@ -1387,7 +1589,7 @@ fn ppt_slide_title(items: &[OfficeLayoutItemDto], slide_index: usize, slide_heig
         .unwrap_or_else(|| format!("Slide {slide_index}"))
 }
 
-fn ppt_fallback_title_rank(item: &OfficeLayoutItemDto, slide_height: f64) -> (u8, u8, i64, i64) {
+fn ppt_fallback_title_rank(item: &OfficeLayoutItemDto, slide_height: f64) -> (u8, i64, i64, u8) {
     let placeholder_rank = match item.placeholder_type.as_deref() {
         Some(value) if value.eq_ignore_ascii_case("subTitle") => 0,
         None => 1,
@@ -1397,7 +1599,13 @@ fn ppt_fallback_title_rank(item: &OfficeLayoutItemDto, slide_height: f64) -> (u8
     let vertical_rank = u8::from(item.y > slide_height.max(1.0) * 0.5);
     let y_rank = (item.y.max(0.0) * 100.0).round() as i64;
     let font_rank = -((item.font_size.unwrap_or(0.0).max(0.0) * 100.0).round() as i64);
-    (placeholder_rank, vertical_rank, y_rank, font_rank)
+    (vertical_rank, font_rank, y_rank, placeholder_rank)
+}
+
+fn ppt_is_title_placeholder(value: &str) -> bool {
+    value.eq_ignore_ascii_case("title")
+        || value.eq_ignore_ascii_case("ctrTitle")
+        || value.eq_ignore_ascii_case("vertTitle")
 }
 
 fn ppt_is_auxiliary_placeholder(placeholder_type: Option<&str>) -> bool {
@@ -1410,31 +1618,78 @@ fn ppt_is_auxiliary_placeholder(placeholder_type: Option<&str>) -> bool {
 }
 
 fn normalize_ppt_slide_title(text: &str) -> Option<String> {
-    let normalized = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            line.strip_prefix("[center] ")
-                .or_else(|| line.strip_prefix("[right] "))
-                .unwrap_or(line)
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
+    let mut title = String::new();
+    let mut char_count = 0usize;
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let line = line
+            .strip_prefix("[center] ")
+            .or_else(|| line.strip_prefix("[right] "))
+            .unwrap_or(line);
+        for word in line.split_whitespace() {
+            if !title.is_empty() {
+                if char_count == MAX_PPT_SLIDE_TITLE_CHARS {
+                    title.push('…');
+                    return Some(title);
+                }
+                title.push(' ');
+                char_count += 1;
+            }
+            for character in word.chars() {
+                if char_count == MAX_PPT_SLIDE_TITLE_CHARS {
+                    title.push('…');
+                    return Some(title);
+                }
+                title.push(character);
+                char_count += 1;
+            }
+        }
+    }
+    if title.is_empty() {
         return None;
     }
-    let mut chars = normalized.chars();
-    let title = chars
-        .by_ref()
-        .take(MAX_PPT_SLIDE_TITLE_CHARS)
-        .collect::<String>();
-    Some(if chars.next().is_some() {
-        format!("{title}…")
+    Some(title)
+}
+
+fn ppt_slide_summary(title: &str, text: &str) -> String {
+    let body = remove_ppt_title_from_text(text, title);
+    if body.is_empty() {
+        title.to_string()
     } else {
-        title
-    })
+        format!("{title}\n{body}")
+    }
+}
+
+fn remove_ppt_title_from_text(text: &str, title: &str) -> String {
+    const MAX_SCANNED_LINES: usize = 32;
+    const MAX_TITLE_LINES: usize = 8;
+
+    let text = text.trim();
+    let mut spans = Vec::with_capacity(MAX_SCANNED_LINES);
+    let mut offset = 0usize;
+    for segment in text.split_inclusive('\n').take(MAX_SCANNED_LINES) {
+        let content_length = segment.trim_end_matches(['\r', '\n']).len();
+        spans.push((offset, offset + content_length, offset + segment.len()));
+        offset += segment.len();
+    }
+
+    for start in 0..spans.len() {
+        for end in start..(start + MAX_TITLE_LINES).min(spans.len()) {
+            let candidate = &text[spans[start].0..spans[end].1];
+            if normalize_ppt_slide_title(candidate).as_deref() != Some(title) {
+                continue;
+            }
+            let before = text[..spans[start].0].trim_end();
+            let after = text[spans[end].2..].trim_start();
+            return match (before.is_empty(), after.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => after.to_string(),
+                (false, true) => before.to_string(),
+                (false, false) => format!("{before}\n{after}"),
+            };
+        }
+    }
+
+    text.to_string()
 }
 
 fn ppt_paragraph_prefix(e: &BytesStart<'_>) -> String {
@@ -13958,6 +14213,128 @@ mod tests {
             layout.pages[0].items[0].placeholder_type.as_deref(),
             Some("title")
         );
+    }
+
+    #[test]
+    fn ppt_layout_inherits_title_type_and_geometry_from_master_once() {
+        let presentation_xml =
+            br#"<p:presentation xmlns:p="p"><p:sldSz cx="9144000" cy="5143500"/></p:presentation>"#;
+        let slide_rels_xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdLayout" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>"#;
+        let layout_xml = br#"<p:sldLayout xmlns:p="p"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/></p:sp></p:spTree></p:cSld></p:sldLayout>"#;
+        let layout_rels_xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdMaster" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>"#;
+        let master_xml = br#"<p:sldMaster xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="457200"/><a:ext cx="7315200" cy="914400"/></a:xfrm></p:spPr></p:sp></p:spTree></p:cSld></p:sldMaster>"#;
+        let slide1_xml = br#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Master title one</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#;
+        let slide2_xml = br#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Master title two</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#;
+        let bytes = test_zip_bytes(&[
+            ("ppt/presentation.xml", presentation_xml),
+            ("ppt/slides/_rels/slide1.xml.rels", slide_rels_xml),
+            ("ppt/slides/_rels/slide2.xml.rels", slide_rels_xml),
+            ("ppt/slideLayouts/slideLayout1.xml", layout_xml),
+            (
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+                layout_rels_xml,
+            ),
+            ("ppt/slideMasters/slideMaster1.xml", master_xml),
+            ("ppt/slides/slide1.xml", slide1_xml),
+            ("ppt/slides/slide2.xml", slide2_xml),
+        ]);
+        let mut zip = ZipArchive::new(Cursor::new(bytes)).expect("PPTX archive");
+        let mut context = OfficeContext::new(None);
+        let initial_budget = context.remaining_decompressed_bytes;
+
+        let layout = build_pptx_layout(&mut context, &mut zip)
+            .expect("PPTX layout")
+            .expect("presentation pages");
+
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(layout.pages[0].title, "Master title one");
+        assert_eq!(layout.pages[1].title, "Master title two");
+        for page in &layout.pages {
+            assert_eq!(page.items[0].placeholder_type.as_deref(), Some("title"));
+            assert_eq!(page.items[0].x, 96.0);
+            assert_eq!(page.items[0].y, 48.0);
+            assert_eq!(page.items[0].width, 768.0);
+            assert_eq!(page.items[0].height, 96.0);
+        }
+        let expected_read_bytes = presentation_xml.len()
+            + slide_rels_xml.len() * 2
+            + layout_xml.len()
+            + layout_rels_xml.len()
+            + master_xml.len()
+            + slide1_xml.len()
+            + slide2_xml.len();
+        assert_eq!(
+            initial_budget - context.remaining_decompressed_bytes,
+            expected_read_bytes as u64,
+            "shared layout/master parts must only consume the decompression budget once"
+        );
+    }
+
+    #[test]
+    fn ppt_vertical_title_is_retained_without_explicit_geometry() {
+        let mut cursor = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()))
+            .finish()
+            .expect("empty zip archive bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
+        let mut image_budget = 0;
+        let mut context = OfficeContext::new(None);
+        let items = parse_ppt_slide_items(
+            &mut context,
+            &mut zip,
+            "ppt/slides/",
+            r#"<p:sld xmlns:p="p" xmlns:a="a"><p:sp><p:nvSpPr><p:nvPr><p:ph type="vertTitle"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Vertical title</a:t></a:r></a:p></p:txBody></p:sp></p:sld>"#,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            960.0,
+            540.0,
+            &mut image_budget,
+        )
+        .expect("vertical title layout");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].placeholder_type.as_deref(), Some("vertTitle"));
+        assert_eq!(items[0].width, 864.0);
+        assert_eq!(ppt_slide_title(&items, 1, 540.0), "Vertical title");
+    }
+
+    #[test]
+    fn ppt_fallback_prefers_large_top_text_over_header_subtitle_and_footer() {
+        let mut cursor = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()))
+            .finish()
+            .expect("empty zip archive bytes");
+        cursor.set_position(0);
+        let mut zip = ZipArchive::new(cursor).expect("empty zip archive");
+        let mut image_budget = 0;
+        let mut context = OfficeContext::new(None);
+        let items = parse_ppt_slide_items(
+            &mut context,
+            &mut zip,
+            "ppt/slides/",
+            r#"<p:sld xmlns:p="p" xmlns:a="a">
+                <p:sp><p:spPr><a:xfrm><a:off x="0" y="95250"/><a:ext cx="9144000" cy="190500"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="1000"/><a:t>Small header</a:t></a:r></a:p></p:txBody></p:sp>
+                <p:sp><p:nvSpPr><p:nvPr><p:ph type="ftr"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="190500"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="6000"/><a:t>Footer metadata</a:t></a:r></a:p></p:txBody></p:sp>
+                <p:sp><p:nvSpPr><p:nvPr><p:ph type="subTitle"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="2857500"/><a:ext cx="9144000" cy="457200"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="1800"/><a:t>Lower subtitle</a:t></a:r></a:p></p:txBody></p:sp>
+                <p:sp><p:spPr><a:xfrm><a:off x="0" y="476250"/><a:ext cx="9144000" cy="914400"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="4400"/><a:t>Manual title</a:t></a:r></a:p></p:txBody></p:sp>
+            </p:sld>"#,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            960.0,
+            540.0,
+            &mut image_budget,
+        )
+        .expect("fallback title candidates");
+
+        assert_eq!(ppt_slide_title(&items, 1, 540.0), "Manual title");
+    }
+
+    #[test]
+    fn ppt_slide_summary_removes_one_multiline_title_occurrence() {
+        let title = normalize_ppt_slide_title("Line one\nLine two").expect("title");
+        let summary = ppt_slide_summary(&title, "Kicker\nLine one\nLine two\nBody");
+
+        assert_eq!(summary, "Line one Line two\nKicker\nBody");
+        assert_eq!(ppt_slide_summary("Only title", "Only title"), "Only title");
     }
 
     #[test]

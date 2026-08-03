@@ -612,7 +612,7 @@ internal sealed class OfficePreviewPresenter
         return item.PlaceholderType switch
         {
             _ when item.FontSize is > 0 => Math.Clamp(item.FontSize.Value * scale, 8, 36),
-            "title" or "ctrTitle" => Math.Clamp(28 * scale, 16, 30),
+            "title" or "ctrTitle" or "vertTitle" => Math.Clamp(28 * scale, 16, 30),
             "subTitle" => Math.Clamp(22 * scale, 13, 24),
             "body" or "obj" => Math.Clamp(16 * scale, 10, 18),
             _ => Math.Clamp(16 * scale, 10, 18),

@@ -1869,7 +1869,7 @@ public sealed class ParserHostIntegrationTests
     }
 
     [Fact]
-    public async Task Generated_xlsx_and_pptx_return_office_layouts()
+    public async Task Generated_xlsx_pptx_and_pptm_return_office_layouts()
     {
         string tempDirectory = Path.Combine(Path.GetTempPath(), "QuickLookNextParserHostTests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(tempDirectory);
@@ -1884,9 +1884,19 @@ public sealed class ParserHostIntegrationTests
         {
             WriteEntry(archive, "ppt/presentation.xml",
                 "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:sldSz cx=\"9144000\" cy=\"5143500\"/></p:presentation>");
+            WriteEntry(archive, "ppt/slides/_rels/slide1.xml.rels",
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdLayout\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/></Relationships>");
+            WriteEntry(archive, "ppt/slideLayouts/slideLayout1.xml",
+                "<p:sldLayout xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/></p:sp></p:spTree></p:cSld></p:sldLayout>");
+            WriteEntry(archive, "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdMaster\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster\" Target=\"../slideMasters/slideMaster1.xml\"/></Relationships>");
+            WriteEntry(archive, "ppt/slideMasters/slideMaster1.xml",
+                "<p:sldMaster xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"914400\" y=\"457200\"/><a:ext cx=\"7315200\" cy=\"914400\"/></a:xfrm></p:spPr></p:sp></p:spTree></p:cSld></p:sldMaster>");
             WriteEntry(archive, "ppt/slides/slide1.xml",
-                "<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"914400\" y=\"457200\"/><a:ext cx=\"7315200\" cy=\"914400\"/></a:xfrm><a:prstGeom prst=\"rect\"/></p:spPr><p:txBody><a:p><a:r><a:t>ParserHost PPTX marker</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>");
+                "<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>ParserHost PPTX marker</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>");
         }
+        string pptmPath = Path.Combine(tempDirectory, "sample.pptm");
+        File.Copy(pptxPath, pptmPath);
 
         string pipeName = $"quicklook_next_parser_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
@@ -1908,11 +1918,18 @@ public sealed class ParserHostIntegrationTests
             Assert.Contains(workbook.Pages.SelectMany(page => page.Cells), cell => cell.Text == "ParserHost XLSX marker");
 
             PreviewReady pptx = await PreviewOfficeAsync(channel, pptxPath, timeout.Token);
-            Assert.Contains("ParserHost PPTX marker", pptx.TextContent);
+            string pptxText = Assert.IsType<string>(pptx.TextContent);
+            Assert.Contains("ParserHost PPTX marker", pptxText);
+            Assert.Equal(1, pptxText.Split("ParserHost PPTX marker", StringSplitOptions.None).Length - 1);
             OfficeLayout presentation = Assert.IsType<OfficeLayout>(pptx.OfficeLayout);
             Assert.Equal("presentation", presentation.LayoutKind);
             Assert.Equal("ParserHost PPTX marker", Assert.Single(presentation.Pages).Title);
             Assert.Contains(presentation.Pages.SelectMany(page => page.Items), item => item.Text == "ParserHost PPTX marker");
+
+            PreviewReady pptm = await PreviewOfficeAsync(channel, pptmPath, timeout.Token);
+            OfficeLayout macroPresentation = Assert.IsType<OfficeLayout>(pptm.OfficeLayout);
+            Assert.Equal("presentation", macroPresentation.LayoutKind);
+            Assert.Equal("ParserHost PPTX marker", Assert.Single(macroPresentation.Pages).Title);
         }
         finally
         {
