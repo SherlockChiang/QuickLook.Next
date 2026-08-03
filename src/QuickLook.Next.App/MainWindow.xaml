@@ -419,6 +419,7 @@
                               Grid.Row="1"
                               Visibility="Collapsed"
                               Padding="24"
+                              Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                               SelectionMode="None"
                               IsItemClickEnabled="False"
                               ShowsScrollingPlaceholders="False"
@@ -429,6 +430,7 @@
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:MarkdownListItem">
                                 <ContentControl x:Name="MarkdownContentHost"
+                                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                                 HorizontalContentAlignment="Stretch" />
                             </DataTemplate>
                         </ListView.ItemTemplate>

@@ -26,7 +26,6 @@ internal sealed class TextPreviewPresenter
     private const double OutlineWidth = 188;
     private const double OutlineGap = 10;
 
-    private static readonly SolidColorBrush UiGrayBrush = new(Colors.Gray);
     private static readonly Dictionary<string, FontFamily> FontFamilyCache = new(StringComparer.Ordinal);
 
     private readonly RichTextBlock _textBlock;
@@ -43,6 +42,7 @@ internal sealed class TextPreviewPresenter
     private readonly Dictionary<ListViewItem, RealizedTextLine> _realizedTextLines = [];
     private readonly Dictionary<ListViewItem, RealizedMarkdownItem> _realizedMarkdownItems = [];
     private readonly Thickness _defaultScrollMargin;
+    private ScrollViewer? _markdownScrollViewer;
     private bool? _brushThemeDark;
     private bool _updatingOutline;
     private int _renderVersion;
@@ -96,6 +96,7 @@ internal sealed class TextPreviewPresenter
         _textListView.ContainerContentChanging += OnTextLineContainerChanging;
         _markdownListView.ContainerContentChanging += OnMarkdownContainerChanging;
         _markdownListView.LayoutUpdated += OnMarkdownListViewLayoutUpdated;
+        _markdownListView.SizeChanged += OnMarkdownListViewSizeChanged;
     }
 
     public TextPreviewResult Render(
@@ -650,6 +651,7 @@ internal sealed class TextPreviewPresenter
     {
         _markdownItems = presentation.Items.Select(item => new MarkdownListItem(item)).ToArray();
         _markdownListView.ItemsSource = _markdownItems;
+        ApplyMarkdownViewportPadding(_markdownListView.ActualHeight);
         foreach (MarkdownListItem item in _markdownItems)
         {
             if (item.Item.Block.Kind != "heading")
@@ -717,7 +719,7 @@ internal sealed class TextPreviewPresenter
             FontWeight = block.Kind == "heading" ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
             TextWrapping = block.Kind == "code" ? TextWrapping.NoWrap : TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
-            Foreground = block.Kind is "blockquote" or "partial" ? UiGrayBrush : null,
+            Style = MarkdownTextBlockStyle(block.Kind is "blockquote" or "partial"),
             Margin = block.Kind switch
             {
                 "heading" => new Thickness(0, block.Level <= 2 ? 16 : 10, 0, 8),
@@ -798,6 +800,7 @@ internal sealed class TextPreviewPresenter
             var text = new TextBlock
             {
                 Text = cells[index],
+                Style = MarkdownTextBlockStyle(secondary: false),
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
                 FontWeight = item.Block.Kind == "tableHeader"
@@ -904,6 +907,21 @@ internal sealed class TextPreviewPresenter
         }
     }
 
+    private void OnMarkdownListViewSizeChanged(object sender, SizeChangedEventArgs e)
+        => ApplyMarkdownViewportPadding(e.NewSize.Height);
+
+    private void ApplyMarkdownViewportPadding(double viewportHeight)
+    {
+        Thickness current = _markdownListView.Padding;
+        double bottom = MarkdownViewportPolicy.TrailingPadding(
+            viewportHeight,
+            current.Top,
+            MarkdownViewportPolicy.DefaultContentInset);
+        if (Math.Abs(current.Bottom - bottom) < 0.5)
+            return;
+        _markdownListView.Padding = new Thickness(current.Left, current.Top, current.Right, bottom);
+    }
+
     private void RenderMarkdownDocument(PreviewMarkdown document)
     {
         foreach (PreviewMarkdownBlock block in document.Blocks)
@@ -919,9 +937,8 @@ internal sealed class TextPreviewPresenter
         if (document.IsPartial || _markdownRenderTruncated)
         {
             var partial = CreateParagraph(12, "Segoe UI", 12, 0);
-            partial.Foreground = UiGrayBrush;
             var partialText = CreateMarkdownTextBlock(12, "Segoe UI");
-            partialText.Foreground = UiGrayBrush;
+            partialText.Style = MarkdownTextBlockStyle(secondary: true);
             partialText.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
             partial.Inlines.Add(new InlineUIContainer { Child = partialText });
             _textBlock.Blocks.Add(partial);
@@ -997,11 +1014,10 @@ internal sealed class TextPreviewPresenter
     private void AddMarkdownQuote(PreviewMarkdownBlock block)
     {
         var p = CreateParagraph(14, "Segoe UI", 4, 10);
-        p.Foreground = UiGrayBrush;
         FrameworkElement anchor = CreateHeadingAnchor();
         p.Inlines.Add(new InlineUIContainer { Child = anchor });
         var text = CreateMarkdownTextBlock(14, "Segoe UI");
-        text.Foreground = UiGrayBrush;
+        text.Style = MarkdownTextBlockStyle(secondary: true);
         text.Inlines.Add(new Run { Text = "| " });
         AddMarkdownInlines(text.Inlines, block.Inlines, block.Text);
         p.Inlines.Add(new InlineUIContainer { Child = text });
@@ -1045,7 +1061,6 @@ internal sealed class TextPreviewPresenter
     private void AddMarkdownRule()
     {
         var p = CreateParagraph(12, "Segoe UI", 8, 10);
-        p.Foreground = UiGrayBrush;
         p.Inlines.Add(new Run { Text = "----------------------------------------" });
         _textBlock.Blocks.Add(p);
     }
@@ -1198,29 +1213,84 @@ internal sealed class TextPreviewPresenter
             return;
 
         int version = _renderVersion;
-        _updatingOutline = true;
-        if (item.ItemIndex >= 0 && _markdownItems is not null && item.ItemIndex < _markdownItems.Count)
-        {
-            _markdownListView.ScrollIntoView(_markdownItems[item.ItemIndex], ScrollIntoViewAlignment.Leading);
-        }
-        else if (item.Anchor is not null)
-        {
-            _scrollViewer.UpdateLayout();
-            _textBlock.UpdateLayout();
-            double target = Math.Max(0, _scrollViewer.VerticalOffset
-                + item.Anchor.TransformToVisual(_scrollViewer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y - 8);
-            _scrollViewer.ChangeView(null, target, null, disableAnimation: false);
-        }
-
         try
         {
-            await Task.Delay(300);
+            _updatingOutline = true;
+            if (item.ItemIndex >= 0 && _markdownItems is not null && item.ItemIndex < _markdownItems.Count)
+            {
+                await AlignVirtualMarkdownHeadingAsync(_markdownItems[item.ItemIndex], version);
+            }
+            else if (item.Anchor is not null)
+            {
+                _scrollViewer.UpdateLayout();
+                _textBlock.UpdateLayout();
+                double headingTop = item.Anchor.TransformToVisual(_scrollViewer)
+                    .TransformPoint(new Windows.Foundation.Point()).Y;
+                double target = MarkdownViewportPolicy.TargetOffset(
+                    _scrollViewer.VerticalOffset,
+                    headingTop,
+                    _scrollViewer.ScrollableHeight,
+                    8);
+                _scrollViewer.ChangeView(null, target, null, disableAnimation: true);
+            }
+
+            await Task.Delay(100);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "Markdown outline navigation failed: " + ex.Message);
         }
         finally
         {
             if (version == _renderVersion)
                 _updatingOutline = false;
         }
+    }
+
+    private async Task AlignVirtualMarkdownHeadingAsync(MarkdownListItem item, int renderVersion)
+    {
+        _markdownListView.ScrollIntoView(item, ScrollIntoViewAlignment.Leading);
+        _markdownListView.UpdateLayout();
+        await Task.Yield();
+        if (renderVersion != _renderVersion)
+            return;
+
+        _markdownListView.UpdateLayout();
+        if (_markdownListView.ContainerFromItem(item) is not ListViewItem container)
+            return;
+        _markdownScrollViewer ??= FindDescendant<ScrollViewer>(_markdownListView);
+        if (_markdownScrollViewer is null)
+            return;
+
+        FrameworkElement heading = container;
+        if (_realizedMarkdownItems.TryGetValue(container, out RealizedMarkdownItem realized)
+            && realized.Host.Content is FrameworkElement content)
+        {
+            heading = content;
+        }
+
+        double headingTop = heading.TransformToVisual(_markdownScrollViewer)
+            .TransformPoint(new Windows.Foundation.Point()).Y;
+        double target = MarkdownViewportPolicy.TargetOffset(
+            _markdownScrollViewer.VerticalOffset,
+            headingTop,
+            _markdownScrollViewer.ScrollableHeight,
+            _markdownListView.Padding.Top);
+        _markdownScrollViewer.ChangeView(null, target, null, disableAnimation: true);
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int index = 0; index < count; index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+                return match;
+            if (FindDescendant<T>(child) is { } descendant)
+                return descendant;
+        }
+        return null;
     }
 
     private void OnScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
@@ -1427,7 +1497,6 @@ internal sealed class TextPreviewPresenter
                 if (!FlushParagraph() || !TryReserveMarkdownBlock())
                     break;
                 var p = CreateParagraph(14, "Segoe UI", 4, 8);
-                p.Foreground = UiGrayBrush;
                 p.Inlines.Add(new Run { Text = "│ " });
                 AddInlineMarkdown(p, trimmed[2..]);
                 _textBlock.Blocks.Add(p);
@@ -1461,7 +1530,6 @@ internal sealed class TextPreviewPresenter
         if (_markdownRenderTruncated)
         {
             var partial = CreateParagraph(12, "Segoe UI", 12, 0);
-            partial.Foreground = UiGrayBrush;
             partial.Inlines.Add(new Run { Text = UiStrings.TextPreviewTruncated });
             _textBlock.Blocks.Add(partial);
         }
@@ -1755,11 +1823,12 @@ internal sealed class TextPreviewPresenter
             Margin = new Thickness(0, top, 0, bottom),
         };
 
-    private static TextBlock CreateMarkdownTextBlock(double fontSize, string fontFamily)
+    private TextBlock CreateMarkdownTextBlock(double fontSize, string fontFamily)
         => new()
         {
             FontSize = fontSize,
             FontFamily = FontFamilyFor(fontFamily),
+            Style = MarkdownTextBlockStyle(secondary: false),
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
             MaxWidth = 980,
@@ -1865,6 +1934,10 @@ internal sealed class TextPreviewPresenter
         if (highContrast.Enabled) return highContrast.Foreground;
         return ThemeResourceColor("TextFillColorSecondaryBrush", Colors.Gray);
     }
+
+    private static Style MarkdownTextBlockStyle(bool secondary)
+        => (Style)Application.Current.Resources[
+            secondary ? "MarkdownSecondaryTextBlockStyle" : "MarkdownPrimaryTextBlockStyle"];
 
     private Windows.UI.Color ThemeSurfaceBorderColor()
     {
