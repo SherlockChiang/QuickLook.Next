@@ -14,10 +14,13 @@ public sealed class RasterHostAnimationTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
     [Theory]
-    [InlineData("gif")]
-    [InlineData("webp")]
-    [InlineData("png")]
-    public async Task Animated_frames_are_section_backed_and_released_on_close(string extension)
+    [InlineData("gif", false)]
+    [InlineData("gif", true)]
+    [InlineData("webp", false)]
+    [InlineData("png", false)]
+    public async Task Animated_frames_are_section_backed_and_released_on_close(
+        string extension,
+        bool requestMismatchedTarget)
     {
         string pipeName = $"quicklook_next_raster_animation_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
@@ -60,6 +63,7 @@ public sealed class RasterHostAnimationTests
             {
                 TargetWidth = 256,
                 TargetHeight = 256,
+                PrepareAnimation = extension == "gif",
             }, timeout.Token);
 
             PreviewReady? previewReady = null;
@@ -79,6 +83,8 @@ public sealed class RasterHostAnimationTests
                     Assert.False(localSurfaceHandle.IsInvalid);
                     await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), timeout.Token);
                 }
+                if (extension == "gif")
+                    Assert.False(message is PreviewImageWaveform, "GIF must not publish an RGB waveform.");
                 previewReady = message as PreviewReady;
             }
 
@@ -92,8 +98,14 @@ public sealed class RasterHostAnimationTests
             Assert.False(TryOverwriteFile(physicalPath));
 
             string animationRequestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+            uint animationTarget = extension == "gif"
+                ? requestMismatchedTarget ? 128u : 256u
+                : 2048u;
             await channel.SendAsync(new PreviewAnimationFramesOpen(
-                animationRequestId, previewRequestId, 2048, 2048), timeout.Token);
+                animationRequestId,
+                previewRequestId,
+                animationTarget,
+                animationTarget), timeout.Token);
             PreviewAnimationFramesReady? frames = null;
             while (frames is null)
             {
@@ -101,12 +113,19 @@ public sealed class RasterHostAnimationTests
                     ?? throw new EndOfStreamException("RasterHost closed before returning animation frames");
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
+                if (extension == "gif")
+                    Assert.False(message is PreviewImageWaveform, "GIF must not publish an RGB waveform.");
                 frames = message as PreviewAnimationFramesReady;
             }
             Assert.Equal(previewRequestId, frames.PreviewRequestId);
             Assert.InRange(frames.FrameCount, 2, 120);
             Assert.InRange(frames.Width, 1, 1024);
             Assert.InRange(frames.Height, 1, 1024);
+            if (extension == "gif")
+            {
+                Assert.Equal((int)animationTarget, frames.Width);
+                Assert.Equal((int)animationTarget, frames.Height);
+            }
             Assert.InRange(frames.PacketLength, 13, 64L * 1024 * 1024 + 12);
             using SharedSectionView frameView = SharedSectionView.DuplicateAndMapReadOnly(
                 host.SafeHandle,
@@ -144,6 +163,95 @@ public sealed class RasterHostAnimationTests
             await WaitUntilAsync(
                 () => TryOverwriteFile(physicalPath),
                 closeTimeout.Token);
+        }
+        finally
+        {
+            try { pipe.Dispose(); } catch { }
+            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            try { File.Delete(physicalPath); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Gif_static_first_frame_never_starts_or_publishes_rgb_waveform(
+        bool prepareAnimation,
+        bool isAnimated)
+    {
+        string pipeName = $"quicklook_next_raster_gif_still_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
+        string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.gif");
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(Timeout);
+            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "animated.gif"), physicalPath);
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+
+            var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+            string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+            long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+            var probe = new FileProbe(logicalPath, ".gif", [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+            {
+                Kind = "image",
+                Size = pinned.Length,
+                IsAnimated = isAnimated,
+            };
+            await channel.SendAsync(new PreviewOpenHandle(
+                requestId,
+                hostHandle,
+                pinned.Length,
+                logicalPath,
+                probe)
+            {
+                TargetWidth = 128,
+                TargetHeight = 128,
+                PrepareAnimation = prepareAnimation,
+            }, timeout.Token);
+            pinned.Handle.Dispose();
+
+            PreviewSurface? surface = null;
+            PreviewReady? ready = null;
+            while (surface is null || ready is null)
+            {
+                ControlMessage message = await channel.ReceiveAsync(timeout.Token)
+                    ?? throw new EndOfStreamException("RasterHost closed during GIF static preview");
+                Assert.False(message is PreviewImageWaveform, "GIF static first frame must not publish RGB waveform data.");
+                if (message is PreviewError error)
+                    throw new Xunit.Sdk.XunitException(error.Message);
+                if (message is PreviewSurface receivedSurface)
+                {
+                    surface = receivedSurface;
+                    await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), timeout.Token);
+                }
+                ready = message as PreviewReady ?? ready;
+            }
+
+            using (var quiet = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    async () => await channel.ReceiveAsync(quiet.Token));
+            }
+            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
         }
         finally
         {

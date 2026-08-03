@@ -69,6 +69,7 @@ public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe)
 {
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
+    public bool PrepareAnimation { get; init; }
 }
 
 /// <summary>App → preview host: open the exact read-only file object duplicated into the host.</summary>
@@ -77,6 +78,7 @@ public sealed record PreviewOpenHandle(
 {
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
+    public bool PrepareAnimation { get; init; }
 }
 
 /// <summary>

@@ -252,6 +252,7 @@ bit 16 HANDLE_OFFICE_LAYOUT_IMAGE (parent-bound Office imageRef decode)
 bit 17 HANDLE_IMAGE_WAVEFORM (static raster packet with Rust-generated RGB density)
 bit 18 HANDLE_ARCHIVE_ENTRY_OUTPUT (caller-owned bounded archive-entry output object)
 bit 19 HANDLE_IMAGE_METADATA (optional parent-bound Rust metadata sidecar)
+bit 20 DIRECT_GIF_ANIMATION_OUTPUT (optional exact-size callback output; stable GIF exports remain fallback)
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
@@ -264,7 +265,9 @@ packets, `ql_decode_image_with_waveform_handle` for single-pass RGB density, and
 `ql_preview_image_metadata_handle` for the optional retained-image metadata child.
 `ql_extract_archive_entry_handle` remains as an ABI-compatible legacy temp-path export but is not
 used by ParserHost.
-`ql_decode_gif_frames_handle` remains the stable legacy GIF entry point.
+`ql_decode_gif_frames_handle` and `ql_decode_gif_frames_sized_cancelable` remain the stable GIF
+entry points. Capability bit 20 permits RasterHost to use the additive exact-size direct-output
+variants; an ABI 3 library without that bit stays on the stable entry points.
 Package parsing and retained Hero extraction use `ql_preview_package_handle` and
 `ql_extract_package_icon_handle`. The authoritative local routing probe uses
 `ql_probe_file_handle` against the same pinned object later handed to the Host.

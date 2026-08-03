@@ -23,6 +23,7 @@ public static class NativeAbi
     public const ulong HandleImageWaveform = 1UL << 17;
     public const ulong HandleArchiveEntryOutput = 1UL << 18;
     public const ulong HandleImageMetadata = 1UL << 19;
+    public const ulong DirectGifAnimationOutput = 1UL << 20;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable

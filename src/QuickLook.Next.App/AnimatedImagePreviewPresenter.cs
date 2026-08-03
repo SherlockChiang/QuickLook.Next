@@ -38,7 +38,9 @@ internal sealed class AnimatedImagePreviewPresenter
     private int _nativeFrameIndex;
     private AnimationPlaybackTimeline? _nativeFrameTimeline;
     private Stopwatch? _nativeFrameClock;
+    private long _nativePlaybackOffsetMilliseconds;
     private bool _nativeRenderingSubscribed;
+    private bool _nativeWaveformEnabled;
     private long _lastWaveformUpdateMilliseconds;
     private bool _waveformUpdatePending;
     private int _waveformVersion;
@@ -72,7 +74,13 @@ internal sealed class AnimatedImagePreviewPresenter
     public bool IsPlaybackPaused { get; private set; }
     public Action<ImageWaveform>? WaveformChanged { get; init; }
 
-    public AnimatedImagePreviewResult RenderNativeFrames(string path, PreviewReady ready, NativeAnimationFrames frames, (double Width, double Height) maxContent)
+    public AnimatedImagePreviewResult RenderNativeFrames(
+        string path,
+        PreviewReady ready,
+        NativeAnimationFrames frames,
+        (double Width, double Height) maxContent,
+        bool enableWaveform,
+        long initialElapsedMilliseconds = 0)
     {
         StopNativePlayback();
         _nativeFrames = frames;
@@ -83,10 +91,16 @@ internal sealed class AnimatedImagePreviewPresenter
             _openWatch = null;
             _waveformVersion++;
             _waveformUpdatePending = false;
+            _nativeWaveformEnabled = enableWaveform
+                && !Path.GetExtension(path).Equals(".gif", StringComparison.OrdinalIgnoreCase);
             IsPlaybackPaused = false;
             _nativeFrameBitmap = new WriteableBitmap(frames.Width, frames.Height);
-            _nativeFrameIndex = 0;
             _nativeFrameTimeline = BuildFrameTimeline(frames);
+            _nativePlaybackOffsetMilliseconds = Math.Max(0, initialElapsedMilliseconds);
+            if (frames.FrameCount > 1)
+                _nativeFrameClock = Stopwatch.StartNew();
+            _nativeFrameIndex = _nativeFrameTimeline.GetFrameIndex(
+                _nativePlaybackOffsetMilliseconds);
             _sourceWidth = Math.Max(1, frames.Width);
             _sourceHeight = Math.Max(1, frames.Height);
             _lastWaveformUpdateMilliseconds = 0;
@@ -95,13 +109,12 @@ internal sealed class AnimatedImagePreviewPresenter
             double imageMaxWidth = Math.Max(1, maxContent.Width - InfoRailWidth);
             double imageMaxHeight = Math.Max(1, maxContent.Height - ToolbarHeight);
             double scale = Math.Min(1.0, Math.Min(imageMaxWidth / frames.Width, imageMaxHeight / frames.Height));
-            PresentNativeFrame(0);
+            PresentNativeFrame(_nativeFrameIndex);
             ResetView();
             ScheduleLayoutUpdate();
 
             if (frames.FrameCount > 1)
             {
-                _nativeFrameClock = Stopwatch.StartNew();
                 SubscribeNativeRendering();
             }
 
@@ -193,7 +206,7 @@ internal sealed class AnimatedImagePreviewPresenter
         if (_nativeFrameTimeline is null || _nativeFrameClock is null)
             return;
 
-        int frameIndex = _nativeFrameTimeline.GetFrameIndex(_nativeFrameClock.ElapsedMilliseconds);
+        int frameIndex = _nativeFrameTimeline.GetFrameIndex(GetPlaybackElapsedMilliseconds());
         if (frameIndex != _nativeFrameIndex)
         {
             _nativeFrameIndex = frameIndex;
@@ -243,8 +256,9 @@ internal sealed class AnimatedImagePreviewPresenter
         if (!ReferenceEquals(_image.Source, _nativeFrameBitmap))
             _image.Source = _nativeFrameBitmap;
 
-        long elapsed = _nativeFrameClock?.ElapsedMilliseconds ?? 0;
-        if (_nativeFrameClock is not null
+        long elapsed = GetPlaybackElapsedMilliseconds();
+        if (_nativeWaveformEnabled
+            && _nativeFrameClock is not null
             && elapsed - _lastWaveformUpdateMilliseconds >= WaveformUpdateIntervalMilliseconds)
         {
             _lastWaveformUpdateMilliseconds = elapsed;
@@ -254,7 +268,7 @@ internal sealed class AnimatedImagePreviewPresenter
 
     private void QueueWaveformUpdate(NativeAnimationFrames frames, int frameIndex)
     {
-        if (_waveformUpdatePending || WaveformChanged is null)
+        if (!_nativeWaveformEnabled || _waveformUpdatePending || WaveformChanged is null)
             return;
 
         _waveformUpdatePending = true;
@@ -266,7 +280,7 @@ internal sealed class AnimatedImagePreviewPresenter
                 if (version != _waveformVersion)
                     return;
                 _waveformUpdatePending = false;
-                if (task.IsCompletedSuccessfully && task.Result is { } waveform)
+                if (_nativeWaveformEnabled && task.IsCompletedSuccessfully && task.Result is { } waveform)
                     WaveformChanged?.Invoke(waveform);
             });
         }, TaskScheduler.Default);
@@ -279,13 +293,23 @@ internal sealed class AnimatedImagePreviewPresenter
         _nativeFrames = null;
         _waveformVersion++;
         _waveformUpdatePending = false;
+        _nativeWaveformEnabled = false;
         frames?.Dispose();
         _nativeFrameBitmap = null;
         _nativeFrameIndex = 0;
         _nativeFrameTimeline = null;
         _nativeFrameClock = null;
+        _nativePlaybackOffsetMilliseconds = 0;
         _lastWaveformUpdateMilliseconds = 0;
         IsPlaybackPaused = false;
+    }
+
+    private long GetPlaybackElapsedMilliseconds()
+    {
+        long elapsed = _nativeFrameClock?.ElapsedMilliseconds ?? 0;
+        return _nativePlaybackOffsetMilliseconds > long.MaxValue - elapsed
+            ? long.MaxValue
+            : _nativePlaybackOffsetMilliseconds + elapsed;
     }
 
     private static AnimationPlaybackTimeline BuildFrameTimeline(NativeAnimationFrames frames)

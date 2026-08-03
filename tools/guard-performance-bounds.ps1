@@ -84,6 +84,7 @@ Require-Pattern $imageWaveform '1_000_000d' `
     "Image waveform generation must retain its one-million-sample ceiling."
 $rasterHostProgram = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
 $nativeImageDecoder = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeImageDecoder.cs"
+$nativeAnimationPacketDecoder = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeAnimationPacketDecoder.cs"
 $nativeImageMetadataReader = Join-Path $Root "src/QuickLook.Next.RasterHost/NativeImageMetadataReader.cs"
 $systemImageMetadataReader = Join-Path $Root "src/QuickLook.Next.RasterHost/SystemImageMetadataReader.cs"
 $propertyHandlerMetadataReader =
@@ -96,6 +97,14 @@ Require-Pattern $rasterHostProgram 'ImageWaveform waveform = image\.Waveform \?\
     "Compatibility image decoders must retain the bounded managed waveform fallback."
 Require-Pattern $nativeImageDecoder 'HandleImageWaveform[\s\S]*ql_decode_image_with_waveform_handle\([\s\S]*ParseDecodedImageWithWaveform' `
     "Rust-native HANDLE images must consume the additive waveform packet without a managed BGRA rescan."
+Require-Pattern $nativeAnimationPacketDecoder 'TryDecodeHandleAsync\([\s\S]*extension\s*==\s*"\.gif"[\s\S]*SupportsDirectGifAnimationOutput[\s\S]*DecodeGifHandleDirect\([\s\S]*extension\s*==\s*"\.gif"[\s\S]*ql_decode_gif_frames_handle' `
+    "Exact-size GIF HANDLE output must be capability-gated with the stable ABI 3 HANDLE fallback."
+Require-Pattern $nativeAnimationPacketDecoder 'TryDecodeAsync\([\s\S]*"\.gif"\s*=>\s*ql_decode_gif_frames_sized_cancelable[\s\S]*normalizedExtension\s*==\s*"\.gif"[\s\S]*SupportsDirectGifAnimationOutput[\s\S]*DecodeGifDirect\([\s\S]*Decode\(call!' `
+    "Exact-size GIF path output must be capability-gated with the stable ABI 3 path fallback."
+Require-Pattern $nativeLibrary 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20[\s\S]*ql_capabilities\(\)[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT' `
+    "The additive direct GIF output ABI must retain optional capability bit 20."
+Require-Pattern $nativeLibrary 'write_animation_frames_direct\([\s\S]*cancel_cb:\s*Option<CancelCallback>[\s\S]*for\s*\(delay_ms,\s*bgra\)\s*in\s*frames[\s\S]*cancel_requested\(cancel_cb\)[\s\S]*copy_from_slice\(bgra\)' `
+    "Direct GIF packet copies must remain cancellable between bounded frames."
 Require-Pattern $nativeLibrary 'IMAGE_WAVEFORM_WIDTH:\s*u32\s*=\s*192[\s\S]*IMAGE_WAVEFORM_HEIGHT:\s*u32\s*=\s*96[\s\S]*IMAGE_WAVEFORM_SAMPLE_LIMIT:\s*f64\s*=\s*1_000_000\.0' `
     "Rust-native image waveform generation must retain its fixed dimensions and sample ceiling."
 Require-Pattern $nativeLibrary 'let mut waveform = include_waveform\.then\(\|\| ImageWaveformAccumulator::new\(width, height\)\);[\s\S]*for \(index, px\) in rgba\.chunks_exact\(4\)\.enumerate\(\)[\s\S]*accumulator\.add_straight_rgba\(index, px\)[\s\S]*bgra\.push' `
@@ -218,8 +227,8 @@ Require-Pattern $rasterPresenter 'public void PanBy\(double x, double y\)' `
     "Static images must retain bounded keyboard panning."
 Require-Pattern $animatedImagePresenter 'public void PanBy\(double x, double y\)' `
     "Animated images must retain bounded keyboard panning."
-Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100[\s\S]*Task\.Run\(\(\)\s*=>\s*frames\.CreateWaveform\(frameIndex\)\)[\s\S]*version\s*!=\s*_waveformVersion' `
-    "Animated image waveforms must remain throttled, asynchronous, and stale-generation safe."
+Require-Pattern $animatedImagePresenter 'WaveformUpdateIntervalMilliseconds\s*=\s*100[\s\S]*_nativeWaveformEnabled\s*=\s*enableWaveform[\s\S]*Path\.GetExtension\(path\)\.Equals\("\.gif"[\s\S]*if\s*\(_nativeWaveformEnabled[\s\S]*Task\.Run\(\(\)\s*=>\s*frames\.CreateWaveform\(frameIndex\)\)[\s\S]*version\s*!=\s*_waveformVersion' `
+    "Animated WebP/APNG waveforms must remain throttled and stale-safe while GIF bypasses frame waveform scans."
 Require-Pattern $animatedImagePresenter 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]*probe\.IsAnimated' `
     "Animated image routing must consume bounded Rust FileProbe metadata."
 Require-Pattern $nativeAnimationProbe 'MAX_IMAGE_ANIMATION_PROBE_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
@@ -228,8 +237,8 @@ Require-Pattern $animatedImagePresenter 'PixelBuffer\.AsStream\(\)[\s\S]*stream\
     "Animated native frames must release the WinRT pixel-buffer stream before invalidation."
 Require-Pattern $animatedImagePresenter 'frames\.TryWriteFrame\(index,\s*stream\)' `
     "Animated native frames must upload directly from the retained read-only section span."
-Require-Pattern $animatedImagePresenter 'Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(_nativeFrameClock\.ElapsedMilliseconds\)[\s\S]*frameIndex\s*!=\s*_nativeFrameIndex' `
-    "Animated native frames must sample a monotonic timeline on compositor rendering callbacks and skip unchanged frames."
+Require-Pattern $animatedImagePresenter '_nativePlaybackOffsetMilliseconds\s*=\s*Math\.Max\(0,\s*initialElapsedMilliseconds\)[\s\S]*_nativeFrameClock\s*=\s*Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(GetPlaybackElapsedMilliseconds\(\)\)[\s\S]*frameIndex\s*!=\s*_nativeFrameIndex' `
+    "Animated native frames must preserve static-first-frame elapsed time, sample a monotonic timeline, and skip unchanged frames."
 Require-Pattern $animatedImagePresenter 'CompositionTarget\.Rendering\s*\+=\s*OnNativeFrameRendering' `
     "Animated native frames must advance from compositor rendering callbacks."
 Require-Pattern $animatedImagePresenter 'CompositionTarget\.Rendering\s*-=\s*OnNativeFrameRendering[\s\S]*_nativeRenderingSubscribed\s*=\s*false' `
@@ -644,6 +653,8 @@ Require-TextPattern $packageIconReader 'MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*ope
     "Package icon HANDLE extraction must retain source and validated ZIP bounds."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
+$markdownViewportPolicy = Join-Path $Root "src/QuickLook.Next.Core/MarkdownViewportPolicy.cs"
+$markdownViewportPolicyTests = Join-Path $Root "tests/QuickLook.Next.Core.Tests/MarkdownViewportPolicyTests.cs"
 Require-Pattern $textPresenter 'MaxSearchHighlightRanges\s*=\s*5000' `
     "Text search must retain its 5000-range visual highlight budget."
 Require-Pattern $textPresenter 'MaxMarkdownBlocks\s*=\s*TextSearchIndex\.MaxMarkdownBlocks' `
@@ -658,8 +669,14 @@ Require-Pattern $textPresenter '_markdownListView\.ItemsSource\s*=\s*_markdownIt
     "Structured Markdown must use virtualized ListView items."
 Require-Pattern $textPresenter '_markdownListView\.ContainerContentChanging\s*\+=' `
     "Structured Markdown must materialize only realized containers."
-Require-Pattern $textPresenter 'ScrollIntoView\(_markdownItems\[item\.ItemIndex\]' `
-    "Markdown outline navigation must use stable render-item indices."
+Require-Pattern $textPresenter 'item\.ItemIndex\s*>=\s*0[\s\S]*item\.ItemIndex\s*<\s*_markdownItems\.Count[\s\S]*AlignVirtualMarkdownHeadingAsync\(_markdownItems\[item\.ItemIndex\],\s*version\)' `
+    "Markdown outline navigation must resolve a stable render-item index through the bounded virtual-heading aligner."
+Require-Pattern $textPresenter 'AlignVirtualMarkdownHeadingAsync\(MarkdownListItem\s+item,\s*int\s+renderVersion\)[\s\S]*attempt\s*<\s*MarkdownViewportPolicy\.MaximumRealizationAttempts[\s\S]*renderVersion\s*!=\s*_renderVersion[\s\S]*WaitForNextMarkdownUiTurnAsync\(renderVersion\)[\s\S]*MarkdownViewportPolicy\.ShouldRetryRealization' `
+    "Virtual Markdown heading alignment must be render-version-safe and use a bounded realization retry."
+Require-Pattern $markdownViewportPolicy 'MaximumRealizationAttempts\s*=\s*3[\s\S]*ShouldRetryRealization\([\s\S]*completedAttempt\s*\+\s*1\s*<\s*MaximumRealizationAttempts' `
+    "Markdown viewport policy must cap realization retries at three attempts."
+Require-Pattern $markdownViewportPolicyTests 'InlineData\(2,\s*false,\s*true,\s*false\)[\s\S]*Realization_retry_is_bounded_and_stops_for_realized_or_stale_content[\s\S]*ShouldRetryRealization' `
+    "Markdown viewport tests must cover the retry ceiling and stale/realized stop conditions."
 Require-Pattern $textPresenter 'public sealed record MarkdownListItem\(MarkdownRenderItem Item\)' `
     "Virtual Markdown item models must remain data-only."
 Require-Pattern $textPresenter 'useLineList\s*=\s*!isMarkdown\s*&&\s*_showLineNumbers[\s\S]*_scrollViewer\.Visibility\s*=\s*!isStructuredMarkdown\s*&&\s*!useLineList' `

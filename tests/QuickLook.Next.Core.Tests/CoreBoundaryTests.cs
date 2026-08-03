@@ -220,6 +220,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1UL << 17, NativeAbi.HandleImageWaveform);
         Assert.Equal(1UL << 18, NativeAbi.HandleArchiveEntryOutput);
         Assert.Equal(1UL << 19, NativeAbi.HandleImageMetadata);
+        Assert.Equal(1UL << 20, NativeAbi.DirectGifAnimationOutput);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
@@ -240,6 +241,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleAnimation);
         Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleImageWaveform);
         Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.HandleImageMetadata);
+        Assert.Equal(0UL, NativeAbi.RasterHandleInputs & NativeAbi.DirectGifAnimationOutput);
         NativeAbi.EnsureCapabilities(NativeAbi.RasterHandleInputs, NativeAbi.RasterHandleInputs);
         NativeAbi.EnsureCapabilities(
             NativeAbi.RasterHandleInputs | NativeAbi.HandleImageWaveform,
@@ -814,6 +816,7 @@ public sealed class CoreBoundaryTests : IDisposable
         {
             TargetWidth = 800,
             TargetHeight = 600,
+            PrepareAnimation = true,
         };
         string json = ProtocolJson.Serialize(message);
 
@@ -825,6 +828,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(message.LogicalPath, roundTrip.LogicalPath);
         Assert.Equal(message.TargetWidth, roundTrip.TargetWidth);
         Assert.Equal(message.TargetHeight, roundTrip.TargetHeight);
+        Assert.True(roundTrip.PrepareAnimation);
         Assert.Equal(message.Probe.Kind, roundTrip.Probe.Kind);
         Assert.Equal(message.Probe.MagicPrefix, roundTrip.Probe.MagicPrefix);
         Assert.Equal(message.Probe.IsAnimated, roundTrip.Probe.IsAnimated);
@@ -840,6 +844,13 @@ public sealed class CoreBoundaryTests : IDisposable
         PreviewOpenHandle open = Assert.IsType<PreviewOpenHandle>(ProtocolJson.Deserialize(json));
 
         Assert.Null(open.Probe.IsAnimated);
+        Assert.False(open.PrepareAnimation);
+
+        const string pathJson = """
+            {"type":"preview.open","requestId":"44444444444444444444444444444444","path":"C:\\logical.gif","probe":{"path":"C:\\logical.gif","extension":".gif","magicPrefix":"R0lGODlh","kind":"image","size":6,"modifiedUnix":0},"targetWidth":800,"targetHeight":600}
+            """;
+        PreviewOpen pathOpen = Assert.IsType<PreviewOpen>(ProtocolJson.Deserialize(pathJson));
+        Assert.False(pathOpen.PrepareAnimation);
     }
 
     [Fact]

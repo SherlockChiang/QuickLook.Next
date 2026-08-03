@@ -46,6 +46,7 @@ var openCtsLock = new object();
 var surfacePublishGate = new SemaphoreSlim(1, 1);
 var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, NativeAnimationPacket>();
+var preparedGifDecodes = new ConcurrentDictionary<string, PreparedGifDecodeState>();
 var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var metadataRequests = new ConcurrentDictionary<string, ImageMetadataRequestState>();
@@ -110,7 +111,12 @@ while (true)
                 try
                 {
                     StartOpen(new RasterOpen(
-                        open.RequestId, open.Path, open.Probe, open.TargetWidth, open.TargetHeight));
+                        open.RequestId,
+                        open.Path,
+                        open.Probe,
+                        open.TargetWidth,
+                        open.TargetHeight,
+                        open.PrepareAnimation));
                 }
                 finally
                 {
@@ -146,7 +152,13 @@ while (true)
                 try
                 {
                     StartOpen(
-                        new RasterOpen(open.RequestId, open.LogicalPath, open.Probe, open.TargetWidth, open.TargetHeight),
+                        new RasterOpen(
+                            open.RequestId,
+                            open.LogicalPath,
+                            open.Probe,
+                            open.TargetWidth,
+                            open.TargetHeight,
+                            open.PrepareAnimation),
                         sourceHandle,
                         open.SourceLength);
                 }
@@ -162,7 +174,13 @@ while (true)
                                                               && activeOpen is { } parent
                                                               && string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal)
                                                               && string.Equals(parent.RequestId, animation.PreviewRequestId, StringComparison.Ordinal):
-                if (retainedRasterSources.TryGetValue(animation.PreviewRequestId, out var retainedSource))
+                PreparedGifDecodeState? preparedGifDecode =
+                    await TryTakePreparedGifDecodeAsync(animation);
+                if (preparedGifDecode is not null)
+                {
+                    StartPreparedAnimationHandoff(animation, preparedGifDecode);
+                }
+                else if (retainedRasterSources.TryGetValue(animation.PreviewRequestId, out var retainedSource))
                 {
                     if (retainedSource.TryAcquire(
                             RetainedRasterOperations.Animation,
@@ -271,6 +289,7 @@ while (true)
                             activeOpen = null;
                             idleTrimmer.SetPreviewActive(false);
                             CancelAnimationsForParent(close.RequestId);
+                            DeletePreparedGifDecode(close.RequestId);
                             producer.Retire(); // defer GPU surface release until the next open (avoids compositor AV)
                         }
                     }
@@ -314,6 +333,8 @@ foreach (PdfPreviewSession session in pdfSessions.Values)
 pdfSessions.Clear();
 foreach (string requestId in retainedRasterSources.Keys)
     DeleteRetainedRasterSource(requestId);
+foreach (string requestId in preparedGifDecodes.Keys)
+    DeletePreparedGifDecode(requestId);
 foreach (var packet in animationPackets.Values)
     packet.Dispose();
 
@@ -326,6 +347,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     if (previousRequestId is not null && !string.Equals(previousRequestId, open.RequestId, StringComparison.Ordinal))
     {
         CancelAnimationsForParent(previousRequestId);
+        DeletePreparedGifDecode(previousRequestId);
         DeleteRetainedRasterSource(previousRequestId);
     }
     activeRequestId = open.RequestId;
@@ -427,6 +449,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         }
         catch (Exception ex)
         {
+            DeletePreparedGifDecode(open.RequestId);
             DeleteRetainedRasterSource(open.RequestId);
             DiagLog.Write("RasterHost", "open task ERROR: " + ex);
             try
@@ -441,6 +464,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         {
             if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
             {
+                DeletePreparedGifDecode(open.RequestId);
                 DeleteRetainedRasterSource(open.RequestId);
             }
             lock (openCtsLock)
@@ -459,6 +483,23 @@ async Task<bool> HandleImageOpenAsync(
     CancellationToken cancellationToken)
 {
     NativeDecodedImage? image = null;
+    bool nativeHandleDecodeAttempted = false;
+    if (ShouldPrepareGifAnimation(open))
+    {
+        // Queue the exact-object first frame before the longer animation decode. The two decoders
+        // have independent gates, so the first surface is not delayed by the full frame packet.
+        Task<NativeDecodedImage?> firstFrameTask = NativeImageDecoder.TryDecodeHandleAsync(
+            source.Handle,
+            source.Length,
+            source.LogicalName,
+            imageDecodeTimeout,
+            cancellationToken,
+            open.TargetWidth,
+            open.TargetHeight);
+        nativeHandleDecodeAttempted = true;
+        StartPreparedGifHandleDecode(open, source);
+        image = await firstFrameTask;
+    }
     if (PreferSystemImageDecoder(source.LogicalName))
     {
         image = await DecodeSystemImageHandleWithTimeoutAsync(
@@ -469,6 +510,7 @@ async Task<bool> HandleImageOpenAsync(
             open.TargetHeight);
     }
     if (image is null
+        && !nativeHandleDecodeAttempted
         && !NativeImageDecoder.RequiresSystemDecoderHandle(
             source.Handle, source.Length, source.LogicalName)
         && !NativeImageDecoder.SkipNativeHandleFallbackAfterSystemFailure(
@@ -495,6 +537,7 @@ async Task<bool> HandleImageOpenAsync(
     cancellationToken.ThrowIfCancellationRequested();
     if (image is null)
     {
+        DeletePreparedGifDecode(open.RequestId);
         await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
         return false;
     }
@@ -539,6 +582,14 @@ async Task<bool> PublishImageWaveformAsync(
     NativeDecodedImage image,
     CancellationToken cancellationToken)
 {
+    if (Path.GetExtension(open.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase))
+    {
+        DiagLog.Write(
+            "RasterHost",
+            $"GIF RGB waveform intentionally skipped: request={open.RequestId}");
+        return true;
+    }
+
     // Native HANDLE decoding can produce this fixed-size analysis while it converts pixels.
     // Compatibility decoders retain the bounded background scan, but readiness and the first
     // surface are always sent before either waveform path is published.
@@ -711,6 +762,175 @@ async Task CloseImageMetadataAsync(string requestId)
     }
 }
 
+void StartPreparedGifHandleDecode(RasterOpen open, RetainedRasterSourceLease source)
+{
+    PreparedGifDecodeState? state = null;
+    try
+    {
+        state = PreparedGifDecodeState.StartHandle(
+            source.Handle,
+            source.Length,
+            source.LogicalName,
+            open.TargetWidth,
+            open.TargetHeight);
+        if (preparedGifDecodes.TryAdd(open.RequestId, state))
+            return;
+    }
+    catch (Exception ex) when (ex is IOException
+        or ObjectDisposedException
+        or UnauthorizedAccessException
+        or System.ComponentModel.Win32Exception)
+    {
+        DiagLog.Write(
+            "RasterHost",
+            $"could not start concurrent GIF HANDLE decode request={open.RequestId}: {ex.Message}");
+    }
+    state?.CancelAndDispose();
+}
+
+void StartPreparedGifPathDecode(RasterOpen open)
+{
+    var state = PreparedGifDecodeState.StartPath(
+        open.Path,
+        open.TargetWidth,
+        open.TargetHeight);
+    if (!preparedGifDecodes.TryAdd(open.RequestId, state))
+        state.CancelAndDispose();
+}
+
+async Task<PreparedGifDecodeState?> TryTakePreparedGifDecodeAsync(
+    PreviewAnimationFramesOpen animation)
+{
+    if (!preparedGifDecodes.TryGetValue(
+            animation.PreviewRequestId,
+            out PreparedGifDecodeState? candidate))
+        return null;
+
+    if (!candidate.MatchesTarget(animation.TargetWidth, animation.TargetHeight))
+    {
+        if (preparedGifDecodes.TryRemove(
+                animation.PreviewRequestId,
+                out PreparedGifDecodeState? mismatched))
+            await mismatched.CancelAndDisposeAsync();
+        DiagLog.Write(
+            "RasterHost",
+            $"discarded prepared GIF packet for target mismatch: parent={animation.PreviewRequestId}; " +
+            $"prepared={candidate.TargetWidth}x{candidate.TargetHeight}; " +
+            $"requested={animation.TargetWidth}x{animation.TargetHeight}");
+        return null;
+    }
+
+    if (preparedGifDecodes.TryRemove(
+            animation.PreviewRequestId,
+            out PreparedGifDecodeState? matched))
+    {
+        return matched;
+    }
+    return null;
+}
+
+void StartPreparedAnimationHandoff(
+    PreviewAnimationFramesOpen animation,
+    PreparedGifDecodeState preparedDecode)
+{
+    if (animationPackets.ContainsKey(animation.RequestId))
+    {
+        preparedDecode.CancelAndDispose();
+        _ = channel.SendAsync(new PreviewError(
+            animation.RequestId,
+            "Animation frame packet has not been released."));
+        return;
+    }
+
+    var cts = new CancellationTokenSource();
+    var gate = new SemaphoreSlim(1, 1);
+    if (!animationCts.TryAdd(animation.RequestId, cts)
+        || !animationHandoffGates.TryAdd(animation.RequestId, gate))
+    {
+        animationCts.TryRemove(animation.RequestId, out _);
+        cts.Dispose();
+        gate.Dispose();
+        preparedDecode.CancelAndDispose();
+        _ = channel.SendAsync(new PreviewError(animation.RequestId, "Duplicate animation request ID."));
+        return;
+    }
+    animationParents[animation.RequestId] = animation.PreviewRequestId;
+
+    _ = Task.Run(async () =>
+    {
+        NativeAnimationPacket? packet = null;
+        try
+        {
+            packet = await preparedDecode.TakeAsync(cts.Token);
+            cts.Token.ThrowIfCancellationRequested();
+            if (packet is null)
+            {
+                await channel.SendAsync(new PreviewError(
+                    animation.RequestId,
+                    "Prepared GIF frame decode failed."));
+                return;
+            }
+            DiagLog.Write(
+                "RasterHost",
+                $"reused concurrently prepared GIF packet: request={animation.RequestId}; " +
+                $"frames={packet.FrameCount}; size={packet.Width}x{packet.Height}; bytes={packet.PacketLength}; " +
+                $"decode={preparedDecode.ElapsedMilliseconds}ms");
+            await gate.WaitAsync();
+            try
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (!string.Equals(animation.PreviewRequestId, activeRequestId, StringComparison.Ordinal))
+                    return;
+
+                animationPackets[animation.RequestId] = packet;
+                try
+                {
+                    await channel.SendAsync(new PreviewAnimationFramesReady(
+                        animation.RequestId,
+                        animation.PreviewRequestId,
+                        packet.Section.Handle.DangerousGetHandle().ToInt64(),
+                        packet.FrameCount,
+                        packet.Width,
+                        packet.Height,
+                        packet.PacketLength));
+                    packet = null;
+                }
+                catch
+                {
+                    if (animationPackets.TryRemove(
+                            animation.RequestId,
+                            out NativeAnimationPacket? failed))
+                        failed.Dispose();
+                    throw;
+                }
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write(
+                "RasterHost",
+                $"prepared GIF handoff failed request={animation.RequestId}: {ex}");
+            try { await channel.SendAsync(new PreviewError(animation.RequestId, ex.Message)); } catch { }
+        }
+        finally
+        {
+            packet?.Dispose();
+            if (animationCts.TryRemove(animation.RequestId, out var current))
+                current.Dispose();
+            if (!animationPackets.ContainsKey(animation.RequestId))
+                animationParents.TryRemove(animation.RequestId, out _);
+            animationHandoffGates.TryRemove(animation.RequestId, out _);
+        }
+    });
+}
+
 void StartAnimationDecode(
     PreviewAnimationFramesOpen animation,
     string? path,
@@ -868,13 +1088,17 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
 
         if (IsImage(open.Probe))
         {
-            var image = await DecodeImageAsync(
+            Task<NativeDecodedImage?> imageTask = DecodeImageAsync(
                 open.Path,
                 imageDecodeTimeout,
                 systemImageDecodeTimeout,
                 cancellationToken,
                 open.TargetWidth,
                 open.TargetHeight);
+            if (ShouldPrepareGifAnimation(open))
+                StartPreparedGifPathDecode(open);
+
+            NativeDecodedImage? image = await imageTask;
             cancellationToken.ThrowIfCancellationRequested();
             if (image is not null)
             {
@@ -909,6 +1133,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
             }
 
             DiagLog.Write("RasterHost", "path image decode returned no raster");
+            DeletePreparedGifDecode(open.RequestId);
         }
 
         if (IsImage(open.Probe))
@@ -1175,6 +1400,18 @@ static bool IsValidTargetSize(uint width, uint height)
 static bool IsValidAnimationTargetSize(uint width, uint height)
     => IsValidTargetSize(width, height);
 
+static bool ShouldPrepareGifAnimation(RasterOpen open)
+    => open.PrepareAnimation
+       && open.Probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
+       && Path.GetExtension(open.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+       && open.Probe.IsAnimated is not false;
+
+void DeletePreparedGifDecode(string requestId)
+{
+    if (preparedGifDecodes.TryRemove(requestId, out PreparedGifDecodeState? state))
+        state.CancelAndDispose();
+}
+
 void DeleteRetainedRasterSource(string requestId)
 {
     if (retainedRasterSources.TryRemove(requestId, out var source))
@@ -1236,7 +1473,171 @@ internal sealed record RasterOpen(
     string Path,
     QuickLook.Next.Contracts.FileProbe Probe,
     uint TargetWidth,
-    uint TargetHeight);
+    uint TargetHeight,
+    bool PrepareAnimation);
+
+internal sealed class PreparedGifDecodeState
+{
+    private readonly CancellationTokenSource _cancellation;
+    private readonly Task<NativeAnimationPacket?> _worker;
+    private readonly long _startedTimestamp;
+    private int _claimed;
+
+    private PreparedGifDecodeState(
+        uint targetWidth,
+        uint targetHeight,
+        CancellationTokenSource cancellation,
+        Task<NativeAnimationPacket?> worker,
+        long startedTimestamp)
+    {
+        TargetWidth = targetWidth;
+        TargetHeight = targetHeight;
+        _cancellation = cancellation;
+        _worker = worker;
+        _startedTimestamp = startedTimestamp;
+    }
+
+    public uint TargetWidth { get; }
+    public uint TargetHeight { get; }
+    public long ElapsedMilliseconds
+        => Math.Max(0, (long)Stopwatch.GetElapsedTime(_startedTimestamp).TotalMilliseconds);
+
+    public static PreparedGifDecodeState StartHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalName,
+        uint targetWidth,
+        uint targetHeight)
+    {
+        SafeFileHandle decodeHandle = WindowsHandleTransfer.ReopenReadOnlyFile(
+            sourceHandle,
+            sourceLength);
+        var cancellation = new CancellationTokenSource();
+        long started = Stopwatch.GetTimestamp();
+        Task<NativeAnimationPacket?> worker = DecodeHandleAsync(
+            decodeHandle,
+            sourceLength,
+            logicalName,
+            targetWidth,
+            targetHeight,
+            cancellation.Token);
+        return new PreparedGifDecodeState(
+            targetWidth,
+            targetHeight,
+            cancellation,
+            worker,
+            started);
+    }
+
+    public static PreparedGifDecodeState StartPath(
+        string path,
+        uint targetWidth,
+        uint targetHeight)
+    {
+        var cancellation = new CancellationTokenSource();
+        long started = Stopwatch.GetTimestamp();
+        Task<NativeAnimationPacket?> worker = DecodePathAsync(
+            path,
+            targetWidth,
+            targetHeight,
+            cancellation.Token);
+        return new PreparedGifDecodeState(
+            targetWidth,
+            targetHeight,
+            cancellation,
+            worker,
+            started);
+    }
+
+    public bool MatchesTarget(uint targetWidth, uint targetHeight)
+        => TargetWidth == targetWidth && TargetHeight == targetHeight;
+
+    public async Task<NativeAnimationPacket?> TakeAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _claimed, 1) != 0)
+            return null;
+
+        CancellationTokenRegistration registration = cancellationToken.Register(
+            static state =>
+            {
+                try { ((CancellationTokenSource)state!).Cancel(); }
+                catch (ObjectDisposedException) { }
+            },
+            _cancellation);
+        try
+        {
+            return await _worker;
+        }
+        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally
+        {
+            registration.Dispose();
+            _cancellation.Dispose();
+        }
+    }
+
+    public void CancelAndDispose()
+        => _ = CancelAndDisposeAsync();
+
+    public async Task CancelAndDisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _claimed, 1) != 0)
+            return;
+        try { _cancellation.Cancel(); }
+        catch (ObjectDisposedException) { }
+        await DisposeWorkerAsync();
+    }
+
+    private async Task DisposeWorkerAsync()
+    {
+        try
+        {
+            NativeAnimationPacket? packet = await _worker;
+            packet?.Dispose();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _cancellation.Dispose();
+        }
+    }
+
+    private static async Task<NativeAnimationPacket?> DecodeHandleAsync(
+        SafeFileHandle handle,
+        long sourceLength,
+        string logicalName,
+        uint targetWidth,
+        uint targetHeight,
+        CancellationToken cancellationToken)
+    {
+        using (handle)
+        {
+            return await NativeAnimationPacketDecoder.TryDecodeHandleAsync(
+                handle,
+                sourceLength,
+                logicalName,
+                targetWidth,
+                targetHeight,
+                cancellationToken);
+        }
+    }
+
+    private static async Task<NativeAnimationPacket?> DecodePathAsync(
+        string path,
+        uint targetWidth,
+        uint targetHeight,
+        CancellationToken cancellationToken)
+        => await NativeAnimationPacketDecoder.TryDecodeAsync(
+            path,
+            targetWidth,
+            targetHeight,
+            cancellationToken);
+}
 
 internal sealed class ImageMetadataRequestState(
     string requestId,

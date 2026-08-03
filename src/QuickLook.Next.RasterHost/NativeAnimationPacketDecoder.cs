@@ -14,14 +14,31 @@ internal static class NativeAnimationPacketDecoder
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
     private static CancellationToken _cancellationToken;
     private static readonly NativeCancelCallback CancelCallback = IsCanceled;
+    private static readonly AnimationOutputCallback OutputCallback = AllocateDirectOutput;
+    private static SharedSectionOwner? _directOutputSection;
+    private static SharedSectionView? _directOutputView;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nint AnimationOutputCallback(nuint requiredBytes);
+
     private delegate int NativeAnimationCall(
         byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
         nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+
+    private delegate int NativeAnimationHandleCall(
+        nint sourceHandle, ulong expectedLength, byte[] logicalNameUtf8, nuint logicalNameLen,
+        uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
+        out nuint outRequired, NativeCancelCallback cancelCallback);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_gif_frames_sized_direct(
+        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+        out nuint outRequired, AnimationOutputCallback outputCallback,
+        NativeCancelCallback cancelCallback);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_gif_frames_sized_cancelable(
@@ -37,6 +54,12 @@ internal static class NativeAnimationPacketDecoder
     private static extern int ql_decode_png_frames_sized_cancelable(
         byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
         nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_decode_gif_frames_handle_direct(
+        nint sourceHandle, ulong expectedLength, byte[] logicalNameUtf8, nuint logicalNameLen,
+        uint targetWidth, uint targetHeight, out nuint outRequired,
+        AnimationOutputCallback outputCallback, NativeCancelCallback cancelCallback);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_decode_gif_frames_handle(
@@ -75,14 +98,25 @@ internal static class NativeAnimationPacketDecoder
         try
         {
             return await Task.Run(
-                () => DecodeHandle(
-                    sourceHandle,
-                    sourceLength,
-                    logicalNameBytes,
-                    targetWidth,
-                    targetHeight,
-                    useGeneralHandleDecoder,
-                    cancellationToken),
+                () => extension == ".gif"
+                    && NativeImageDecoder.SupportsDirectGifAnimationOutput
+                    ? DecodeGifHandleDirect(
+                        sourceHandle,
+                        sourceLength,
+                        logicalNameBytes,
+                        targetWidth,
+                        targetHeight,
+                        cancellationToken)
+                    : DecodeHandle(
+                        extension == ".gif"
+                            ? ql_decode_gif_frames_handle
+                            : ql_decode_animation_frames_handle,
+                        sourceHandle,
+                        sourceLength,
+                        logicalNameBytes,
+                        targetWidth,
+                        targetHeight,
+                        cancellationToken),
                 CancellationToken.None);
         }
         finally
@@ -96,26 +130,175 @@ internal static class NativeAnimationPacketDecoder
         string path, uint targetWidth, uint targetHeight, CancellationToken cancellationToken)
     {
         string extension = Path.GetExtension(path);
-        NativeAnimationCall? call = extension.ToLowerInvariant() switch
+        string normalizedExtension = extension.ToLowerInvariant();
+        NativeAnimationCall? call = normalizedExtension switch
         {
             ".gif" => ql_decode_gif_frames_sized_cancelable,
             ".webp" => ql_decode_webp_frames_sized_cancelable,
             ".png" => ql_decode_png_frames_sized_cancelable,
             _ => null,
         };
-        if (call is null || !File.Exists(path) || new FileInfo(path).Length > MaxInputBytes)
+        if (call is null
+            || !File.Exists(path)
+            || new FileInfo(path).Length > MaxInputBytes)
             return null;
 
         await DecodeGate.WaitAsync(cancellationToken);
         try
         {
-            return await Task.Run(() => Decode(call, path, targetWidth, targetHeight, cancellationToken), CancellationToken.None);
+            return await Task.Run(
+                () => normalizedExtension == ".gif"
+                    && NativeImageDecoder.SupportsDirectGifAnimationOutput
+                    ? DecodeGifDirect(path, targetWidth, targetHeight, cancellationToken)
+                    : Decode(call!, path, targetWidth, targetHeight, cancellationToken),
+                CancellationToken.None);
         }
         finally
         {
             _cancellationToken = CancellationToken.None;
             DecodeGate.Release();
         }
+    }
+
+    private static NativeAnimationPacket? DecodeGifDirect(
+        string path,
+        uint targetWidth,
+        uint targetHeight,
+        CancellationToken cancellationToken)
+    {
+        byte[] pathBytes = Encoding.UTF8.GetBytes(path);
+        ResetDirectOutput();
+        try
+        {
+            _cancellationToken = cancellationToken;
+            int status = ql_decode_gif_frames_sized_direct(
+                pathBytes,
+                (nuint)pathBytes.Length,
+                targetWidth,
+                targetHeight,
+                out nuint required,
+                OutputCallback,
+                CancelCallback);
+            cancellationToken.ThrowIfCancellationRequested();
+            return CompleteDirectOutput(status, required);
+        }
+        finally
+        {
+            DisposeDirectOutput();
+        }
+    }
+
+    private static NativeAnimationPacket? DecodeGifHandleDirect(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        byte[] logicalNameBytes,
+        uint targetWidth,
+        uint targetHeight,
+        CancellationToken cancellationToken)
+    {
+        bool addRef = false;
+        ResetDirectOutput();
+        try
+        {
+            sourceHandle.DangerousAddRef(ref addRef);
+            _cancellationToken = cancellationToken;
+            int status = ql_decode_gif_frames_handle_direct(
+                sourceHandle.DangerousGetHandle(),
+                checked((ulong)sourceLength),
+                logicalNameBytes,
+                (nuint)logicalNameBytes.Length,
+                targetWidth,
+                targetHeight,
+                out nuint required,
+                OutputCallback,
+                CancelCallback);
+            cancellationToken.ThrowIfCancellationRequested();
+            return CompleteDirectOutput(status, required);
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (addRef)
+                sourceHandle.DangerousRelease();
+            DisposeDirectOutput();
+        }
+    }
+
+    private static nint AllocateDirectOutput(nuint requiredBytes)
+    {
+        if (requiredBytes is <= 12 or > MaxPacketBytes
+            || requiredBytes > int.MaxValue
+            || _directOutputSection is not null
+            || _directOutputView is not null)
+            return 0;
+
+        try
+        {
+            var section = SharedSectionOwner.Create(checked((int)requiredBytes));
+            SharedSectionView? view = null;
+            try
+            {
+                view = section.MapWritable();
+                _directOutputSection = section;
+                _directOutputView = view;
+                return view.Pointer;
+            }
+            catch
+            {
+                view?.Dispose();
+                section.Dispose();
+                return 0;
+            }
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static NativeAnimationPacket? CompleteDirectOutput(int status, nuint required)
+    {
+        SharedSectionOwner? section = _directOutputSection;
+        SharedSectionView? view = _directOutputView;
+        if (status != NativeAbi.StatusOk
+            || section is null
+            || view is null
+            || required != (nuint)section.Capacity
+            || !TryReadPacketMetadata(
+                view.Bytes,
+                checked((int)required),
+                out int count,
+                out int width,
+                out int height))
+        {
+            return null;
+        }
+
+        _directOutputSection = null;
+        return new NativeAnimationPacket(
+            section,
+            checked((int)required),
+            count,
+            width,
+            height);
+    }
+
+    private static void ResetDirectOutput()
+    {
+        DisposeDirectOutput();
+        _directOutputSection = null;
+        _directOutputView = null;
+    }
+
+    private static void DisposeDirectOutput()
+    {
+        _directOutputView?.Dispose();
+        _directOutputView = null;
+        _directOutputSection?.Dispose();
+        _directOutputSection = null;
     }
 
     private static NativeAnimationPacket? Decode(
@@ -158,7 +341,12 @@ internal static class NativeAnimationPacketDecoder
                     return null;
                 }
 
-                var packet = new NativeAnimationPacket(section, length, count, width, height);
+                var packet = new NativeAnimationPacket(
+                    section,
+                    length,
+                    count,
+                    width,
+                    height);
                 section = null;
                 return packet;
             }
@@ -171,12 +359,12 @@ internal static class NativeAnimationPacketDecoder
     }
 
     private static NativeAnimationPacket? DecodeHandle(
+        NativeAnimationHandleCall call,
         SafeFileHandle sourceHandle,
         long sourceLength,
         byte[] logicalNameBytes,
         uint targetWidth,
         uint targetHeight,
-        bool useGeneralHandleDecoder,
         CancellationToken cancellationToken)
     {
         bool addRef = false;
@@ -192,36 +380,17 @@ internal static class NativeAnimationPacketDecoder
                 {
                     using SharedSectionView view = section.MapWritable();
                     _cancellationToken = cancellationToken;
-                    int status;
-                    nuint required;
-                    if (useGeneralHandleDecoder)
-                    {
-                        status = ql_decode_animation_frames_handle(
-                            sourceHandle.DangerousGetHandle(),
-                            checked((ulong)sourceLength),
-                            logicalNameBytes,
-                            (nuint)logicalNameBytes.Length,
-                            targetWidth,
-                            targetHeight,
-                            view.Pointer,
-                            (nuint)capacity,
-                            out required,
-                            CancelCallback);
-                    }
-                    else
-                    {
-                        status = ql_decode_gif_frames_handle(
-                            sourceHandle.DangerousGetHandle(),
-                            checked((ulong)sourceLength),
-                            logicalNameBytes,
-                            (nuint)logicalNameBytes.Length,
-                            targetWidth,
-                            targetHeight,
-                            view.Pointer,
-                            (nuint)capacity,
-                            out required,
-                            CancelCallback);
-                    }
+                    int status = call(
+                        sourceHandle.DangerousGetHandle(),
+                        checked((ulong)sourceLength),
+                        logicalNameBytes,
+                        (nuint)logicalNameBytes.Length,
+                        targetWidth,
+                        targetHeight,
+                        view.Pointer,
+                        (nuint)capacity,
+                        out nuint required,
+                        CancelCallback);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (status == NativeAbi.StatusOk
                         && required <= (nuint)capacity

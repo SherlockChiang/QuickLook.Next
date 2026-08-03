@@ -963,6 +963,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleImageWaveform\s*=\s*1UL\s*<<\s*17' -or
         $nativeAbiText -notmatch 'HandleArchiveEntryOutput\s*=\s*1UL\s*<<\s*18' -or
         $nativeAbiText -notmatch 'HandleImageMetadata\s*=\s*1UL\s*<<\s*19' -or
+        $nativeAbiText -notmatch 'DirectGifAnimationOutput\s*=\s*1UL\s*<<\s*20' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -982,7 +983,7 @@ if (Test-Path $parserHostProgram) {
         $rasterHandleInputs -match '\bHandleAnimation\b' -or
         $rasterHandleInputs -match '\bHandleImageMetadata\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-19 and LIMIT_EXCEEDED status must remain stable; animation and metadata sidebands remain optional"
+        Add-Failure "Native ABI HANDLE capability bits 0-20 and LIMIT_EXCEEDED status must remain stable; animation, metadata, and direct GIF output remain optional"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -1013,7 +1014,7 @@ if (Test-Path $parserHostProgram) {
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
     $panicBoundaryExemptions = @{
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
-        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_HANDLE_IMAGE_METADATA\s*\}'
+        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\s*\}'
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
         "ql_set_preview_visible" = '\{\s*PREVIEW_VISIBLE\.store\(visible\s*!=\s*0,\s*Ordering::SeqCst\);\s*\}'
     }
@@ -1244,6 +1245,7 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_WAVEFORM:\s*u64\s*=\s*1\s*<<\s*17' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT:\s*u64\s*=\s*1\s*<<\s*18' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_METADATA:\s*u64\s*=\s*1\s*<<\s*19' -or
+        $nativeLibText -notmatch 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -1259,8 +1261,9 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_IMAGE_METADATA\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-19 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-20 and retain LIMIT_EXCEEDED"
     }
     $nativeOfficeTypesPath = Join-Path $Root "native/quicklook_next_native/src/preview/types.rs"
     $nativeOfficeTypesText = Get-Content -LiteralPath $nativeOfficeTypesPath -Raw
@@ -1400,7 +1403,7 @@ if (Test-Path $animatedPresenterPath) {
         $animatedPresenterText -notmatch 'CreateRenderPlan\(FileProbe\s+probe\)[\s\S]{0,500}probe\.IsAnimated' -or
         $animatedPresenterText -notmatch 'frames\.TryWriteFrame\(index,\s*stream\)' -or
         $animatedPresenterText -match 'DispatcherTimer' -or
-        $animatedPresenterText -notmatch 'Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(_nativeFrameClock\.ElapsedMilliseconds\)' -or
+        $animatedPresenterText -notmatch '_nativePlaybackOffsetMilliseconds\s*=\s*Math\.Max\(0,\s*initialElapsedMilliseconds\)[\s\S]*Stopwatch\.StartNew\(\)[\s\S]*GetFrameIndex\(GetPlaybackElapsedMilliseconds\(\)\)' -or
         $animatedPresenterText -notmatch 'CompositionTarget\.Rendering\s*\+=\s*OnNativeFrameRendering[\s\S]*CompositionTarget\.Rendering\s*-=\s*OnNativeFrameRendering') {
         Add-Failure "App animation presenter must consume Rust metadata, advance a monotonic frame timeline, and avoid container re-parsing"
     }
@@ -1491,7 +1494,10 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'SystemImageDecoder\.TryDecodeHandleAsync\(' -or
         $rasterHostText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
         $rasterHostText -notmatch 'fileStream\.AsRandomAccessStream\(\)' -or
+        $rasterHostText -notmatch 'ql_decode_gif_frames_handle_direct\(' -or
         $rasterHostText -notmatch 'ql_decode_gif_frames_handle\(' -or
+        $rasterHostText -notmatch 'ql_decode_gif_frames_sized_cancelable\(' -or
+        $rasterHostText -notmatch 'SupportsDirectGifAnimationOutput' -or
         $rasterHostText -notmatch 'ql_decode_animation_frames_handle\(' -or
         $rasterHostText -notmatch 'SupportsGeneralHandleAnimation' -or
         $rasterHostText -notmatch 'probe\.IsAnimated\s+is\s+false' -or

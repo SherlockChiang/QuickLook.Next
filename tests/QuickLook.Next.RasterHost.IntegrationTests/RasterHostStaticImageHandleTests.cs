@@ -238,6 +238,7 @@ public sealed class RasterHostStaticImageHandleTests
     [Theory]
     [InlineData("ico")]
     [InlineData("png")]
+    [InlineData("jpg")]
     public async Task Image_handle_decodes_without_an_input_anchor_or_logical_path(string format)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -263,6 +264,8 @@ public sealed class RasterHostStaticImageHandleTests
         {
             if (format == "ico")
                 File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"), physicalPath);
+            else if (format == "jpg")
+                File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.jpg"), physicalPath);
             else
                 await File.WriteAllBytesAsync(physicalPath, Convert.FromBase64String(
                     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII="), timeout.Token);
@@ -275,7 +278,12 @@ public sealed class RasterHostStaticImageHandleTests
             var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
             long hostHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
             string extension = "." + format;
-            byte[] magic = format == "ico" ? [0, 0, 1, 0] : [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+            byte[] magic = format switch
+            {
+                "ico" => [0, 0, 1, 0],
+                "jpg" => [0xFF, 0xD8, 0xFF],
+                _ => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            };
             var probe = new FileProbe(logicalPath, extension, magic)
             {
                 Kind = "image",

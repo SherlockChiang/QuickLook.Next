@@ -26,6 +26,9 @@
     <None Include="..\..\src\QuickLook.Next.App\Assets\QuickLookNext.ico"
           Link="Fixtures\static.ico"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\testdata\image-corpus\external\jpeg-wide-gamut-icc.jpg"
+          Link="Fixtures\static.jpg"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="StageRasterHost" AfterTargets="Build">
     <ItemGroup>

@@ -251,7 +251,10 @@ public sealed partial class MainWindow : Window
             LoadOfficeLayoutImageAsync);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, RasterFallbackImage, ImageZoomText);
         _imageWaveformPresenter = new ImageWaveformPresenter(ImageWaveformPanel, ImageWaveformImage);
-        _animatedImagePresenter = new AnimatedImagePreviewPresenter(AnimatedImagePreviewRoot, AnimatedImagePreviewImage, ImageZoomText)
+        _animatedImagePresenter = new AnimatedImagePreviewPresenter(
+            AnimatedImagePreviewRoot,
+            AnimatedImagePreviewImage,
+            ImageZoomText)
         {
             WaveformChanged = waveform => _imageWaveformPresenter.Show(waveform),
         };
@@ -989,6 +992,7 @@ public sealed partial class MainWindow : Window
             MarkPreviewPhase(generation, "route-selected", "route=raster-host");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
+            bool prepareAnimation = animatedPlan is not null;
             string requestId;
             Task<ControlMessage> completion;
             if (mayRequireHydration)
@@ -999,7 +1003,8 @@ public sealed partial class MainWindow : Window
                     targetSize.Width,
                     targetSize.Height,
                     CloudPreviewTimeout,
-                    recycleHostOnCancel: true);
+                    recycleHostOnCancel: true,
+                    prepareAnimation: prepareAnimation);
             }
             else if (pinnedPreviewHandle is null)
             {
@@ -1007,7 +1012,8 @@ public sealed partial class MainWindow : Window
                     path,
                     probe,
                     targetSize.Width,
-                    targetSize.Height);
+                    targetSize.Height,
+                    prepareAnimation: prepareAnimation);
             }
             else
             {
@@ -1019,7 +1025,8 @@ public sealed partial class MainWindow : Window
                     rasterSource,
                     pinnedPreviewLength,
                     targetSize.Width,
-                    targetSize.Height);
+                    targetSize.Height,
+                    prepareAnimation);
                 requestId = pinnedRequest.RequestId;
                 completion = pinnedRequest.Completion;
             }
@@ -1051,13 +1058,20 @@ public sealed partial class MainWindow : Window
                         StatusText.Text = ShowRasterPreview(shellReady);
                         if (!_rasterPresenter!.AttachBitmap(shellRaster))
                             throw new InvalidDataException("ShellBroker returned an invalid raster packet.");
-                        ImageWaveform waveform = await Task.Run(
-                            () => ImageWaveformBuilder.Create(shellRaster.Bgra, shellRaster.Width, shellRaster.Height),
-                            previewToken);
-                        if (!IsPreviewGenerationCurrent(generation, previewToken)
-                            || !_previewSession.IsCurrentRequest(requestId))
-                            return;
-                        _imageWaveformPresenter!.Show(waveform);
+                        if (!Path.GetExtension(path).Equals(".gif", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ImageWaveform waveform = await Task.Run(
+                                () => ImageWaveformBuilder.Create(shellRaster.Bgra, shellRaster.Width, shellRaster.Height),
+                                previewToken);
+                            if (!IsPreviewGenerationCurrent(generation, previewToken)
+                                || !_previewSession.IsCurrentRequest(requestId))
+                                return;
+                            _imageWaveformPresenter!.Show(waveform);
+                        }
+                        else
+                        {
+                            _imageWaveformPresenter!.Clear();
+                        }
                         RevealPreviewWindow(ShouldActivatePreview(shellReady));
                         return;
                     }
@@ -1137,6 +1151,7 @@ public sealed partial class MainWindow : Window
     {
         NativeAnimationFrames? frames = null;
         bool framesOwnershipTransferred = false;
+        long handoffStarted = Stopwatch.GetTimestamp();
         try
         {
             var targetSize = GetRasterDecodeTargetSize();
@@ -1162,7 +1177,15 @@ public sealed partial class MainWindow : Window
             // ShowNativeAnimatedImagePreview consumes the mapping on every path: the
             // presenter keeps it when rendering succeeds and disposes it before adoption.
             framesOwnershipTransferred = true;
-            StatusText.Text = ShowNativeAnimatedImagePreview(ready, path, frames, scheduleSidecars: false);
+            long initialElapsedMilliseconds = Math.Max(
+                0,
+                (long)Stopwatch.GetElapsedTime(handoffStarted).TotalMilliseconds);
+            StatusText.Text = ShowNativeAnimatedImagePreview(
+                ready,
+                path,
+                frames,
+                scheduleSidecars: false,
+                initialElapsedMilliseconds: initialElapsedMilliseconds);
             await CloseCurrentAsync(rasterRequestId);
         }
         catch (OperationCanceledException)
@@ -1814,7 +1837,7 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
             var layoutWatch = Stopwatch.StartNew();
             _rasterPresenter.UpdateLayout();
-            _imageWaveformPresenter?.Show(surface.Waveform);
+            _imageWaveformPresenter?.Show(IsCurrentGifPreview() ? null : surface.Waveform);
             layoutWatch.Stop();
             DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
         }
@@ -1831,9 +1854,15 @@ public sealed partial class MainWindow : Window
 
     private void OnImageWaveformReceived(PreviewImageWaveform message)
     {
-        if (_previewSession.IsCurrentRequest(message.RequestId))
+        if (_previewSession.IsCurrentRequest(message.RequestId) && !IsCurrentGifPreview())
             _imageWaveformPresenter?.Show(message.Waveform);
     }
+
+    private bool IsCurrentGifPreview()
+        => string.Equals(
+            Path.GetExtension(_previewSession.CurrentPath),
+            ".gif",
+            StringComparison.OrdinalIgnoreCase);
 
     private void OnPdfPageErrorReceived(PreviewPageError error)
     {
@@ -1938,17 +1967,29 @@ public sealed partial class MainWindow : Window
         PreviewReady ready,
         string path,
         NativeAnimationFrames frames,
-        bool scheduleSidecars = true)
+        bool scheduleSidecars = true,
+        long initialElapsedMilliseconds = 0)
     {
         bool presenterOwnsFrames = false;
         try
         {
             UpdatePreviewChrome(ready, showRasterTools: true);
+            AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(
+                path,
+                ready,
+                frames,
+                GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight),
+                enableWaveform: !string.Equals(
+                    Path.GetExtension(path),
+                    ".gif",
+                    StringComparison.OrdinalIgnoreCase),
+                initialElapsedMilliseconds: initialElapsedMilliseconds);
+            presenterOwnsFrames = true;
+            // Populate the first animation bitmap while the static surface remains visible.
+            // Swapping panels only after Invalidate avoids a blank upgrade frame.
             _panelController.ShowAnimatedImage();
             _rasterPresenter?.Clear();
-
-            AnimatedImagePreviewResult result = _animatedImagePresenter!.RenderNativeFrames(path, ready, frames, GetMaxContentSize(MaxImageWindowWidth, MaxImageWindowHeight));
-            presenterOwnsFrames = true;
+            _imageWaveformPresenter?.Clear();
             UpdateImageAnimationPlaybackButton();
             ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
             if (scheduleSidecars)
@@ -3839,7 +3880,8 @@ public sealed partial class MainWindow : Window
         Microsoft.Win32.SafeHandles.SafeFileHandle pinnedHandle,
         long pinnedLength,
         uint targetWidth,
-        uint targetHeight)
+        uint targetHeight,
+        bool prepareAnimation)
     {
         try
         {
@@ -3852,7 +3894,8 @@ public sealed partial class MainWindow : Window
                 verifiedProbe,
                 pinnedHandle,
                 targetWidth,
-                targetHeight);
+                targetHeight,
+                prepareAnimation);
         }
         finally
         {

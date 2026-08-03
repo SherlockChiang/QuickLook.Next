@@ -51,6 +51,7 @@ const VK_F11_U32: u32 = 0x7A;
 
 type Callback = unsafe extern "C" fn(*const u16);
 pub type CancelCallback = extern "C" fn() -> bool;
+pub type AnimationOutputCallback = extern "C" fn(usize) -> *mut u8;
 
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
@@ -102,6 +103,7 @@ const QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE: u64 = 1 << 16;
 const QL_FEATURE_HANDLE_IMAGE_WAVEFORM: u64 = 1 << 17;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT: u64 = 1 << 18;
 const QL_FEATURE_HANDLE_IMAGE_METADATA: u64 = 1 << 19;
+const QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT: u64 = 1 << 20;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -141,6 +143,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_IMAGE_WAVEFORM
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT
         | QL_FEATURE_HANDLE_IMAGE_METADATA
+        | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -1423,7 +1426,6 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
             let required_format = match extension.as_str() {
                 "png" => ImageFormat::Png,
                 "jpg" | "jpeg" | "jpe" => ImageFormat::Jpeg,
-                "gif" => ImageFormat::Gif,
                 "bmp" => ImageFormat::Bmp,
                 "ico" => ImageFormat::Ico,
                 "tif" | "tiff" => ImageFormat::Tiff,
@@ -1619,11 +1621,40 @@ unsafe fn decode_animation_frames_handle_v2(
     if out_buf.is_null() && out_cap != 0 {
         return QL_ERROR_INVALID_ARGUMENT;
     }
+    let (width, height, frames) = match unsafe {
+        decode_animation_frames_handle(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            target_width,
+            target_height,
+            cancel_cb,
+            gif_only,
+        )
+    } {
+        Ok(decoded) => decoded,
+        Err(status) => return status,
+    };
+    unsafe { write_animation_frames_v2(width, height, &frames, out_buf, out_cap, out_required) }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn decode_animation_frames_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    gif_only: bool,
+) -> std::result::Result<(u32, u32, Vec<(u32, Vec<u8>)>), i32> {
     if expected_length > MAX_ANIMATION_HANDLE_INPUT_BYTES {
-        return QL_ERROR_LIMIT_EXCEEDED;
+        return Err(QL_ERROR_LIMIT_EXCEEDED);
     }
 
-    let (mut file, logical_name, _, _) = match unsafe {
+    let (mut file, logical_name, _, _) = unsafe {
         reopen_handle_input_v2(
             source_handle,
             expected_length,
@@ -1631,23 +1662,13 @@ unsafe fn decode_animation_frames_handle_v2(
             logical_name_len,
             cancel_cb,
         )
-    } {
-        Ok(input) => input,
-        Err(status) => return status,
-    };
-    let Some(format) = HandleAnimationFormat::from_logical_name(&logical_name) else {
-        return QL_ERROR_INVALID_ARGUMENT;
-    };
+    }?;
+    let format =
+        HandleAnimationFormat::from_logical_name(&logical_name).ok_or(QL_ERROR_INVALID_ARGUMENT)?;
     if gif_only && format != HandleAnimationFormat::Gif {
-        return QL_ERROR_INVALID_ARGUMENT;
+        return Err(QL_ERROR_INVALID_ARGUMENT);
     }
-    if let Err(status) = validate_handle_image_dimensions(
-        &mut file,
-        format.image_format(),
-        MAX_ANIMATED_SOURCE_PIXELS,
-    ) {
-        return status;
-    }
+    validate_handle_image_dimensions(&mut file, format.image_format(), MAX_ANIMATED_SOURCE_PIXELS)?;
 
     let decoded = match format {
         HandleAnimationFormat::Gif => {
@@ -1660,17 +1681,11 @@ unsafe fn decode_animation_frames_handle_v2(
             decode_png_frames_bgra_reader(file, target_width, target_height, cancel_cb)
         }
     };
-    let (width, height, frames) = match decoded {
-        Some(decoded) if !decoded.2.is_empty() => decoded,
-        _ => {
-            return if cancel_requested(cancel_cb) {
-                QL_ERROR_CANCELLED
-            } else {
-                QL_ERROR_MALFORMED
-            }
-        }
-    };
-    unsafe { write_animation_frames_v2(width, height, &frames, out_buf, out_cap, out_required) }
+    match decoded {
+        Some(decoded) if !decoded.2.is_empty() => Ok(decoded),
+        _ if cancel_requested(cancel_cb) => Err(QL_ERROR_CANCELLED),
+        _ => Err(QL_ERROR_MALFORMED),
+    }
 }
 
 /// Decode bounded GIF animation frames from a borrowed Windows file handle.
@@ -1705,6 +1720,50 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
             cancel_cb,
             true,
         )
+    })
+}
+
+/// Decode a bounded GIF exactly once, then ask the caller for an exact-size output buffer.
+/// This avoids repeating the expensive frame decode when the final packet exceeds a guessed
+/// managed buffer size.
+///
+/// # Safety
+/// The caller retains ownership of `source_handle`; `output_cb` must return writable storage for
+/// exactly the requested byte count and keep it valid until this call returns.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_required: *mut usize,
+    output_cb: Option<AnimationOutputCallback>,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        let (width, height, frames) = match decode_animation_frames_handle(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            target_width,
+            target_height,
+            cancel_cb,
+            true,
+        ) {
+            Ok(decoded) => decoded,
+            Err(status) => return status,
+        };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        write_animation_frames_direct(width, height, &frames, out_required, output_cb, cancel_cb)
     })
 }
 
@@ -1822,6 +1881,46 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_cancelable(
             return -3;
         }
         write_animation_frames(width, height, frames, out, out_cap)
+    })
+}
+
+/// Path compatibility form of the exact-size, single-decode GIF handoff.
+///
+/// # Safety
+/// `output_cb` must return writable storage for exactly the requested byte count and keep it valid
+/// until this call returns.
+#[no_mangle]
+pub unsafe extern "C" fn ql_decode_gif_frames_sized_direct(
+    path_utf8: *const u8,
+    path_len: usize,
+    target_width: u32,
+    target_height: u32,
+    out_required: *mut usize,
+    output_cb: Option<AnimationOutputCallback>,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        if out_required.is_null() {
+            return QL_ERROR_INVALID_ARGUMENT;
+        }
+        *out_required = 0;
+        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+            Some(path) => path,
+            None => return QL_ERROR_INVALID_ARGUMENT,
+        };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        let (width, height, frames) =
+            match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
+                Some(decoded) if !decoded.2.is_empty() => decoded,
+                _ if cancel_requested(cancel_cb) => return QL_ERROR_CANCELLED,
+                _ => return QL_ERROR_MALFORMED,
+            };
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        write_animation_frames_direct(width, height, &frames, out_required, output_cb, cancel_cb)
     })
 }
 
@@ -2566,6 +2665,52 @@ unsafe fn write_animation_frames_v2(
         Ok(()) => QL_OK,
         Err(AnimationPacketError::Internal) => QL_ERROR_INTERNAL,
         Err(AnimationPacketError::LimitExceeded) => QL_ERROR_LIMIT_EXCEEDED,
+    }
+}
+
+unsafe fn write_animation_frames_direct(
+    width: u32,
+    height: u32,
+    frames: &[(u32, Vec<u8>)],
+    out_required: *mut usize,
+    output_cb: Option<AnimationOutputCallback>,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    unsafe { *out_required = 0 };
+    let total = match animation_frames_packet_length(width, height, frames) {
+        Ok(total) => total,
+        Err(AnimationPacketError::Internal) => return QL_ERROR_INTERNAL,
+        Err(AnimationPacketError::LimitExceeded) => return QL_ERROR_LIMIT_EXCEEDED,
+    };
+    unsafe { *out_required = total };
+    let Some(output_cb) = output_cb else {
+        return QL_ERROR_INVALID_ARGUMENT;
+    };
+    let output_ptr = output_cb(total);
+    if output_ptr.is_null() {
+        return QL_ERROR_INTERNAL;
+    }
+    let output = unsafe { std::slice::from_raw_parts_mut(output_ptr, total) };
+    if cancel_requested(cancel_cb) {
+        return QL_ERROR_CANCELLED;
+    }
+    output[0..4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
+    output[4..8].copy_from_slice(&width.to_le_bytes());
+    output[8..12].copy_from_slice(&height.to_le_bytes());
+    let mut offset = 12;
+    for (delay_ms, bgra) in frames {
+        if cancel_requested(cancel_cb) {
+            return QL_ERROR_CANCELLED;
+        }
+        output[offset..offset + 4].copy_from_slice(&delay_ms.to_le_bytes());
+        offset += 4;
+        output[offset..offset + bgra.len()].copy_from_slice(bgra);
+        offset += bgra.len();
+    }
+    if offset == total {
+        QL_OK
+    } else {
+        QL_ERROR_INTERNAL
     }
 }
 
@@ -5766,6 +5911,7 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_IMAGE_WAVEFORM;
     let required = required | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT;
     let required = required | QL_FEATURE_HANDLE_IMAGE_METADATA;
+    let required = required | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -7964,6 +8110,28 @@ mod handle_v2_tests {
             QL_ERROR_BUFFER_TOO_SMALL
         );
         assert!(required > 28);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                2,
+                1,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            required, 0,
+            "GIF must never enter the native RGB waveform path"
+        );
         assert_eq!(file.stream_position().unwrap(), position);
 
         required = 0;

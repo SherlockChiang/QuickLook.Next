@@ -297,7 +297,8 @@ internal sealed class RasterHostSupervisor
         uint targetWidth = 0,
         uint targetHeight = 0,
         TimeSpan? timeout = null,
-        bool recycleHostOnCancel = false)
+        bool recycleHostOnCancel = false,
+        bool prepareAnimation = false)
     {
         if (_channel is null) throw new InvalidOperationException("RasterHost not connected");
         var (requestId, completion) = _pending.Begin(timeout ?? PreviewTimeout);
@@ -309,7 +310,13 @@ internal sealed class RasterHostSupervisor
             _activeRequestId = requestId;
             _activePath = path;
         }
-        _ = SendOpenAsync(requestId, path, probe, targetWidth, targetHeight);
+        _ = SendOpenAsync(
+            requestId,
+            path,
+            probe,
+            targetWidth,
+            targetHeight,
+            prepareAnimation);
         return (requestId, completion);
     }
 
@@ -318,7 +325,8 @@ internal sealed class RasterHostSupervisor
         FileProbe probe,
         Microsoft.Win32.SafeHandles.SafeFileHandle pinnedHandle,
         uint targetWidth,
-        uint targetHeight)
+        uint targetHeight,
+        bool prepareAnimation = false)
     {
         if (_channel is null || _host is null) throw new InvalidOperationException("RasterHost not connected");
         PipeChannel channel = _channel;
@@ -346,7 +354,16 @@ internal sealed class RasterHostSupervisor
             _activePath = path;
         }
         Task sendTask = SendOpenHandleAsync(
-            channel, generation, requestId, hostHandle, probe.Size, path, probe, targetWidth, targetHeight);
+            channel,
+            generation,
+            requestId,
+            hostHandle,
+            probe.Size,
+            path,
+            probe,
+            targetWidth,
+            targetHeight,
+            prepareAnimation);
         RegisterHandleOpenSend(requestId, sendTask);
         return (requestId, completion);
     }
@@ -355,7 +372,7 @@ internal sealed class RasterHostSupervisor
         PipeChannel channel,
         int generation,
         string requestId, long sourceHandle, long sourceLength, string logicalPath, FileProbe probe,
-        uint targetWidth, uint targetHeight)
+        uint targetWidth, uint targetHeight, bool prepareAnimation)
     {
         try
         {
@@ -364,6 +381,7 @@ internal sealed class RasterHostSupervisor
             {
                 TargetWidth = targetWidth,
                 TargetHeight = targetHeight,
+                PrepareAnimation = prepareAnimation,
             });
         }
         catch (Exception ex)
@@ -418,7 +436,13 @@ internal sealed class RasterHostSupervisor
         }
     }
 
-    private async Task SendOpenAsync(string requestId, string path, FileProbe probe, uint targetWidth, uint targetHeight)
+    private async Task SendOpenAsync(
+        string requestId,
+        string path,
+        FileProbe probe,
+        uint targetWidth,
+        uint targetHeight,
+        bool prepareAnimation)
     {
         try
         {
@@ -428,6 +452,7 @@ internal sealed class RasterHostSupervisor
             {
                 TargetWidth = targetWidth,
                 TargetHeight = targetHeight,
+                PrepareAnimation = prepareAnimation,
             });
         }
         catch (Exception ex)

@@ -121,6 +121,9 @@ internal static class NativeImageDecoder
     internal static bool SupportsHandleImageMetadata
         => (_capabilities & NativeAbi.HandleImageMetadata) != 0;
 
+    internal static bool SupportsDirectGifAnimationOutput
+        => (_capabilities & NativeAbi.DirectGifAnimationOutput) != 0;
+
     public static bool SupportsHandleAnimation(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
     {
         string extension = Path.GetExtension(logicalPath).ToLowerInvariant();
@@ -222,7 +225,10 @@ internal static class NativeImageDecoder
         if (logicalNameBytes.Length is 0 or > NativeAbi.MaxLogicalNameUtf8Bytes)
             return null;
 
-        bool includeWaveform = SupportsHandleImageWaveform;
+        // GIF uses either the prepared animation packet or an exact-object static first-frame
+        // fallback. Neither path should spend startup time deriving an RGB waveform.
+        bool includeWaveform = SupportsHandleImageWaveform
+            && !Path.GetExtension(logicalPath).Equals(".gif", StringComparison.OrdinalIgnoreCase);
         int maximumPacketBytes = includeWaveform
             ? MaxDecodedImageWithWaveformBytes
             : MaxDecodedImageBytes;
