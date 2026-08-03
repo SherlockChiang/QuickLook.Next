@@ -6,7 +6,7 @@ and commit so changes remain independently reviewable and revertible.
 
 ## Optimization batches
 
-All planned 0.3.1 batches and the focused 0.3.2/0.3.3 hardening batches are complete;
+All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
 ## P0: Immediate safety and usability
@@ -64,6 +64,20 @@ remaining work below stays ordered by risk and user-visible impact.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.4. The local
+  release workflow passed the 224 native tests with one external-corpus test ignored in the
+  ordinary suite, the complete .NET solution tests, and the release build before writing a
+  hash-bound tested-payload proof for commit `c5731cd`. Independently validate the generated
+  installer checksum and eight-entry layout, the MSIX 0.3.4.1 identity, valid pinned signature,
+  required payload, and ten key package-to-`dist` hashes. Install the same MSIX over 0.3.3.1 for
+  the current user; AppX reports publisher `CN=QuickLook Next Development` and status `Ok`.
+  - Test/package workflow: `pwsh -NoProfile -File build.ps1 -NoRestore -Install` (the orchestration timeout occurred after proof/package creation while deleting generated staging directories; installation was completed separately from the already-validated artifact)
+  - Verification: `pwsh -NoProfile -File tools/test-release-version.ps1 -ExpectedVersion 0.3.4`
+  - Verification: `Get-AuthenticodeSignature`, read-only installer/MSIX manifest/payload/hash validation, `Add-AppxPackage -ForceApplicationShutdown`, and `Get-AppxPackage`
+  - Artifact: `artifacts/QuickLook.Next-0.3.4.1-win-x64.msix` (SHA-256 `3B9FA435203CB4177BCDF1E6E29CFC3DBC34E5F680E03D0731CF35F6E8BD265A`)
+  - Artifact: `artifacts/QuickLook.Next-Installer-0.3.4.1-win-x64.zip` (SHA-256 `0E7884CCFF9282A215151E61329716412FB83128226CBA2B82A29ADFA0BA7BFA`)
+  - Commit: `c5731cd`
 
 - [x] Remove the GIF initial-motion stall reproduced with the 8,258,096-byte, 652x909, 75-frame
   user sample. RasterHost now starts the exact-object static first frame and an independent GIF
