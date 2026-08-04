@@ -9,6 +9,66 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## 2026-08-04 review execution queue
+
+This queue turns the August repository review into independently verifiable local
+commits. Complete one item at a time, run its focused checks before committing,
+and record the implementation commit in the completed ledger. Do not push or use
+the release-only `release:` prefix while this queue is in progress.
+
+### Release blockers
+
+- [ ] `R26-P0-01` Bound Shell thumbnail dimensions and allocation arithmetic in
+  Rust before calling `GetDIBits`; cover hostile dimensions and overflow edges.
+- [ ] `R26-P0-02` Make every release, packaging, long-cycle, and nested guard
+  invocation fail closed on a non-zero child-script exit code; add fault-injection
+  coverage so a later successful guard cannot erase an earlier failure.
+- [ ] `R26-P0-03` Move the live signing certificate and password out of the
+  workspace, verify their storage policy, and rotate them if exposure cannot be
+  excluded. This is an owner-operated credential task and must not be automated.
+
+### Correctness and user-visible state
+
+- [ ] `R26-P1-01` Bind preview errors to the failing path and generation so Retry,
+  Open, and Reveal can never act on the previous file; cover first-open and A-to-B
+  early-failure transitions.
+- [ ] `R26-P1-02` Resolve the text-search contract drift between the presenter,
+  keyboard routing, documentation, and performance guard without restoring the
+  old wheel-intercepting flyout.
+- [ ] `R26-P1-03` Add explicit CloudProgress, PDF per-page failure, empty, and
+  partial-result states, including Office represented/total/limit metadata.
+- [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
+  phase, correlation ID, version, format, and size bucket but no local path.
+
+### Rust-first architecture and performance
+
+- [ ] `R26-P1-05` Make Cargo a first-class MSBuild input/output dependency so a
+  direct solution build cannot silently package a missing or stale native DLL.
+- [ ] `R26-P1-06` Move the ignored Rust-first guidance into tracked `AGENTS.md`
+  and focused ADRs for process, HANDLE ownership, cancellation, and error contracts.
+- [ ] `R26-P1-07` Split native preview code into bounded parser/core, format-family,
+  Win32, and thin FFI modules or crates; generate Rust/C# ABI declarations from one
+  schema and scope complexity lint exceptions to unavoidable FFI shims.
+- [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
+  output sizing, and measurable cancellation latency for RasterHost image work.
+- [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
+  thumbnail worker's unbounded, non-cancellable queue with a bounded supervised
+  broker or deadline-aware worker.
+- [ ] `R26-P1-10` Add fuzz/property targets and sanitizer coverage for archive,
+  Office, TIFF/EXIF, SQLite, executable, media, and FFI packet boundaries.
+
+### Repository and delivery governance
+
+- [ ] `R26-P1-11` Route the local 0.3.5 stack through an integration branch and PR
+  after release blockers pass; require CI checks, admin enforcement, resolved
+  conversations, and an approval-protected release environment before publishing.
+- [ ] `R26-P2-01` Normalize signed annotated release tags, enable dependency
+  security alerts, group routine update PRs, and add CODEOWNERS for native, App,
+  RasterHost, and release tooling.
+- [ ] `R26-P2-02` Keep the active workspace rooted at the real `QuickLook.Next`
+  repository and retire the ambiguous empty outer `.git`/legacy-repository layout
+  only after explicit owner confirmation.
+
 ## P0: Immediate safety and usability
 
 - [ ] Move the live release signing key out of the workspace and rotate it if
