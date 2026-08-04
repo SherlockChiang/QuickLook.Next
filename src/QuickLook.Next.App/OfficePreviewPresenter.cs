@@ -95,7 +95,7 @@ internal sealed class OfficePreviewPresenter
         double headerHeight = isWorkbook ? 24 : 0;
         double contentWidth = Math.Min(maxContent.Width, firstWidth * scale + headerWidth + 64);
         double contentHeight = Math.Min(maxContent.Height, firstHeight * scale + headerHeight + 112);
-        return new OfficePreviewResult($"{ready.Kind}: {ready.Title}", contentWidth, contentHeight);
+        return new OfficePreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), contentWidth, contentHeight);
     }
 
     public void RefreshPalette()

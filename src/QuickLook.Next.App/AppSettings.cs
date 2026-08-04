@@ -6,7 +6,7 @@ namespace QuickLook.Next.App;
 
 internal sealed record AppSettings(
     int SchemaVersion = 3,
-    string Language = "system",
+    string Language = AppLanguagePolicy.SystemLanguage,
     string Animation = "system",
     string TextWrapping = "automatic",
     string TextSize = "default",
@@ -24,12 +24,8 @@ internal sealed record AppSettings(
     {
         try
         {
-            ApplicationLanguages.PrimaryLanguageOverride = Current.Language switch
-            {
-                "en-US" => "en-US",
-                "zh-CN" => "zh-CN",
-                _ => "",
-            };
+            ApplicationLanguages.PrimaryLanguageOverride =
+                AppLanguagePolicy.ToPrimaryLanguageOverride(Current.Language);
         }
         catch (Exception ex)
         {
@@ -39,7 +35,7 @@ internal sealed record AppSettings(
 
     public static bool SaveLanguage(string language)
     {
-        if (language is not ("system" or "en-US" or "zh-CN"))
+        if (!AppLanguagePolicy.IsSupported(language))
             return false;
 
         return Save(Current with { Language = language });
@@ -100,7 +96,7 @@ internal sealed record AppSettings(
             AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
             if (settings is null
                 || settings.SchemaVersion is < 1 or > CurrentSchemaVersion
-                || settings.Language is not ("system" or "en-US" or "zh-CN")
+                || !AppLanguagePolicy.IsSupported(settings.Language)
                 || settings.Animation is not ("system" or "always" or "still"))
             {
                 PreserveInvalidSettings();

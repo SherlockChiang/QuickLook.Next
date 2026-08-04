@@ -192,7 +192,7 @@ internal sealed class TextPreviewPresenter
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         if (_outlineItems.Count > 0)
             size = (Math.Min(maxContent.Width, size.Width + OutlineWidth + OutlineGap), size.Height);
-        return new TextPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
+        return new TextPreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), size.Width, size.Height);
     }
 
     public void Clear()

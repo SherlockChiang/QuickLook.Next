@@ -17,7 +17,7 @@ public sealed class ListingRow : INotifyPropertyChanged
         IsEncrypted = item.IsEncrypted;
         IsArchive = !item.IsFolder && IsArchiveName(item.Name);
         Glyph = ChooseGlyph(item);
-        TypeDisplay = item.IsFolder ? UiStrings.FolderTypeDisplay : item.Type;
+        TypeDisplay = BuildTypeDisplay(item);
         SizeDisplay = item.IsFolder ? "" : MainWindow.FormatBytes(item.Size);
         ModifiedDisplay = item.ModifiedUnix > 0
             ? DateTimeOffset.FromUnixTimeSeconds(item.ModifiedUnix).LocalDateTime.ToString("g")
@@ -97,6 +97,16 @@ public sealed class ListingRow : INotifyPropertyChanged
             ".iso" or ".img" => "\uEDA2",
             _ => "\uE8A5",
         };
+    }
+
+    private static string BuildTypeDisplay(PreviewListingItem item)
+    {
+        if (item.IsFolder)
+            return UiStrings.FolderTypeDisplay;
+        string format = System.IO.Path.GetExtension(item.Name).TrimStart('.').ToUpperInvariant();
+        return string.IsNullOrWhiteSpace(format)
+            ? UiStrings.ListingFileTypeDisplay
+            : UiStrings.Format(UiStrings.ListingTypedFileFormat, format);
     }
 
     private static bool IsArchiveName(string name)

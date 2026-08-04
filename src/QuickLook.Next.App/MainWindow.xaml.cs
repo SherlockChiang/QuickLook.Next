@@ -99,101 +99,122 @@ public sealed partial class MainWindow : Window
     private readonly UISettings _uiSettings = new();
     private readonly AccessibilitySettings _accessibilitySettings = new();
 
-    private static readonly string[] ByteUnits = ["B", "KB", "MB", "GB", "TB"];
+    private static readonly string[] ByteSizeFormatResourceKeys =
+    [
+        "ByteSizeBytesFormat",
+        "ByteSizeKilobytesFormat",
+        "ByteSizeMegabytesFormat",
+        "ByteSizeGigabytesFormat",
+        "ByteSizeTerabytesFormat",
+    ];
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
         ".heic", ".heif", ".avif", ".jxl", ".svg",
     };
-    private static readonly IReadOnlyDictionary<int, string> ExposureProgramNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> ExposureProgramResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Not defined",
-        [1] = "Manual",
-        [2] = "Normal program",
-        [3] = "Aperture priority",
-        [4] = "Shutter priority",
-        [5] = "Creative program",
-        [6] = "Action program",
-        [7] = "Portrait mode",
-        [8] = "Landscape mode",
+        [0] = "ImageMetadataValueNotDefined",
+        [1] = "ImageMetadataValueManual",
+        [2] = "ImageMetadataValueNormalProgram",
+        [3] = "ImageMetadataValueAperturePriority",
+        [4] = "ImageMetadataValueShutterPriority",
+        [5] = "ImageMetadataValueCreativeProgram",
+        [6] = "ImageMetadataValueActionProgram",
+        [7] = "ImageMetadataValuePortraitMode",
+        [8] = "ImageMetadataValueLandscapeMode",
     };
-    private static readonly IReadOnlyDictionary<int, string> ExposureModeNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> ExposureModeResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Auto exposure",
-        [1] = "Manual exposure",
-        [2] = "Auto bracket",
+        [0] = "ImageMetadataValueAutoExposure",
+        [1] = "ImageMetadataValueManualExposure",
+        [2] = "ImageMetadataValueAutoBracket",
     };
-    private static readonly IReadOnlyDictionary<int, string> MeteringModeNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> MeteringModeResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Unknown",
-        [1] = "Average",
-        [2] = "Center-weighted average",
-        [3] = "Spot",
-        [4] = "Multi-spot",
-        [5] = "Pattern",
-        [6] = "Partial",
-        [255] = "Other",
+        [0] = "ImageMetadataValueUnknown",
+        [1] = "ImageMetadataValueAverage",
+        [2] = "ImageMetadataValueCenterWeightedAverage",
+        [3] = "ImageMetadataValueSpot",
+        [4] = "ImageMetadataValueMultiSpot",
+        [5] = "ImageMetadataValuePattern",
+        [6] = "ImageMetadataValuePartial",
+        [255] = "ImageMetadataValueOther",
     };
-    private static readonly IReadOnlyDictionary<int, string> WhiteBalanceNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> WhiteBalanceResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Auto",
-        [1] = "Manual",
+        [0] = "ImageMetadataValueAuto",
+        [1] = "ImageMetadataValueManual",
     };
-    private static readonly IReadOnlyDictionary<int, string> LightSourceNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> LightSourceResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Unknown",
-        [1] = "Daylight",
-        [2] = "Fluorescent",
-        [3] = "Tungsten",
-        [4] = "Flash",
-        [9] = "Fine weather",
-        [10] = "Cloudy",
-        [11] = "Shade",
-        [12] = "Daylight fluorescent",
-        [13] = "Day white fluorescent",
-        [14] = "Cool white fluorescent",
-        [15] = "White fluorescent",
-        [17] = "Standard light A",
-        [18] = "Standard light B",
-        [19] = "Standard light C",
+        [0] = "ImageMetadataValueUnknown",
+        [1] = "ImageMetadataValueDaylight",
+        [2] = "ImageMetadataValueFluorescent",
+        [3] = "ImageMetadataValueTungsten",
+        [4] = "ImageMetadataValueFlash",
+        [9] = "ImageMetadataValueFineWeather",
+        [10] = "ImageMetadataValueCloudy",
+        [11] = "ImageMetadataValueShade",
+        [12] = "ImageMetadataValueDaylightFluorescent",
+        [13] = "ImageMetadataValueDayWhiteFluorescent",
+        [14] = "ImageMetadataValueCoolWhiteFluorescent",
+        [15] = "ImageMetadataValueWhiteFluorescent",
+        [17] = "ImageMetadataValueStandardLightA",
+        [18] = "ImageMetadataValueStandardLightB",
+        [19] = "ImageMetadataValueStandardLightC",
         [20] = "D55",
         [21] = "D65",
         [22] = "D75",
         [23] = "D50",
-        [24] = "ISO studio tungsten",
-        [255] = "Other",
+        [24] = "ImageMetadataValueIsoStudioTungsten",
+        [255] = "ImageMetadataValueOther",
     };
-    private static readonly IReadOnlyDictionary<int, string> ColorSpaceNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> ColorSpaceResourceKeys = new Dictionary<int, string>
     {
         [1] = "sRGB",
-        [65535] = "Uncalibrated",
+        [65535] = "ImageMetadataValueUncalibrated",
     };
-    private static readonly IReadOnlyDictionary<int, string> CompressionNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> NormalHardSoftResourceKeys = new Dictionary<int, string>
     {
-        [1] = "Uncompressed",
-        [2] = "CCITT 1D",
-        [3] = "T4/Group 3 fax",
-        [4] = "T6/Group 4 fax",
-        [5] = "LZW",
-        [6] = "JPEG",
-        [7] = "JPEG",
-        [8] = "Deflate",
-        [32773] = "PackBits",
+        [0] = "ImageMetadataValueNormal",
+        [1] = "ImageMetadataValueSoft",
+        [2] = "ImageMetadataValueHard",
     };
-    private static readonly IReadOnlyDictionary<int, string> NormalHardSoftNames = new Dictionary<int, string>
+    private static readonly IReadOnlyDictionary<int, string> GainControlResourceKeys = new Dictionary<int, string>
     {
-        [0] = "Normal",
-        [1] = "Soft",
-        [2] = "Hard",
+        [0] = "ImageMetadataValueNone",
+        [1] = "ImageMetadataValueLowGainUp",
+        [2] = "ImageMetadataValueHighGainUp",
+        [3] = "ImageMetadataValueLowGainDown",
+        [4] = "ImageMetadataValueHighGainDown",
     };
-    private static readonly IReadOnlyDictionary<int, string> GainControlNames = new Dictionary<int, string>
-    {
-        [0] = "None",
-        [1] = "Low gain up",
-        [2] = "High gain up",
-        [3] = "Low gain down",
-        [4] = "High gain down",
-    };
+    private static readonly IReadOnlyDictionary<string, string> ImageMetadataValueResourceKeys =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["uncompressed"] = "ImageMetadataValueUncompressed",
+            ["CCITT Group 3 1-D"] = "ImageMetadataValueCcittGroup3OneDimensional",
+            ["Group 3 fax"] = "ImageMetadataValueGroup3Fax",
+            ["Group 4 fax"] = "ImageMetadataValueGroup4Fax",
+            ["LZW"] = "ImageMetadataValueLzw",
+            ["JPEG"] = "ImageMetadataValueJpeg",
+            ["Deflate"] = "ImageMetadataValueDeflate",
+            ["PackBits"] = "ImageMetadataValuePackBits",
+            ["grayscale"] = "ImageMetadataValueGrayscale",
+            ["truecolor"] = "ImageMetadataValueTruecolor",
+            ["indexed color"] = "ImageMetadataValueIndexedColor",
+            ["grayscale with alpha"] = "ImageMetadataValueGrayscaleWithAlpha",
+            ["truecolor with alpha"] = "ImageMetadataValueTruecolorWithAlpha",
+            ["unknown"] = "ImageMetadataValueUnknown",
+            ["none"] = "ImageMetadataValueNone",
+            ["old JPEG"] = "ImageMetadataValueOldJpeg",
+            ["white is zero"] = "ImageMetadataValueWhiteIsZero",
+            ["black is zero"] = "ImageMetadataValueBlackIsZero",
+            ["palette color"] = "ImageMetadataValuePaletteColor",
+            ["transparency mask"] = "ImageMetadataValueTransparencyMask",
+            ["separated"] = "ImageMetadataValueSeparated",
+            ["sRGB"] = "ImageMetadataValueSrgb",
+        };
     private enum PreviewInfoRailTab { Info, Exif, More }
     private enum PreviewHostOwner { Raster, Parser }
     private enum PreviewFailureKind { Content, TimedOut, Service, Surface }
@@ -401,7 +422,7 @@ public sealed partial class MainWindow : Window
             _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
             _native.Start(OnNativeIntent);
             AppStartupTiming.Mark("native-hook-ready");
-            StatusText.Text = UiStrings.Ready.ToLowerInvariant();
+            StatusText.Text = UiStrings.Ready;
             DiagLog.Write("App", "native hook installed; RasterHost is lazy");
             _ = RepairAutoStartAsync(_lifetimeCts.Token);
             _ = PrewarmPreviewHostsAsync(_lifetimeCts.Token);
@@ -418,7 +439,7 @@ public sealed partial class MainWindow : Window
                 ExitApp();
                 return;
             }
-            StatusText.Text = UiStrings.StartupErrorPrefix + ex.Message;
+            StatusText.Text = UiStrings.StartupFailedMessage;
             StatusBar.Visibility = Visibility.Visible;
             ShowPreviewWindow(activate: true);
         }
@@ -982,7 +1003,7 @@ public sealed partial class MainWindow : Window
                     PreviewReady r when r.Listing is not null => ShowListingPreview(r),
                     PreviewReady r when r.Markdown is not null => ShowTextPreview(r),
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
-                    _ => $"{nativeReady.Kind}: {nativeReady.Title}",
+                    _ => UiStrings.BuildPreviewStatus(nativeReady.Kind, nativeReady.Title),
                 };
                 RevealPreviewWindow(ShouldActivatePreview(nativeReady));
                 return;
@@ -1381,7 +1402,7 @@ public sealed partial class MainWindow : Window
 
         Title = title;
         PreviewTitleText.Text = title;
-        PreviewKindPillText.Text = ready.Kind.ToUpperInvariant();
+        PreviewKindPillText.Text = LocalizePreviewKind(ready.Kind);
         PreviewMetaText.Text = BuildPreviewMetaLine(ready, path, _currentProbe);
 
         _isRasterChromeEnabled = showRasterTools;
@@ -1506,7 +1527,7 @@ public sealed partial class MainWindow : Window
         if (ready.OfficeLayout is { Pages.Length: > 0 } layout)
             return FormatPageCount(layout.Pages.Length);
         if (ready.Listing is { } listing)
-            return listing.Summary;
+            return ListingPreviewPresenter.BuildRootSummary(listing);
         if (ready.Table is { } table)
             return UiStrings.Format(UiStrings.TableDimensionsFormat, table.TotalRows, table.TotalColumns);
         return UiStrings.EmptyValue;
@@ -1520,8 +1541,12 @@ public sealed partial class MainWindow : Window
         string ext = string.IsNullOrWhiteSpace(path)
             ? ""
             : System.IO.Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
-        return string.IsNullOrEmpty(ext) ? ready.Kind : $"{ext} {ready.Kind}";
+        string kind = LocalizePreviewKind(ready.Kind);
+        return string.IsNullOrEmpty(ext) ? kind : $"{ext} {kind}";
     }
+
+    private static string LocalizePreviewKind(string? kind)
+        => UiStrings.LocalizePreviewKind(kind);
 
     private static string FileSizeText(string? path, FileProbe? probe)
     {
@@ -1563,7 +1588,7 @@ public sealed partial class MainWindow : Window
             TextContent = UiStrings.Format(
                 UiStrings.CloudMetadataPreviewFormat,
                 fileName,
-                probe.Kind,
+                LocalizePreviewKind(probe.Kind),
                 FormatBytes(probe.Size),
                 modified,
                 status),
@@ -1756,7 +1781,7 @@ public sealed partial class MainWindow : Window
             else if (ErrorActionsPanel.Visibility == Visibility.Visible)
                 ErrorOpenFileButton.Focus(FocusState.Programmatic);
         });
-        return "error: " + ErrorText.Text;
+        return UiStrings.Format(UiStrings.Get("PreviewErrorStatusFormat"), ErrorText.Text);
     }
 
     private void FadeInPreviewContent()
@@ -1812,7 +1837,8 @@ public sealed partial class MainWindow : Window
                 handleConsumed = true;
                 if (!_pdfPresenter.AttachSurface(surface, out string? pdfError))
                 {
-                    StatusText.Text = pdfError ?? UiStrings.PdfPageFailed;
+                    DiagLog.Write("App", "pdf page surface attach failed: " + pdfError);
+                    StatusText.Text = UiStrings.PdfPageFailed;
                     return;
                 }
                 pdfAttachWatch.Stop();
@@ -2592,53 +2618,68 @@ public sealed partial class MainWindow : Window
     private void RenderImageMetadata(ImageMetadata metadata)
     {
         var rows = new List<(string Label, string Value)>();
-        AddIfValue(rows, "Format", metadata.Format);
-        AddIfValue(rows, "Title", metadata.Title);
-        AddIfValue(rows, "Comment", metadata.Comment);
-        AddIfValue(rows, "Dimensions", metadata.Width is > 0 && metadata.Height is > 0 ? $"{metadata.Width.Value:N0} x {metadata.Height.Value:N0}" : null);
-        AddIfValue(rows, "Resolution", FormatResolution(
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelFormat"), metadata.Format);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelTitle"), metadata.Title);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelComment"), metadata.Comment);
+        AddIfValue(
+            rows,
+            UiStrings.Get("ImageMetadataLabelDimensions"),
+            metadata.Width is > 0 && metadata.Height is > 0
+                ? UiStrings.Format(
+                    UiStrings.Get("ImageMetadataDimensionsFormat"),
+                    metadata.Width.Value,
+                    metadata.Height.Value)
+                : null);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelResolution"), FormatResolution(
             metadata.HorizontalResolution,
             metadata.VerticalResolution));
-        AddIfValue(rows, "Bit depth", metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
-        AddIfValue(rows, "Color type", metadata.ColorType);
-        AddIfValue(rows, "Compression", metadata.Compression);
-        AddIfValue(rows, "Alpha", metadata.HasAlpha.HasValue ? (metadata.HasAlpha.Value ? "yes" : "no") : null);
-        AddIfValue(rows, "Interlace", metadata.Interlace);
-        AddIfValue(rows, "Animated", metadata.Animated.HasValue ? (metadata.Animated.Value ? "yes" : "no") : null);
-        AddIfValue(rows, "Frames", metadata.FrameCount?.ToString(CultureInfo.InvariantCulture));
-        AddIfValue(rows, "Animation duration", metadata.DurationMs is > 0 ? $"{metadata.DurationMs.Value / 1000.0:0.###} s" : null);
-        AddIfValue(rows, "Date taken", FormatExifDateTime(metadata.DateTime));
-        AddIfValue(rows, "Camera", JoinNonEmpty(metadata.Make, metadata.Model));
-        AddIfValue(rows, "Lens", JoinNonEmpty(metadata.LensMake, metadata.LensModel));
-        AddIfValue(rows, "Focal length", FormatDoubleWithUnit(metadata.FocalLength, "mm"));
-        AddIfValue(rows, "35mm equivalent", FormatDoubleWithUnit(metadata.FocalLengthIn35mmFilm, "mm"));
-        AddIfValue(rows, "Aperture", metadata.FNumber is > 0 ? $"f/{metadata.FNumber.Value:0.0}" : null);
-        AddIfValue(rows, "Max aperture", metadata.MaxAperture is > 0 ? $"f/{metadata.MaxAperture.Value:0.0}" : null);
-        AddIfValue(rows, "Shutter speed", FormatExposureSeconds(metadata.ExposureTime));
-        AddIfValue(rows, "ISO", metadata.Iso?.ToString(CultureInfo.InvariantCulture));
-        AddIfValue(rows, "Exposure bias", FormatDoubleWithUnit(metadata.ExposureBias, "EV"));
-        AddIfValue(rows, "Exposure program", FormatExifEnum(metadata.ExposureProgram, ExposureProgramNames));
-        AddIfValue(rows, "Exposure mode", FormatExifEnum(metadata.ExposureMode, ExposureModeNames));
-        AddIfValue(rows, "Metering", FormatExifEnum(metadata.MeteringMode, MeteringModeNames));
-        AddIfValue(rows, "White balance", FormatExifEnum(metadata.WhiteBalance, WhiteBalanceNames));
-        AddIfValue(rows, "Light source", FormatExifEnum(metadata.LightSource, LightSourceNames));
-        AddIfValue(rows, "Flash", FormatFlash(metadata.Flash));
-        AddIfValue(rows, "Digital zoom", FormatDoubleWithUnit(metadata.DigitalZoomRatio, "x"));
-        AddIfValue(rows, "Subject distance", FormatDoubleWithUnit(metadata.SubjectDistance, "m"));
-        AddIfValue(rows, "Orientation", metadata.Orientation?.ToString(CultureInfo.InvariantCulture));
-        AddIfValue(rows, "Photometric", metadata.PhotometricInterpretation);
-        AddIfValue(rows, "Contrast", FormatExifEnum(metadata.Contrast, NormalHardSoftNames));
-        AddIfValue(rows, "Saturation", FormatExifEnum(metadata.Saturation, NormalHardSoftNames));
-        AddIfValue(rows, "Sharpness", FormatExifEnum(metadata.Sharpness, NormalHardSoftNames));
-        AddIfValue(rows, "Gain control", FormatExifEnum(metadata.GainControl, GainControlNames));
-        AddIfValue(rows, "Color space", FormatExifEnum(metadata.ColorSpace, ColorSpaceNames));
-        AddIfValue(rows, "Location", FormatLocation(metadata.Latitude, metadata.Longitude));
-        AddIfValue(rows, "Altitude", FormatDoubleWithUnit(metadata.Altitude, "m"));
-        AddIfValue(rows, "Direction", FormatDoubleWithUnit(metadata.Direction, "deg"));
-        AddIfValue(rows, "Software", metadata.Software);
-        AddIfValue(rows, "Camera serial", metadata.CameraSerial);
-        AddIfValue(rows, "Lens serial", metadata.LensSerial);
-        AddIfValue(rows, "EXIF version", metadata.ExifVersion);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelBitDepth"), metadata.BitDepth?.ToString(CultureInfo.InvariantCulture));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelColorType"), LocalizeImageMetadataValue(metadata.ColorType));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelCompression"), LocalizeImageMetadataValue(metadata.Compression));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelAlpha"), FormatBoolean(metadata.HasAlpha));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelInterlace"), LocalizeImageMetadataValue(metadata.Interlace));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelAnimated"), FormatBoolean(metadata.Animated));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelFrames"), metadata.FrameCount?.ToString(CultureInfo.CurrentCulture));
+        AddIfValue(
+            rows,
+            UiStrings.Get("ImageMetadataLabelAnimationDuration"),
+            metadata.DurationMs is > 0
+                ? UiStrings.Format(
+                    UiStrings.Get("ImageMetadataDurationSecondsFormat"),
+                    metadata.DurationMs.Value / 1000.0)
+                : null);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelDateTaken"), FormatExifDateTime(metadata.DateTime));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelCamera"), JoinNonEmpty(metadata.Make, metadata.Model));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelLens"), JoinNonEmpty(metadata.LensMake, metadata.LensModel));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelFocalLength"), FormatDoubleWithUnit(metadata.FocalLength, "ImageMetadataMillimetersFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelEquivalent35mm"), FormatDoubleWithUnit(metadata.FocalLengthIn35mmFilm, "ImageMetadataMillimetersFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelAperture"), FormatAperture(metadata.FNumber));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelMaxAperture"), FormatAperture(metadata.MaxAperture));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelShutterSpeed"), FormatExposureSeconds(metadata.ExposureTime));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelIso"), metadata.Iso?.ToString(CultureInfo.CurrentCulture));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelExposureBias"), FormatDoubleWithUnit(metadata.ExposureBias, "ImageMetadataExposureValueFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelExposureProgram"), FormatExifEnum(metadata.ExposureProgram, ExposureProgramResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelExposureMode"), FormatExifEnum(metadata.ExposureMode, ExposureModeResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelMetering"), FormatExifEnum(metadata.MeteringMode, MeteringModeResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelWhiteBalance"), FormatExifEnum(metadata.WhiteBalance, WhiteBalanceResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelLightSource"), FormatExifEnum(metadata.LightSource, LightSourceResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelFlash"), FormatFlash(metadata.Flash));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelDigitalZoom"), FormatDoubleWithUnit(metadata.DigitalZoomRatio, "ImageMetadataZoomRatioFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelSubjectDistance"), FormatDoubleWithUnit(metadata.SubjectDistance, "ImageMetadataMetersFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelOrientation"), metadata.Orientation?.ToString(CultureInfo.CurrentCulture));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelPhotometric"), LocalizeImageMetadataValue(metadata.PhotometricInterpretation));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelContrast"), FormatExifEnum(metadata.Contrast, NormalHardSoftResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelSaturation"), FormatExifEnum(metadata.Saturation, NormalHardSoftResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelSharpness"), FormatExifEnum(metadata.Sharpness, NormalHardSoftResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelGainControl"), FormatExifEnum(metadata.GainControl, GainControlResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelColorSpace"), FormatExifEnum(metadata.ColorSpace, ColorSpaceResourceKeys));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelLocation"), FormatLocation(metadata.Latitude, metadata.Longitude));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelAltitude"), FormatDoubleWithUnit(metadata.Altitude, "ImageMetadataMetersFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelDirection"), FormatDoubleWithUnit(metadata.Direction, "ImageMetadataDegreesFormat"));
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelSoftware"), metadata.Software);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelCameraSerial"), metadata.CameraSerial);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelLensSerial"), metadata.LensSerial);
+        AddIfValue(rows, UiStrings.Get("ImageMetadataLabelExifVersion"), metadata.ExifVersion);
 
         if (rows.Count > 0)
             _exifPresenter?.RenderRows(rows, metadata.Latitude, metadata.Longitude);
@@ -2654,16 +2695,28 @@ public sealed partial class MainWindow : Window
             : trimmed;
     }
 
-    private static string? FormatDoubleWithUnit(double? value, string unit)
-        => value.HasValue ? $"{value.Value:0.###} {unit}" : null;
+    private static string? FormatDoubleWithUnit(double? value, string formatResourceKey)
+        => value.HasValue
+            ? UiStrings.Format(UiStrings.Get(formatResourceKey), value.Value)
+            : null;
+
+    private static string? FormatBoolean(bool? value)
+        => value.HasValue
+            ? UiStrings.Get(value.Value ? "ImageMetadataValueYes" : "ImageMetadataValueNo")
+            : null;
+
+    private static string? FormatAperture(double? value)
+        => value is { } aperture && double.IsFinite(aperture) && aperture > 0
+            ? UiStrings.Format(UiStrings.Get("ImageMetadataApertureFormat"), aperture)
+            : null;
 
     private static string? FormatExposureSeconds(double? value)
     {
         if (!value.HasValue || value.Value <= 0)
             return null;
         return value.Value < 1.0
-            ? $"1/{Math.Round(1.0 / value.Value):0} s"
-            : $"{value.Value:0.###} s";
+            ? UiStrings.Format(UiStrings.Get("ImageMetadataExposureFractionFormat"), Math.Round(1.0 / value.Value))
+            : UiStrings.Format(UiStrings.Get("ImageMetadataExposureSecondsFormat"), value.Value);
     }
 
     private static string? FormatExifEnum(ushort? value, IReadOnlyDictionary<int, string> names)
@@ -2697,12 +2750,27 @@ public sealed partial class MainWindow : Window
             return null;
         if (horizontal.HasValue && vertical.HasValue
             && Math.Abs(horizontal.Value - vertical.Value) < 0.001)
-            return $"{horizontal.Value:0.##} dpi";
-        string? horizontalText = horizontal.HasValue ? $"{horizontal.Value:0.##}" : null;
-        string? verticalText = vertical.HasValue ? $"{vertical.Value:0.##}" : null;
-        return JoinNonEmpty(horizontalText, verticalText) is { } joined
-            ? $"{joined} dpi"
-            : null;
+            return UiStrings.Format(UiStrings.Get("ImageMetadataResolutionDpiFormat"), horizontal.Value);
+        if (horizontal.HasValue && vertical.HasValue)
+        {
+            return UiStrings.Format(
+                UiStrings.Get("ImageMetadataResolutionPairDpiFormat"),
+                horizontal.Value,
+                vertical.Value);
+        }
+        return UiStrings.Format(
+            UiStrings.Get("ImageMetadataResolutionDpiFormat"),
+            horizontal ?? vertical!.Value);
+    }
+
+    private static string? LocalizeImageMetadataValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        string trimmed = value.Trim();
+        return ImageMetadataValueResourceKeys.TryGetValue(trimmed, out string? resourceKey)
+            ? UiStrings.Get(resourceKey)
+            : trimmed;
     }
 
     private static string? FormatExifEnum(string? raw, IReadOnlyDictionary<int, string> names)
@@ -2712,7 +2780,9 @@ public sealed partial class MainWindow : Window
         string trimmed = raw.Trim();
         if (!int.TryParse(trimmed, out int value))
             return trimmed;
-        return names.TryGetValue(value, out string? name) ? name : trimmed;
+        return names.TryGetValue(value, out string? resourceKey)
+            ? UiStrings.Get(resourceKey)
+            : trimmed;
     }
 
     private static string? FormatFlash(string? raw)
@@ -2723,16 +2793,18 @@ public sealed partial class MainWindow : Window
             return raw;
 
         var parts = new List<string>();
-        parts.Add((flags & 0x1) != 0 ? "Fired" : "Did not fire");
+        parts.Add(UiStrings.Get((flags & 0x1) != 0
+            ? "ImageMetadataFlashFired"
+            : "ImageMetadataFlashDidNotFire"));
         if ((flags & 0x18) == 0x18)
-            parts.Add("Auto");
+            parts.Add(UiStrings.Get("ImageMetadataFlashAuto"));
         if ((flags & 0x40) != 0)
-            parts.Add("Red-eye reduction");
+            parts.Add(UiStrings.Get("ImageMetadataFlashRedEyeReduction"));
         if ((flags & 0x6) == 0x4)
-            parts.Add("Return detected");
+            parts.Add(UiStrings.Get("ImageMetadataFlashReturnDetected"));
         else if ((flags & 0x6) == 0x6)
-            parts.Add("Return not detected");
-        return string.Join(", ", parts);
+            parts.Add(UiStrings.Get("ImageMetadataFlashReturnNotDetected"));
+        return string.Join(UiStrings.Get("ImageMetadataValueSeparator"), parts);
     }
 
     private static string? FormatLocation(double? latitude, double? longitude)
@@ -3295,7 +3367,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             DiagLog.Write("App", "delete preview file failed: " + ex.Message);
-            StatusText.Text = ex.Message;
+            StatusText.Text = UiStrings.Get("DeleteFileFailed");
             StatusBar.Visibility = Visibility.Visible;
         }
     }
@@ -3392,12 +3464,14 @@ public sealed partial class MainWindow : Window
     {
         double value = bytes;
         int unit = 0;
-        while (value >= 1024 && unit < ByteUnits.Length - 1)
+        while (value >= 1024 && unit < ByteSizeFormatResourceKeys.Length - 1)
         {
             value /= 1024;
             unit++;
         }
-        return unit == 0 ? $"{bytes:N0} B" : $"{value:0.##} {ByteUnits[unit]}";
+        return UiStrings.Format(
+            UiStrings.Get(ByteSizeFormatResourceKeys[unit]),
+            unit == 0 ? bytes : value);
     }
 
     private void EnsureCompositor()
@@ -3620,7 +3694,7 @@ public sealed partial class MainWindow : Window
         {
             _native.Stop();
             _native.Start(OnNativeIntent);
-            StatusText.Text = UiStrings.Ready.ToLowerInvariant();
+            StatusText.Text = UiStrings.Ready;
             DiagLog.Write("App", "native hook restarted from settings");
             return true;
         }

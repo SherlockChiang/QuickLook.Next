@@ -66,8 +66,9 @@
                                       AutomationProperties.LabeledBy="{x:Bind LanguageTitle}"
                                       SelectionChanged="OnLanguageSelectionChanged">
                                 <ComboBoxItem x:Name="SystemLanguageItem" Tag="system" />
-                                <ComboBoxItem Content="English" Tag="en-US" />
-                                <ComboBoxItem Content="简体中文" Tag="zh-CN" />
+                                <ComboBoxItem x:Name="EnglishLanguageItem" Tag="en-US" />
+                                <ComboBoxItem x:Name="SimplifiedChineseLanguageItem" Tag="zh-CN" />
+                                <ComboBoxItem x:Name="TraditionalChineseLanguageItem" Tag="zh-TW" />
                             </ComboBox>
                         </Grid>
                     </Border>

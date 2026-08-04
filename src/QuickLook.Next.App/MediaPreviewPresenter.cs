@@ -38,7 +38,7 @@ internal sealed class MediaPreviewPresenter
         double scale = width > 0 && height > 0
             ? Math.Min(1.0, Math.Min(maxContent.Width / width, maxContent.Height / height))
             : 1.0;
-        return new MediaPreviewResult($"{ready.Kind}: {ready.Title}", width * scale, height * scale);
+        return new MediaPreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), width * scale, height * scale);
     }
 
     public void Clear()

@@ -132,7 +132,7 @@ internal sealed class PdfPreviewPresenter
                 RequestVisiblePages();
         }));
         return new PdfPreviewResult(
-            $"pdf: {ready.Title}",
+            UiStrings.BuildPreviewStatus(ready.Kind, ready.Title),
             Math.Min(maxContent.Width, _pageDisplayWidths[0] + 64),
             Math.Min(maxContent.Height, _pageDisplayHeights[0] + 96));
     }

@@ -94,7 +94,7 @@ internal sealed class ExifPreviewPresenter
         catch (Exception ex)
         {
             DiagLog.Write("App", "open EXIF location failed: " + ex.Message);
-            _statusText.Text = ex.Message;
+            _statusText.Text = UiStrings.Get("OpenImageLocationFailed");
             _statusBar.Visibility = Visibility.Visible;
         }
     }

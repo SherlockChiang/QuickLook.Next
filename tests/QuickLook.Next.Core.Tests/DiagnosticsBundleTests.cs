@@ -60,6 +60,24 @@ public sealed class DiagnosticsBundleTests
     }
 
     [Fact]
+    public async Task Bundle_preserves_supported_traditional_chinese_language_mode()
+    {
+        using var output = new MemoryStream();
+        DiagnosticsSnapshot snapshot = Snapshot() with
+        {
+            LanguageMode = AppLanguagePolicy.ChineseTraditional,
+        };
+
+        await DiagnosticsBundle.WriteAsync(output, snapshot, DateTimeOffset.UtcNow);
+
+        using var archive = new ZipArchive(new MemoryStream(output.ToArray()), ZipArchiveMode.Read);
+        using JsonDocument json = JsonDocument.Parse(await ReadEntryAsync(archive, "diagnostics.json"));
+        Assert.Equal(
+            AppLanguagePolicy.ChineseTraditional,
+            json.RootElement.GetProperty("preferences").GetProperty("languageMode").GetString());
+    }
+
+    [Fact]
     public async Task Bundle_honors_cancellation_before_writing()
     {
         using var output = new MemoryStream();

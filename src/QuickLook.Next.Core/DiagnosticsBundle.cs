@@ -91,7 +91,7 @@ public static partial class DiagnosticsBundle
             preferences = new
             {
                 settingsSchemaVersion = Math.Clamp(snapshot.SettingsSchemaVersion, 0, 1000),
-                languageMode = NormalizeSetting(snapshot.LanguageMode, ["system", "en-US", "zh-CN"]),
+                languageMode = NormalizeLanguageMode(snapshot.LanguageMode),
                 animationMode = NormalizeSetting(snapshot.AnimationMode, ["system", "always", "still"]),
             },
             capabilities = new
@@ -149,6 +149,9 @@ public static partial class DiagnosticsBundle
 
     private static string NormalizeSetting(string value, string[] allowed)
         => allowed.Contains(value, StringComparer.Ordinal) ? value : "unknown";
+
+    private static string NormalizeLanguageMode(string value)
+        => AppLanguagePolicy.IsSupported(value) ? value : "unknown";
 
     private static async Task WriteEntryAsync(
         ZipArchive archive,

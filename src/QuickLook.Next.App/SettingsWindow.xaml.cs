@@ -48,12 +48,7 @@ public sealed partial class SettingsWindow : Window
         Activated += OnActivated;
 
         AutoStartToggle.IsEnabled = false;
-        LanguageCombo.SelectedIndex = AppSettings.Current.Language switch
-        {
-            "en-US" => 1,
-            "zh-CN" => 2,
-            _ => 0,
-        };
+        SelectComboItem(LanguageCombo, AppSettings.Current.Language);
         AnimationCombo.SelectedIndex = AppSettings.Current.Animation switch
         {
             "always" => 1,
@@ -105,6 +100,9 @@ public sealed partial class SettingsWindow : Window
         LanguageTitle.Text = UiStrings.SettingsLanguage;
         LanguageDescription.Text = UiStrings.SettingsLanguageDescription;
         SystemLanguageItem.Content = UiStrings.SettingsSystemLanguage;
+        EnglishLanguageItem.Content = UiStrings.SettingsLanguageEnglish;
+        SimplifiedChineseLanguageItem.Content = UiStrings.SettingsLanguageSimplifiedChinese;
+        TraditionalChineseLanguageItem.Content = UiStrings.SettingsLanguageTraditionalChinese;
         AnimationTitle.Text = UiStrings.SettingsAnimation;
         AnimationDescription.Text = UiStrings.SettingsAnimationDescription;
         SystemAnimationItem.Content = UiStrings.SettingsAnimationSystem;
@@ -278,6 +276,21 @@ public sealed partial class SettingsWindow : Window
         RestartInfo.Title = UiStrings.SettingsRestartTitle;
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         RestartInfo.IsOpen = true;
+    }
+
+    private static void SelectComboItem(ComboBox comboBox, string tag)
+    {
+        for (int index = 0; index < comboBox.Items.Count; index++)
+        {
+            if (comboBox.Items[index] is ComboBoxItem item
+                && string.Equals(item.Tag as string, tag, StringComparison.Ordinal))
+            {
+                comboBox.SelectedIndex = index;
+                return;
+            }
+        }
+
+        comboBox.SelectedIndex = 0;
     }
 
     private void OnAnimationSelectionChanged(object sender, SelectionChangedEventArgs e)

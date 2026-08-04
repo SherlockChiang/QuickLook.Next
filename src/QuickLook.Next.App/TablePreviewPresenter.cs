@@ -73,7 +73,7 @@ internal sealed class TablePreviewPresenter
         double tableHeight = HeaderHeight + _table!.Rows.Length * RowHeight;
         double widthTarget = Math.Clamp(Math.Min(tableWidth + 72, maxContent.Width), 560, maxContent.Width);
         double heightTarget = Math.Clamp(Math.Min(tableHeight + 132, maxContent.Height), 320, maxContent.Height);
-        return new TablePreviewResult($"{ready.Kind}: {ready.Title}", widthTarget, heightTarget);
+        return new TablePreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), widthTarget, heightTarget);
     }
 
     private void ApplyTable(PreviewTable source)
@@ -108,7 +108,9 @@ internal sealed class TablePreviewPresenter
                 CornerRadius = new CornerRadius(5),
                 Tag = index,
             };
-            AutomationProperties.SetName(button, $"Sheet {_sheets[index].Name}");
+            AutomationProperties.SetName(
+                button,
+                UiStrings.Format(UiStrings.Get("TableSheetTabAccessibleNameFormat"), _sheets[index].Name));
             button.Click += (_, _) => SelectSheet(sheetIndex);
             _sheetTabsPanel.Children.Add(button);
         }

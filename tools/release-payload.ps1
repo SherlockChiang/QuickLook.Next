@@ -82,7 +82,7 @@ function Get-QuickLookReleasePayload {
     function Get-PrunedAppLocaleDirectories([string]$AppOutput) {
         $retainedLocales = [Collections.Generic.HashSet[string]]::new(
             [StringComparer]::OrdinalIgnoreCase)
-        foreach ($name in @("en-US", "zh-CN")) {
+        foreach ($name in @("en-US", "zh-CN", "zh-TW")) {
             [void]$retainedLocales.Add($name)
         }
 

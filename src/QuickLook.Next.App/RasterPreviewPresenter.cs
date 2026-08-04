@@ -63,7 +63,7 @@ internal sealed class RasterPreviewPresenter
             height = h + ToolbarHeight;
         }
 
-        return new RasterPreviewResult($"{ready.Kind}: {ready.Title}", width, height);
+        return new RasterPreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), width, height);
     }
 
     public bool AttachSurface(Compositor compositor, PreviewSurface surface, out string? error)

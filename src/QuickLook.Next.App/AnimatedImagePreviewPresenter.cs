@@ -120,7 +120,7 @@ internal sealed class AnimatedImagePreviewPresenter
 
             double width = frames.Width * scale + InfoRailWidth;
             double height = frames.Height * scale + ToolbarHeight;
-            return new AnimatedImagePreviewResult($"{ready.Kind}: {ready.Title}", width, height);
+            return new AnimatedImagePreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), width, height);
         }
         catch
         {

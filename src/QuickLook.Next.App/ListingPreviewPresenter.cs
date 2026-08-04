@@ -89,7 +89,8 @@ internal sealed class ListingPreviewPresenter
         SetFilterText("");
         RenderListing();
         var size = EstimatePreviewSize(maxContent);
-        return new ListingPreviewResult($"{ready.Kind}: {ready.Title}", size.Width, size.Height);
+        string title = ready.Listing?.RootName ?? ready.Title;
+        return new ListingPreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, title), size.Width, size.Height);
     }
 
     public void Reset()
@@ -464,13 +465,13 @@ internal sealed class ListingPreviewPresenter
         }
         else if (string.IsNullOrEmpty(_currentPath))
         {
-            summary = listing.Summary + (listing.IsPartial ? UiStrings.ListingPartialSuffix : "");
+            summary = BuildRootSummary(listing);
         }
         else
         {
             int folders = visibleItems.Count(i => i.IsFolder);
             int files = visibleItems.Count - folders;
-            long bytes = visibleItems.Where(i => !i.IsFolder).Sum(i => i.Size);
+            long bytes = TotalFileBytes(visibleItems);
             summary = UiStrings.Format(UiStrings.ListingSummaryFormat, files, folders, MainWindow.FormatBytes(bytes));
         }
 
@@ -487,6 +488,30 @@ internal sealed class ListingPreviewPresenter
         if (!listing.CanPreviewEntries)
             summary += UiStrings.ListingBrowseOnlySuffix;
         return summary;
+    }
+
+    internal static string BuildRootSummary(PreviewListing listing)
+    {
+        int folders = listing.Items.Count(item => item.IsFolder);
+        int files = listing.Items.Length - folders;
+        string summary = UiStrings.Format(
+            UiStrings.ListingSummaryFormat,
+            files,
+            folders,
+            MainWindow.FormatBytes(TotalFileBytes(listing.Items)));
+        return listing.IsPartial ? summary + UiStrings.ListingPartialSuffix : summary;
+    }
+
+    private static long TotalFileBytes(IEnumerable<PreviewListingItem> items)
+    {
+        long total = 0;
+        foreach (PreviewListingItem item in items.Where(item => !item.IsFolder && item.Size > 0))
+        {
+            total = item.Size > long.MaxValue - total
+                ? long.MaxValue
+                : total + item.Size;
+        }
+        return total;
     }
 
     private void SetHeader(Button button, string column, string label)

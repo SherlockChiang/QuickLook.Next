@@ -5,6 +5,7 @@
   <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
   <data name="AppName" xml:space="preserve"><value>QuickLook Next</value></data>
+  <data name="AppDescription" xml:space="preserve"><value>在文件资源管理器中按空格键预览文件。</value></data>
   <data name="Ready" xml:space="preserve"><value>就绪</value></data>
   <data name="ReadyKind" xml:space="preserve"><value>就绪</value></data>
   <data name="PreviewReadyAnnouncement" xml:space="preserve"><value>预览已就绪</value></data>
@@ -106,7 +107,7 @@
   <data name="SettingsSaveFailedMessage" xml:space="preserve"><value>QuickLook Next 无法保存此设置。</value></data>
   <data name="ListingReading" xml:space="preserve"><value>正在读取文件夹...</value></data>
   <data name="ListingError" xml:space="preserve"><value>无法读取此文件夹</value></data>
-  <data name="StartupErrorPrefix" xml:space="preserve"><value>启动错误：</value></data>
+  <data name="StartupFailedMessage" xml:space="preserve"><value>QuickLook Next 无法正常启动。</value></data>
   <data name="MovedToRecycleBin" xml:space="preserve"><value>已移至回收站</value></data>
   <data name="DeleteFileTitle" xml:space="preserve"><value>将文件移至回收站？</value></data>
   <data name="DeleteFileMessage" xml:space="preserve"><value>{0} 将被移至回收站。</value></data>
@@ -279,4 +280,172 @@
   <data name="ListingModifiedHeader.AutomationProperties.Name" xml:space="preserve"><value>按修改时间排序</value></data>
   <data name="ListingTypeHeader.AutomationProperties.Name" xml:space="preserve"><value>按类型排序</value></data>
   <data name="ListingSizeHeader.AutomationProperties.Name" xml:space="preserve"><value>按大小排序</value></data>
+  <data name="SettingsLanguageEnglish" xml:space="preserve"><value>英语</value></data>
+  <data name="SettingsLanguageSimplifiedChinese" xml:space="preserve"><value>简体中文</value></data>
+  <data name="SettingsLanguageTraditionalChinese" xml:space="preserve"><value>繁体中文</value></data>
+  <data name="PreviewStatusFormat" xml:space="preserve"><value>{0}：{1}</value></data>
+  <data name="PreviewErrorStatusFormat" xml:space="preserve"><value>错误：{0}</value></data>
+  <data name="PreviewKindImage" xml:space="preserve"><value>图像</value></data>
+  <data name="PreviewKindPdf" xml:space="preserve"><value>PDF</value></data>
+  <data name="PreviewKindText" xml:space="preserve"><value>文本</value></data>
+  <data name="PreviewKindMarkdown" xml:space="preserve"><value>Markdown</value></data>
+  <data name="PreviewKindTable" xml:space="preserve"><value>表格</value></data>
+  <data name="PreviewKindFolder" xml:space="preserve"><value>文件夹</value></data>
+  <data name="PreviewKindArchive" xml:space="preserve"><value>压缩包</value></data>
+  <data name="PreviewKindDocument" xml:space="preserve"><value>文档</value></data>
+  <data name="PreviewKindPresentation" xml:space="preserve"><value>演示文稿</value></data>
+  <data name="PreviewKindWorkbook" xml:space="preserve"><value>工作簿</value></data>
+  <data name="PreviewKindDatabase" xml:space="preserve"><value>数据库</value></data>
+  <data name="PreviewKindPackage" xml:space="preserve"><value>应用包</value></data>
+  <data name="PreviewKindCertificate" xml:space="preserve"><value>证书</value></data>
+  <data name="PreviewKindExecutable" xml:space="preserve"><value>可执行文件</value></data>
+  <data name="PreviewKindEbook" xml:space="preserve"><value>电子书</value></data>
+  <data name="PreviewKindTorrent" xml:space="preserve"><value>种子</value></data>
+  <data name="PreviewKindMedia" xml:space="preserve"><value>媒体</value></data>
+  <data name="PreviewKindVideo" xml:space="preserve"><value>视频</value></data>
+  <data name="PreviewKindAudio" xml:space="preserve"><value>音频</value></data>
+  <data name="PreviewKindFont" xml:space="preserve"><value>字体</value></data>
+  <data name="PreviewKindBinary" xml:space="preserve"><value>二进制</value></data>
+  <data name="PreviewKindUnknown" xml:space="preserve"><value>未知</value></data>
+  <data name="TableSheetTabAccessibleNameFormat" xml:space="preserve"><value>工作表 {0}</value></data>
+  <data name="ImageMetadataLabelFormat" xml:space="preserve"><value>格式</value></data>
+  <data name="ImageMetadataLabelTitle" xml:space="preserve"><value>标题</value></data>
+  <data name="ImageMetadataLabelComment" xml:space="preserve"><value>注释</value></data>
+  <data name="ImageMetadataLabelDimensions" xml:space="preserve"><value>尺寸</value></data>
+  <data name="ImageMetadataLabelResolution" xml:space="preserve"><value>分辨率</value></data>
+  <data name="ImageMetadataLabelBitDepth" xml:space="preserve"><value>位深度</value></data>
+  <data name="ImageMetadataLabelColorType" xml:space="preserve"><value>颜色类型</value></data>
+  <data name="ImageMetadataLabelCompression" xml:space="preserve"><value>压缩方式</value></data>
+  <data name="ImageMetadataLabelAlpha" xml:space="preserve"><value>Alpha 通道</value></data>
+  <data name="ImageMetadataLabelInterlace" xml:space="preserve"><value>隔行扫描</value></data>
+  <data name="ImageMetadataLabelAnimated" xml:space="preserve"><value>动画</value></data>
+  <data name="ImageMetadataLabelFrames" xml:space="preserve"><value>帧数</value></data>
+  <data name="ImageMetadataLabelAnimationDuration" xml:space="preserve"><value>动画时长</value></data>
+  <data name="ImageMetadataLabelDateTaken" xml:space="preserve"><value>拍摄时间</value></data>
+  <data name="ImageMetadataLabelCamera" xml:space="preserve"><value>相机</value></data>
+  <data name="ImageMetadataLabelLens" xml:space="preserve"><value>镜头</value></data>
+  <data name="ImageMetadataLabelFocalLength" xml:space="preserve"><value>焦距</value></data>
+  <data name="ImageMetadataLabelEquivalent35mm" xml:space="preserve"><value>35 毫米等效焦距</value></data>
+  <data name="ImageMetadataLabelAperture" xml:space="preserve"><value>光圈</value></data>
+  <data name="ImageMetadataLabelMaxAperture" xml:space="preserve"><value>最大光圈</value></data>
+  <data name="ImageMetadataLabelShutterSpeed" xml:space="preserve"><value>快门速度</value></data>
+  <data name="ImageMetadataLabelIso" xml:space="preserve"><value>ISO</value></data>
+  <data name="ImageMetadataLabelExposureBias" xml:space="preserve"><value>曝光补偿</value></data>
+  <data name="ImageMetadataLabelExposureProgram" xml:space="preserve"><value>曝光程序</value></data>
+  <data name="ImageMetadataLabelExposureMode" xml:space="preserve"><value>曝光模式</value></data>
+  <data name="ImageMetadataLabelMetering" xml:space="preserve"><value>测光模式</value></data>
+  <data name="ImageMetadataLabelWhiteBalance" xml:space="preserve"><value>白平衡</value></data>
+  <data name="ImageMetadataLabelLightSource" xml:space="preserve"><value>光源</value></data>
+  <data name="ImageMetadataLabelFlash" xml:space="preserve"><value>闪光灯</value></data>
+  <data name="ImageMetadataLabelDigitalZoom" xml:space="preserve"><value>数码变焦</value></data>
+  <data name="ImageMetadataLabelSubjectDistance" xml:space="preserve"><value>主体距离</value></data>
+  <data name="ImageMetadataLabelOrientation" xml:space="preserve"><value>方向</value></data>
+  <data name="ImageMetadataLabelPhotometric" xml:space="preserve"><value>光度解释</value></data>
+  <data name="ImageMetadataLabelContrast" xml:space="preserve"><value>对比度</value></data>
+  <data name="ImageMetadataLabelSaturation" xml:space="preserve"><value>饱和度</value></data>
+  <data name="ImageMetadataLabelSharpness" xml:space="preserve"><value>锐度</value></data>
+  <data name="ImageMetadataLabelGainControl" xml:space="preserve"><value>增益控制</value></data>
+  <data name="ImageMetadataLabelColorSpace" xml:space="preserve"><value>色彩空间</value></data>
+  <data name="ImageMetadataLabelLocation" xml:space="preserve"><value>位置</value></data>
+  <data name="ImageMetadataLabelAltitude" xml:space="preserve"><value>海拔</value></data>
+  <data name="ImageMetadataLabelDirection" xml:space="preserve"><value>方位角</value></data>
+  <data name="ImageMetadataLabelSoftware" xml:space="preserve"><value>软件</value></data>
+  <data name="ImageMetadataLabelCameraSerial" xml:space="preserve"><value>相机序列号</value></data>
+  <data name="ImageMetadataLabelLensSerial" xml:space="preserve"><value>镜头序列号</value></data>
+  <data name="ImageMetadataLabelExifVersion" xml:space="preserve"><value>EXIF 版本</value></data>
+  <data name="ImageMetadataDimensionsFormat" xml:space="preserve"><value>{0:N0} × {1:N0}</value></data>
+  <data name="ImageMetadataDurationSecondsFormat" xml:space="preserve"><value>{0:0.###} 秒</value></data>
+  <data name="ImageMetadataApertureFormat" xml:space="preserve"><value>f/{0:0.###}</value></data>
+  <data name="ImageMetadataExposureFractionFormat" xml:space="preserve"><value>1/{0:0} 秒</value></data>
+  <data name="ImageMetadataExposureSecondsFormat" xml:space="preserve"><value>{0:0.###} 秒</value></data>
+  <data name="ImageMetadataResolutionDpiFormat" xml:space="preserve"><value>{0:0.##} dpi</value></data>
+  <data name="ImageMetadataResolutionPairDpiFormat" xml:space="preserve"><value>{0:0.##} × {1:0.##} dpi</value></data>
+  <data name="ImageMetadataMillimetersFormat" xml:space="preserve"><value>{0:0.###} 毫米</value></data>
+  <data name="ImageMetadataExposureValueFormat" xml:space="preserve"><value>{0:0.###} EV</value></data>
+  <data name="ImageMetadataZoomRatioFormat" xml:space="preserve"><value>{0:0.###}×</value></data>
+  <data name="ImageMetadataMetersFormat" xml:space="preserve"><value>{0:0.###} 米</value></data>
+  <data name="ImageMetadataDegreesFormat" xml:space="preserve"><value>{0:0.###}°</value></data>
+  <data name="DeleteFileFailed" xml:space="preserve"><value>无法将文件移到回收站。</value></data>
+  <data name="OpenImageLocationFailed" xml:space="preserve"><value>无法在 Google 地图中打开图像位置。</value></data>
+  <data name="ByteSizeBytesFormat" xml:space="preserve"><value>{0:N0} 字节</value></data>
+  <data name="ByteSizeKilobytesFormat" xml:space="preserve"><value>{0:0.##} KB</value></data>
+  <data name="ByteSizeMegabytesFormat" xml:space="preserve"><value>{0:0.##} MB</value></data>
+  <data name="ByteSizeGigabytesFormat" xml:space="preserve"><value>{0:0.##} GB</value></data>
+  <data name="ByteSizeTerabytesFormat" xml:space="preserve"><value>{0:0.##} TB</value></data>
+  <data name="ListingFileTypeDisplay" xml:space="preserve"><value>文件</value></data>
+  <data name="ListingTypedFileFormat" xml:space="preserve"><value>{0} 文件</value></data>
+  <data name="ImageMetadataValueSeparator" xml:space="preserve"><value>、</value></data>
+  <data name="ImageMetadataValueYes" xml:space="preserve"><value>是</value></data>
+  <data name="ImageMetadataValueNo" xml:space="preserve"><value>否</value></data>
+  <data name="ImageMetadataValueNotDefined" xml:space="preserve"><value>未定义</value></data>
+  <data name="ImageMetadataValueManual" xml:space="preserve"><value>手动</value></data>
+  <data name="ImageMetadataValueNormalProgram" xml:space="preserve"><value>常规程序</value></data>
+  <data name="ImageMetadataValueAperturePriority" xml:space="preserve"><value>光圈优先</value></data>
+  <data name="ImageMetadataValueShutterPriority" xml:space="preserve"><value>快门优先</value></data>
+  <data name="ImageMetadataValueCreativeProgram" xml:space="preserve"><value>创意程序</value></data>
+  <data name="ImageMetadataValueActionProgram" xml:space="preserve"><value>运动程序</value></data>
+  <data name="ImageMetadataValuePortraitMode" xml:space="preserve"><value>人像模式</value></data>
+  <data name="ImageMetadataValueLandscapeMode" xml:space="preserve"><value>风景模式</value></data>
+  <data name="ImageMetadataValueAutoExposure" xml:space="preserve"><value>自动曝光</value></data>
+  <data name="ImageMetadataValueManualExposure" xml:space="preserve"><value>手动曝光</value></data>
+  <data name="ImageMetadataValueAutoBracket" xml:space="preserve"><value>自动包围曝光</value></data>
+  <data name="ImageMetadataValueUnknown" xml:space="preserve"><value>未知</value></data>
+  <data name="ImageMetadataValueAverage" xml:space="preserve"><value>平均</value></data>
+  <data name="ImageMetadataValueCenterWeightedAverage" xml:space="preserve"><value>中央重点平均</value></data>
+  <data name="ImageMetadataValueSpot" xml:space="preserve"><value>点测光</value></data>
+  <data name="ImageMetadataValueMultiSpot" xml:space="preserve"><value>多点测光</value></data>
+  <data name="ImageMetadataValuePattern" xml:space="preserve"><value>分区测光</value></data>
+  <data name="ImageMetadataValuePartial" xml:space="preserve"><value>局部测光</value></data>
+  <data name="ImageMetadataValueOther" xml:space="preserve"><value>其他</value></data>
+  <data name="ImageMetadataValueAuto" xml:space="preserve"><value>自动</value></data>
+  <data name="ImageMetadataValueDaylight" xml:space="preserve"><value>日光</value></data>
+  <data name="ImageMetadataValueFluorescent" xml:space="preserve"><value>荧光灯</value></data>
+  <data name="ImageMetadataValueTungsten" xml:space="preserve"><value>钨丝灯</value></data>
+  <data name="ImageMetadataValueFlash" xml:space="preserve"><value>闪光灯</value></data>
+  <data name="ImageMetadataValueFineWeather" xml:space="preserve"><value>晴天</value></data>
+  <data name="ImageMetadataValueCloudy" xml:space="preserve"><value>阴天</value></data>
+  <data name="ImageMetadataValueShade" xml:space="preserve"><value>阴影</value></data>
+  <data name="ImageMetadataValueDaylightFluorescent" xml:space="preserve"><value>日光型荧光灯</value></data>
+  <data name="ImageMetadataValueDayWhiteFluorescent" xml:space="preserve"><value>日白型荧光灯</value></data>
+  <data name="ImageMetadataValueCoolWhiteFluorescent" xml:space="preserve"><value>冷白型荧光灯</value></data>
+  <data name="ImageMetadataValueWhiteFluorescent" xml:space="preserve"><value>白色荧光灯</value></data>
+  <data name="ImageMetadataValueStandardLightA" xml:space="preserve"><value>标准光源 A</value></data>
+  <data name="ImageMetadataValueStandardLightB" xml:space="preserve"><value>标准光源 B</value></data>
+  <data name="ImageMetadataValueStandardLightC" xml:space="preserve"><value>标准光源 C</value></data>
+  <data name="ImageMetadataValueIsoStudioTungsten" xml:space="preserve"><value>ISO 影棚钨丝灯</value></data>
+  <data name="ImageMetadataValueUncalibrated" xml:space="preserve"><value>未校准</value></data>
+  <data name="ImageMetadataValueNormal" xml:space="preserve"><value>标准</value></data>
+  <data name="ImageMetadataValueSoft" xml:space="preserve"><value>柔和</value></data>
+  <data name="ImageMetadataValueHard" xml:space="preserve"><value>强烈</value></data>
+  <data name="ImageMetadataValueNone" xml:space="preserve"><value>无</value></data>
+  <data name="ImageMetadataValueLowGainUp" xml:space="preserve"><value>低增益增强</value></data>
+  <data name="ImageMetadataValueHighGainUp" xml:space="preserve"><value>高增益增强</value></data>
+  <data name="ImageMetadataValueLowGainDown" xml:space="preserve"><value>低增益降低</value></data>
+  <data name="ImageMetadataValueHighGainDown" xml:space="preserve"><value>高增益降低</value></data>
+  <data name="ImageMetadataValueGrayscale" xml:space="preserve"><value>灰度</value></data>
+  <data name="ImageMetadataValueTruecolor" xml:space="preserve"><value>真彩色</value></data>
+  <data name="ImageMetadataValueIndexedColor" xml:space="preserve"><value>索引色</value></data>
+  <data name="ImageMetadataValueGrayscaleWithAlpha" xml:space="preserve"><value>带 Alpha 的灰度</value></data>
+  <data name="ImageMetadataValueTruecolorWithAlpha" xml:space="preserve"><value>带 Alpha 的真彩色</value></data>
+  <data name="ImageMetadataValueOldJpeg" xml:space="preserve"><value>旧式 JPEG</value></data>
+  <data name="ImageMetadataValueWhiteIsZero" xml:space="preserve"><value>白色为零</value></data>
+  <data name="ImageMetadataValueBlackIsZero" xml:space="preserve"><value>黑色为零</value></data>
+  <data name="ImageMetadataValuePaletteColor" xml:space="preserve"><value>调色板颜色</value></data>
+  <data name="ImageMetadataValueTransparencyMask" xml:space="preserve"><value>透明蒙版</value></data>
+  <data name="ImageMetadataValueSeparated" xml:space="preserve"><value>分色</value></data>
+  <data name="ImageMetadataValueUncompressed" xml:space="preserve"><value>未压缩</value></data>
+  <data name="ImageMetadataValueCcittGroup3OneDimensional" xml:space="preserve"><value>CCITT Group 3 一维编码</value></data>
+  <data name="ImageMetadataValueGroup3Fax" xml:space="preserve"><value>Group 3 传真</value></data>
+  <data name="ImageMetadataValueGroup4Fax" xml:space="preserve"><value>Group 4 传真</value></data>
+  <data name="ImageMetadataValueLzw" xml:space="preserve"><value>LZW</value></data>
+  <data name="ImageMetadataValueJpeg" xml:space="preserve"><value>JPEG</value></data>
+  <data name="ImageMetadataValueDeflate" xml:space="preserve"><value>Deflate</value></data>
+  <data name="ImageMetadataValuePackBits" xml:space="preserve"><value>PackBits</value></data>
+  <data name="ImageMetadataValueSrgb" xml:space="preserve"><value>sRGB</value></data>
+  <data name="ImageMetadataFlashFired" xml:space="preserve"><value>已闪光</value></data>
+  <data name="ImageMetadataFlashDidNotFire" xml:space="preserve"><value>未闪光</value></data>
+  <data name="ImageMetadataFlashAuto" xml:space="preserve"><value>自动</value></data>
+  <data name="ImageMetadataFlashRedEyeReduction" xml:space="preserve"><value>防红眼</value></data>
+  <data name="ImageMetadataFlashReturnDetected" xml:space="preserve"><value>检测到回光</value></data>
+  <data name="ImageMetadataFlashReturnNotDetected" xml:space="preserve"><value>未检测到回光</value></data>
 </root>
