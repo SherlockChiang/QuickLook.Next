@@ -4,9 +4,18 @@ use super::{
     file_name, generic_info_json, read_file_prefix,
 };
 
+const MAX_CHM_HEADER_BYTES: usize = 8 * 1024;
+const MAX_CHM_DIRECTORY_ENTRIES: usize = 12;
+const MAX_CHM_ENTRY_NAME_BYTES: usize = 260;
+const MAX_CHM_COMPRESSED_STREAM_SCAN: usize = 32;
+const MAX_CHM_COMPRESSED_STREAMS: usize = 8;
+const MAX_CHM_SYSTEM_STREAM_BYTES: usize = 4 * 1024;
+const MAX_CHM_SYSTEM_FIELDS: usize = 8;
+const MAX_CHM_ENCINT_BYTES: usize = 8;
+
 pub(super) fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
-    let bytes = read_file_prefix(path, 8192).unwrap_or_default();
+    let bytes = read_file_prefix(path, MAX_CHM_HEADER_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, "chm", size, modified_unix);
     if bytes.starts_with(b"ITSF") {
         text.push_str("\nFormat: Microsoft Compiled HTML Help");
@@ -29,10 +38,10 @@ pub(super) fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> Stri
             text.push_str(&format!("\nDirectory offset: 0x{dir_offset:016X}"));
         }
         if let Some(dir_len) = read_u64(&bytes, 48).filter(|value| *value > 0) {
-            text.push_str(&format!(
-                "\nDirectory length: {}",
-                format_bytes(dir_len as i64)
-            ));
+            let formatted_len = i64::try_from(dir_len)
+                .map(format_bytes)
+                .unwrap_or_else(|_| format!("{dir_len} bytes"));
+            text.push_str(&format!("\nDirectory length: {}", formatted_len));
         }
         append_chm_itsp_summary(&mut text, &bytes);
     } else {
@@ -43,12 +52,15 @@ pub(super) fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> Stri
 
 fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
     let Some(dir_offset) = read_u64(bytes, 40)
-        .map(|value| value as usize)
+        .and_then(|value| usize::try_from(value).ok())
         .filter(|value| *value > 0)
     else {
         return;
     };
-    if dir_offset + 56 > bytes.len() || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP") {
+    let Some(header_end) = dir_offset.checked_add(56) else {
+        return;
+    };
+    if header_end > bytes.len() || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP") {
         return;
     }
     let version = read_u32(bytes, dir_offset + 4).unwrap_or(0);
@@ -109,28 +121,38 @@ fn chm_directory_entries(
     if header_len == 0 || block_len < 32 {
         return Vec::new();
     }
-    let block_offset = dir_offset.saturating_add(header_len);
-    if block_offset.saturating_add(block_len) > bytes.len()
-        || bytes.get(block_offset..block_offset + 4) != Some(b"PMGL")
-    {
+    let Some(block_offset) = dir_offset.checked_add(header_len) else {
+        return Vec::new();
+    };
+    let Some(block_end) = block_offset
+        .checked_add(block_len)
+        .filter(|end| *end <= bytes.len())
+    else {
+        return Vec::new();
+    };
+    if bytes.get(block_offset..block_offset + 4) != Some(b"PMGL") {
         return Vec::new();
     }
     let free_space = read_u32(bytes, block_offset + 4).unwrap_or(0) as usize;
-    let entries_end = block_offset
-        .saturating_add(block_len)
-        .saturating_sub(free_space.min(block_len));
+    let entries_end = block_end.saturating_sub(free_space.min(block_len));
     let mut offset = block_offset + 20;
     let mut entries = Vec::new();
-    while offset < entries_end && entries.len() < 12 {
+    while offset < entries_end && entries.len() < MAX_CHM_DIRECTORY_ENTRIES {
         let Some((name_len, next)) = read_chm_encint(bytes, offset, entries_end) else {
             break;
         };
         offset = next;
-        if name_len == 0 || name_len > 260 || offset.saturating_add(name_len) > entries_end {
+        if name_len == 0 || name_len > MAX_CHM_ENTRY_NAME_BYTES {
             break;
         }
-        let name = String::from_utf8_lossy(&bytes[offset..offset + name_len]).to_string();
-        offset += name_len;
+        let Some(name_end) = offset
+            .checked_add(name_len)
+            .filter(|end| *end <= entries_end)
+        else {
+            break;
+        };
+        let name = String::from_utf8_lossy(&bytes[offset..name_end]).to_string();
+        offset = name_end;
         let Some((section, next)) = read_chm_encint(bytes, offset, entries_end) else {
             break;
         };
@@ -157,7 +179,7 @@ fn chm_directory_entries(
 
 fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
     let mut summary = Vec::new();
-    for entry in entries.iter().take(32) {
+    for entry in entries.iter().take(MAX_CHM_COMPRESSED_STREAM_SCAN) {
         let lower = entry.name.to_ascii_lowercase();
         if lower.contains("::dataspace/storage/") || lower.contains("::dataspace/namelist") {
             summary.push(format!(
@@ -171,7 +193,7 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
                 format_bytes(entry.len as i64)
             ));
         }
-        if summary.len() >= 8 {
+        if summary.len() >= MAX_CHM_COMPRESSED_STREAMS {
             break;
         }
     }
@@ -185,23 +207,33 @@ fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'sta
     else {
         return Vec::new();
     };
-    if system.len == 0
-        || system.len > 4096
-        || system.offset.saturating_add(system.len) > bytes.len()
-    {
+    if system.len == 0 || system.len > MAX_CHM_SYSTEM_STREAM_BYTES {
         return Vec::new();
     }
-    let data = &bytes[system.offset..system.offset + system.len];
+    let Some(system_end) = system
+        .offset
+        .checked_add(system.len)
+        .filter(|end| *end <= bytes.len())
+    else {
+        return Vec::new();
+    };
+    let data = &bytes[system.offset..system_end];
     let mut offset = 0usize;
     let mut values = Vec::new();
-    while offset + 4 <= data.len() && values.len() < 8 {
+    while values.len() < MAX_CHM_SYSTEM_FIELDS {
+        let Some(header_end) = offset.checked_add(4).filter(|end| *end <= data.len()) else {
+            break;
+        };
         let code = u16::from_le_bytes([data[offset], data[offset + 1]]);
         let len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
-        offset += 4;
-        if len == 0 || offset.saturating_add(len) > data.len() {
+        offset = header_end;
+        if len == 0 {
             break;
         }
-        let value = String::from_utf8_lossy(&data[offset..offset + len])
+        let Some(value_end) = offset.checked_add(len).filter(|end| *end <= data.len()) else {
+            break;
+        };
+        let value = String::from_utf8_lossy(&data[offset..value_end])
             .trim_matches('\0')
             .trim()
             .to_string();
@@ -210,7 +242,7 @@ fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'sta
             3 if !value.is_empty() => values.push(("Title", value)),
             _ => {}
         }
-        offset += len;
+        offset = value_end;
     }
     values
 }
@@ -218,10 +250,12 @@ fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'sta
 fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, usize)> {
     let mut value = 0usize;
     let mut current = offset;
-    for _ in 0..8 {
+    for _ in 0..MAX_CHM_ENCINT_BYTES {
         let byte = *bytes.get(current).filter(|_| current < limit)?;
         current += 1;
-        value = value.checked_shl(7)?.checked_add((byte & 0x7F) as usize)?;
+        value = value
+            .checked_mul(128)?
+            .checked_add((byte & 0x7F) as usize)?;
         if byte & 0x80 == 0 {
             return Some((value, current));
         }
@@ -232,6 +266,18 @@ fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, 
 #[cfg(test)]
 mod tests {
     use super::append_chm_itsp_summary;
+
+    #[test]
+    fn chm_itsp_summary_rejects_hostile_directory_offsets() {
+        let mut bytes = vec![0u8; 56];
+        bytes[0..4].copy_from_slice(b"ITSF");
+        bytes[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+        let mut text = String::new();
+
+        append_chm_itsp_summary(&mut text, &bytes);
+
+        assert!(text.is_empty());
+    }
 
     #[test]
     fn chm_itsp_summary_reads_directory_header() {
