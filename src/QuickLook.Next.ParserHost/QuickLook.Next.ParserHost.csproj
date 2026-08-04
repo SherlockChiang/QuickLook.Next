@@ -5,6 +5,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>QuickLook.Next.ParserHost</AssemblyName>
     <RootNamespace>QuickLook.Next.ParserHost</RootNamespace>
+    <QuickLookUsesNative>true</QuickLookUsesNative>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
@@ -12,11 +13,5 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="QuickLook.Next.ParserHost.IntegrationTests" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="..\..\native\target\release\quicklook_next_native.dll"
-          Link="quicklook_next_native.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\native\target\release\quicklook_next_native.dll')" />
   </ItemGroup>
 </Project>

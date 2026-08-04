@@ -7,6 +7,7 @@
     <AssemblyName>QuickLook.Next.RasterHost</AssemblyName>
     <RootNamespace>QuickLook.Next.RasterHost</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <QuickLookUsesNative>true</QuickLookUsesNative>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298">
@@ -19,11 +20,5 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="QuickLook.Next.RasterHost.IntegrationTests" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="..\..\native\target\release\quicklook_next_native.dll"
-          Link="quicklook_next_native.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\native\target\release\quicklook_next_native.dll')" />
   </ItemGroup>
 </Project>

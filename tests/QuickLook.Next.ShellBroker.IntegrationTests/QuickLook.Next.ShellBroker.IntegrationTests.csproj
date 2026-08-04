@@ -4,7 +4,6 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IsPackable>false</IsPackable>
     <ShellBrokerOutput>$(MSBuildThisFileDirectory)..\..\src\QuickLook.Next.ShellBroker\bin\$(Configuration)\net10.0-windows10.0.19041.0\win-x64\</ShellBrokerOutput>
-    <NativeDll>$(MSBuildThisFileDirectory)..\..\native\target\release\quicklook_next_native.dll</NativeDll>
     <IconFixture>$(MSBuildThisFileDirectory)..\..\src\QuickLook.Next.App\Assets\QuickLookNext.ico</IconFixture>
   </PropertyGroup>
   <ItemGroup>
@@ -19,13 +18,11 @@
     <ProjectReference Include="..\..\src\QuickLook.Next.ShellBroker\QuickLook.Next.ShellBroker.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <Target Name="StageShellBroker" AfterTargets="Build">
-    <Error Condition="!Exists('$(NativeDll)')" Text="Build the native release DLL before integration tests: cargo build --release --locked --manifest-path native/quicklook_next_native/Cargo.toml" />
     <Error Condition="!Exists('$(IconFixture)')" Text="ShellBroker icon fixture is missing: $(IconFixture)" />
     <ItemGroup>
       <ShellBrokerFiles Include="$(ShellBrokerOutput)**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(ShellBrokerFiles)" DestinationFiles="@(ShellBrokerFiles->'$(OutDir)ShellBroker\%(RecursiveDir)%(Filename)%(Extension)')" />
-    <Copy SourceFiles="$(NativeDll)" DestinationFolder="$(OutDir)ShellBroker" />
     <Copy SourceFiles="$(IconFixture)" DestinationFiles="$(OutDir)QuickLookNext.ico" />
   </Target>
 </Project>

@@ -1,0 +1,22 @@
+<Project>
+  <!-- Projects that cross the Rust FFI boundary opt in with QuickLookUsesNative. -->
+  <ItemGroup Condition="'$(QuickLookUsesNative)' == 'true'">
+    <ProjectReference Include="$(QuickLookNativeProject)"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      GlobalPropertiesToRemove="TargetFramework;RuntimeIdentifier;SelfContained;WindowsAppSDKSelfContained" />
+    <None Include="$(QuickLookNativeDll)"
+          Link="quicklook_next_native.dll"
+          CopyToOutputDirectory="Always"
+          CopyToPublishDirectory="Always"
+          Visible="false" />
+  </ItemGroup>
+
+  <Target Name="ValidateQuickLookNativeOutput"
+          AfterTargets="ResolveProjectReferences"
+          BeforeTargets="CopyFilesToOutputDirectory"
+          Condition="'$(QuickLookUsesNative)' == 'true' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(QuickLookNativeDll)')"
+           Text="The Rust native build completed without producing $(QuickLookNativeDll)." />
+  </Target>
+</Project>

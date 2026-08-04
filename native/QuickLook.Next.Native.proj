@@ -1,0 +1,57 @@
+<Project DefaultTargets="Build">
+  <PropertyGroup>
+    <QuickLookNativeSourceRoot Condition="'$(QuickLookNativeSourceRoot)' == ''">$(MSBuildThisFileDirectory)</QuickLookNativeSourceRoot>
+    <QuickLookNativeManifest Condition="'$(QuickLookNativeManifest)' == ''">$(QuickLookNativeSourceRoot)Cargo.toml</QuickLookNativeManifest>
+    <QuickLookNativeTargetDir Condition="'$(QuickLookNativeTargetDir)' == ''">$(QuickLookNativeSourceRoot)target</QuickLookNativeTargetDir>
+    <QuickLookNativeDll Condition="'$(QuickLookNativeDll)' == ''">$(QuickLookNativeTargetDir)\release\quicklook_next_native.dll</QuickLookNativeDll>
+    <QuickLookNativeBuildStamp Condition="'$(QuickLookNativeBuildStamp)' == ''">$(QuickLookNativeTargetDir)\release\.quicklook-next-native.msbuild.stamp</QuickLookNativeBuildStamp>
+    <QuickLookNativeCargoExecutable Condition="'$(QuickLookNativeCargoExecutable)' == ''">cargo</QuickLookNativeCargoExecutable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <QuickLookNativeInput Include="$(MSBuildProjectFullPath)" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)**\Cargo.toml;
+                                  $(QuickLookNativeSourceRoot)**\build.rs;
+                                  $(QuickLookNativeSourceRoot)**\src\**\*.rs"
+                          Exclude="$(QuickLookNativeTargetDir)\**\*" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)Cargo.lock" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)rust-toolchain.toml"
+                          Condition="Exists('$(QuickLookNativeSourceRoot)rust-toolchain.toml')" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot).cargo\config.toml"
+                          Condition="Exists('$(QuickLookNativeSourceRoot).cargo\config.toml')" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot).cargo\config"
+                          Condition="Exists('$(QuickLookNativeSourceRoot).cargo\config')" />
+    <QuickLookNativeOutput Include="$(QuickLookNativeDll)" />
+  </ItemGroup>
+
+  <Target Name="ValidateNativeBuildInputs">
+    <Error Condition="!Exists('$(QuickLookNativeManifest)')"
+           Text="Rust workspace manifest not found: $(QuickLookNativeManifest)" />
+    <Error Condition="'@(QuickLookNativeInput)' == ''"
+           Text="No Rust build inputs were found under $(QuickLookNativeSourceRoot)." />
+  </Target>
+
+  <Target Name="Build"
+          DependsOnTargets="ValidateNativeBuildInputs"
+          Inputs="@(QuickLookNativeInput)"
+          Outputs="$(QuickLookNativeDll);$(QuickLookNativeBuildStamp)">
+    <Message Text="Building QuickLook Next native DLL with Cargo" Importance="high" />
+    <Exec Command="&quot;$(QuickLookNativeCargoExecutable)&quot; build --workspace --release --locked --manifest-path &quot;$(QuickLookNativeManifest)&quot;"
+          WorkingDirectory="$(QuickLookNativeSourceRoot)"
+          EnvironmentVariables="CARGO_TARGET_DIR=$(QuickLookNativeTargetDir);QUICKLOOK_NEXT_NATIVE_OUTPUT=$(QuickLookNativeDll)" />
+    <Error Condition="!Exists('$(QuickLookNativeDll)')"
+           Text="Cargo succeeded without producing the expected native DLL: $(QuickLookNativeDll)" />
+    <Touch Files="$(QuickLookNativeBuildStamp)" AlwaysCreate="true" />
+  </Target>
+
+  <Target Name="Clean">
+    <Delete Files="$(QuickLookNativeBuildStamp)" />
+  </Target>
+
+  <Target Name="Rebuild" DependsOnTargets="Clean;Build" />
+  <Target Name="Restore" />
+  <Target Name="GetTargetPath" DependsOnTargets="Build" Returns="@(QuickLookNativeOutput)" />
+  <Target Name="GetTargetPathWithTargetPlatformMoniker"
+          DependsOnTargets="Build"
+          Returns="@(QuickLookNativeOutput)" />
+</Project>

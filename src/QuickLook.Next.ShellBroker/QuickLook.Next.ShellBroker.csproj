@@ -5,14 +5,9 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>QuickLook.Next.ShellBroker</AssemblyName>
     <RootNamespace>QuickLook.Next.ShellBroker</RootNamespace>
+    <QuickLookUsesNative>true</QuickLookUsesNative>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="..\..\native\target\release\quicklook_next_native.dll"
-          Link="quicklook_next_native.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\native\target\release\quicklook_next_native.dll')" />
   </ItemGroup>
 </Project>

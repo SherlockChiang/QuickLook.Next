@@ -12,6 +12,8 @@
     <Company>QuickLook Next</Company>
     <Authors>SherlockChiang</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <QuickLookNativeProject>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)native\QuickLook.Next.Native.proj'))</QuickLookNativeProject>
+    <QuickLookNativeDll>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)native\target\release\quicklook_next_native.dll'))</QuickLookNativeDll>
     <VersionFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)VERSION'))</VersionFile>
     <VersionPrefix Condition="'$(VersionPrefix)' == ''">$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</VersionPrefix>
     <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
