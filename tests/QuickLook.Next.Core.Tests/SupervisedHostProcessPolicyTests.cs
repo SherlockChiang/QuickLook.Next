@@ -7,6 +7,7 @@ namespace QuickLook.Next.Core.Tests;
 public sealed class SupervisedHostProcessPolicyTests
 {
     private const uint RequiredErrorMode = 0x0001 | 0x0002 | 0x8000;
+    private const uint WerFaultReportingAlwaysShowUi = 0x0010;
     private const uint WerFaultReportingNoUi = 0x0020;
 
     [Fact]
@@ -21,13 +22,16 @@ public sealed class SupervisedHostProcessPolicyTests
         try
         {
             _ = SetErrorMode(originalErrorMode & ~RequiredErrorMode);
-            Assert.True(WerSetFlags(originalWerFlags & ~WerFaultReportingNoUi) >= 0);
+            Assert.True(WerSetFlags(
+                (originalWerFlags | WerFaultReportingAlwaysShowUi)
+                & ~WerFaultReportingNoUi) >= 0);
 
             SupervisedHostProcessPolicy.SuppressInteractiveErrorUi();
 
             Assert.Equal(RequiredErrorMode, GetErrorMode() & RequiredErrorMode);
             Assert.True(WerGetFlags(GetCurrentProcess(), out uint currentWerFlags) >= 0);
             Assert.Equal(WerFaultReportingNoUi, currentWerFlags & WerFaultReportingNoUi);
+            Assert.Equal(0u, currentWerFlags & WerFaultReportingAlwaysShowUi);
         }
         finally
         {

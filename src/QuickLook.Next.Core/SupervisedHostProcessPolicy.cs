@@ -11,6 +11,7 @@ public static class SupervisedHostProcessPolicy
     private const uint SEM_FAILCRITICALERRORS = 0x0001;
     private const uint SEM_NOGPFAULTERRORBOX = 0x0002;
     private const uint SEM_NOOPENFILEERRORBOX = 0x8000;
+    private const uint WER_FAULT_REPORTING_ALWAYS_SHOW_UI = 0x0010;
     private const uint WER_FAULT_REPORTING_NO_UI = 0x0020;
 
     /// <summary>
@@ -26,7 +27,11 @@ public static class SupervisedHostProcessPolicy
         try
         {
             if (WerGetFlags(GetCurrentProcess(), out uint currentWerFlags) >= 0)
-                _ = WerSetFlags(currentWerFlags | WER_FAULT_REPORTING_NO_UI);
+            {
+                _ = WerSetFlags(
+                    (currentWerFlags & ~WER_FAULT_REPORTING_ALWAYS_SHOW_UI)
+                    | WER_FAULT_REPORTING_NO_UI);
+            }
         }
         catch (Exception)
         {

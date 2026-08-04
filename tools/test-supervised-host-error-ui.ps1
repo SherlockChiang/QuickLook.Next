@@ -23,9 +23,10 @@ else {
         @{ Pattern = 'SEM_FAILCRITICALERRORS\s*=\s*0x0*1'; Message = "SEM_FAILCRITICALERRORS must remain enabled." },
         @{ Pattern = 'SEM_NOGPFAULTERRORBOX\s*=\s*0x0*2'; Message = "The WER-disabling error-mode bit must remain explicitly identified." },
         @{ Pattern = 'SEM_NOOPENFILEERRORBOX\s*=\s*0x0*8000'; Message = "SEM_NOOPENFILEERRORBOX must remain enabled." },
+        @{ Pattern = 'WER_FAULT_REPORTING_ALWAYS_SHOW_UI\s*=\s*0x0*10'; Message = "The conflicting WER always-show-UI flag must remain explicitly identified." },
         @{ Pattern = 'WER_FAULT_REPORTING_NO_UI\s*=\s*0x0*20'; Message = "WER_FAULT_REPORTING_NO_UI must remain enabled." },
         @{ Pattern = 'GetErrorMode\(\)[\s\S]*SetErrorMode\([\s\S]*currentErrorMode[\s\S]*SEM_FAILCRITICALERRORS[\s\S]*SEM_NOGPFAULTERRORBOX[\s\S]*SEM_NOOPENFILEERRORBOX'; Message = "The policy must preserve the current error mode while suppressing critical, unhandled-exception, and open-file dialogs." },
-        @{ Pattern = 'WerGetFlags\(\s*GetCurrentProcess\(\)[\s\S]*currentWerFlags[\s\S]*WerSetFlags\(\s*currentWerFlags\s*\|\s*WER_FAULT_REPORTING_NO_UI'; Message = "The policy must preserve and extend the current WER flags." },
+        @{ Pattern = 'WerGetFlags\(\s*GetCurrentProcess\(\)[\s\S]*WerSetFlags\([\s\S]*currentWerFlags\s*&\s*~WER_FAULT_REPORTING_ALWAYS_SHOW_UI[\s\S]*\|\s*WER_FAULT_REPORTING_NO_UI'; Message = "The policy must clear WER always-show-UI while preserving other flags and requesting no UI." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+GetErrorMode\(\)'; Message = "GetErrorMode must retain its System32 kernel32 uint signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+SetErrorMode\(uint\s+mode\)'; Message = "SetErrorMode must retain its System32 kernel32 uint signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+nint\s+GetCurrentProcess\(\)'; Message = "GetCurrentProcess must retain its System32 kernel32 HANDLE signature." },
@@ -48,9 +49,12 @@ else {
     foreach ($requiredTestPattern in @(
             'void\s+Suppression_sets_process_and_WER_no_UI_modes\(',
             'SetErrorMode\(originalErrorMode\s*&\s*~RequiredErrorMode\)',
+            'originalWerFlags\s*\|\s*WerFaultReportingAlwaysShowUi',
+            '&\s*~WerFaultReportingNoUi',
             'SupervisedHostProcessPolicy\.SuppressInteractiveErrorUi\(\)',
             'Assert\.Equal\(RequiredErrorMode, GetErrorMode\(\)\s*&\s*RequiredErrorMode\)',
             'Assert\.Equal\(WerFaultReportingNoUi, currentWerFlags\s*&\s*WerFaultReportingNoUi\)',
+            'Assert\.Equal\(0u, currentWerFlags\s*&\s*WerFaultReportingAlwaysShowUi\)',
             'SetErrorMode\(originalErrorMode\)',
             'WerSetFlags\(originalWerFlags\)')) {
         if ($policyTestText -notmatch $requiredTestPattern) {
