@@ -77,7 +77,7 @@ the release-only `release:` prefix while this queue is in progress.
           parameter-set array parsing into the codec module.
       - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
         chunk summaries into `preview/media/mp4.rs`.
-        - [ ] `R26-P1-07c-2e-1` Move bounded atom traversal, movie-header time,
+        - [x] `R26-P1-07c-2e-1` Move bounded atom traversal, movie-header time,
           creation, and rotation primitives into `preview/media/mp4.rs`.
         - [ ] `R26-P1-07c-2e-2` Move sample tables, edit/composition timelines,
           and chunk mapping into the MP4 module with linear-or-better `stsc`
@@ -176,6 +176,23 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2e-1` Establish the 265-line `preview::media::mp4`
+  module by moving bounded atom discovery/collection, movie-header duration and
+  creation time, track-matrix rotation, and timescale conversion out of
+  `preview.rs`. Unify 32-bit, extended-size, and end-of-range atom handling with
+  checked offsets and conversions; cap recursive traversal at depth four and
+  collected payloads at 1,024. Fail closed when MP4 epoch conversion exceeds
+  `i64`, continue across valid empty sibling atoms, and cover malformed extended
+  sizes, excessive nesting, collection pressure, and movie-header boundaries.
+  Guard implementation backflow, these budgets and checked operations, explicit
+  imports, no C ABI, the focused tests, and the final 1,200-line MP4 ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native mp4` (6 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (238 passed, 1 external-corpus test ignored)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `c280562`, `62725ac`, `4da1be0`
 - [x] `R26-P1-07c-2d` Complete the 1,027-line `preview::media::codec` family
   module with three narrow payload APIs for `esds`, `avcC`, and `hvcC`; keep MP4
   atom location in the aggregation layer for the next slice. Move AVC SPS/VUI,
