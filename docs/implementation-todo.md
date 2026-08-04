@@ -26,6 +26,11 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P0-03` Move the live signing certificate and password out of the
   workspace, verify their storage policy, and rotate them if exposure cannot be
   excluded. This is an owner-operated credential task and must not be automated.
+- [ ] `R26-P0-04` Fail closed against supervised-host `Application Error`
+  dialogs after the observed RasterHost DXGI `0x0000087a` crash. Keep the
+  process-wide no-dialog error mode active, retain supervisor exit-code/log
+  diagnostics, and add a runtime policy test instead of relying only on static
+  source-pattern checks.
 
 ### Correctness and user-visible state
 
