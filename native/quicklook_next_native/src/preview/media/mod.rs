@@ -29,6 +29,14 @@ pub(super) fn parse_esds_detail(payload: &[u8]) -> Option<String> {
     codec::parse_esds_detail(payload)
 }
 
+pub(super) fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
+    codec::parse_avcc_detail(payload)
+}
+
+pub(super) fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
+    codec::parse_hvcc_detail(payload)
+}
+
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
     let ext = Path::new(path)
         .extension()
