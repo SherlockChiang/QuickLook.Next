@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -128,8 +129,14 @@ Write-Host "root: $Root"
 
 $sourceFiles = @(Get-SourceFiles)
 
-& (Join-Path $PSScriptRoot "test-release-notes.ps1") -Root $Root
-if ($LASTEXITCODE -ne 0) { Add-Failure "Release notes tests failed." }
+try {
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-notes.ps1") `
+        -Arguments @{ Root = $Root } `
+        -FailureMessage "Release notes tests failed"
+}
+catch {
+    Add-Failure $_.Exception.Message
+}
 
 # Rule 1: WebView/WebView2 must not re-enter product source.
 $webViewPattern = '\b(WebView|WebView2|Microsoft\.Web\.WebView2)\b'
@@ -1811,120 +1818,108 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host "architecture guard passed" -ForegroundColor Green
-
 $localizationTest = Join-Path $PSScriptRoot "test-localization.ps1"
 if (-not (Test-Path -LiteralPath $localizationTest -PathType Leaf)) {
     throw "Missing localization consistency test: $localizationTest"
 }
-& $localizationTest -Root $Root
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-CheckedScript -Path $localizationTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Localization consistency test failed"
 
 $rustFfiSafetyTest = Join-Path $PSScriptRoot "test-rust-ffi-safety.ps1"
 if (-not (Test-Path -LiteralPath $rustFfiSafetyTest -PathType Leaf)) {
     throw "Missing Rust FFI safety guard: $rustFfiSafetyTest"
 }
-& $rustFfiSafetyTest -Root $Root
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-CheckedScript -Path $rustFfiSafetyTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Rust FFI safety guard failed"
 
 $supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
 if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
     throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"
 }
-& $supervisedHostErrorUiTest -Root $Root
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-CheckedScript -Path $supervisedHostErrorUiTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Supervised host error UI guard failed"
+
+$checkedInvocationTest = Join-Path $PSScriptRoot "test-checked-invocation.ps1"
+Invoke-CheckedScript -Path $checkedInvocationTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Checked child-script invocation tests failed"
 
 $staleCallbackGuard = Join-Path $PSScriptRoot "guard-stale-callbacks.ps1"
-if (Test-Path $staleCallbackGuard) {
-    & $staleCallbackGuard -Root $Root
-}
+Invoke-CheckedScript -Path $staleCallbackGuard -Arguments @{ Root = $Root } `
+    -FailureMessage "Stale callback guard failed"
 
 $thumbnailPriorityGuard = Join-Path $PSScriptRoot "guard-thumbnail-priority.ps1"
-if (Test-Path $thumbnailPriorityGuard) {
-    & $thumbnailPriorityGuard -Root $Root
-}
+Invoke-CheckedScript -Path $thumbnailPriorityGuard -Arguments @{ Root = $Root } `
+    -FailureMessage "Thumbnail priority guard failed"
 
 $performanceBoundsGuard = Join-Path $PSScriptRoot "guard-performance-bounds.ps1"
-if (Test-Path $performanceBoundsGuard) {
-    & $performanceBoundsGuard -Root $Root
-}
+Invoke-CheckedScript -Path $performanceBoundsGuard -Arguments @{ Root = $Root } `
+    -FailureMessage "Performance bounds guard failed"
 
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
-if (Test-Path $packMsixVersionTest) {
-    & $packMsixVersionTest -Root $Root
-}
+Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `
+    -FailureMessage "MSIX version tests failed"
 
 $packReleaseFailFastTest = Join-Path $PSScriptRoot "test-pack-release-failfast.ps1"
-if (Test-Path $packReleaseFailFastTest) {
-    & $packReleaseFailFastTest -Root $Root
-}
+Invoke-CheckedScript -Path $packReleaseFailFastTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Release fail-fast tests failed"
 
 $releasePayloadProofTest = Join-Path (
     $PSScriptRoot) "test-release-payload-proof.ps1"
-if (Test-Path $releasePayloadProofTest) {
-    & $releasePayloadProofTest -Root $Root
-}
+Invoke-CheckedScript -Path $releasePayloadProofTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Release payload proof tests failed"
 
 $releaseWorkflowTest = Join-Path $PSScriptRoot "test-release-workflows.ps1"
-if (Test-Path $releaseWorkflowTest) {
-    & $releaseWorkflowTest -Root $Root
-}
+Invoke-CheckedScript -Path $releaseWorkflowTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Release workflow tests failed"
 
 $setVersionWorkflowTest = Join-Path $PSScriptRoot "test-set-version.ps1"
-if (Test-Path $setVersionWorkflowTest) {
-    & $setVersionWorkflowTest -Root $Root
-}
+Invoke-CheckedScript -Path $setVersionWorkflowTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Set-version workflow tests failed"
 
 $releaseVersionStructureTest = Join-Path (
     $PSScriptRoot) "test-release-version-structure.ps1"
-if (Test-Path $releaseVersionStructureTest) {
-    & $releaseVersionStructureTest -Root $Root
-}
+Invoke-CheckedScript -Path $releaseVersionStructureTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Release version structure tests failed"
 
 $localBuildWorkflowTest = Join-Path $PSScriptRoot "test-build-local.ps1"
-if (Test-Path $localBuildWorkflowTest) {
-    & $localBuildWorkflowTest -Root $Root
-}
+Invoke-CheckedScript -Path $localBuildWorkflowTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Local build workflow tests failed"
 
 $localMsixVersionTest = Join-Path $PSScriptRoot "test-local-msix-version.ps1"
-if (Test-Path $localMsixVersionTest) {
-    & $localMsixVersionTest -Root $Root
-}
+Invoke-CheckedScript -Path $localMsixVersionTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Local MSIX version tests failed"
 
 $formalMsixVersionTest = Join-Path $PSScriptRoot "test-formal-msix-version.ps1"
-if (Test-Path $formalMsixVersionTest) {
-    & $formalMsixVersionTest -Root $Root
-}
+Invoke-CheckedScript -Path $formalMsixVersionTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Formal MSIX version tests failed"
 
 $localMsixUpdateTest = Join-Path $PSScriptRoot "test-local-msix-update.ps1"
-if (Test-Path $localMsixUpdateTest) {
-    & $localMsixUpdateTest -Root $Root
-}
+Invoke-CheckedScript -Path $localMsixUpdateTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Local MSIX update tests failed"
 
 $taskbarIconAssetTest = Join-Path $PSScriptRoot "test-taskbar-icon-assets.ps1"
-if (Test-Path $taskbarIconAssetTest) {
-    & $taskbarIconAssetTest -Root $Root
-}
+Invoke-CheckedScript -Path $taskbarIconAssetTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Taskbar icon asset tests failed"
 
 $formatRegistryGuard = Join-Path $PSScriptRoot "guard-format-registry.ps1"
-if (Test-Path $formatRegistryGuard) {
-    & $formatRegistryGuard -Root $Root
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
+Invoke-CheckedScript -Path $formatRegistryGuard -Arguments @{ Root = $Root } `
+    -FailureMessage "Format registry guard failed"
 
 $restrictedHostLaunchSmoke = Join-Path $PSScriptRoot "smoke-restricted-host-launch.ps1"
-if (Test-Path $restrictedHostLaunchSmoke) {
-    & $restrictedHostLaunchSmoke -Root $Root
-}
+Invoke-CheckedScript -Path $restrictedHostLaunchSmoke -Arguments @{ Root = $Root } `
+    -FailureMessage "Restricted host launch smoke failed"
 
 $imageCorpusGuard = Join-Path $PSScriptRoot "guard-image-corpus.ps1"
-if (Test-Path $imageCorpusGuard) {
-    & $imageCorpusGuard -Root $Root -SkipSystemImageSmoke:$SkipSystemImageSmoke
-}
+Invoke-CheckedScript -Path $imageCorpusGuard -Arguments @{
+    Root = $Root
+    SkipSystemImageSmoke = [bool]$SkipSystemImageSmoke
+} -FailureMessage "Image corpus guard failed"
 
 $titleBarInsetsTest = Join-Path $PSScriptRoot "test-titlebar-insets.ps1"
 if (-not (Test-Path -LiteralPath $titleBarInsetsTest -PathType Leaf)) {
     throw "Missing title-bar inset guard: $titleBarInsetsTest"
 }
-& $titleBarInsetsTest -Root $Root
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-CheckedScript -Path $titleBarInsetsTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Title-bar inset guard failed"
+
+Write-Host "architecture guard passed" -ForegroundColor Green

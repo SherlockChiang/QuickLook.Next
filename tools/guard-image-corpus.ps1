@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 
 $manifestPath = Join-Path $Root "testdata/image-corpus/external/manifest.json"
 Write-Host "== image corpus guard ==" -ForegroundColor Cyan
@@ -37,20 +38,20 @@ if ($missing.Count -gt 0) {
     }
 }
 
-Write-Host "image corpus guard passed" -ForegroundColor Green
-
 $smoke = Join-Path $PSScriptRoot "smoke-image-corpus.ps1"
-if (Test-Path -LiteralPath $smoke) {
-    if ($AllowMissingSamples) { & $smoke -Root $Root }
-    else { & $smoke -Root $Root -RequireSamples }
-}
+Invoke-CheckedScript -Path $smoke -Arguments @{
+    Root = $Root
+    RequireSamples = -not [bool]$AllowMissingSamples
+} -FailureMessage "Image corpus smoke failed"
 
 $capabilities = Join-Path $PSScriptRoot "report-image-capabilities.ps1"
-if (Test-Path -LiteralPath $capabilities) {
-    & $capabilities -Root $Root
-}
+Invoke-CheckedScript -Path $capabilities -Arguments @{ Root = $Root } `
+    -FailureMessage "Image capability report failed"
 
 $systemSmoke = Join-Path $PSScriptRoot "smoke-system-image-corpus.ps1"
-if ((-not $SkipSystemImageSmoke) -and (Test-Path -LiteralPath $systemSmoke)) {
-    & $systemSmoke -Root $Root
+if (-not $SkipSystemImageSmoke) {
+    Invoke-CheckedScript -Path $systemSmoke -Arguments @{ Root = $Root } `
+        -FailureMessage "System image corpus smoke failed"
 }
+
+Write-Host "image corpus guard passed" -ForegroundColor Green
