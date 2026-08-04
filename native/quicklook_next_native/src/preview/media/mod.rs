@@ -1,3 +1,6 @@
+use super::{
+    base_info_text, file_name, generic_info_json, read_file_prefix, MAX_INFO_HEADER_BYTES,
+};
 use std::path::Path;
 
 mod audio;
@@ -6,31 +9,21 @@ mod id3;
 mod matroska;
 mod mp4;
 
-pub(super) fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
-    audio::append_wav_metadata(text, bytes);
+pub(super) fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
+    let filename = file_name(path);
+    let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
+    let mut text = base_info_text(filename, kind, size, modified_unix);
+    text.push_str(&format!("\nContainer: {}", container_name(path, &bytes)));
+    mp4::append_metadata(&mut text, &bytes, size);
+    matroska::append_metadata(&mut text, &bytes);
+    audio::append_wav_metadata(&mut text, &bytes);
+    audio::append_flac_metadata(&mut text, &bytes);
+    audio::append_ogg_metadata(&mut text, &bytes);
+    id3::append_metadata(&mut text, &bytes);
+    generic_info_json(path, kind, size, modified_unix, Some(text))
 }
 
-pub(super) fn append_flac_metadata(text: &mut String, bytes: &[u8]) {
-    audio::append_flac_metadata(text, bytes);
-}
-
-pub(super) fn append_ogg_metadata(text: &mut String, bytes: &[u8]) {
-    audio::append_ogg_metadata(text, bytes);
-}
-
-pub(super) fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
-    id3::append_metadata(text, bytes);
-}
-
-pub(super) fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
-    matroska::append_metadata(text, bytes);
-}
-
-pub(super) fn append_mp4_metadata(text: &mut String, bytes: &[u8], file_size: i64) {
-    mp4::append_metadata(text, bytes, file_size);
-}
-
-pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
+fn container_name(path: &str, bytes: &[u8]) -> &'static str {
     let ext = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -68,7 +61,7 @@ pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
     }
 }
 
-pub(super) fn format_duration(seconds: f64) -> String {
+fn format_duration(seconds: f64) -> String {
     let total = seconds.round().max(0.0) as u64;
     let hours = total / 3600;
     let minutes = (total % 3600) / 60;
@@ -80,7 +73,7 @@ pub(super) fn format_duration(seconds: f64) -> String {
     }
 }
 
-pub(super) fn codec_label(codec: &str) -> String {
+fn codec_label(codec: &str) -> String {
     match codec {
         "V_MPEG4/ISO/AVC" => "H.264 / AVC".to_string(),
         "V_MPEGH/ISO/HEVC" => "H.265 / HEVC".to_string(),

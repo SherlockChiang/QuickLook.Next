@@ -60,10 +60,6 @@ use image_metadata::{
 use image_metadata::{
     parse_jpeg_exif_metadata, parse_jpeg_exif_metadata_from_bytes, parse_tiff_exif_metadata,
 };
-use media::{
-    append_flac_metadata, append_id3_metadata, append_mkv_metadata, append_mp4_metadata,
-    append_ogg_metadata, append_wav_metadata, container_name as media_container_name,
-};
 pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
 use torrent::parse_bencode;
 pub use torrent::{render_torrent, render_torrent_reader};
@@ -3626,7 +3622,9 @@ pub fn render_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> Str
         "chm" => return render_chm_info(path, size, modified_unix),
         "dump" => return render_dump_info(path, size, modified_unix),
         "elf" => return render_elf_info(path, size, modified_unix),
-        "video" | "audio" | "media" => return render_media_info(path, kind, size, modified_unix),
+        "video" | "audio" | "media" => {
+            return media::render_media_info(path, kind, size, modified_unix)
+        }
         _ => {}
     }
     generic_info_json(path, kind, size, modified_unix, None)
@@ -4499,23 +4497,6 @@ fn render_elf_info(path: &str, size: i64, modified_unix: i64) -> String {
     let mut text = base_info_text(filename, "elf", size, modified_unix);
     append_elf_summary(&mut text, &bytes);
     generic_info_json(path, "elf", size, modified_unix, Some(text))
-}
-
-fn render_media_info(path: &str, kind: &str, size: i64, modified_unix: i64) -> String {
-    let filename = file_name(path);
-    let bytes = read_file_prefix(path, MAX_INFO_HEADER_BYTES).unwrap_or_default();
-    let mut text = base_info_text(filename, kind, size, modified_unix);
-    text.push_str(&format!(
-        "\nContainer: {}",
-        media_container_name(path, &bytes)
-    ));
-    append_mp4_metadata(&mut text, &bytes, size);
-    append_mkv_metadata(&mut text, &bytes);
-    append_wav_metadata(&mut text, &bytes);
-    append_flac_metadata(&mut text, &bytes);
-    append_ogg_metadata(&mut text, &bytes);
-    append_id3_metadata(&mut text, &bytes);
-    generic_info_json(path, kind, size, modified_unix, Some(text))
 }
 
 fn base_info_text(filename: &str, kind: &str, size: i64, modified_unix: i64) -> String {
