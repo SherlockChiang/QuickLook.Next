@@ -12,6 +12,7 @@ $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
+$mediaCodecPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\codec.rs"
 $mediaId3Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\id3.rs"
 $mediaMatroskaPath = Join-Path (
     $Root) "native\quicklook_next_native\src\preview\media\matroska.rs"
@@ -25,6 +26,7 @@ foreach ($path in @(
         $fontPath,
         $mediaPath,
         $mediaAudioPath,
+        $mediaCodecPath,
         $mediaId3Path,
         $mediaMatroskaPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -40,6 +42,7 @@ if ($failures.Count -eq 0) {
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
+    $mediaCodecText = Get-Content -LiteralPath $mediaCodecPath -Raw
     $mediaId3Text = Get-Content -LiteralPath $mediaId3Path -Raw
     $mediaMatroskaText = Get-Content -LiteralPath $mediaMatroskaPath -Raw
 
@@ -152,6 +155,7 @@ if ($failures.Count -eq 0) {
 
     if ($previewText -notmatch '(?m)^mod media;\s*$' -or
         $mediaText -notmatch '(?m)^mod audio;\s*$' -or
+        $mediaText -notmatch '(?m)^mod codec;\s*$' -or
         $mediaText -notmatch '(?m)^mod id3;\s*$' -or
         $mediaText -notmatch '(?m)^mod matroska;\s*$') {
         $failures.Add(
@@ -177,7 +181,11 @@ if ($failures.Count -eq 0) {
             'fn\s+append_mkv_metadata\s*\(',
             'fn\s+media_codec_label\s*\(',
             'fn\s+parse_mkv_\w+\s*\(',
-            'fn\s+read_ebml_\w+\s*\(')) {
+            'fn\s+read_ebml_\w+\s*\(',
+            'fn\s+parse_esds_detail\s*\(',
+            'fn\s+find_mpeg4_descriptor\s*\(',
+            'fn\s+read_mpeg4_descriptor\s*\(',
+            'fn\s+parse_aac_audio_specific_config\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -193,6 +201,7 @@ if ($failures.Count -eq 0) {
             'audio::append_ogg_metadata\(',
             'id3::append_metadata\(',
             'matroska::append_metadata\(',
+            'codec::parse_esds_detail\(',
             'pub\(super\) fn codec_label\(',
             '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
@@ -274,6 +283,24 @@ if ($failures.Count -eq 0) {
         $failures.Add("Matroska metadata fields must retain their stable output order.")
     }
 
+    foreach ($required in @(
+            'pub\(super\) fn parse_esds_detail\(',
+            'fn find_mpeg4_descriptor\(',
+            'fn read_mpeg4_descriptor\(',
+            'for _ in 0\.\.4',
+            'offset\.checked_add\(1\)',
+            'position\.checked_add\(length\)',
+            'bytes\.get\(position\.\.end\)',
+            'next\.max\(offset \+ 1\)',
+            'fn parse_aac_audio_specific_config\(',
+            '4 => 44_100',
+            'fn media_info_reads_mp4_esds_aac_config\(',
+            'fn mpeg4_descriptor_rejects_overlong_and_truncated_lengths\(')) {
+        if ($mediaCodecText -notmatch $required) {
+            $failures.Add("Media codec module lost AAC boundary: $required")
+        }
+    }
+
     if ($previewText -notmatch
         'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,1800}append_mp4_tracks[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
         $failures.Add(
@@ -283,6 +310,7 @@ if ($failures.Count -eq 0) {
     foreach ($module in @(
             $mediaText,
             $mediaAudioText,
+            $mediaCodecText,
             $mediaId3Text,
             $mediaMatroskaText)) {
         if ($module -match 'use\s+super::\*' -or
@@ -301,6 +329,10 @@ if ($failures.Count -eq 0) {
     if ($mediaAudioLineCount -gt 500) {
         $failures.Add(
             "The bounded audio-container module grew beyond 500 lines: $mediaAudioLineCount")
+    }
+    $mediaCodecLineCount = @(Get-Content -LiteralPath $mediaCodecPath).Count
+    if ($mediaCodecLineCount -gt 1100) {
+        $failures.Add("The bounded media codec module grew beyond 1100 lines: $mediaCodecLineCount")
     }
     $mediaId3LineCount = @(Get-Content -LiteralPath $mediaId3Path).Count
     if ($mediaId3LineCount -gt 320) {
