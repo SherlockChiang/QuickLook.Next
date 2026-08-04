@@ -24,7 +24,7 @@ else {
         @{ Pattern = 'SEM_NOGPFAULTERRORBOX\s*=\s*0x0*2'; Message = "The WER-disabling error-mode bit must remain explicitly identified." },
         @{ Pattern = 'SEM_NOOPENFILEERRORBOX\s*=\s*0x0*8000'; Message = "SEM_NOOPENFILEERRORBOX must remain enabled." },
         @{ Pattern = 'WER_FAULT_REPORTING_NO_UI\s*=\s*0x0*20'; Message = "WER_FAULT_REPORTING_NO_UI must remain enabled." },
-        @{ Pattern = 'GetErrorMode\(\)[\s\S]*SetErrorMode\([\s\S]*currentErrorMode\s*&\s*~SEM_NOGPFAULTERRORBOX[\s\S]*SEM_FAILCRITICALERRORS[\s\S]*SEM_NOOPENFILEERRORBOX'; Message = "The policy must preserve the current error mode while clearing the bit that disables WER." },
+        @{ Pattern = 'GetErrorMode\(\)[\s\S]*SetErrorMode\([\s\S]*currentErrorMode[\s\S]*SEM_FAILCRITICALERRORS[\s\S]*SEM_NOGPFAULTERRORBOX[\s\S]*SEM_NOOPENFILEERRORBOX'; Message = "The policy must preserve the current error mode while suppressing critical, unhandled-exception, and open-file dialogs." },
         @{ Pattern = 'WerGetFlags\(\s*GetCurrentProcess\(\)[\s\S]*currentWerFlags[\s\S]*WerSetFlags\(\s*currentWerFlags\s*\|\s*WER_FAULT_REPORTING_NO_UI'; Message = "The policy must preserve and extend the current WER flags." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+GetErrorMode\(\)'; Message = "GetErrorMode must retain its System32 kernel32 uint signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+SetErrorMode\(uint\s+mode\)'; Message = "SetErrorMode must retain its System32 kernel32 uint signature." },
@@ -37,8 +37,25 @@ else {
             Add-Failure $requirement.Message
         }
     }
-    if ($policyText -match '\|\s*SEM_NOGPFAULTERRORBOX') {
-        Add-Failure "SEM_NOGPFAULTERRORBOX disables WER and must never be enabled."
+}
+
+$policyTestPath = Join-Path $Root "tests/QuickLook.Next.Core.Tests/SupervisedHostProcessPolicyTests.cs"
+if (-not (Test-Path -LiteralPath $policyTestPath -PathType Leaf)) {
+    Add-Failure "The supervised-host error policy runtime test is missing."
+}
+else {
+    $policyTestText = Get-Content -LiteralPath $policyTestPath -Raw
+    foreach ($requiredTestPattern in @(
+            'void\s+Suppression_sets_process_and_WER_no_UI_modes\(',
+            'SetErrorMode\(originalErrorMode\s*&\s*~RequiredErrorMode\)',
+            'SupervisedHostProcessPolicy\.SuppressInteractiveErrorUi\(\)',
+            'Assert\.Equal\(RequiredErrorMode, GetErrorMode\(\)\s*&\s*RequiredErrorMode\)',
+            'Assert\.Equal\(WerFaultReportingNoUi, currentWerFlags\s*&\s*WerFaultReportingNoUi\)',
+            'SetErrorMode\(originalErrorMode\)',
+            'WerSetFlags\(originalWerFlags\)')) {
+        if ($policyTestText -notmatch $requiredTestPattern) {
+            Add-Failure "The supervised-host runtime policy test lost required coverage: $requiredTestPattern"
+        }
     }
 }
 
