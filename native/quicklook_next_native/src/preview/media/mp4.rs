@@ -1,6 +1,10 @@
-use super::super::{
-    common::{read_i16_be, read_i32_be, read_i64_be, read_u32_be, read_u64_be},
-    Mp4TrackSummary,
+use super::super::common::{
+    format_number, format_timestamp, read_i16_be, read_i32_be, read_i64_be, read_u16_be,
+    read_u32_be, read_u64_be,
+};
+use super::{
+    codec::{parse_avcc_detail, parse_esds_detail, parse_hvcc_detail},
+    codec_label, format_duration,
 };
 
 const MAX_ATOM_DEPTH: usize = 4;
@@ -9,6 +13,7 @@ const MAX_TIMELINE_ENTRIES: usize = 100_000;
 const MAX_CHUNK_TABLE_ENTRIES: usize = 1_000_000;
 const MAX_SAMPLE_COUNT: usize = 1_000_000;
 const MAX_CHUNK_DETAILS: usize = 4;
+const MAX_SAMPLE_DESCRIPTION_ENTRIES: u32 = 16;
 const MP4_TO_UNIX_SECONDS: u64 = 2_082_844_800;
 
 struct Atom<'a> {
@@ -17,15 +22,11 @@ struct Atom<'a> {
     end: usize,
 }
 
-pub(super) fn find_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
+fn find_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
     find_atom_payload_in_range(bytes, 0, bytes.len(), atom, 0)
 }
 
-pub(super) fn collect_atom_payloads<'a>(
-    bytes: &'a [u8],
-    atom: &[u8; 4],
-    found: &mut Vec<&'a [u8]>,
-) {
+fn collect_atom_payloads<'a>(bytes: &'a [u8], atom: &[u8; 4], found: &mut Vec<&'a [u8]>) {
     collect_atom_payloads_in_range(bytes, 0, bytes.len(), atom, 0, found);
 }
 
@@ -71,7 +72,7 @@ fn collect_atom_payloads_in_range<'a>(
     }
 }
 
-pub(super) fn find_atom_payload_in_range<'a>(
+fn find_atom_payload_in_range<'a>(
     bytes: &'a [u8],
     start: usize,
     end: usize,
@@ -142,7 +143,7 @@ fn is_container_atom(kind: &[u8]) -> bool {
     )
 }
 
-pub(super) fn parse_movie_duration_seconds(payload: &[u8]) -> Option<f64> {
+fn parse_movie_duration_seconds(payload: &[u8]) -> Option<f64> {
     let version = *payload.first()?;
     match version {
         0 => {
@@ -159,7 +160,7 @@ pub(super) fn parse_movie_duration_seconds(payload: &[u8]) -> Option<f64> {
     }
 }
 
-pub(super) fn parse_movie_created_unix(payload: &[u8]) -> Option<i64> {
+fn parse_movie_created_unix(payload: &[u8]) -> Option<i64> {
     let version = *payload.first()?;
     let mac_time = match version {
         0 => read_u32_be(payload, 4)? as u64,
@@ -174,7 +175,7 @@ fn mp4_time_to_unix(mac_time: u64) -> Option<i64> {
     i64::try_from(unix_time).ok()
 }
 
-pub(super) fn rotation_degrees(bytes: &[u8]) -> Option<i32> {
+fn rotation_degrees(bytes: &[u8]) -> Option<i32> {
     let mut rotations = Vec::new();
     collect_atom_payloads(bytes, b"tkhd", &mut rotations);
     rotations
@@ -196,11 +197,399 @@ fn parse_track_rotation_degrees(payload: &[u8]) -> Option<i32> {
     Some(degrees.rem_euclid(360))
 }
 
-pub(super) fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f64> {
+fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f64> {
     (timescale > 0).then(|| duration as f64 / timescale as f64)
 }
 
-pub(super) fn apply_track_tables(trak: &[u8], summary: &mut Mp4TrackSummary) {
+#[derive(Default)]
+struct TrackSummary {
+    kind: &'static str,
+    codec: String,
+    codec_detail: String,
+    language: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    channels: Option<u16>,
+    sample_rate: Option<u32>,
+    duration_seconds: Option<f64>,
+    data_bytes: Option<u64>,
+    timing_entries: Option<u32>,
+    samples: Option<u64>,
+    decode_ticks: Option<u64>,
+    first_sample_delta: Option<u32>,
+    composition_entries: Option<u32>,
+    composition_samples: Option<u64>,
+    first_composition_offset: Option<i64>,
+    composition_offset_range: Option<(i64, i64)>,
+    edit_entries: Option<u32>,
+    first_edit_duration: Option<u64>,
+    first_edit_media_time: Option<i64>,
+    first_edit_rate: Option<f64>,
+    chunks: Option<u32>,
+    first_chunk_offset: Option<u64>,
+    last_chunk_end: Option<u64>,
+    first_chunk_samples: Option<u32>,
+    first_chunk_bytes: Option<u64>,
+    first_sample_size: Option<u32>,
+    chunk_details: Vec<String>,
+}
+
+pub(super) fn append_metadata(text: &mut String, bytes: &[u8], file_size: i64) {
+    if let Some(brand) = major_brand(bytes) {
+        text.push_str(&format!("\nBrand: {brand}"));
+    }
+    let movie_header = find_atom_payload(bytes, b"mvhd");
+    if let Some(duration) = movie_header.and_then(parse_movie_duration_seconds) {
+        text.push_str(&format!("\nDuration: {}", format_duration(duration)));
+        if let Some(bitrate) = estimate_bitrate(file_size, duration) {
+            text.push_str(&format!("\nBitrate: {}", format_bitrate(bitrate)));
+        }
+    }
+    if let Some(created_unix) = movie_header.and_then(parse_movie_created_unix) {
+        text.push_str(&format!("\nCreated: {}", format_timestamp(created_unix)));
+    }
+    if let Some(rotation) = rotation_degrees(bytes) {
+        text.push_str(&format!("\nRotation: {}", format_rotation(rotation)));
+    }
+    append_tracks(text, &tracks(bytes));
+}
+
+fn major_brand(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 12 || bytes.get(4..8) != Some(b"ftyp") {
+        return None;
+    }
+    let brand = std::str::from_utf8(bytes.get(8..12)?).ok()?.trim();
+    (!brand.is_empty()).then(|| brand.to_string())
+}
+
+fn tracks(bytes: &[u8]) -> Vec<TrackSummary> {
+    let mut payloads = Vec::new();
+    collect_atom_payloads(bytes, b"trak", &mut payloads);
+    payloads.into_iter().filter_map(parse_track).collect()
+}
+
+fn parse_track(trak: &[u8]) -> Option<TrackSummary> {
+    let handler = find_atom_payload(trak, b"hdlr").and_then(parse_handler_type);
+    let mut summary = TrackSummary {
+        kind: match handler.as_deref() {
+            Some("vide") => "Video",
+            Some("soun") => "Audio",
+            _ => "Media",
+        },
+        ..Default::default()
+    };
+
+    if let Some(tkhd) = find_atom_payload(trak, b"tkhd") {
+        let (width, height) = parse_track_dimensions(tkhd).unwrap_or((0, 0));
+        if width > 0 && height > 0 {
+            summary.width = Some(width);
+            summary.height = Some(height);
+        }
+    }
+    if let Some(mdhd) = find_atom_payload(trak, b"mdhd") {
+        summary.duration_seconds = parse_media_duration_seconds(mdhd);
+        summary.language = parse_media_language(mdhd).unwrap_or_default();
+    }
+    if let Some(stsd) = find_atom_payload(trak, b"stsd") {
+        parse_sample_descriptions(stsd, &mut summary);
+    }
+    apply_track_tables(trak, &mut summary);
+
+    (!summary.codec.is_empty()
+        || summary.width.is_some()
+        || !summary.codec_detail.is_empty()
+        || !summary.language.is_empty()
+        || summary.height.is_some()
+        || summary.channels.is_some()
+        || summary.sample_rate.is_some()
+        || summary.duration_seconds.is_some()
+        || summary.data_bytes.is_some()
+        || summary.timing_entries.is_some()
+        || summary.composition_entries.is_some()
+        || summary.edit_entries.is_some()
+        || summary.chunks.is_some())
+    .then_some(summary)
+}
+
+fn parse_handler_type(payload: &[u8]) -> Option<String> {
+    let handler = std::str::from_utf8(payload.get(8..12)?).ok()?.trim();
+    (!handler.is_empty()).then(|| handler.to_string())
+}
+
+fn parse_media_duration_seconds(payload: &[u8]) -> Option<f64> {
+    let version = *payload.first()?;
+    match version {
+        0 => duration_from_timescale(
+            u64::from(read_u32_be(payload, 16)?),
+            read_u32_be(payload, 12)?,
+        ),
+        1 => duration_from_timescale(read_u64_be(payload, 24)?, read_u32_be(payload, 20)?),
+        _ => None,
+    }
+}
+
+fn parse_media_language(payload: &[u8]) -> Option<String> {
+    let version = *payload.first()?;
+    let offset = match version {
+        0 => 20,
+        1 => 32,
+        _ => return None,
+    };
+    let packed = read_u16_be(payload, offset)?;
+    let mut language = String::new();
+    for shift in [10, 5, 0] {
+        let value = ((packed >> shift) & 0x1F) as u8;
+        if value == 0 {
+            return None;
+        }
+        language.push((value + 0x60) as char);
+    }
+    (language != "und").then_some(language)
+}
+
+fn parse_track_dimensions(payload: &[u8]) -> Option<(u32, u32)> {
+    let version = *payload.first()?;
+    let offset = match version {
+        0 => 76,
+        1 => 88,
+        _ => return None,
+    };
+    let width = read_u32_be(payload, offset)? >> 16;
+    let height = read_u32_be(payload, offset.checked_add(4)?)? >> 16;
+    Some((width, height))
+}
+
+fn parse_sample_descriptions(payload: &[u8], summary: &mut TrackSummary) -> Option<()> {
+    if *payload.first()? != 0 {
+        return None;
+    }
+    let entries = read_u32_be(payload, 4)?.min(MAX_SAMPLE_DESCRIPTION_ENTRIES) as usize;
+    let mut offset = 8usize;
+    for _ in 0..entries {
+        let entry_size = usize::try_from(read_u32_be(payload, offset)?).ok()?;
+        let entry_end = offset.checked_add(entry_size)?;
+        if entry_size < 8 || entry_end > payload.len() {
+            return None;
+        }
+        let codec =
+            std::str::from_utf8(payload.get(offset.checked_add(4)?..offset.checked_add(8)?)?)
+                .ok()?
+                .to_string();
+        if summary.codec.is_empty() {
+            summary.codec = codec;
+        }
+
+        if summary.kind == "Video" && entry_size >= 36 {
+            summary.width = read_u16_be(payload, offset.checked_add(32)?)
+                .map(u32::from)
+                .filter(|value| *value > 0);
+            summary.height = read_u16_be(payload, offset.checked_add(34)?)
+                .map(u32::from)
+                .filter(|value| *value > 0);
+            if let Some(detail) = parse_video_codec_detail(payload, offset, entry_size) {
+                summary.codec_detail = detail;
+            }
+        } else if summary.kind == "Audio" && entry_size >= 32 {
+            summary.channels =
+                read_u16_be(payload, offset.checked_add(16)?).filter(|value| *value > 0);
+            summary.sample_rate = read_u32_be(payload, offset.checked_add(24)?)
+                .map(|value| value >> 16)
+                .filter(|value| *value > 0);
+            if let Some(detail) = parse_audio_codec_detail(payload, offset, entry_size) {
+                summary.codec_detail = detail;
+            }
+        }
+        offset = entry_end;
+    }
+    Some(())
+}
+
+fn parse_video_codec_detail(
+    payload: &[u8],
+    entry_offset: usize,
+    entry_size: usize,
+) -> Option<String> {
+    let start = entry_offset.checked_add(86)?;
+    let end = entry_offset.checked_add(entry_size)?;
+    if let Some(avcc) = find_atom_payload_in_range(payload, start, end, b"avcC", 0) {
+        return parse_avcc_detail(avcc);
+    }
+    if let Some(hvcc) = find_atom_payload_in_range(payload, start, end, b"hvcC", 0) {
+        return parse_hvcc_detail(hvcc);
+    }
+    None
+}
+
+fn parse_audio_codec_detail(
+    payload: &[u8],
+    entry_offset: usize,
+    entry_size: usize,
+) -> Option<String> {
+    let start = entry_offset.checked_add(36)?;
+    let end = entry_offset.checked_add(entry_size)?;
+    find_atom_payload_in_range(payload, start, end, b"esds", 0).and_then(parse_esds_detail)
+}
+
+fn append_tracks(text: &mut String, tracks: &[TrackSummary]) {
+    for (index, track) in tracks.iter().enumerate() {
+        text.push_str(&format!("\n{} track {}", track.kind, index + 1));
+        if !track.codec.is_empty() {
+            text.push_str(&format!(": {}", codec_label(&track.codec)));
+        }
+        if !track.codec_detail.is_empty() {
+            text.push_str(&format!(" ({})", track.codec_detail));
+        }
+        if !track.language.is_empty() {
+            text.push_str(&format!("\n{} language: {}", track.kind, track.language));
+        }
+        if let (Some(width), Some(height)) = (track.width, track.height) {
+            text.push_str(&format!("\n{} size: {}x{}", track.kind, width, height));
+        }
+        if let Some(channels) = track.channels {
+            text.push_str(&format!("\n{} channels: {}", track.kind, channels));
+        }
+        if let Some(sample_rate) = track.sample_rate {
+            text.push_str(&format!(
+                "\n{} sample rate: {} Hz",
+                track.kind,
+                format_number(i64::from(sample_rate))
+            ));
+        }
+        if let Some(duration) = track.duration_seconds {
+            text.push_str(&format!(
+                "\n{} duration: {}",
+                track.kind,
+                format_duration(duration)
+            ));
+            if let Some(data_bytes) = track.data_bytes {
+                if let Some(bitrate) = estimate_bitrate(data_bytes as i64, duration) {
+                    text.push_str(&format!(
+                        "\n{} bitrate: {}",
+                        track.kind,
+                        format_bitrate(bitrate)
+                    ));
+                }
+            }
+        }
+        if let Some(entries) = track.timing_entries {
+            text.push_str(&format!("\n{} timing entries: {}", track.kind, entries));
+        }
+        if let Some(samples) = track.samples {
+            text.push_str(&format!(
+                "\n{} samples: {}",
+                track.kind,
+                format_number(samples as i64)
+            ));
+        }
+        if let Some(decode_ticks) = track.decode_ticks {
+            text.push_str(&format!(
+                "\n{} decode ticks: {}",
+                track.kind,
+                format_number(decode_ticks as i64)
+            ));
+        }
+        if let Some(delta) = track.first_sample_delta {
+            text.push_str(&format!("\n{} first sample delta: {}", track.kind, delta));
+        }
+        if let Some(entries) = track.composition_entries {
+            text.push_str(&format!(
+                "\n{} composition offsets: {}",
+                track.kind, entries
+            ));
+        }
+        if let Some(samples) = track.composition_samples {
+            text.push_str(&format!(
+                "\n{} composition samples: {}",
+                track.kind,
+                format_number(samples as i64)
+            ));
+        }
+        if let Some(offset) = track.first_composition_offset {
+            text.push_str(&format!(
+                "\n{} first composition offset: {}",
+                track.kind, offset
+            ));
+        }
+        if let Some((min, max)) = track.composition_offset_range {
+            text.push_str(&format!(
+                "\n{} composition offset range: {}..{}",
+                track.kind, min, max
+            ));
+        }
+        if let Some(entries) = track.edit_entries {
+            text.push_str(&format!("\n{} edit list entries: {}", track.kind, entries));
+        }
+        if let Some(duration) = track.first_edit_duration {
+            text.push_str(&format!(
+                "\n{} first edit duration: {}",
+                track.kind,
+                format_number(duration as i64)
+            ));
+        }
+        if let Some(media_time) = track.first_edit_media_time {
+            text.push_str(&format!(
+                "\n{} first edit media time: {}",
+                track.kind, media_time
+            ));
+        }
+        if let Some(rate) = track.first_edit_rate {
+            text.push_str(&format!("\n{} first edit rate: {:.2}", track.kind, rate));
+        }
+        if let Some(chunks) = track.chunks {
+            text.push_str(&format!("\n{} chunks: {}", track.kind, chunks));
+            if let (Some(first), Some(last)) = (track.first_chunk_offset, track.last_chunk_end) {
+                text.push_str(&format!(" (0x{first:X}-0x{last:X})"));
+            }
+        }
+        if let Some(samples) = track.first_chunk_samples {
+            text.push_str(&format!(
+                "\n{} first chunk samples: {}",
+                track.kind, samples
+            ));
+        }
+        if let Some(bytes) = track.first_chunk_bytes {
+            text.push_str(&format!(
+                "\n{} first chunk bytes: {}",
+                track.kind,
+                format_number(bytes as i64)
+            ));
+        }
+        if let Some(size) = track.first_sample_size {
+            text.push_str(&format!(
+                "\n{} first sample size: {}",
+                track.kind,
+                format_number(i64::from(size))
+            ));
+        }
+        if !track.chunk_details.is_empty() {
+            text.push_str(&format!(
+                "\n{} chunk map: {}",
+                track.kind,
+                track.chunk_details.join(", ")
+            ));
+        }
+    }
+}
+
+fn estimate_bitrate(size: i64, duration_seconds: f64) -> Option<f64> {
+    (size > 0 && duration_seconds > 0.0).then(|| size as f64 * 8.0 / duration_seconds)
+}
+
+fn format_bitrate(bits_per_second: f64) -> String {
+    if bits_per_second >= 1_000_000.0 {
+        format!("{:.2} Mbps", bits_per_second / 1_000_000.0)
+    } else if bits_per_second >= 1_000.0 {
+        format!("{:.0} kbps", bits_per_second / 1_000.0)
+    } else {
+        format!("{:.0} bps", bits_per_second)
+    }
+}
+
+fn format_rotation(degrees: i32) -> String {
+    format!("{degrees}°")
+}
+
+fn apply_track_tables(trak: &[u8], summary: &mut TrackSummary) {
     let sample_sizes = find_atom_payload(trak, b"stsz").and_then(SampleSizes::parse);
     if let Some(sizes) = sample_sizes {
         summary.data_bytes = sizes.total_bytes();
@@ -606,244 +995,4 @@ fn checked_table_end(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        collect_atom_payloads, find_atom_payload, mp4_time_to_unix, parse_chunk_summary,
-        parse_co64_offsets, parse_ctts_summary, parse_elst_summary, parse_movie_duration_seconds,
-        parse_stco_offsets, parse_stsc_entries, parse_stts_timeline, summarize_chunks, SampleSizes,
-        StscEntry, MAX_CHUNK_TABLE_ENTRIES, MAX_COLLECTED_ATOMS, MAX_SAMPLE_COUNT,
-        MAX_TIMELINE_ENTRIES, MP4_TO_UNIX_SECONDS,
-    };
-
-    #[test]
-    fn atom_traversal_accepts_empty_siblings_and_rejects_excessive_depth() {
-        let mut with_empty_sibling = atom(b"free", &[]);
-        with_empty_sibling.extend_from_slice(&atom(b"mvhd", &[0; 20]));
-        assert_eq!(
-            find_atom_payload(&with_empty_sibling, b"mvhd").map(<[u8]>::len),
-            Some(20)
-        );
-
-        let mut nested = atom(b"mvhd", &[0; 20]);
-        for _ in 0..6 {
-            nested = atom(b"moov", &nested);
-        }
-        assert!(find_atom_payload(&nested, b"mvhd").is_none());
-    }
-
-    #[test]
-    fn atom_traversal_rejects_malformed_extended_sizes() {
-        let mut smaller_than_header = Vec::from([0, 0, 0, 1]);
-        smaller_than_header.extend_from_slice(b"free");
-        smaller_than_header.extend_from_slice(&15u64.to_be_bytes());
-        assert!(find_atom_payload(&smaller_than_header, b"free").is_none());
-
-        let mut beyond_input = Vec::from([0, 0, 0, 1]);
-        beyond_input.extend_from_slice(b"free");
-        beyond_input.extend_from_slice(&32u64.to_be_bytes());
-        assert!(find_atom_payload(&beyond_input, b"free").is_none());
-    }
-
-    #[test]
-    fn atom_collection_stops_at_budget() {
-        let mut bytes = Vec::new();
-        for _ in 0..=MAX_COLLECTED_ATOMS {
-            bytes.extend_from_slice(&atom(b"trak", &[0]));
-        }
-        let mut found = Vec::new();
-
-        collect_atom_payloads(&bytes, b"trak", &mut found);
-
-        assert_eq!(found.len(), MAX_COLLECTED_ATOMS);
-    }
-
-    #[test]
-    fn movie_header_time_and_duration_fail_closed() {
-        assert_eq!(mp4_time_to_unix(MP4_TO_UNIX_SECONDS), Some(0));
-        assert!(mp4_time_to_unix(u64::MAX).is_none());
-
-        let mut mvhd = vec![0u8; 20];
-        mvhd[16..20].copy_from_slice(&90u32.to_be_bytes());
-        assert!(parse_movie_duration_seconds(&mvhd).is_none());
-        mvhd[12..16].copy_from_slice(&1u32.to_be_bytes());
-        assert_eq!(parse_movie_duration_seconds(&mvhd), Some(90.0));
-    }
-
-    #[test]
-    fn stsc_rejects_zero_duplicate_descending_and_truncated_entries() {
-        for entries in [
-            vec![(0, 1, 1)],
-            vec![(1, 0, 1)],
-            vec![(1, 1, 0)],
-            vec![(2, 1, 1)],
-            vec![(1, 1, 1), (1, 2, 1)],
-            vec![(1, 1, 1), (3, 1, 1), (2, 1, 1)],
-        ] {
-            assert!(parse_stsc_entries(&stsc_payload(&entries)).is_none());
-        }
-
-        let mut truncated = stsc_payload(&[(1, 1, 1)]);
-        truncated.pop();
-        assert!(parse_stsc_entries(&truncated).is_none());
-    }
-
-    #[test]
-    fn large_stsc_mapping_remains_linear() {
-        const ENTRY_COUNT: u32 = 65_000;
-        let mut stco = vec![0u8; 8];
-        stco[4..8].copy_from_slice(&ENTRY_COUNT.to_be_bytes());
-        let mut stsc = vec![0u8; 8];
-        stsc[4..8].copy_from_slice(&ENTRY_COUNT.to_be_bytes());
-        for chunk in 1..=ENTRY_COUNT {
-            stco.extend_from_slice(&(chunk - 1).to_be_bytes());
-            stsc.extend_from_slice(&chunk.to_be_bytes());
-            stsc.extend_from_slice(&1u32.to_be_bytes());
-            stsc.extend_from_slice(&1u32.to_be_bytes());
-        }
-        let mut stsz = vec![0u8; 12];
-        stsz[4..8].copy_from_slice(&1u32.to_be_bytes());
-        stsz[8..12].copy_from_slice(&ENTRY_COUNT.to_be_bytes());
-        let trak = [atom(b"stco", &stco), atom(b"stsc", &stsc)].concat();
-
-        let summary = parse_chunk_summary(&trak, SampleSizes::parse(&stsz))
-            .expect("large linear chunk mapping");
-
-        assert_eq!(summary.chunks, ENTRY_COUNT);
-        assert_eq!(summary.data_bytes, u64::from(ENTRY_COUNT));
-        assert_eq!(summary.first_offset, 0);
-        assert_eq!(summary.last_end, u64::from(ENTRY_COUNT));
-        assert_eq!(summary.first_chunk_samples, Some(1));
-        assert_eq!(summary.first_sample_size, Some(1));
-    }
-
-    #[test]
-    fn fixed_stsz_is_compact_and_rejects_over_budget_counts() {
-        let mut fixed = vec![0u8; 12];
-        fixed[4..8].copy_from_slice(&7u32.to_be_bytes());
-        fixed[8..12].copy_from_slice(&(MAX_SAMPLE_COUNT as u32).to_be_bytes());
-        assert!(matches!(
-            SampleSizes::parse(&fixed),
-            Some(SampleSizes::Fixed {
-                size: 7,
-                count: MAX_SAMPLE_COUNT
-            })
-        ));
-
-        fixed[8..12].copy_from_slice(&((MAX_SAMPLE_COUNT as u32) + 1).to_be_bytes());
-        assert!(SampleSizes::parse(&fixed).is_none());
-
-        let mut truncated_variable = vec![0u8; 15];
-        truncated_variable[8..12].copy_from_slice(&1u32.to_be_bytes());
-        assert!(SampleSizes::parse(&truncated_variable).is_none());
-    }
-
-    #[test]
-    fn table_parsers_reject_truncated_and_over_budget_counts() {
-        assert!(parse_stts_timeline(&declared_table(0, 1, 15)).is_none());
-        assert!(parse_ctts_summary(&declared_table(1, 1, 15)).is_none());
-        assert!(parse_elst_summary(&declared_table(0, 1, 19)).is_none());
-        assert!(parse_elst_summary(&declared_table(1, 1, 27)).is_none());
-        assert!(parse_stco_offsets(&declared_table(0, 1, 11)).is_none());
-        assert!(parse_co64_offsets(&declared_table(0, 1, 15)).is_none());
-
-        let over_budget = declared_table(0, (MAX_TIMELINE_ENTRIES as u32) + 1, 8);
-        assert!(parse_stts_timeline(&over_budget).is_none());
-
-        let over_chunk_budget = declared_table(0, (MAX_CHUNK_TABLE_ENTRIES as u32) + 1, 8);
-        assert!(parse_stco_offsets(&over_chunk_budget).is_none());
-        assert!(parse_co64_offsets(&over_chunk_budget).is_none());
-
-        let only_one_of_two_edits = declared_table(0, 2, 20);
-        assert!(parse_elst_summary(&only_one_of_two_edits).is_none());
-    }
-
-    #[test]
-    fn timeline_tables_reject_versions_and_tick_overflow() {
-        let invalid_version = declared_table(2, 0, 8);
-        assert!(parse_stts_timeline(&invalid_version).is_none());
-        assert!(parse_ctts_summary(&invalid_version).is_none());
-        assert!(parse_elst_summary(&invalid_version).is_none());
-
-        let mut overflow = declared_table(0, 2, 24);
-        for offset in [8usize, 16] {
-            overflow[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
-            overflow[offset + 4..offset + 8].copy_from_slice(&u32::MAX.to_be_bytes());
-        }
-        assert!(parse_stts_timeline(&overflow).is_none());
-
-        let mut signed_ctts = declared_table(1, 1, 16);
-        signed_ctts[8..12].copy_from_slice(&1u32.to_be_bytes());
-        signed_ctts[12..16].copy_from_slice(&(-40i32).to_be_bytes());
-        let composition = parse_ctts_summary(&signed_ctts).expect("signed ctts");
-        assert_eq!(composition.first_offset, Some(-40));
-        assert_eq!(composition.offset_range, Some((-40, -40)));
-
-        let mut fractional_rate = declared_table(0, 1, 20);
-        fractional_rate[16..18].copy_from_slice(&1i16.to_be_bytes());
-        fractional_rate[18..20].copy_from_slice(&(-32_768i16).to_be_bytes());
-        assert_eq!(
-            parse_elst_summary(&fractional_rate).and_then(|summary| summary.first_rate),
-            Some(0.5)
-        );
-    }
-
-    #[test]
-    fn chunk_summary_rejects_offset_overflow_and_sample_mismatch() {
-        let one_sample = SampleSizes::Fixed { size: 1, count: 1 };
-        let one_per_chunk = [StscEntry {
-            first_chunk: 1,
-            samples_per_chunk: 1,
-        }];
-        assert!(summarize_chunks(&[u64::MAX], one_sample, &one_per_chunk).is_none());
-
-        let two_per_chunk = [StscEntry {
-            first_chunk: 1,
-            samples_per_chunk: 2,
-        }];
-        assert!(summarize_chunks(&[0], one_sample, &two_per_chunk).is_none());
-        assert!(summarize_chunks(
-            &[0],
-            SampleSizes::Fixed { size: 1, count: 2 },
-            &one_per_chunk
-        )
-        .is_none());
-
-        let malformed_co64 = declared_table(0, 1, 15);
-        let mut stco = declared_table(0, 1, 12);
-        stco[8..12].copy_from_slice(&0u32.to_be_bytes());
-        let trak = [
-            atom(b"co64", &malformed_co64),
-            atom(b"stco", &stco),
-            atom(b"stsc", &stsc_payload(&[(1, 1, 1)])),
-        ]
-        .concat();
-        assert!(parse_chunk_summary(&trak, Some(one_sample)).is_none());
-    }
-
-    fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-        let size = 8usize.checked_add(payload.len()).expect("test atom size");
-        let mut bytes = Vec::with_capacity(size);
-        bytes.extend_from_slice(&(size as u32).to_be_bytes());
-        bytes.extend_from_slice(kind);
-        bytes.extend_from_slice(payload);
-        bytes
-    }
-
-    fn stsc_payload(entries: &[(u32, u32, u32)]) -> Vec<u8> {
-        let mut payload = vec![0u8; 8];
-        payload[4..8].copy_from_slice(&(entries.len() as u32).to_be_bytes());
-        for (first_chunk, samples_per_chunk, description_index) in entries {
-            payload.extend_from_slice(&first_chunk.to_be_bytes());
-            payload.extend_from_slice(&samples_per_chunk.to_be_bytes());
-            payload.extend_from_slice(&description_index.to_be_bytes());
-        }
-        payload
-    }
-
-    fn declared_table(version: u8, entries: u32, length: usize) -> Vec<u8> {
-        let mut payload = vec![0u8; length];
-        payload[0] = version;
-        payload[4..8].copy_from_slice(&entries.to_be_bytes());
-        payload
-    }
-}
+mod tests;

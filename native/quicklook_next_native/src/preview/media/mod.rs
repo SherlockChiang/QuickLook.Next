@@ -26,58 +26,8 @@ pub(super) fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
     matroska::append_metadata(text, bytes);
 }
 
-pub(super) fn parse_esds_detail(payload: &[u8]) -> Option<String> {
-    codec::parse_esds_detail(payload)
-}
-
-pub(super) fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
-    codec::parse_avcc_detail(payload)
-}
-
-pub(super) fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
-    codec::parse_hvcc_detail(payload)
-}
-
-pub(super) fn find_mp4_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
-    mp4::find_atom_payload(bytes, atom)
-}
-
-pub(super) fn collect_mp4_atom_payloads<'a>(
-    bytes: &'a [u8],
-    atom: &[u8; 4],
-    found: &mut Vec<&'a [u8]>,
-) {
-    mp4::collect_atom_payloads(bytes, atom, found);
-}
-
-pub(super) fn find_mp4_atom_payload_in_range<'a>(
-    bytes: &'a [u8],
-    start: usize,
-    end: usize,
-    atom: &[u8; 4],
-    depth: usize,
-) -> Option<&'a [u8]> {
-    mp4::find_atom_payload_in_range(bytes, start, end, atom, depth)
-}
-
-pub(super) fn parse_mvhd_duration_seconds(payload: &[u8]) -> Option<f64> {
-    mp4::parse_movie_duration_seconds(payload)
-}
-
-pub(super) fn parse_mvhd_created_unix(payload: &[u8]) -> Option<i64> {
-    mp4::parse_movie_created_unix(payload)
-}
-
-pub(super) fn mp4_rotation_degrees(bytes: &[u8]) -> Option<i32> {
-    mp4::rotation_degrees(bytes)
-}
-
-pub(super) fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f64> {
-    mp4::duration_from_timescale(duration, timescale)
-}
-
-pub(super) fn apply_mp4_track_tables(trak: &[u8], summary: &mut super::Mp4TrackSummary) {
-    mp4::apply_track_tables(trak, summary);
+pub(super) fn append_mp4_metadata(text: &mut String, bytes: &[u8], file_size: i64) {
+    mp4::append_metadata(text, bytes, file_size);
 }
 
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
