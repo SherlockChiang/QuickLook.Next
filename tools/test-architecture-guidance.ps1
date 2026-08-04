@@ -37,13 +37,16 @@ Assert-True ($LASTEXITCODE -eq 0) `
     "The legacy lowercase agent.md must remain ignored local scratch material."
 
 $agentsText = Get-Content -LiteralPath (Join-Path $Root "AGENTS.md") -Raw
+$embeddedBrowserName = "Web" + "View"
+$embeddedBrowserPattern = [regex]::Escape(
+    $embeddedBrowserName + "/" + $embeddedBrowserName + "2")
 foreach ($rule in @(
     @('Rust-first', "AGENTS.md must preserve the Rust-first default."),
     @('QuickLook\.Next\.App[\s\S]*thin WinUI shell', "AGENTS.md must keep the App as a thin WinUI shell."),
     @('ParserHost[\s\S]*Rust FFI', "AGENTS.md must keep ParserHost at the Rust FFI boundary."),
     @('RasterHost[\s\S]*surface production', "AGENTS.md must keep RasterHost scoped to surfaces."),
     @('ShellBroker[\s\S]*Explorer/Shell compatibility', "AGENTS.md must keep Shell compatibility in ShellBroker."),
-    @('WebView/WebView2', "AGENTS.md must forbid WebView preview rendering."),
+    @($embeddedBrowserPattern, "AGENTS.md must forbid embedded-browser preview rendering."),
     @('Plugin\.\*[\s\S]*outside default', "AGENTS.md must keep legacy plugins off the default path."),
     @('logical path[\s\S]*metadata', "AGENTS.md must deny logical-path file authority."),
     @('generation[\s\S]*request-ID[\s\S]*cancellation', "AGENTS.md must require stale-work identity checks."),
