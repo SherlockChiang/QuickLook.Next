@@ -12,6 +12,7 @@ $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
+$mediaId3Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\id3.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -21,7 +22,8 @@ foreach ($path in @(
         $previewPath,
         $fontPath,
         $mediaPath,
-        $mediaAudioPath)) {
+        $mediaAudioPath,
+        $mediaId3Path)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -35,6 +37,7 @@ if ($failures.Count -eq 0) {
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
+    $mediaId3Text = Get-Content -LiteralPath $mediaId3Path -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -144,9 +147,10 @@ if ($failures.Count -eq 0) {
     }
 
     if ($previewText -notmatch '(?m)^mod media;\s*$' -or
-        $mediaText -notmatch '(?m)^mod audio;\s*$') {
+        $mediaText -notmatch '(?m)^mod audio;\s*$' -or
+        $mediaText -notmatch '(?m)^mod id3;\s*$') {
         $failures.Add(
-            "preview.rs must compose the explicit preview::media::audio module family.")
+            "preview.rs must compose the explicit preview::media audio and ID3 modules.")
     }
 
     foreach ($forbidden in @(
@@ -158,10 +162,15 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_wav_summary\s*\(',
             'fn\s+parse_flac_summary\s*\(',
             'fn\s+parse_ogg_summary\s*\(',
-            'fn\s+read_ogg_packets\s*\(')) {
+            'fn\s+read_ogg_packets\s*\(',
+            'fn\s+append_id3_metadata\s*\(',
+            'fn\s+parse_id3_text_fields\s*\(',
+            'fn\s+read_id3_synchsafe\s*\(',
+            'fn\s+decode_id3_text_frame\s*\(',
+            'fn\s+decode_id3_comment_frame\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
-                "preview.rs must not regain audio-container implementation detail: $forbidden")
+                "preview.rs must not regain media implementation detail: $forbidden")
         }
     }
 
@@ -171,7 +180,8 @@ if ($failures.Count -eq 0) {
             'pub\(super\) fn format_duration\(',
             'audio::append_wav_metadata\(',
             'audio::append_flac_metadata\(',
-            'audio::append_ogg_metadata\(')) {
+            'audio::append_ogg_metadata\(',
+            'id3::append_metadata\(')) {
         if ($mediaText -notmatch $required) {
             $failures.Add("Media composition module lost required boundary: $required")
         }
@@ -204,13 +214,36 @@ if ($failures.Count -eq 0) {
         }
     }
 
+    foreach ($required in @(
+            'pub\(super\) fn append_metadata\(',
+            'fn parse_text_fields\(',
+            '\(2\.\.=4\)\.contains\(&version\)',
+            '10usize\.saturating_add\(tag_size\)\.min\(bytes\.len\(\)\)',
+            'while offset \+ 10 <= tag_end',
+            'byte\.is_ascii_uppercase\(\) \|\| byte\.is_ascii_digit\(\)',
+            'frame_start\.checked_add\(frame_size\)',
+            'frame_size == 0 \|\| frame_end > tag_end',
+            'chunk\.iter\(\)\.any\(\|byte\| byte & 0x80 != 0\)',
+            'chunks_exact\(2\)',
+            'fn media_info_reads_id3_text_frames\(',
+            'fn id3_text_decodes_utf16_bom\(')) {
+        if ($mediaId3Text -notmatch $required) {
+            $failures.Add("ID3 module lost required boundary: $required")
+        }
+    }
+
+    if ($mediaId3Text -notmatch
+        '\("Title", "TIT2"\)[\s\S]*\("Artist", "TPE1"\)[\s\S]*\("Album", "TALB"\)[\s\S]*\("Track", "TRCK"\)[\s\S]*\("Year", "TDRC"\)[\s\S]*\("Year", "TYER"\)[\s\S]*\("Genre", "TCON"\)[\s\S]*\("Comment", "COMM"\)') {
+        $failures.Add("ID3 output fields must retain their stable precedence and order.")
+    }
+
     if ($previewText -notmatch
         'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,1800}append_mp4_tracks[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
         $failures.Add(
             "Media rendering must keep the bounded read and stable MP4/MKV/WAV/FLAC/Ogg/ID3 order.")
     }
 
-    foreach ($module in @($mediaText, $mediaAudioText)) {
+    foreach ($module in @($mediaText, $mediaAudioText, $mediaId3Text)) {
         if ($module -match 'use\s+super::\*' -or
             $module -match '#\[no_mangle\]' -or
             $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
@@ -227,6 +260,10 @@ if ($failures.Count -eq 0) {
     if ($mediaAudioLineCount -gt 500) {
         $failures.Add(
             "The bounded audio-container module grew beyond 500 lines: $mediaAudioLineCount")
+    }
+    $mediaId3LineCount = @(Get-Content -LiteralPath $mediaId3Path).Count
+    if ($mediaId3LineCount -gt 320) {
+        $failures.Add("The bounded ID3 module grew beyond 320 lines: $mediaId3LineCount")
     }
 }
 
