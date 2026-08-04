@@ -1,6 +1,7 @@
 use std::path::Path;
 
 mod audio;
+mod codec;
 mod id3;
 mod matroska;
 
@@ -22,6 +23,10 @@ pub(super) fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
 
 pub(super) fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
     matroska::append_metadata(text, bytes);
+}
+
+pub(super) fn parse_esds_detail(payload: &[u8]) -> Option<String> {
+    codec::parse_esds_detail(payload)
 }
 
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
