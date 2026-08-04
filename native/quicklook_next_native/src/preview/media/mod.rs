@@ -76,6 +76,10 @@ pub(super) fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f
     mp4::duration_from_timescale(duration, timescale)
 }
 
+pub(super) fn apply_mp4_track_tables(trak: &[u8], summary: &mut super::Mp4TrackSummary) {
+    mp4::apply_track_tables(trak, summary);
+}
+
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
     let ext = Path::new(path)
         .extension()

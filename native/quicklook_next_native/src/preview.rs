@@ -34,9 +34,9 @@ pub(crate) use animation_probe::probe_image_animation_reader;
 #[cfg(test)]
 use animation_probe::ImageAnimationProbe;
 use common::{
-    format_bytes, format_number, read_c_string, read_i16_be, read_i32_be, read_i32_endian,
-    read_i64_be, read_u16, read_u16_be, read_u16_endian, read_u32, read_u32_be, read_u32_endian,
-    read_u64, read_u64_be, read_u64_endian, type_for_ext,
+    format_bytes, format_number, read_c_string, read_i32_endian, read_u16, read_u16_be,
+    read_u16_endian, read_u32, read_u32_be, read_u32_endian, read_u64, read_u64_be,
+    read_u64_endian, type_for_ext,
 };
 #[cfg(test)]
 use ebook::{
@@ -62,10 +62,11 @@ use image_metadata::{
 };
 use media::{
     append_flac_metadata, append_id3_metadata, append_mkv_metadata, append_ogg_metadata,
-    append_wav_metadata, codec_label as media_codec_label, collect_mp4_atom_payloads,
-    container_name as media_container_name, duration_from_timescale, find_mp4_atom_payload,
-    find_mp4_atom_payload_in_range, format_duration, mp4_rotation_degrees, parse_avcc_detail,
-    parse_esds_detail, parse_hvcc_detail, parse_mvhd_created_unix, parse_mvhd_duration_seconds,
+    append_wav_metadata, apply_mp4_track_tables, codec_label as media_codec_label,
+    collect_mp4_atom_payloads, container_name as media_container_name, duration_from_timescale,
+    find_mp4_atom_payload, find_mp4_atom_payload_in_range, format_duration, mp4_rotation_degrees,
+    parse_avcc_detail, parse_esds_detail, parse_hvcc_detail, parse_mvhd_created_unix,
+    parse_mvhd_duration_seconds,
 };
 pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
 use torrent::parse_bencode;
@@ -7607,43 +7608,7 @@ fn parse_mp4_track(trak: &[u8]) -> Option<Mp4TrackSummary> {
     if let Some(stsd) = find_mp4_atom_payload(trak, b"stsd") {
         parse_stsd_summary(stsd, &mut summary);
     }
-    if let Some(stsz) = find_mp4_atom_payload(trak, b"stsz") {
-        summary.data_bytes = parse_stsz_total_bytes(stsz);
-    }
-    if let Some(stts) = find_mp4_atom_payload(trak, b"stts") {
-        summary.timing_entries = parse_mp4_entry_count(stts);
-        if let Some(timeline) = parse_stts_timeline(stts) {
-            summary.samples = Some(timeline.samples);
-            summary.decode_ticks = Some(timeline.decode_ticks);
-            summary.first_sample_delta = timeline.first_delta;
-        }
-    }
-    if let Some(ctts) = find_mp4_atom_payload(trak, b"ctts") {
-        summary.composition_entries = parse_mp4_entry_count(ctts);
-        if let Some(composition) = parse_ctts_summary(ctts) {
-            summary.composition_samples = Some(composition.samples);
-            summary.first_composition_offset = composition.first_offset;
-            summary.composition_offset_range = composition.offset_range;
-        }
-    }
-    if let Some(elst) = find_mp4_atom_payload(trak, b"elst") {
-        summary.edit_entries = parse_mp4_entry_count(elst);
-        if let Some(edit) = parse_elst_summary(elst) {
-            summary.first_edit_duration = edit.first_duration;
-            summary.first_edit_media_time = edit.first_media_time;
-            summary.first_edit_rate = edit.first_rate;
-        }
-    }
-    if let Some(chunk_summary) = parse_mp4_chunk_summary(trak) {
-        summary.chunks = Some(chunk_summary.chunks);
-        summary.first_chunk_offset = Some(chunk_summary.first_offset);
-        summary.last_chunk_end = Some(chunk_summary.last_end);
-        summary.data_bytes = Some(chunk_summary.data_bytes);
-        summary.first_chunk_samples = chunk_summary.first_chunk_samples;
-        summary.first_chunk_bytes = chunk_summary.first_chunk_bytes;
-        summary.first_sample_size = chunk_summary.first_sample_size;
-        summary.chunk_details = chunk_summary.chunk_details;
-    }
+    apply_mp4_track_tables(trak, &mut summary);
 
     (!summary.codec.is_empty()
         || summary.width.is_some()
@@ -7770,261 +7735,6 @@ fn parse_audio_codec_detail(
     let start = entry_offset.checked_add(36)?;
     let end = entry_offset.checked_add(entry_size)?.min(payload.len());
     find_mp4_atom_payload_in_range(payload, start, end, b"esds", 0).and_then(parse_esds_detail)
-}
-
-fn parse_stsz_total_bytes(payload: &[u8]) -> Option<u64> {
-    let sample_size = read_u32_be(payload, 4)? as u64;
-    let sample_count = read_u32_be(payload, 8)? as u64;
-    if sample_size > 0 {
-        return sample_size.checked_mul(sample_count);
-    }
-    let count = sample_count.min(1_000_000) as usize;
-    let mut offset = 12usize;
-    let mut total = 0u64;
-    for _ in 0..count {
-        total = total.checked_add(read_u32_be(payload, offset)? as u64)?;
-        offset = offset.checked_add(4)?;
-    }
-    Some(total)
-}
-
-fn parse_mp4_entry_count(payload: &[u8]) -> Option<u32> {
-    read_u32_be(payload, 4)
-}
-
-struct Mp4SttsTimeline {
-    samples: u64,
-    decode_ticks: u64,
-    first_delta: Option<u32>,
-}
-
-struct Mp4CttsSummary {
-    samples: u64,
-    first_offset: Option<i64>,
-    offset_range: Option<(i64, i64)>,
-}
-
-struct Mp4ElstSummary {
-    first_duration: Option<u64>,
-    first_media_time: Option<i64>,
-    first_rate: Option<f64>,
-}
-
-fn parse_elst_summary(payload: &[u8]) -> Option<Mp4ElstSummary> {
-    let version = *payload.first()?;
-    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
-    if entries == 0 {
-        return Some(Mp4ElstSummary {
-            first_duration: None,
-            first_media_time: None,
-            first_rate: None,
-        });
-    }
-    let offset = 8usize;
-    let (duration, media_time, rate_offset) = if version == 1 {
-        (
-            read_u64_be(payload, offset)?,
-            read_i64_be(payload, offset + 8)?,
-            offset + 16,
-        )
-    } else {
-        (
-            read_u32_be(payload, offset)? as u64,
-            read_i32_be(payload, offset + 4)? as i64,
-            offset + 8,
-        )
-    };
-    let rate_integer = read_i16_be(payload, rate_offset)? as f64;
-    let rate_fraction = read_u16_be(payload, rate_offset + 2)? as f64 / 65536.0;
-    Some(Mp4ElstSummary {
-        first_duration: Some(duration),
-        first_media_time: Some(media_time),
-        first_rate: Some(rate_integer + rate_fraction),
-    })
-}
-
-fn parse_ctts_summary(payload: &[u8]) -> Option<Mp4CttsSummary> {
-    let version = *payload.first()?;
-    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
-    let mut offset = 8usize;
-    let mut samples = 0u64;
-    let mut first_offset = None;
-    let mut min_offset = i64::MAX;
-    let mut max_offset = i64::MIN;
-    for _ in 0..entries {
-        let sample_count = read_u32_be(payload, offset)? as u64;
-        let composition_offset = if version == 1 {
-            read_i32_be(payload, offset + 4)? as i64
-        } else {
-            read_u32_be(payload, offset + 4)? as i64
-        };
-        if first_offset.is_none() {
-            first_offset = Some(composition_offset);
-        }
-        min_offset = min_offset.min(composition_offset);
-        max_offset = max_offset.max(composition_offset);
-        samples = samples.checked_add(sample_count)?;
-        offset = offset.checked_add(8)?;
-    }
-    Some(Mp4CttsSummary {
-        samples,
-        first_offset,
-        offset_range: first_offset.map(|_| (min_offset, max_offset)),
-    })
-}
-
-fn parse_stts_timeline(payload: &[u8]) -> Option<Mp4SttsTimeline> {
-    let entries = read_u32_be(payload, 4)?.min(100_000) as usize;
-    let mut offset = 8usize;
-    let mut samples = 0u64;
-    let mut decode_ticks = 0u64;
-    let mut first_delta = None;
-    for _ in 0..entries {
-        let sample_count = read_u32_be(payload, offset)? as u64;
-        let sample_delta = read_u32_be(payload, offset + 4)?;
-        if first_delta.is_none() {
-            first_delta = Some(sample_delta);
-        }
-        samples = samples.checked_add(sample_count)?;
-        decode_ticks = decode_ticks.checked_add(sample_count.checked_mul(sample_delta as u64)?)?;
-        offset = offset.checked_add(8)?;
-    }
-    Some(Mp4SttsTimeline {
-        samples,
-        decode_ticks,
-        first_delta,
-    })
-}
-
-struct Mp4ChunkSummary {
-    chunks: u32,
-    first_offset: u64,
-    last_end: u64,
-    data_bytes: u64,
-    first_chunk_samples: Option<u32>,
-    first_chunk_bytes: Option<u64>,
-    first_sample_size: Option<u32>,
-    chunk_details: Vec<String>,
-}
-
-fn parse_mp4_chunk_summary(trak: &[u8]) -> Option<Mp4ChunkSummary> {
-    let chunk_offsets = find_mp4_atom_payload(trak, b"co64")
-        .and_then(parse_co64_offsets)
-        .or_else(|| find_mp4_atom_payload(trak, b"stco").and_then(parse_stco_offsets))?;
-    let sample_sizes = find_mp4_atom_payload(trak, b"stsz").and_then(parse_stsz_sample_sizes)?;
-    let sample_to_chunks = find_mp4_atom_payload(trak, b"stsc").and_then(parse_stsc_entries)?;
-    if chunk_offsets.is_empty() || sample_sizes.is_empty() || sample_to_chunks.is_empty() {
-        return None;
-    }
-
-    let mut sample_index = 0usize;
-    let mut data_bytes = 0u64;
-    let mut last_end = 0u64;
-    let mut first_chunk_samples = None;
-    let mut first_chunk_bytes = None;
-    let mut chunk_details = Vec::new();
-    for (chunk_index, chunk_offset) in chunk_offsets.iter().enumerate() {
-        let samples_per_chunk =
-            samples_per_chunk_for_chunk(&sample_to_chunks, (chunk_index + 1) as u32)? as usize;
-        let mut chunk_bytes = 0u64;
-        for _ in 0..samples_per_chunk {
-            let Some(size) = sample_sizes.get(sample_index) else {
-                break;
-            };
-            chunk_bytes = chunk_bytes.checked_add(*size as u64)?;
-            sample_index += 1;
-        }
-        if chunk_index == 0 {
-            first_chunk_samples = Some(samples_per_chunk as u32);
-            first_chunk_bytes = Some(chunk_bytes);
-        }
-        if chunk_details.len() < 4 {
-            chunk_details.push(format!(
-                "#{} @0x{:X} {} samples {} bytes",
-                chunk_index + 1,
-                chunk_offset,
-                samples_per_chunk,
-                chunk_bytes
-            ));
-        }
-        data_bytes = data_bytes.checked_add(chunk_bytes)?;
-        last_end = last_end.max(chunk_offset.saturating_add(chunk_bytes));
-        if sample_index >= sample_sizes.len() {
-            break;
-        }
-    }
-
-    Some(Mp4ChunkSummary {
-        chunks: chunk_offsets.len() as u32,
-        first_offset: *chunk_offsets.first()?,
-        last_end,
-        data_bytes,
-        first_chunk_samples,
-        first_chunk_bytes,
-        first_sample_size: sample_sizes.first().copied(),
-        chunk_details,
-    })
-}
-
-fn parse_stco_offsets(payload: &[u8]) -> Option<Vec<u64>> {
-    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
-    let mut offsets = Vec::with_capacity(count.min(1024));
-    let mut offset = 8usize;
-    for _ in 0..count {
-        offsets.push(read_u32_be(payload, offset)? as u64);
-        offset += 4;
-    }
-    Some(offsets)
-}
-
-fn parse_co64_offsets(payload: &[u8]) -> Option<Vec<u64>> {
-    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
-    let mut offsets = Vec::with_capacity(count.min(1024));
-    let mut offset = 8usize;
-    for _ in 0..count {
-        offsets.push(read_u64_be(payload, offset)?);
-        offset += 8;
-    }
-    Some(offsets)
-}
-
-fn parse_stsz_sample_sizes(payload: &[u8]) -> Option<Vec<u32>> {
-    let sample_size = read_u32_be(payload, 4)?;
-    let sample_count = read_u32_be(payload, 8)?.min(1_000_000) as usize;
-    if sample_size > 0 {
-        return Some(vec![sample_size; sample_count]);
-    }
-    let mut sizes = Vec::with_capacity(sample_count.min(1024));
-    let mut offset = 12usize;
-    for _ in 0..sample_count {
-        sizes.push(read_u32_be(payload, offset)?);
-        offset += 4;
-    }
-    Some(sizes)
-}
-
-fn parse_stsc_entries(payload: &[u8]) -> Option<Vec<(u32, u32)>> {
-    let count = read_u32_be(payload, 4)?.min(1_000_000) as usize;
-    let mut entries = Vec::with_capacity(count.min(1024));
-    let mut offset = 8usize;
-    for _ in 0..count {
-        let first_chunk = read_u32_be(payload, offset)?;
-        let samples_per_chunk = read_u32_be(payload, offset + 4)?;
-        entries.push((first_chunk, samples_per_chunk));
-        offset += 12;
-    }
-    Some(entries)
-}
-
-fn samples_per_chunk_for_chunk(entries: &[(u32, u32)], chunk: u32) -> Option<u32> {
-    let mut current = None;
-    for (first_chunk, samples_per_chunk) in entries {
-        if chunk < *first_chunk {
-            break;
-        }
-        current = Some(*samples_per_chunk);
-    }
-    current.filter(|value| *value > 0)
 }
 
 fn estimate_bitrate(size: i64, duration_seconds: f64) -> Option<f64> {
