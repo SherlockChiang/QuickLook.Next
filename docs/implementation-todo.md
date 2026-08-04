@@ -79,7 +79,7 @@ the release-only `release:` prefix while this queue is in progress.
         chunk summaries into `preview/media/mp4.rs`.
         - [x] `R26-P1-07c-2e-1` Move bounded atom traversal, movie-header time,
           creation, and rotation primitives into `preview/media/mp4.rs`.
-        - [ ] `R26-P1-07c-2e-2` Move sample tables, edit/composition timelines,
+        - [x] `R26-P1-07c-2e-2` Move sample tables, edit/composition timelines,
           and chunk mapping into the MP4 module with linear-or-better `stsc`
           lookup and hostile table tests.
         - [ ] `R26-P1-07c-2e-3` Move track parsing, codec payload adapters,
@@ -176,6 +176,30 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2e-2` Move `stsz`, `stts`, `ctts`, `elst`, `stco`, `co64`,
+  `stsc`, timeline summaries, and chunk mapping into the 849-line
+  `preview::media::mp4` module behind one temporary track-summary adapter.
+  Replace fixed-size `stsz` expansion with a borrowed/constant sample-size view
+  and replace per-chunk full `stsc` scans with a monotonic cursor, covered by a
+  65,000-entry near-1-MiB regression. Validate complete count/stride payloads,
+  supported versions, 1-based strictly increasing `stsc` entries, non-zero
+  samples and description indexes, signed composition/edit values, checked tick
+  accumulation, complete sample/transition consumption, and checked chunk ends.
+  Fail closed on malformed authoritative `co64` data instead of falling back to
+  `stco`. Guard 100,000 timeline entries, 1,000,000 chunk/sample declarations,
+  four retained chunk details, compact fixed samples, linear mapping, hostile
+  tests, implementation backflow, explicit imports, no C ABI, and the existing
+  1,200-line final MP4 ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native mp4` (12 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (244 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --maxcpucount:1` (360 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `d65ba97`, `ac2f0fd`
 - [x] `R26-P1-07c-2e-1` Establish the 265-line `preview::media::mp4`
   module by moving bounded atom discovery/collection, movie-header duration and
   creation time, track-matrix rotation, and timescale conversion out of
