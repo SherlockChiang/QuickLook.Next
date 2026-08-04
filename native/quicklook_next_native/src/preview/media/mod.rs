@@ -4,6 +4,7 @@ mod audio;
 mod codec;
 mod id3;
 mod matroska;
+mod mp4;
 
 pub(super) fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
     audio::append_wav_metadata(text, bytes);
@@ -35,6 +36,44 @@ pub(super) fn parse_avcc_detail(payload: &[u8]) -> Option<String> {
 
 pub(super) fn parse_hvcc_detail(payload: &[u8]) -> Option<String> {
     codec::parse_hvcc_detail(payload)
+}
+
+pub(super) fn find_mp4_atom_payload<'a>(bytes: &'a [u8], atom: &[u8; 4]) -> Option<&'a [u8]> {
+    mp4::find_atom_payload(bytes, atom)
+}
+
+pub(super) fn collect_mp4_atom_payloads<'a>(
+    bytes: &'a [u8],
+    atom: &[u8; 4],
+    found: &mut Vec<&'a [u8]>,
+) {
+    mp4::collect_atom_payloads(bytes, atom, found);
+}
+
+pub(super) fn find_mp4_atom_payload_in_range<'a>(
+    bytes: &'a [u8],
+    start: usize,
+    end: usize,
+    atom: &[u8; 4],
+    depth: usize,
+) -> Option<&'a [u8]> {
+    mp4::find_atom_payload_in_range(bytes, start, end, atom, depth)
+}
+
+pub(super) fn parse_mvhd_duration_seconds(payload: &[u8]) -> Option<f64> {
+    mp4::parse_movie_duration_seconds(payload)
+}
+
+pub(super) fn parse_mvhd_created_unix(payload: &[u8]) -> Option<i64> {
+    mp4::parse_movie_created_unix(payload)
+}
+
+pub(super) fn mp4_rotation_degrees(bytes: &[u8]) -> Option<i32> {
+    mp4::rotation_degrees(bytes)
+}
+
+pub(super) fn duration_from_timescale(duration: u64, timescale: u32) -> Option<f64> {
+    mp4::duration_from_timescale(duration, timescale)
 }
 
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
