@@ -2,6 +2,7 @@ use std::path::Path;
 
 mod audio;
 mod id3;
+mod matroska;
 
 pub(super) fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
     audio::append_wav_metadata(text, bytes);
@@ -17,6 +18,10 @@ pub(super) fn append_ogg_metadata(text: &mut String, bytes: &[u8]) {
 
 pub(super) fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
     id3::append_metadata(text, bytes);
+}
+
+pub(super) fn append_mkv_metadata(text: &mut String, bytes: &[u8]) {
+    matroska::append_metadata(text, bytes);
 }
 
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
@@ -66,5 +71,23 @@ pub(super) fn format_duration(seconds: f64) -> String {
         format!("{hours}:{minutes:02}:{seconds:02}")
     } else {
         format!("{minutes}:{seconds:02}")
+    }
+}
+
+pub(super) fn codec_label(codec: &str) -> String {
+    match codec {
+        "V_MPEG4/ISO/AVC" => "H.264 / AVC".to_string(),
+        "V_MPEGH/ISO/HEVC" => "H.265 / HEVC".to_string(),
+        "V_AV1" => "AV1".to_string(),
+        "V_VP8" => "VP8".to_string(),
+        "V_VP9" => "VP9".to_string(),
+        "A_AAC" | "A_AAC/MPEG2/LC" | "A_AAC/MPEG4/LC" => "AAC".to_string(),
+        "A_AC3" => "AC-3".to_string(),
+        "A_EAC3" => "E-AC-3".to_string(),
+        "A_FLAC" => "FLAC".to_string(),
+        "A_OPUS" => "Opus".to_string(),
+        "A_VORBIS" => "Vorbis".to_string(),
+        "A_PCM/INT/LIT" => "PCM".to_string(),
+        _ => codec.to_string(),
     }
 }
