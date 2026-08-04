@@ -52,7 +52,7 @@ the release-only `release:` prefix while this queue is in progress.
   - [x] `R26-P1-07a` Remove crate-wide complexity lint exemptions, replace complex
     data tuples with named Rust types, and keep any remaining argument-count
     exemptions local to ABI-shaped shims.
-  - [ ] `R26-P1-07b` Move Shell thumbnail STA, COM, GDI ownership, and allocation
+  - [x] `R26-P1-07b` Move Shell thumbnail STA, COM, GDI ownership, and allocation
     validation into a bounded `win32` module while keeping exported functions thin.
   - [ ] `R26-P1-07c` Split Office, archive/package, database/media, and shared
     parser primitives out of the `preview.rs` aggregation module by format family.
@@ -136,6 +136,23 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07b` Move Shell thumbnail flags, size/allocation validation,
+  STA dispatch, COM image-factory calls, and HBITMAP/HDC ownership into the
+  262-line `win32::shell_thumbnail` module. Keep all three C exports in `lib.rs`
+  as typed-error adapters and retain the shared raster packet writer for
+  package and Office images. Recursively inspect Rust FFI safety, enforce the
+  module boundary and 400-line ceiling, and teach the thumbnail policy guard to
+  inspect the implementation file instead of silently missing moved code.
+  - Verification: `pwsh -NoProfile -File tools/test-rust-ffi-safety.ps1` (15 Rust files, 57 raw-pointer exports)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-thumbnail-priority.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `pwsh -NoProfile -File tools/smoke-native.ps1 -BuildNative`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `637615e`, `18d83fb`
 - [x] `R26-P1-07a` Remove crate-wide `too_many_arguments` and
   `type_complexity` allowances. Replace animation tuples and high-arity Office,
   SQLite, Android, archive, waveform, and compositing inputs with named Rust
