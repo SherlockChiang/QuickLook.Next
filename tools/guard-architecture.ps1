@@ -1885,6 +1885,10 @@ $localBuildWorkflowTest = Join-Path $PSScriptRoot "test-build-local.ps1"
 Invoke-CheckedScript -Path $localBuildWorkflowTest -Arguments @{ Root = $Root } `
     -FailureMessage "Local build workflow tests failed"
 
+$nativeMsbuildDependencyTest = Join-Path $PSScriptRoot "test-native-msbuild-dependency.ps1"
+Invoke-CheckedScript -Path $nativeMsbuildDependencyTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Native MSBuild dependency tests failed"
+
 $localMsixVersionTest = Join-Path $PSScriptRoot "test-local-msix-version.ps1"
 Invoke-CheckedScript -Path $localMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "Local MSIX version tests failed"
