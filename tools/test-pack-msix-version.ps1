@@ -19,12 +19,13 @@ $requiredPatterns = @(
     @('\$_\s+-lt\s+0\s+-or\s+\$_\s+-gt\s+65535', "MSIX version components must remain bounded to 0..65535."),
     @('\$numericVersion\s*=\s*\$Version', "The explicit four-part version must flow to the MSIX manifest."),
     @('\$VersionPrefix\s*=\s*\$versionParts\[0\.\.2\]\s+-join', "The build version prefix must derive from the first three components."),
-    @('resolve-formal-msix-version\.ps1[\s\S]*-VersionSuffix\s+\$VersionSuffix', "Formal packages must use the ordered beta/stable MSIX revision resolver."),
+    @('resolve-formal-msix-version\.ps1[\s\S]{0,300}VersionSuffix\s*=\s*\$VersionSuffix', "Formal packages must use the ordered beta/stable MSIX revision resolver."),
     @('Resolve-ArtifactChildPath[\s\S]*GetFullPath[\s\S]*StartsWith\([\s\S]*OrdinalIgnoreCase', "Artifact paths must be normalized and confined before deletion or writes."),
     @('\.signing[\s\S]*QuickLook\.Next-Release\.pfx', "MSIX packaging must discover the initialized local release certificate."),
     @('QuickLook\.Next-Release\.password[\s\S]*Get-Content\s+-LiteralPath', "MSIX packaging must discover the initialized local certificate password."),
     @('A signing certificate is required\.[\s\S]{0,300}test-installer-script\.ps1', "Missing signing credentials must fail before release packaging starts."),
-    @('pack-release\.ps1[\s\S]{0,300}-SkipBuild:\$SkipBuild[\s\S]{0,100}-SkipArchive', "MSIX packaging must reuse tested outputs and skip its unused intermediate archive.")
+    @('checked-invocation\.ps1[\s\S]*Invoke-CheckedScript[\s\S]{0,300}pack-release\.ps1', "MSIX packaging must fail closed on the release staging script."),
+    @('pack-release\.ps1[\s\S]{0,400}SkipBuild\s*=\s*\[bool\]\$SkipBuild[\s\S]{0,100}SkipArchive\s*=\s*\$true', "MSIX packaging must reuse tested outputs and skip its unused intermediate archive.")
 )
 foreach ($rule in $requiredPatterns) {
     if ($text -notmatch $rule[0]) {

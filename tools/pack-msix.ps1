@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 $root = Split-Path $PSScriptRoot -Parent
 $versionFile = Join-Path $root "VERSION"
 if ($Version -and ($VersionPrefix -or $VersionSuffix)) {
@@ -29,9 +30,13 @@ if ($Version) {
 else {
     if (-not $VersionPrefix) { $VersionPrefix = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
     $numericVersion = @(
-        & (Join-Path $PSScriptRoot "resolve-formal-msix-version.ps1") `
-            -VersionPrefix $VersionPrefix `
-            -VersionSuffix $VersionSuffix
+        Invoke-CheckedScript `
+            -Path (Join-Path $PSScriptRoot "resolve-formal-msix-version.ps1") `
+            -Arguments @{
+                VersionPrefix = $VersionPrefix
+                VersionSuffix = $VersionSuffix
+            } `
+            -FailureMessage "Formal MSIX version resolution failed"
     )[-1]
     if (-not $numericVersion) {
         throw "The formal MSIX version could not be resolved."
@@ -78,13 +83,21 @@ if (-not $CreateDevelopmentCertificate -and -not (Test-Path -LiteralPath $Certif
     throw "A signing certificate is required. Run tools/setup-release-signing.ps1 or pass CertificatePath and CertificatePassword."
 }
 
-& (Join-Path $PSScriptRoot "test-installer-script.ps1") -Path $installScript
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-installer-script.ps1") `
+    -Arguments @{ Path = $installScript } `
+    -FailureMessage "Installer script tests failed"
 
 Remove-Item -LiteralPath $msixRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $installerRoot -Recurse -Force -ErrorAction SilentlyContinue
-& (Join-Path $PSScriptRoot "pack-release.ps1") -VersionPrefix $VersionPrefix -VersionSuffix $VersionSuffix `
-    -SkipBuild:$SkipBuild -SkipArchive -SkipSystemImageSmoke:$SkipSystemImageSmoke
-if ($LASTEXITCODE -ne 0) { throw "Release packaging failed." }
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "pack-release.ps1") `
+    -Arguments @{
+        VersionPrefix = $VersionPrefix
+        VersionSuffix = $VersionSuffix
+        SkipBuild = [bool]$SkipBuild
+        SkipArchive = $true
+        SkipSystemImageSmoke = [bool]$SkipSystemImageSmoke
+    } `
+    -FailureMessage "Release packaging failed"
 
 New-Item -ItemType Directory -Path $msixRoot, $installerRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $root "dist\*") -Destination $msixRoot -Recurse -Force
@@ -184,12 +197,15 @@ Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $installerPath -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $installerName" | Set-Content -LiteralPath "$installerPath.sha256" -Encoding ascii
-& (Join-Path $PSScriptRoot "test-release-artifacts.ps1") `
-    -InstallerPath $installerPath `
-    -ChecksumPath "$installerPath.sha256" `
-    -ExpectedMsixVersion $numericVersion `
-    -ExpectedCertificatePath $ExpectedCertificatePath `
-    -DistPath (Join-Path $root "dist")
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-artifacts.ps1") `
+    -Arguments @{
+        InstallerPath = $installerPath
+        ChecksumPath = "$installerPath.sha256"
+        ExpectedMsixVersion = $numericVersion
+        ExpectedCertificatePath = $ExpectedCertificatePath
+        DistPath = (Join-Path $root "dist")
+    } `
+    -FailureMessage "Release artifact validation failed"
 Remove-Item -LiteralPath $msixRoot -Recurse -Force
 Remove-Item -LiteralPath $installerRoot -Recurse -Force
 Write-Host "Installer created: $installerPath" -ForegroundColor Green

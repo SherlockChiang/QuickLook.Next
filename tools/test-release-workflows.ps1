@@ -72,8 +72,17 @@ if ($packageAction -notmatch 'Test and package signed release[\s\S]*tools/releas
     $packageAction -match '(?m)^\s*run:\s*(cargo|dotnet)\s+(build|test)') {
     throw "The shared action must delegate its single build/test/package sequence to release.ps1."
 }
+if ($packageAction -notmatch 'checked-invocation\.ps1' -or
+    $packageAction -notmatch 'Invoke-CheckedScript[\s\S]{0,300}tools/release\.ps1') {
+    throw "Release workflow child scripts must use the checked invocation boundary."
+}
 $releaseScript = Get-Content -LiteralPath (
     Join-Path $Root "tools\release.ps1") -Raw
+if ($releaseScript -notmatch 'checked-invocation\.ps1' -or
+    $releaseScript -notmatch 'Invoke-CheckedScript[\s\S]{0,300}pack-msix\.ps1' -or
+    $releaseScript -notmatch 'Invoke-CheckedScript[\s\S]{0,300}guard-architecture\.ps1') {
+    throw "Formal release orchestration must fail closed on packaging and guard scripts."
+}
 if ($releaseScript -notmatch
         'dotnet\s+test[\s\S]{0,260}--maxcpucount:1') {
     throw "Formal release integration test projects must run serially."
@@ -101,7 +110,7 @@ if ($packageAction -notmatch 'resolve-formal-msix-version\.ps1[\s\S]*msix_versio
     throw "Formal beta and stable packages must use strictly ordered MSIX revisions."
 }
 if ($packageAction -notmatch
-        'set-version\.ps1\s+-Version\s+\$version' -or
+        'set-version\.ps1[\s\S]{0,160}Arguments\s+@\{\s*Version\s*=\s*\$version' -or
     $packageAction -match
         '\$version\s*\|\s*Set-Content\s+-LiteralPath\s+VERSION') {
     throw "Resolved release versions must synchronize every authoritative version source."

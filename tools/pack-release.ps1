@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 . (Join-Path $PSScriptRoot "release-payload.ps1")
 $root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
 $dist = Join-Path $root "dist"
@@ -77,9 +78,12 @@ foreach ($requiredOutput in $requiredOutputs) {
 }
 
 $noticePath = Join-Path $artifacts "THIRD-PARTY-NOTICES.txt"
-& (Join-Path $PSScriptRoot "new-third-party-notices.ps1") `
-    -Root $root `
-    -OutputPath $noticePath
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "new-third-party-notices.ps1") `
+    -Arguments @{
+        Root = $root
+        OutputPath = $noticePath
+    } `
+    -FailureMessage "Third-party notice generation failed"
 $payload = @(
     Get-QuickLookReleasePayload `
         -Root $root `
@@ -124,7 +128,13 @@ Assert-QuickLookReleasePayloadProof `
     -ProofOutputs $payloadHashesForStage `
     -ContentRoot $dist
 
-& (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -DistDir $dist -SkipSystemImageSmoke:$SkipSystemImageSmoke
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "guard-architecture.ps1") `
+    -Arguments @{
+        Root = $root
+        DistDir = $dist
+        SkipSystemImageSmoke = [bool]$SkipSystemImageSmoke
+    } `
+    -FailureMessage "Packaged release architecture guard failed"
 
 $size = [math]::Round(((Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB))
 $packageVersion = if ($VersionPrefix) { $VersionPrefix } else { "dev" }

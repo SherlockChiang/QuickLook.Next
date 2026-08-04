@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 . (Join-Path $PSScriptRoot "release-payload.ps1")
 
 if ($VersionPrefix -notmatch '^\d+\.\d+\.\d+$') {
@@ -20,9 +21,12 @@ if ($LASTEXITCODE -ne 0 -or -not $commit) {
 $artifacts = Join-Path $Root "artifacts"
 [IO.Directory]::CreateDirectory($artifacts) | Out-Null
 $noticePath = Join-Path $artifacts "THIRD-PARTY-NOTICES.txt"
-& (Join-Path $PSScriptRoot "new-third-party-notices.ps1") `
-    -Root $Root `
-    -OutputPath $noticePath
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "new-third-party-notices.ps1") `
+    -Arguments @{
+        Root = $Root
+        OutputPath = $noticePath
+    } `
+    -FailureMessage "Third-party notice generation failed"
 $payload = @(
     Get-QuickLookReleasePayload `
         -Root $Root `

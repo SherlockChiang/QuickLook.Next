@@ -22,6 +22,7 @@ $requiredPatterns = @(
     @('\$VersionSuffix\s+-and[\s\S]{0,100}\^\[0-9A-Za-z\][\s\S]{0,100}SemVer-compatible identifier', "Release packaging must reject unsafe suffixes before deriving artifact paths."),
     @('\$requiredOutputs[\s\S]*QuickLook\.Next\.App\.exe[\s\S]*QuickLook\.Next\.RasterHost\.exe[\s\S]*QuickLook\.Next\.ParserHost\.exe[\s\S]*QuickLook\.Next\.ShellBroker\.exe', "No-build packaging must require all release executables."),
     @('new-third-party-notices\.ps1', "Release packages must generate third-party notices."),
+    @('checked-invocation\.ps1[\s\S]*Invoke-CheckedScript[\s\S]{0,300}guard-architecture\.ps1', "Release packaging must fail closed on the architecture guard."),
     @('release-payload\.ps1[\s\S]*Get-QuickLookReleasePayload', "Release packaging must use the shared payload enumeration."),
     @('tested-release-build\.json[\s\S]*payloadSchemaVersion[\s\S]*versionPrefix[\s\S]*proof\.commit[\s\S]*Assert-QuickLookReleasePayloadProof', "No-build packaging must verify the proof schema, version, commit, exact payload keys, and hashes."),
     @('Copy-QuickLookReleasePayload[\s\S]*Assert-QuickLookReleasePayloadProof[\s\S]*-ContentRoot\s+\$dist', "The staged dist payload must be copied and revalidated from the shared manifest."),

@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 $root = Split-Path $PSScriptRoot -Parent
 $version = if ($VersionPrefix) { $VersionPrefix } else { (Get-Content -LiteralPath (Join-Path $root "VERSION") -Raw).Trim() }
 if ($ExpectedVersion -and $ExpectedVersion.TrimStart("v") -ne $version) {
@@ -34,7 +35,9 @@ if (-not $CertificatePassword) {
     }
 }
 
-& (Join-Path $PSScriptRoot "test-release-version.ps1") -ExpectedVersion $version
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-version.ps1") `
+    -Arguments @{ ExpectedVersion = $version } `
+    -FailureMessage "Release version test failed"
 
 Write-Host "== checking Rust formatting ==" -ForegroundColor Cyan
 cargo fmt --all --manifest-path (Join-Path $root "native\Cargo.toml") -- --check
@@ -71,21 +74,34 @@ dotnet test (Join-Path $root "QuickLook.Next.slnx") -c Release `
     --no-build --no-restore --maxcpucount:1 @versionProperties
 if ($LASTEXITCODE -ne 0) { throw "Solution tests failed." }
 
-& (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
-    -Root $root `
-    -VersionPrefix $version `
-    -VersionSuffix $VersionSuffix | Out-Null
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
+    -Arguments @{
+        Root = $root
+        VersionPrefix = $version
+        VersionSuffix = $VersionSuffix
+    } `
+    -FailureMessage "Writing the tested release proof failed" | Out-Null
 
 if (-not $SkipPackage) {
-    & (Join-Path $PSScriptRoot "pack-msix.ps1") -VersionPrefix $version `
-        -VersionSuffix $VersionSuffix `
-        -CertificatePath $CertificatePath -CertificatePassword $CertificatePassword `
-        -SkipBuild `
-        -CreateDevelopmentCertificate:$CreateDevelopmentCertificate `
-        -SkipSystemImageSmoke:$SkipSystemImageSmoke
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "pack-msix.ps1") `
+        -Arguments @{
+            VersionPrefix = $version
+            VersionSuffix = $VersionSuffix
+            CertificatePath = $CertificatePath
+            CertificatePassword = $CertificatePassword
+            SkipBuild = $true
+            CreateDevelopmentCertificate = [bool]$CreateDevelopmentCertificate
+            SkipSystemImageSmoke = [bool]$SkipSystemImageSmoke
+        } `
+        -FailureMessage "MSIX packaging failed"
 }
 else {
-    & (Join-Path $PSScriptRoot "guard-architecture.ps1") -Root $root -SkipSystemImageSmoke:$SkipSystemImageSmoke
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "guard-architecture.ps1") `
+        -Arguments @{
+            Root = $root
+            SkipSystemImageSmoke = [bool]$SkipSystemImageSmoke
+        } `
+        -FailureMessage "Architecture guard failed"
 }
 
 Write-Host "Release $version passed all checks." -ForegroundColor Green

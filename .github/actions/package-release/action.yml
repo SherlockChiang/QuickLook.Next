@@ -58,8 +58,12 @@ runs:
         id: version
         shell: pwsh
         run: |
+          . ./tools/checked-invocation.ps1
           if ("${{ inputs.channel }}" -eq "stable") {
-            $release = ./tools/resolve-auto-release.ps1
+            $release = @(
+              Invoke-CheckedScript -Path ./tools/resolve-auto-release.ps1 `
+                -FailureMessage "Automatic release resolution failed"
+            )[-1]
             $version = $release.Version
             $suffix = ""
             $previousTag = $release.PreviousTag
@@ -72,10 +76,14 @@ runs:
           }
           else { throw "Unknown release channel: ${{ inputs.channel }}" }
           $packageVersion = if ($suffix) { "$version-$suffix" } else { $version }
-          $msixVersion = ./tools/resolve-formal-msix-version.ps1 `
-            -VersionPrefix $version `
-            -VersionSuffix $suffix
-          ./tools/set-version.ps1 -Version $version | Out-Host
+          $msixVersion = @(
+            Invoke-CheckedScript -Path ./tools/resolve-formal-msix-version.ps1 `
+              -Arguments @{ VersionPrefix = $version; VersionSuffix = $suffix } `
+              -FailureMessage "Formal MSIX version resolution failed"
+          )[-1]
+          Invoke-CheckedScript -Path ./tools/set-version.ps1 `
+            -Arguments @{ Version = $version } `
+            -FailureMessage "Release version synchronization failed" | Out-Host
           "version=$packageVersion" >> $env:GITHUB_OUTPUT
           "tag=v$packageVersion" >> $env:GITHUB_OUTPUT
           "artifact_name=QuickLook.Next-$packageVersion-win-x64" >> $env:GITHUB_OUTPUT
@@ -89,15 +97,24 @@ runs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./tools/test-release-target.ps1 `
-            -Tag "${{ steps.version.outputs.tag }}" `
-            -Commit "$env:GITHUB_SHA" `
-            -Repository "$env:GITHUB_REPOSITORY" | Out-Null
-          $notes = ./tools/new-release-notes.ps1 `
-            -Version "${{ steps.version.outputs.version }}" `
-            -PreviousTag "${{ steps.version.outputs.previous_tag }}" `
-            -Repository "$env:GITHUB_REPOSITORY" `
-            -OutputPath artifacts/release-notes.md
+          . ./tools/checked-invocation.ps1
+          Invoke-CheckedScript -Path ./tools/test-release-target.ps1 `
+            -Arguments @{
+              Tag = "${{ steps.version.outputs.tag }}"
+              Commit = "$env:GITHUB_SHA"
+              Repository = "$env:GITHUB_REPOSITORY"
+            } `
+            -FailureMessage "Release target validation failed" | Out-Null
+          $notes = @(
+            Invoke-CheckedScript -Path ./tools/new-release-notes.ps1 `
+              -Arguments @{
+                Version = "${{ steps.version.outputs.version }}"
+                PreviousTag = "${{ steps.version.outputs.previous_tag }}"
+                Repository = "$env:GITHUB_REPOSITORY"
+                OutputPath = "artifacts/release-notes.md"
+              } `
+              -FailureMessage "Release note generation failed"
+          )[-1]
           $allowEmpty = (git log -1 --format=%b) -match '(?im)^Release-Allow-Empty:\s*true\s*$'
           if ("${{ inputs.channel }}" -eq "stable" -and $notes.UserVisibleChangeCount -eq 0 -and -not $allowEmpty) {
             throw "Stable release has no user-visible changes. Add feat/fix/perf, Release-Note, or Release-Allow-Empty: true."
@@ -143,13 +160,17 @@ runs:
         env:
           RELEASE_PFX_PASSWORD: ${{ inputs.release-pfx-password }}
         run: |
-          ./tools/release.ps1 `
-            -ExpectedVersion "${{ steps.version.outputs.base_version }}" `
-            -VersionPrefix "${{ steps.version.outputs.base_version }}" `
-            -VersionSuffix "${{ steps.version.outputs.suffix }}" `
-            -CertificatePath '.signing/QuickLook.Next-Release.pfx' `
-            -CertificatePassword "$env:RELEASE_PFX_PASSWORD" `
-            -SkipSystemImageSmoke
+          . ./tools/checked-invocation.ps1
+          Invoke-CheckedScript -Path ./tools/release.ps1 `
+            -Arguments @{
+              ExpectedVersion = "${{ steps.version.outputs.base_version }}"
+              VersionPrefix = "${{ steps.version.outputs.base_version }}"
+              VersionSuffix = "${{ steps.version.outputs.suffix }}"
+              CertificatePath = ".signing/QuickLook.Next-Release.pfx"
+              CertificatePassword = "$env:RELEASE_PFX_PASSWORD"
+              SkipSystemImageSmoke = $true
+            } `
+            -FailureMessage "Signed release packaging failed"
 
       - name: Delete release signing certificate
         if: always()
@@ -166,15 +187,19 @@ runs:
       - name: Generate release metadata
         shell: pwsh
         run: |
-          ./tools/new-release-metadata.ps1 `
-            -Version "${{ steps.version.outputs.version }}" `
-            -Tag "${{ steps.version.outputs.tag }}" `
-            -Channel "${{ inputs.channel }}" `
-            -InstallerPath "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip" `
-            -ChecksumPath "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip.sha256" `
-            -SbomPath (Get-Item artifacts/*.spdx.json).FullName `
-            -Repository "$env:GITHUB_REPOSITORY" `
-            -OutputDirectory artifacts/release
+          . ./tools/checked-invocation.ps1
+          Invoke-CheckedScript -Path ./tools/new-release-metadata.ps1 `
+            -Arguments @{
+              Version = "${{ steps.version.outputs.version }}"
+              Tag = "${{ steps.version.outputs.tag }}"
+              Channel = "${{ inputs.channel }}"
+              InstallerPath = "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip"
+              ChecksumPath = "artifacts/QuickLook.Next-Installer-${{ steps.version.outputs.version }}-win-x64.zip.sha256"
+              SbomPath = (Get-Item artifacts/*.spdx.json).FullName
+              Repository = "$env:GITHUB_REPOSITORY"
+              OutputDirectory = "artifacts/release"
+            } `
+            -FailureMessage "Release metadata generation failed"
 
       - name: Upload release artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
