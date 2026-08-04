@@ -93,8 +93,20 @@ the release-only `release:` prefix while this queue is in progress.
       - [x] `R26-P1-07c-2f` Move media routing, container detection, and output
         composition into `preview/media/mod.rs`, leaving one explicit route in
         `preview.rs`.
-    - [ ] `R26-P1-07c-3` Move database, mail, dump, ELF, and related binary
+    - [ ] `R26-P1-07c-3` Move database, mail, CHM, dump, ELF, and related binary
       metadata parsing into focused family modules with local tests.
+      - [ ] `R26-P1-07c-3a` Move CHM routing, ITSF/ITSP directory parsing,
+        compressed-stream discovery, and `/#SYSTEM` metadata into
+        `preview/chm.rs`; harden hostile offsets and preserve bounded reads.
+      - [ ] `R26-P1-07c-3b` Move MIME/EML and Compound File Binary MSG parsing
+        into `preview/mail.rs` with malformed/truncated Outlook-message tests.
+      - [ ] `R26-P1-07c-3c` Move ELF headers, sections, symbols, notes, and GNU
+        version parsing into `preview/elf.rs` with checked hostile offsets.
+      - [ ] `R26-P1-07c-3d` Move minidump streams and ELF-core composition into
+        `preview/dump.rs` behind narrow sibling-module APIs.
+      - [ ] `R26-P1-07c-3e` Split SQLite/database rendering into bounded
+        `preview/database/` composition, WAL, and SQLite parser modules while
+        preserving HANDLE, companion-file, cancellation, and size contracts.
     - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
       and embedded-image parsing into focused Office modules.
     - [ ] `R26-P1-07c-5` Move archive and application-package listing/parsing
