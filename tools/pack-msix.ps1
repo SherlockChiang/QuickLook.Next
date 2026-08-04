@@ -150,6 +150,16 @@ if ($priText -notmatch 'Microsoft\.UI\.Xaml[/\\]Themes[/\\]themeresources\.xbf')
 if ($priText -notmatch 'Square44x44Logo\.targetsize-16_altform-unplated\.png') {
     throw "Package PRI is missing unplated taskbar icon candidates."
 }
+$localizedAppResource = [regex]::Match(
+    $priText,
+    '<NamedResource name="AppDescription"[\s\S]*?</NamedResource>').Value
+foreach ($language in @("en-US", "zh-CN", "zh-TW")) {
+    $languageQualifier = '<Qualifier name="Language" value="' +
+        [regex]::Escape($language) + '"'
+    if ($localizedAppResource -notmatch $languageQualifier) {
+        throw "Package PRI AppDescription is missing language: $language"
+    }
+}
 Remove-Item -LiteralPath $priDump -Force
 & (Join-Path $sdkBin "makeappx.exe") pack /d $msixRoot /p $msixPath /o
 if ($LASTEXITCODE -ne 0) { throw "MakeAppx failed." }

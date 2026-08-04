@@ -1813,6 +1813,13 @@ if ($failures.Count -gt 0) {
 
 Write-Host "architecture guard passed" -ForegroundColor Green
 
+$localizationTest = Join-Path $PSScriptRoot "test-localization.ps1"
+if (-not (Test-Path -LiteralPath $localizationTest -PathType Leaf)) {
+    throw "Missing localization consistency test: $localizationTest"
+}
+& $localizationTest -Root $Root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $rustFfiSafetyTest = Join-Path $PSScriptRoot "test-rust-ffi-safety.ps1"
 if (-not (Test-Path -LiteralPath $rustFfiSafetyTest -PathType Leaf)) {
     throw "Missing Rust FFI safety guard: $rustFfiSafetyTest"

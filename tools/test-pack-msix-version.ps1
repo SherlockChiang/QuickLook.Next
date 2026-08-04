@@ -38,9 +38,12 @@ if ($appProjectText -notmatch '<ProjectPriIndexName>SherlockChiang\.QuickLookNex
 foreach ($pattern in @(
     'makepri\.exe"\)\s+dump',
     'Microsoft\\\.UI\\\.Xaml',
-    'Square44x44Logo\\\.targetsize-16_altform-unplated')) {
+    'Square44x44Logo\\\.targetsize-16_altform-unplated',
+    'NamedResource name="AppDescription"',
+    'Qualifier name="Language"',
+    '@\("en-US",\s*"zh-CN",\s*"zh-TW"\)')) {
     if ($text -notmatch $pattern) {
-        throw "MSIX packaging must validate the complete WinUI and unplated icon resource map."
+        throw "MSIX packaging must validate the complete WinUI, icon, and localized app resource map."
     }
 }
 

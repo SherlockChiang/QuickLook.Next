@@ -61,6 +61,10 @@ try {
     Set-FixtureFile (
         Join-Path $appOutput "en-US\Microsoft.ui.xaml.dll.mui") "english"
     Set-FixtureFile (
+        Join-Path $appOutput "zh-CN\Microsoft.ui.xaml.dll.mui") "simplified"
+    Set-FixtureFile (
+        Join-Path $appOutput "zh-TW\Microsoft.ui.xaml.dll.mui") "traditional"
+    Set-FixtureFile (
         Join-Path $appOutput "fr-FR\Microsoft.ui.xaml.dll.mui") "french"
 
     Set-FixtureFile (
@@ -92,6 +96,9 @@ try {
     foreach ($requiredPath in @(
             "App.xbf",
             "Assets/icon.png",
+            "en-US/Microsoft.ui.xaml.dll.mui",
+            "zh-CN/Microsoft.ui.xaml.dll.mui",
+            "zh-TW/Microsoft.ui.xaml.dll.mui",
             "RasterHost/QuickLook.Next.Contracts.dll",
             "ParserHost/QuickLook.Next.Core.dll",
             "THIRD-PARTY-NOTICES.txt"))
