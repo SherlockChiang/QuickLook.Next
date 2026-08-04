@@ -207,7 +207,15 @@ if ($failures.Count -eq 0) {
             'fn\s+mp4_time_to_unix\s*\(',
             'fn\s+mp4_rotation_degrees\s*\(',
             'fn\s+parse_tkhd_rotation_degrees\s*\(',
-            'fn\s+duration_from_timescale\s*\(')) {
+            'fn\s+duration_from_timescale\s*\(',
+            'struct\s+Mp4(?:SttsTimeline|CttsSummary|ElstSummary|ChunkSummary)',
+            'enum\s+SampleSizes',
+            'struct\s+StscEntry',
+            'fn\s+parse_(?:stsz|stts|ctts|elst|stco|co64|stsc)\w*\s*\(',
+            'fn\s+parse_mp4_(?:entry_count|chunk_summary)\s*\(',
+            'fn\s+samples_per_chunk_for_chunk\s*\(',
+            'fn\s+summarize_chunks\s*\(',
+            'fn\s+(?:validated_entry_count|checked_table_end)\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -226,6 +234,7 @@ if ($failures.Count -eq 0) {
             'codec::parse_esds_detail\(',
             'codec::parse_avcc_detail\(',
             'codec::parse_hvcc_detail\(',
+            'mp4::apply_track_tables\(',
             'pub\(super\) fn codec_label\(',
             '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
@@ -257,6 +266,57 @@ if ($failures.Count -eq 0) {
             'fn media_info_reads_ogg_vorbis_summary\(')) {
         if ($mediaAudioText -notmatch $required) {
             $failures.Add("Audio-container module lost required boundary: $required")
+        }
+    }
+
+    if ($previewText -notmatch 'apply_mp4_track_tables\(trak, &mut summary\)') {
+        $failures.Add("MP4 track parsing must delegate sample/timeline tables to media::mp4.")
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn apply_track_tables\(',
+            'const MAX_TIMELINE_ENTRIES: usize = 100_000;',
+            'const MAX_CHUNK_TABLE_ENTRIES: usize = 1_000_000;',
+            'const MAX_SAMPLE_COUNT: usize = 1_000_000;',
+            'const MAX_CHUNK_DETAILS: usize = 4;',
+            'enum SampleSizes',
+            'Fixed \{ size: u32, count: usize \}',
+            'Variable \{ bytes: &''a \[u8\], count: usize \}',
+            'checked_table_end\(12, count, 4, payload\.len\(\)\)',
+            'u64::from\(size\)\.checked_mul\(u64::try_from\(count\)\.ok\(\)\?\)',
+            'fn validated_entry_count\(',
+            'header_size\.checked_add\(count\.checked_mul\(stride\)\?\)',
+            'if !matches!\(version, 0 \| 1\)',
+            'read_i16_be\(payload, rate_offset\.checked_add\(2\)\?\)',
+            'first_chunk <= previous_first_chunk',
+            'samples_per_chunk == 0',
+            'sample_description_index == 0',
+            'entry\.first_chunk != 1',
+            'let mut stsc_index = 0usize;',
+            'sample_to_chunks\.get\(stsc_index\.checked_add\(1\)\?\)',
+            'stsc_index = stsc_index\.checked_add\(1\)\?;',
+            'sample_index != sample_sizes\.len\(\)',
+            'stsc_index\.checked_add\(1\)\? != sample_to_chunks\.len\(\)',
+            'chunk_offset\.checked_add\(chunk_bytes\)',
+            'try_reserve_exact\(count\)',
+            'fn stsc_rejects_zero_duplicate_descending_and_truncated_entries\(',
+            'fn large_stsc_mapping_remains_linear\(',
+            'const ENTRY_COUNT: u32 = 65_000;',
+            'fn fixed_stsz_is_compact_and_rejects_over_budget_counts\(',
+            'fn table_parsers_reject_truncated_and_over_budget_counts\(',
+            'fn timeline_tables_reject_versions_and_tick_overflow\(',
+            'fn chunk_summary_rejects_offset_overflow_and_sample_mismatch\(')) {
+        if ($mediaMp4Text -notmatch $required) {
+            $failures.Add("Media MP4 module lost bounded sample-table boundary: $required")
+        }
+    }
+
+    foreach ($forbidden in @(
+            'vec!\[\s*size\s*;\s*count\s*\]',
+            'chunk_offset\.saturating_add\(chunk_bytes\)',
+            'fn\s+samples_per_chunk_for_chunk\s*\(')) {
+        if ($mediaMp4Text -match $forbidden) {
+            $failures.Add("Media MP4 module regained an unbounded table pattern: $forbidden")
         }
     }
 
