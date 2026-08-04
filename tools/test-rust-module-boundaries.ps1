@@ -16,6 +16,7 @@ $mediaCodecPath = Join-Path $Root "native\quicklook_next_native\src\preview\medi
 $mediaId3Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\id3.rs"
 $mediaMatroskaPath = Join-Path (
     $Root) "native\quicklook_next_native\src\preview\media\matroska.rs"
+$mediaMp4Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\mp4.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -28,7 +29,8 @@ foreach ($path in @(
         $mediaAudioPath,
         $mediaCodecPath,
         $mediaId3Path,
-        $mediaMatroskaPath)) {
+        $mediaMatroskaPath,
+        $mediaMp4Path)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -45,6 +47,7 @@ if ($failures.Count -eq 0) {
     $mediaCodecText = Get-Content -LiteralPath $mediaCodecPath -Raw
     $mediaId3Text = Get-Content -LiteralPath $mediaId3Path -Raw
     $mediaMatroskaText = Get-Content -LiteralPath $mediaMatroskaPath -Raw
+    $mediaMp4Text = Get-Content -LiteralPath $mediaMp4Path -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -157,7 +160,8 @@ if ($failures.Count -eq 0) {
         $mediaText -notmatch '(?m)^mod audio;\s*$' -or
         $mediaText -notmatch '(?m)^mod codec;\s*$' -or
         $mediaText -notmatch '(?m)^mod id3;\s*$' -or
-        $mediaText -notmatch '(?m)^mod matroska;\s*$') {
+        $mediaText -notmatch '(?m)^mod matroska;\s*$' -or
+        $mediaText -notmatch '(?m)^mod mp4;\s*$') {
         $failures.Add(
             "preview.rs must compose the explicit preview::media family modules.")
     }
@@ -195,7 +199,15 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_hevc_\w+\s*\(',
             'fn\s+find_hvcc_\w+\s*\(',
             'fn\s+skip_hevc_\w+\s*\(',
-            'fn\s+hevc_\w+\s*\(')) {
+            'fn\s+hevc_\w+\s*\(',
+            'fn\s+find_mp4_atom_payload\w*\s*\(',
+            'fn\s+collect_mp4_atom_payloads\w*\s*\(',
+            'fn\s+is_mp4_container_atom\s*\(',
+            'fn\s+parse_mvhd_\w+\s*\(',
+            'fn\s+mp4_time_to_unix\s*\(',
+            'fn\s+mp4_rotation_degrees\s*\(',
+            'fn\s+parse_tkhd_rotation_degrees\s*\(',
+            'fn\s+duration_from_timescale\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -296,6 +308,42 @@ if ($failures.Count -eq 0) {
     }
 
     foreach ($required in @(
+            'pub\(super\) fn find_atom_payload(?:<[^>]+>)?\(',
+            'pub\(super\) fn collect_atom_payloads(?:<[^>]+>)?\(',
+            'pub\(super\) fn find_atom_payload_in_range(?:<[^>]+>)?\(',
+            'pub\(super\) fn parse_movie_duration_seconds\(',
+            'pub\(super\) fn parse_movie_created_unix\(',
+            'pub\(super\) fn rotation_degrees\(',
+            'pub\(super\) fn duration_from_timescale\(',
+            'const MAX_ATOM_DEPTH: usize = 4;',
+            'const MAX_COLLECTED_ATOMS: usize = 1024;',
+            'const MP4_TO_UNIX_SECONDS: u64 = 2_082_844_800;',
+            'fn collect_atom_payloads_in_range(?:<[^>]+>)?\(',
+            'found\.len\(\) >= MAX_COLLECTED_ATOMS',
+            'depth > MAX_ATOM_DEPTH',
+            'fn read_atom\(',
+            'position\.checked_add\(8\)',
+            'position\.checked_add\(16\)',
+            'usize::try_from\(size64\)',
+            'position\.checked_add\(size\)',
+            'position\.checked_add\(header_size\)',
+            'minimum_end > logical_end \|\| logical_end > bytes\.len\(\)',
+            'atom_end > logical_end \|\| atom_end < payload_start',
+            'bytes\.get\(current\.payload_start\.\.current\.end\)',
+            'mac_time\.checked_sub\(MP4_TO_UNIX_SECONDS\)',
+            'i64::try_from\(unix_time\)',
+            'matrix_offset\.checked_add\(4\)',
+            'degrees\.rem_euclid\(360\)',
+            'fn atom_traversal_accepts_empty_siblings_and_rejects_excessive_depth\(',
+            'fn atom_traversal_rejects_malformed_extended_sizes\(',
+            'fn atom_collection_stops_at_budget\(',
+            'fn movie_header_time_and_duration_fail_closed\(')) {
+        if ($mediaMp4Text -notmatch $required) {
+            $failures.Add("Media MP4 module lost bounded atom/time boundary: $required")
+        }
+    }
+
+    foreach ($required in @(
             'pub\(super\) fn append_metadata\(',
             'fn parse_text_fields\(',
             '\(2\.\.=4\)\.contains\(&version\)',
@@ -371,8 +419,9 @@ if ($failures.Count -eq 0) {
             $mediaAudioText,
             $mediaCodecText,
             $mediaId3Text,
-            $mediaMatroskaText)) {
-        if ($module -match 'use\s+super::\*' -or
+            $mediaMatroskaText,
+            $mediaMp4Text)) {
+        if ($module -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
             $module -match '#\[no_mangle\]' -or
             $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
             $failures.Add(
@@ -401,6 +450,10 @@ if ($failures.Count -eq 0) {
     if ($mediaMatroskaLineCount -gt 460) {
         $failures.Add(
             "The bounded Matroska module grew beyond 460 lines: $mediaMatroskaLineCount")
+    }
+    $mediaMp4LineCount = @(Get-Content -LiteralPath $mediaMp4Path).Count
+    if ($mediaMp4LineCount -gt 1200) {
+        $failures.Add("The bounded MP4 module grew beyond 1200 lines: $mediaMp4LineCount")
     }
 }
 
