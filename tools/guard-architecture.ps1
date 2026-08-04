@@ -1839,6 +1839,13 @@ if (-not (Test-Path -LiteralPath $rustFfiSafetyTest -PathType Leaf)) {
 Invoke-CheckedScript -Path $rustFfiSafetyTest -Arguments @{ Root = $Root } `
     -FailureMessage "Rust FFI safety guard failed"
 
+$rustLintScopeTest = Join-Path $PSScriptRoot "test-rust-lint-scope.ps1"
+if (-not (Test-Path -LiteralPath $rustLintScopeTest -PathType Leaf)) {
+    throw "Missing Rust lint-scope guard: $rustLintScopeTest"
+}
+Invoke-CheckedScript -Path $rustLintScopeTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Rust lint-scope tests failed"
+
 $supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
 if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
     throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"
