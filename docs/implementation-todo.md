@@ -56,7 +56,7 @@ the release-only `release:` prefix while this queue is in progress.
     validation into a bounded `win32` module while keeping exported functions thin.
   - [ ] `R26-P1-07c` Split Office, archive/package, database/media, and shared
     parser primitives out of the `preview.rs` aggregation module by format family.
-    - [ ] `R26-P1-07c-1` Establish the format-module pattern by moving bounded
+    - [x] `R26-P1-07c-1` Establish the format-module pattern by moving bounded
       font metadata rendering and SFNT/WOFF table parsing into `preview/font.rs`.
     - [ ] `R26-P1-07c-2` Move media container, stream, waveform, and duration
       parsing into a bounded `preview/media.rs` family module.
@@ -148,6 +148,22 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-1` Move font info rendering, SFNT/WOFF metadata parsing,
+  and their focused tests out of the aggregation module into the 291-line
+  `preview::font` module. Keep `preview.rs` as the explicit format router and
+  preserve the existing 1 MiB read cap, table-count cap, checked offsets, JSON
+  shape, and text labels. Extend the architecture guard with an explicit-import
+  rule, implementation-backflow checks, required parser bounds, and a 350-line
+  module ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native font` (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-format-registry.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `dd77c6e`, `6044dcc`
 - [x] `R26-P1-07b` Move Shell thumbnail flags, size/allocation validation,
   STA dispatch, COM image-factory calls, and HBITMAP/HDC ownership into the
   262-line `win32::shell_thumbnail` module. Keep all three C exports in `lib.rs`
