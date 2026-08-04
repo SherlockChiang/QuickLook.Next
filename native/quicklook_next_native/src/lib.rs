@@ -154,6 +154,9 @@ const MAX_ANIMATION_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
 const QL_THUMBNAIL_FLAG_BOUNDED_SIZE: u32 = 2;
 const QL_THUMBNAIL_KNOWN_FLAGS: u32 = QL_THUMBNAIL_FLAG_CACHE_ONLY | QL_THUMBNAIL_FLAG_BOUNDED_SIZE;
+const MIN_SHELL_THUMBNAIL_EDGE: i32 = 16;
+const MAX_SHELL_THUMBNAIL_EDGE: i32 = 512;
+const MAX_SHELL_THUMBNAIL_BYTES: usize = 512 * 512 * 4;
 
 type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
 
@@ -3144,6 +3147,32 @@ fn thumbnail_bounded_size(flags: u32) -> bool {
     flags & QL_THUMBNAIL_FLAG_BOUNDED_SIZE != 0
 }
 
+fn checked_thumbnail_request_size(size: i32) -> Option<i32> {
+    let size = size.max(MIN_SHELL_THUMBNAIL_EDGE);
+    (size <= MAX_SHELL_THUMBNAIL_EDGE).then_some(size)
+}
+
+fn checked_thumbnail_bitmap_layout(width: i32, height: i32) -> Option<(u32, u32, usize)> {
+    let width = u32::try_from(width).ok()?;
+    let height = u32::try_from(height).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let byte_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)?;
+    if width > MAX_SHELL_THUMBNAIL_EDGE as u32
+        || height > MAX_SHELL_THUMBNAIL_EDGE as u32
+        || byte_len > MAX_SHELL_THUMBNAIL_BYTES
+    {
+        return None;
+    }
+
+    Some((width, height, byte_len))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3294,6 +3323,50 @@ mod tests {
         assert!(thumbnail_bounded_size(QL_THUMBNAIL_FLAG_BOUNDED_SIZE));
         assert!(!thumbnail_cache_only(0));
         assert!(!thumbnail_flags_valid(QL_THUMBNAIL_KNOWN_FLAGS | 4));
+    }
+
+    #[test]
+    fn thumbnail_request_size_is_bounded_before_shell_dispatch() {
+        assert_eq!(checked_thumbnail_request_size(i32::MIN), Some(16));
+        assert_eq!(checked_thumbnail_request_size(1), Some(16));
+        assert_eq!(checked_thumbnail_request_size(512), Some(512));
+        assert_eq!(checked_thumbnail_request_size(513), None);
+        assert_eq!(checked_thumbnail_request_size(i32::MAX), None);
+    }
+
+    #[test]
+    fn thumbnail_bitmap_layout_rejects_invalid_and_hostile_dimensions() {
+        assert_eq!(checked_thumbnail_bitmap_layout(1, 1), Some((1, 1, 4)));
+        assert_eq!(
+            checked_thumbnail_bitmap_layout(512, 512),
+            Some((512, 512, 512 * 512 * 4))
+        );
+        assert_eq!(checked_thumbnail_bitmap_layout(0, 1), None);
+        assert_eq!(checked_thumbnail_bitmap_layout(-1, 1), None);
+        assert_eq!(checked_thumbnail_bitmap_layout(513, 1), None);
+        assert_eq!(checked_thumbnail_bitmap_layout(1, 513), None);
+        assert_eq!(checked_thumbnail_bitmap_layout(65_536, 16_384), None);
+        assert_eq!(checked_thumbnail_bitmap_layout(i32::MAX, i32::MAX), None);
+    }
+
+    #[test]
+    fn thumbnail_export_rejects_oversized_request_before_shell_dispatch() {
+        let path = b"missing.file";
+        let mut output = [0u8; 16];
+        assert_eq!(
+            unsafe {
+                ql_get_thumbnail_cancelable_with_flags(
+                    path.as_ptr(),
+                    path.len(),
+                    MAX_SHELL_THUMBNAIL_EDGE + 1,
+                    0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    None,
+                )
+            },
+            QL_ERROR_LIMIT_EXCEEDED
+        );
     }
 
     #[test]
@@ -4171,12 +4244,15 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
         if !thumbnail_flags_valid(flags) {
             return -1;
         }
+        let Some(size) = checked_thumbnail_request_size(size) else {
+            return QL_ERROR_LIMIT_EXCEEDED;
+        };
         let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
             Some(s) => s.to_string(),
             None => return -1,
         };
 
-        let result = shell_thumbnail_on_sta(path, size.max(16), flags, cancel_cb);
+        let result = shell_thumbnail_on_sta(path, size, flags, cancel_cb);
         if cancel_requested(cancel_cb) {
             return -3;
         }
@@ -4185,16 +4261,7 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
             Some(x) => x,
             None => return -2,
         };
-        let total = 8 + bgra.len();
-        if out.is_null() || out_cap < total {
-            return -(total as i32);
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), out, 4);
-            std::ptr::copy_nonoverlapping(h.to_le_bytes().as_ptr(), out.add(4), 4);
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), out.add(8), bgra.len());
-        }
-        total as i32
+        write_raster_packet(w, h, &bgra, out, out_cap)
     })
 }
 
@@ -4204,7 +4271,7 @@ fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             while let Ok(request) = receiver.recv() {
-                let result = shell_thumbnail(&request.path, request.size.max(16), request.flags);
+                let result = shell_thumbnail(&request.path, request.size, request.flags);
                 let _ = request.reply.send(result);
             }
             CoUninitialize();
@@ -4419,6 +4486,39 @@ pub unsafe extern "C" fn ql_extract_office_image_cancelable(
     })
 }
 
+struct OwnedShellBitmap(windows::Win32::Graphics::Gdi::HBITMAP);
+
+impl OwnedShellBitmap {
+    fn new(handle: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<Self> {
+        (!handle.0.is_null()).then_some(Self(handle))
+    }
+}
+
+impl Drop for OwnedShellBitmap {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(self.0.into());
+        }
+    }
+}
+
+struct ScreenDc(windows::Win32::Graphics::Gdi::HDC);
+
+impl ScreenDc {
+    unsafe fn acquire() -> Option<Self> {
+        let handle = windows::Win32::Graphics::Gdi::GetDC(None);
+        (!handle.0.is_null()).then_some(Self(handle))
+    }
+}
+
+impl Drop for ScreenDc {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, self.0);
+        }
+    }
+}
+
 unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::UI::Shell::{
         IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
@@ -4433,12 +4533,12 @@ unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32
         (false, true) => Default::default(),
         (false, false) => SIIGBF_BIGGERSIZEOK,
     };
-    let hbm = factory
-        .GetImage(SIZE { cx: size, cy: size }, shell_flags)
-        .ok()?;
-    let result = hbitmap_to_bgra(hbm);
-    let _ = windows::Win32::Graphics::Gdi::DeleteObject(hbm.into());
-    result
+    let hbm = OwnedShellBitmap::new(
+        factory
+            .GetImage(SIZE { cx: size, cy: size }, shell_flags)
+            .ok()?,
+    )?;
+    hbitmap_to_bgra(hbm.0)
 }
 
 unsafe fn hbitmap_to_bgra(
@@ -4451,12 +4551,13 @@ unsafe fn hbitmap_to_bgra(
         std::mem::size_of::<BITMAP>() as i32,
         Some(&mut bm as *mut _ as *mut _),
     );
-    if got == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0 {
+    if got == 0 {
         return None;
     }
-    let w = bm.bmWidth as u32;
-    let h = bm.bmHeight as u32;
-    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let (w, h, byte_len) = checked_thumbnail_bitmap_layout(bm.bmWidth, bm.bmHeight)?;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(byte_len).ok()?;
+    pixels.resize(byte_len, 0);
 
     let mut info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -4471,9 +4572,9 @@ unsafe fn hbitmap_to_bgra(
         ..Default::default()
     };
 
-    let hdc = GetDC(None);
+    let hdc = ScreenDc::acquire()?;
     let lines = GetDIBits(
-        hdc,
+        hdc.0,
         hbm,
         0,
         h,
@@ -4481,8 +4582,7 @@ unsafe fn hbitmap_to_bgra(
         &mut info,
         DIB_RGB_COLORS,
     );
-    ReleaseDC(None, hdc);
-    if lines == 0 {
+    if lines != h as i32 {
         return None;
     }
 
