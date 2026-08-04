@@ -56,6 +56,18 @@ the release-only `release:` prefix while this queue is in progress.
     validation into a bounded `win32` module while keeping exported functions thin.
   - [ ] `R26-P1-07c` Split Office, archive/package, database/media, and shared
     parser primitives out of the `preview.rs` aggregation module by format family.
+    - [ ] `R26-P1-07c-1` Establish the format-module pattern by moving bounded
+      font metadata rendering and SFNT/WOFF table parsing into `preview/font.rs`.
+    - [ ] `R26-P1-07c-2` Move media container, stream, waveform, and duration
+      parsing into a bounded `preview/media.rs` family module.
+    - [ ] `R26-P1-07c-3` Move database, mail, dump, ELF, and related binary
+      metadata parsing into focused family modules with local tests.
+    - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
+      and embedded-image parsing into focused Office modules.
+    - [ ] `R26-P1-07c-5` Move archive and application-package listing/parsing
+      into focused modules while preserving bounded extraction contracts.
+    - [ ] `R26-P1-07c-6` Move reusable bounded-reader and parser primitives into
+      shared core modules, leaving `preview.rs` as a small explicit router.
   - [ ] `R26-P1-07d` Move exported entry points and raw-pointer validation into
     focused FFI modules, leaving `lib.rs` as a small composition root.
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
