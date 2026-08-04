@@ -712,12 +712,14 @@ fn build_pptx_layout<R: Read + Seek>(
         let items = parse_ppt_slide_items(
             context,
             zip,
-            "ppt/slides/",
-            &slide_xml,
-            &rels,
-            placeholders,
-            slide_width,
-            slide_height,
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: &slide_xml,
+                rels: &rels,
+                inherited_placeholders: placeholders,
+                slide_width,
+                slide_height,
+            },
             &mut image_budget,
         )?;
         let title = ppt_slide_title(&items, slide_idx, slide_height);
@@ -1033,17 +1035,29 @@ fn parse_ppt_slide_background(context: &OfficeContext, xml: &str) -> OfficeResul
     Ok(None)
 }
 
+struct PptSlideInput<'a> {
+    base_dir: &'a str,
+    xml: &'a str,
+    rels: &'a BTreeMap<String, String>,
+    inherited_placeholders: &'a BTreeMap<String, PptPlaceholderInfo>,
+    slide_width: f64,
+    slide_height: f64,
+}
+
 fn parse_ppt_slide_items<R: Read + Seek>(
     context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
-    base_dir: &str,
-    xml: &str,
-    rels: &BTreeMap<String, String>,
-    inherited_placeholders: &BTreeMap<String, PptPlaceholderInfo>,
-    slide_width: f64,
-    slide_height: f64,
+    input: PptSlideInput<'_>,
     image_budget: &mut usize,
 ) -> OfficeResult<Vec<OfficeLayoutItemDto>> {
+    let PptSlideInput {
+        base_dir,
+        xml,
+        rels,
+        inherited_placeholders,
+        slide_width,
+        slide_height,
+    } = input;
     let mut reader = Reader::from_str(xml);
     let mut items = Vec::new();
     let mut in_shape = false;
@@ -1245,12 +1259,14 @@ fn parse_ppt_slide_items<R: Read + Seek>(
                         zip,
                         base_dir,
                         rels,
-                        &rel_id,
-                        x,
-                        y,
-                        width,
-                        height,
-                        items.len(),
+                        OfficeImagePlacement {
+                            rel_id: &rel_id,
+                            x,
+                            y,
+                            width,
+                            height,
+                            z_index: items.len(),
+                        },
                         image_budget,
                     )? {
                         items.push(item);
@@ -2466,12 +2482,14 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
                         zip,
                         base_dir,
                         rels,
-                        &rel_id,
-                        x,
-                        y,
-                        width,
-                        height,
-                        items.len(),
+                        OfficeImagePlacement {
+                            rel_id: &rel_id,
+                            x,
+                            y,
+                            width,
+                            height,
+                            z_index: items.len(),
+                        },
                         image_budget,
                     )? {
                         items.push(item);
@@ -2500,19 +2518,31 @@ fn parse_xlsx_drawing_items<R: Read + Seek>(
     Ok(items)
 }
 
-fn image_item_from_relationship<R: Read + Seek>(
-    context: &mut OfficeContext,
-    zip: &mut ZipArchive<R>,
-    base_dir: &str,
-    rels: &BTreeMap<String, String>,
-    rel_id: &str,
+struct OfficeImagePlacement<'a> {
+    rel_id: &'a str,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
     z_index: usize,
+}
+
+fn image_item_from_relationship<R: Read + Seek>(
+    context: &mut OfficeContext,
+    zip: &mut ZipArchive<R>,
+    base_dir: &str,
+    rels: &BTreeMap<String, String>,
+    placement: OfficeImagePlacement<'_>,
     image_budget: &mut usize,
 ) -> OfficeResult<Option<OfficeLayoutItemDto>> {
+    let OfficeImagePlacement {
+        rel_id,
+        x,
+        y,
+        width,
+        height,
+        z_index,
+    } = placement;
     if rel_id.is_empty() || *image_budget == 0 || width <= 1.0 || height <= 1.0 {
         return Ok(None);
     }
@@ -3708,17 +3738,28 @@ pub fn render_database_info(
     render_database_bytes(path, size, modified_unix, &bytes, &[], cancel_cb)
 }
 
+pub(crate) struct DatabaseCompanionReader<'a> {
+    pub(crate) reader: Option<&'a mut dyn Read>,
+    pub(crate) length: u64,
+}
+
 pub fn render_database_reader<R: Read>(
     reader: &mut R,
     main_length: u64,
-    wal_reader: Option<&mut dyn Read>,
-    wal_length: u64,
-    shm_reader: Option<&mut dyn Read>,
-    shm_length: u64,
+    wal: DatabaseCompanionReader<'_>,
+    shm: DatabaseCompanionReader<'_>,
     logical_name: &str,
     modified_unix: i64,
     cancel_cb: Option<extern "C" fn() -> bool>,
 ) -> Result<String, ReaderPreviewError> {
+    let DatabaseCompanionReader {
+        reader: wal_reader,
+        length: wal_length,
+    } = wal;
+    let DatabaseCompanionReader {
+        reader: shm_reader,
+        length: shm_length,
+    } = shm;
     if main_length > MAX_DATABASE_HANDLE_BYTES
         || wal_length > MAX_SQLITE_WAL_BYTES
         || shm_length > MAX_SQLITE_SHM_BYTES
@@ -10309,12 +10350,14 @@ fn render_rar_entries<R: Read + Seek>(
         root_path,
         "archive",
         entries,
-        file_count,
-        uncompressed,
-        compressed,
-        partial,
-        encrypted_file_count,
-        false,
+        ArchiveListingStats {
+            file_count,
+            uncompressed,
+            compressed,
+            partial,
+            encrypted_file_count,
+            can_preview_entries: false,
+        },
     ))
 }
 
@@ -11937,9 +11980,11 @@ fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<Android
                     if type_name.map(String::as_str) == Some(kind) {
                         collect_android_type_values(
                             table,
-                            child,
-                            child_header,
-                            child_size,
+                            AndroidTypeChunk {
+                                offset: child,
+                                header_size: child_header,
+                                size: child_size,
+                            },
                             &key_strings,
                             name,
                             &global_strings,
@@ -11961,26 +12006,33 @@ fn resolve_android_resource_values(table: &[u8], reference: &str) -> Vec<Android
     values
 }
 
+#[derive(Clone, Copy)]
+struct AndroidTypeChunk {
+    offset: usize,
+    header_size: usize,
+    size: usize,
+}
+
 fn collect_android_type_values(
     table: &[u8],
-    chunk: usize,
-    header_size: usize,
-    chunk_size: usize,
+    chunk: AndroidTypeChunk,
     keys: &[String],
     wanted_name: &str,
     global_strings: &[String],
     output: &mut Vec<AndroidResourceValue>,
 ) {
-    let Some(entry_count) = android_u32(table, chunk + 12).map(|value| value as usize) else {
-        return;
-    };
-    let Some(entries_start) = android_u32(table, chunk + 16).map(|value| chunk + value as usize)
+    let Some(entry_count) = android_u32(table, chunk.offset + 12).map(|value| value as usize)
     else {
         return;
     };
-    let offsets_start = chunk + header_size;
-    let chunk_end = chunk.saturating_add(chunk_size).min(table.len());
-    let sparse = table.get(chunk + 9).copied().unwrap_or(0) & 0x01 != 0;
+    let Some(entries_start) =
+        android_u32(table, chunk.offset + 16).map(|value| chunk.offset + value as usize)
+    else {
+        return;
+    };
+    let offsets_start = chunk.offset + chunk.header_size;
+    let chunk_end = chunk.offset.saturating_add(chunk.size).min(table.len());
+    let sparse = table.get(chunk.offset + 9).copied().unwrap_or(0) & 0x01 != 0;
     let offset_count = if sparse {
         entries_start.saturating_sub(offsets_start) / 4
     } else {
@@ -12762,12 +12814,14 @@ fn render_zip_archive_from_zip<R: Read + Seek>(
         root_path,
         "archive",
         entries,
-        file_count,
-        uncompressed,
-        compressed,
-        partial,
-        encrypted_file_count,
-        true,
+        ArchiveListingStats {
+            file_count,
+            uncompressed,
+            compressed,
+            partial,
+            encrypted_file_count,
+            can_preview_entries: true,
+        },
     ))
 }
 
@@ -12915,12 +12969,14 @@ fn render_tar_entries<R: Read>(
         root_path,
         kind,
         entries,
-        file_count,
-        uncompressed,
-        0,
-        partial,
-        0,
-        false,
+        ArchiveListingStats {
+            file_count,
+            uncompressed,
+            compressed: 0,
+            partial,
+            encrypted_file_count: 0,
+            can_preview_entries: false,
+        },
     )
 }
 
@@ -12972,13 +13028,24 @@ fn render_gzip_member_reader<R: Read + Seek>(
         root_path,
         "archive",
         entries,
-        1,
-        uncompressed,
-        compressed,
-        false,
-        0,
-        false,
+        ArchiveListingStats {
+            file_count: 1,
+            uncompressed,
+            compressed,
+            partial: false,
+            encrypted_file_count: 0,
+            can_preview_entries: false,
+        },
     ))
+}
+
+struct ArchiveListingStats {
+    file_count: u64,
+    uncompressed: i64,
+    compressed: i64,
+    partial: bool,
+    encrypted_file_count: usize,
+    can_preview_entries: bool,
 }
 
 fn archive_listing_json(
@@ -12986,13 +13053,16 @@ fn archive_listing_json(
     root_path: &str,
     kind: &str,
     entries: BTreeMap<String, ArchiveListingEntry>,
-    file_count: u64,
-    uncompressed: i64,
-    compressed: i64,
-    partial: bool,
-    encrypted_file_count: usize,
-    can_preview_entries: bool,
+    stats: ArchiveListingStats,
 ) -> String {
+    let ArchiveListingStats {
+        file_count,
+        uncompressed,
+        compressed,
+        partial,
+        encrypted_file_count,
+        can_preview_entries,
+    } = stats;
     let folder_count = entries
         .values()
         .filter(|(_, _, is_folder, _, _, _, _)| *is_folder)
@@ -14108,8 +14178,9 @@ mod tests {
         let items = parse_ppt_slide_items(
             &mut context,
             &mut zip,
-            "ppt/slides/",
-            r#"<p:sld xmlns:p="p" xmlns:a="a">
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp>
                     <p:nvSpPr><p:nvPr><p:ph type="ctrTitle"/></p:nvPr></p:nvSpPr>
                     <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
@@ -14119,10 +14190,11 @@ mod tests {
                     </p:txBody>
                 </p:sp>
             </p:sld>"#,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            960.0,
-            540.0,
+                rels: &BTreeMap::new(),
+                inherited_placeholders: &BTreeMap::new(),
+                slide_width: 960.0,
+                slide_height: 540.0,
+            },
             &mut image_budget,
         )
         .expect("text-only layout");
@@ -14149,8 +14221,9 @@ mod tests {
         let items = parse_ppt_slide_items(
             &mut context,
             &mut zip,
-            "ppt/slides/",
-            r#"<p:sld xmlns:p="p" xmlns:a="a">
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp>
                     <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></p:spPr>
                     <p:txBody>
@@ -14159,10 +14232,11 @@ mod tests {
                     </p:txBody>
                 </p:sp>
             </p:sld>"#,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            960.0,
-            540.0,
+                rels: &BTreeMap::new(),
+                inherited_placeholders: &BTreeMap::new(),
+                slide_width: 960.0,
+                slide_height: 540.0,
+            },
             &mut image_budget,
         )
         .expect("text-only layout");
@@ -14282,12 +14356,14 @@ mod tests {
         let items = parse_ppt_slide_items(
             &mut context,
             &mut zip,
-            "ppt/slides/",
-            r#"<p:sld xmlns:p="p" xmlns:a="a"><p:sp><p:nvSpPr><p:nvPr><p:ph type="vertTitle"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Vertical title</a:t></a:r></a:p></p:txBody></p:sp></p:sld>"#,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            960.0,
-            540.0,
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: r#"<p:sld xmlns:p="p" xmlns:a="a"><p:sp><p:nvSpPr><p:nvPr><p:ph type="vertTitle"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Vertical title</a:t></a:r></a:p></p:txBody></p:sp></p:sld>"#,
+                rels: &BTreeMap::new(),
+                inherited_placeholders: &BTreeMap::new(),
+                slide_width: 960.0,
+                slide_height: 540.0,
+            },
             &mut image_budget,
         )
         .expect("vertical title layout");
@@ -14310,17 +14386,19 @@ mod tests {
         let items = parse_ppt_slide_items(
             &mut context,
             &mut zip,
-            "ppt/slides/",
-            r#"<p:sld xmlns:p="p" xmlns:a="a">
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp><p:spPr><a:xfrm><a:off x="0" y="95250"/><a:ext cx="9144000" cy="190500"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="1000"/><a:t>Small header</a:t></a:r></a:p></p:txBody></p:sp>
                 <p:sp><p:nvSpPr><p:nvPr><p:ph type="ftr"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="190500"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="6000"/><a:t>Footer metadata</a:t></a:r></a:p></p:txBody></p:sp>
                 <p:sp><p:nvSpPr><p:nvPr><p:ph type="subTitle"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="2857500"/><a:ext cx="9144000" cy="457200"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="1800"/><a:t>Lower subtitle</a:t></a:r></a:p></p:txBody></p:sp>
                 <p:sp><p:spPr><a:xfrm><a:off x="0" y="476250"/><a:ext cx="9144000" cy="914400"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:rPr sz="4400"/><a:t>Manual title</a:t></a:r></a:p></p:txBody></p:sp>
             </p:sld>"#,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            960.0,
-            540.0,
+                rels: &BTreeMap::new(),
+                inherited_placeholders: &BTreeMap::new(),
+                slide_width: 960.0,
+                slide_height: 540.0,
+            },
             &mut image_budget,
         )
         .expect("fallback title candidates");
@@ -14349,8 +14427,9 @@ mod tests {
         let items = parse_ppt_slide_items(
             &mut context,
             &mut zip,
-            "ppt/slides/",
-            r#"<p:sld xmlns:p="p" xmlns:a="a">
+            PptSlideInput {
+                base_dir: "ppt/slides/",
+                xml: r#"<p:sld xmlns:p="p" xmlns:a="a">
                 <p:sp>
                     <p:spPr><a:xfrm><a:off x="0" y="457200"/><a:ext cx="9144000" cy="914400"/></a:xfrm></p:spPr>
                     <p:txBody><a:p><a:r><a:t>Manual title</a:t></a:r></a:p></p:txBody>
@@ -14360,10 +14439,11 @@ mod tests {
                     <p:txBody><a:p><a:r><a:t>Body content</a:t></a:r></a:p></p:txBody>
                 </p:sp>
             </p:sld>"#,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            960.0,
-            540.0,
+                rels: &BTreeMap::new(),
+                inherited_placeholders: &BTreeMap::new(),
+                slide_width: 960.0,
+                slide_height: 540.0,
+            },
             &mut image_budget,
         )
         .expect("text-only layout");
@@ -15761,10 +15841,14 @@ mod tests {
         let json = render_database_reader(
             &mut main_reader,
             512,
-            Some(&mut wal_reader),
-            wal.len() as u64,
-            Some(&mut shm_reader),
-            shm.len() as u64,
+            DatabaseCompanionReader {
+                reader: Some(&mut wal_reader),
+                length: wal.len() as u64,
+            },
+            DatabaseCompanionReader {
+                reader: Some(&mut shm_reader),
+                length: shm.len() as u64,
+            },
             r"C:\does-not-exist\renamed.db",
             0,
             None,
@@ -15787,10 +15871,14 @@ mod tests {
             render_database_reader(
                 &mut main,
                 512,
-                Some(&mut wal),
-                MAX_SQLITE_WAL_BYTES + 1,
-                None,
-                0,
+                DatabaseCompanionReader {
+                    reader: Some(&mut wal),
+                    length: MAX_SQLITE_WAL_BYTES + 1,
+                },
+                DatabaseCompanionReader {
+                    reader: None,
+                    length: 0,
+                },
                 "bounded.db",
                 0,
                 None,
@@ -15804,10 +15892,14 @@ mod tests {
             render_database_reader(
                 &mut main,
                 512,
-                None,
-                0,
-                None,
-                0,
+                DatabaseCompanionReader {
+                    reader: None,
+                    length: 0,
+                },
+                DatabaseCompanionReader {
+                    reader: None,
+                    length: 0,
+                },
                 "cancelled.db",
                 0,
                 Some(always_cancel),
@@ -15834,10 +15926,14 @@ mod tests {
                 render_database_reader(
                     &mut main_reader,
                     main_length,
-                    Some(&mut wal_reader),
-                    wal.len() as u64,
-                    None,
-                    0,
+                    DatabaseCompanionReader {
+                        reader: Some(&mut wal_reader),
+                        length: wal.len() as u64,
+                    },
+                    DatabaseCompanionReader {
+                        reader: None,
+                        length: 0,
+                    },
                     "malformed.db",
                     0,
                     None,
@@ -17655,23 +17751,23 @@ mod tests {
 
     #[test]
     fn elf_summary_reads_gnu_version_sections() {
-        fn write_sh64(
-            bytes: &mut [u8],
-            index: usize,
+        struct ElfSection64 {
             name: u32,
             typ: u32,
             offset: u64,
             size: u64,
             link: u32,
-            entsize: u64,
-        ) {
+            entry_size: u64,
+        }
+
+        fn write_sh64(bytes: &mut [u8], index: usize, section: ElfSection64) {
             let base = 0x100 + index * 64;
-            bytes[base..base + 4].copy_from_slice(&name.to_le_bytes());
-            bytes[base + 4..base + 8].copy_from_slice(&typ.to_le_bytes());
-            bytes[base + 24..base + 32].copy_from_slice(&offset.to_le_bytes());
-            bytes[base + 32..base + 40].copy_from_slice(&size.to_le_bytes());
-            bytes[base + 40..base + 44].copy_from_slice(&link.to_le_bytes());
-            bytes[base + 56..base + 64].copy_from_slice(&entsize.to_le_bytes());
+            bytes[base..base + 4].copy_from_slice(&section.name.to_le_bytes());
+            bytes[base + 4..base + 8].copy_from_slice(&section.typ.to_le_bytes());
+            bytes[base + 24..base + 32].copy_from_slice(&section.offset.to_le_bytes());
+            bytes[base + 32..base + 40].copy_from_slice(&section.size.to_le_bytes());
+            bytes[base + 40..base + 44].copy_from_slice(&section.link.to_le_bytes());
+            bytes[base + 56..base + 64].copy_from_slice(&section.entry_size.to_le_bytes());
         }
 
         let mut bytes = vec![0u8; 1024];
@@ -17682,11 +17778,66 @@ mod tests {
         bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
         bytes[60..62].copy_from_slice(&6u16.to_le_bytes());
         bytes[62..64].copy_from_slice(&1u16.to_le_bytes());
-        write_sh64(&mut bytes, 1, 1, 3, 0x300, 62, 0, 0);
-        write_sh64(&mut bytes, 2, 11, 3, 0x340, 27, 0, 0);
-        write_sh64(&mut bytes, 3, 19, 0x6FFF_FFFF, 0x380, 6, 0, 2);
-        write_sh64(&mut bytes, 4, 32, 0x6FFF_FFFE, 0x390, 32, 2, 0);
-        write_sh64(&mut bytes, 5, 47, 0x6FFF_FFFD, 0x3C0, 28, 2, 0);
+        write_sh64(
+            &mut bytes,
+            1,
+            ElfSection64 {
+                name: 1,
+                typ: 3,
+                offset: 0x300,
+                size: 62,
+                link: 0,
+                entry_size: 0,
+            },
+        );
+        write_sh64(
+            &mut bytes,
+            2,
+            ElfSection64 {
+                name: 11,
+                typ: 3,
+                offset: 0x340,
+                size: 27,
+                link: 0,
+                entry_size: 0,
+            },
+        );
+        write_sh64(
+            &mut bytes,
+            3,
+            ElfSection64 {
+                name: 19,
+                typ: 0x6FFF_FFFF,
+                offset: 0x380,
+                size: 6,
+                link: 0,
+                entry_size: 2,
+            },
+        );
+        write_sh64(
+            &mut bytes,
+            4,
+            ElfSection64 {
+                name: 32,
+                typ: 0x6FFF_FFFE,
+                offset: 0x390,
+                size: 32,
+                link: 2,
+                entry_size: 0,
+            },
+        );
+        write_sh64(
+            &mut bytes,
+            5,
+            ElfSection64 {
+                name: 47,
+                typ: 0x6FFF_FFFD,
+                offset: 0x3C0,
+                size: 28,
+                link: 2,
+                entry_size: 0,
+            },
+        );
         bytes[0x300..0x33E].copy_from_slice(
             b"\0.shstrtab\0.dynstr\0.gnu.version\0.gnu.version_r\0.gnu.version_d\0",
         );

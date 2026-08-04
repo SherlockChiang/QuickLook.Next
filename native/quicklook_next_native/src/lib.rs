@@ -52,6 +52,8 @@ const VK_F11_U32: u32 = 0x7A;
 type Callback = unsafe extern "C" fn(*const u16);
 pub type CancelCallback = extern "C" fn() -> bool;
 pub type AnimationOutputCallback = extern "C" fn(usize) -> *mut u8;
+type AnimationFrameBgra = (u32, Vec<u8>);
+type DecodedAnimationBgra = (u32, u32, Vec<AnimationFrameBgra>);
 
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
@@ -1476,7 +1478,7 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_image_waveform_packet(
+        let packet = ImageWaveformPacket {
             width,
             height,
             original_width,
@@ -1484,17 +1486,14 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
             decode_ms,
             resize_ms,
             convert_ms,
-            &bgra,
-            &density,
-            out_buf,
-            out_cap,
-            out_required,
-        )
+            bgra: &bgra,
+            density: &density,
+        };
+        write_image_waveform_packet(packet, out_buf, out_cap, out_required)
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-unsafe fn write_image_waveform_packet(
+struct ImageWaveformPacket<'a> {
     width: u32,
     height: u32,
     original_width: u32,
@@ -1502,31 +1501,35 @@ unsafe fn write_image_waveform_packet(
     decode_ms: u32,
     resize_ms: u32,
     convert_ms: u32,
-    bgra: &[u8],
-    density: &[u8],
+    bgra: &'a [u8],
+    density: &'a [u8],
+}
+
+unsafe fn write_image_waveform_packet(
+    packet: ImageWaveformPacket<'_>,
     out_buf: *mut u8,
     out_cap: usize,
     out_required: *mut usize,
 ) -> i32 {
-    let raster_bytes = match (width as usize)
-        .checked_mul(height as usize)
+    let raster_bytes = match (packet.width as usize)
+        .checked_mul(packet.height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
     {
         Some(bytes) => bytes,
         None => return QL_ERROR_INTERNAL,
     };
-    if width == 0
-        || height == 0
-        || width > MAX_IMAGE_RASTER_DIMENSION
-        || height > MAX_IMAGE_RASTER_DIMENSION
-        || bgra.len() != raster_bytes
-        || density.len() != IMAGE_WAVEFORM_DENSITY_BYTES
+    if packet.width == 0
+        || packet.height == 0
+        || packet.width > MAX_IMAGE_RASTER_DIMENSION
+        || packet.height > MAX_IMAGE_RASTER_DIMENSION
+        || packet.bgra.len() != raster_bytes
+        || packet.density.len() != IMAGE_WAVEFORM_DENSITY_BYTES
     {
         return QL_ERROR_INTERNAL;
     }
     let total = match IMAGE_WAVEFORM_PACKET_HEADER_BYTES
         .checked_add(raster_bytes)
-        .and_then(|bytes| bytes.checked_add(density.len()))
+        .and_then(|bytes| bytes.checked_add(packet.density.len()))
     {
         Some(total) if total <= MAX_IMAGE_WAVEFORM_PACKET_BYTES => total,
         _ => return QL_ERROR_LIMIT_EXCEEDED,
@@ -1541,13 +1544,13 @@ unsafe fn write_image_waveform_packet(
     }
 
     let header = [
-        width,
-        height,
-        original_width,
-        original_height,
-        decode_ms,
-        resize_ms,
-        convert_ms,
+        packet.width,
+        packet.height,
+        packet.original_width,
+        packet.original_height,
+        packet.decode_ms,
+        packet.resize_ms,
+        packet.convert_ms,
         IMAGE_WAVEFORM_WIDTH,
         IMAGE_WAVEFORM_HEIGHT,
         IMAGE_WAVEFORM_DENSITY_BYTES as u32,
@@ -1559,14 +1562,14 @@ unsafe fn write_image_waveform_packet(
     }
     unsafe {
         std::ptr::copy_nonoverlapping(
-            bgra.as_ptr(),
+            packet.bgra.as_ptr(),
             out_buf.add(IMAGE_WAVEFORM_PACKET_HEADER_BYTES),
             raster_bytes,
         );
         std::ptr::copy_nonoverlapping(
-            density.as_ptr(),
+            packet.density.as_ptr(),
             out_buf.add(IMAGE_WAVEFORM_PACKET_HEADER_BYTES + raster_bytes),
-            density.len(),
+            packet.density.len(),
         );
     }
     QL_OK
@@ -1603,6 +1606,18 @@ impl HandleAnimationFormat {
     }
 }
 
+#[derive(Clone, Copy)]
+struct AnimationHandleRequest {
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    target_width: u32,
+    target_height: u32,
+    cancel_cb: Option<CancelCallback>,
+    gif_only: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn decode_animation_frames_handle_v2(
     source_handle: isize,
@@ -1624,69 +1639,69 @@ unsafe fn decode_animation_frames_handle_v2(
     if out_buf.is_null() && out_cap != 0 {
         return QL_ERROR_INVALID_ARGUMENT;
     }
-    let (width, height, frames) = match unsafe {
-        decode_animation_frames_handle(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            target_width,
-            target_height,
-            cancel_cb,
-            gif_only,
-        )
-    } {
+    let request = AnimationHandleRequest {
+        source_handle,
+        expected_length,
+        logical_name_utf8,
+        logical_name_len,
+        target_width,
+        target_height,
+        cancel_cb,
+        gif_only,
+    };
+    let (width, height, frames) = match unsafe { decode_animation_frames_handle(request) } {
         Ok(decoded) => decoded,
         Err(status) => return status,
     };
     unsafe { write_animation_frames_v2(width, height, &frames, out_buf, out_cap, out_required) }
 }
 
-#[allow(clippy::too_many_arguments)]
 unsafe fn decode_animation_frames_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    target_width: u32,
-    target_height: u32,
-    cancel_cb: Option<CancelCallback>,
-    gif_only: bool,
-) -> std::result::Result<(u32, u32, Vec<(u32, Vec<u8>)>), i32> {
-    if expected_length > MAX_ANIMATION_HANDLE_INPUT_BYTES {
+    request: AnimationHandleRequest,
+) -> std::result::Result<DecodedAnimationBgra, i32> {
+    if request.expected_length > MAX_ANIMATION_HANDLE_INPUT_BYTES {
         return Err(QL_ERROR_LIMIT_EXCEEDED);
     }
 
     let (mut file, logical_name, _, _) = unsafe {
         reopen_handle_input_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            cancel_cb,
+            request.source_handle,
+            request.expected_length,
+            request.logical_name_utf8,
+            request.logical_name_len,
+            request.cancel_cb,
         )
     }?;
     let format =
         HandleAnimationFormat::from_logical_name(&logical_name).ok_or(QL_ERROR_INVALID_ARGUMENT)?;
-    if gif_only && format != HandleAnimationFormat::Gif {
+    if request.gif_only && format != HandleAnimationFormat::Gif {
         return Err(QL_ERROR_INVALID_ARGUMENT);
     }
     validate_handle_image_dimensions(&mut file, format.image_format(), MAX_ANIMATED_SOURCE_PIXELS)?;
 
     let decoded = match format {
-        HandleAnimationFormat::Gif => {
-            decode_gif_frames_bgra_reader(file, target_width, target_height, cancel_cb)
-        }
-        HandleAnimationFormat::WebP => {
-            decode_webp_frames_bgra_reader(file, target_width, target_height, cancel_cb)
-        }
-        HandleAnimationFormat::Png => {
-            decode_png_frames_bgra_reader(file, target_width, target_height, cancel_cb)
-        }
+        HandleAnimationFormat::Gif => decode_gif_frames_bgra_reader(
+            file,
+            request.target_width,
+            request.target_height,
+            request.cancel_cb,
+        ),
+        HandleAnimationFormat::WebP => decode_webp_frames_bgra_reader(
+            file,
+            request.target_width,
+            request.target_height,
+            request.cancel_cb,
+        ),
+        HandleAnimationFormat::Png => decode_png_frames_bgra_reader(
+            file,
+            request.target_width,
+            request.target_height,
+            request.cancel_cb,
+        ),
     };
     match decoded {
         Some(decoded) if !decoded.2.is_empty() => Ok(decoded),
-        _ if cancel_requested(cancel_cb) => Err(QL_ERROR_CANCELLED),
+        _ if cancel_requested(request.cancel_cb) => Err(QL_ERROR_CANCELLED),
         _ => Err(QL_ERROR_MALFORMED),
     }
 }
@@ -1750,7 +1765,7 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
             return QL_ERROR_INVALID_ARGUMENT;
         }
         *out_required = 0;
-        let (width, height, frames) = match decode_animation_frames_handle(
+        let request = AnimationHandleRequest {
             source_handle,
             expected_length,
             logical_name_utf8,
@@ -1758,8 +1773,9 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
             target_width,
             target_height,
             cancel_cb,
-            true,
-        ) {
+            gif_only: true,
+        };
+        let (width, height, frames) = match decode_animation_frames_handle(request) {
             Ok(decoded) => decoded,
             Err(status) => return status,
         };
@@ -2073,7 +2089,6 @@ fn decode_image_bgra_reader_with_waveform<R: Read + Seek>(
     Some((decoded, waveform?))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn decode_image_bgra_reader_internal<R: Read + Seek>(
     mut reader: R,
     logical_name: &str,
@@ -2227,7 +2242,7 @@ fn decode_gif_frames_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2240,7 +2255,7 @@ fn decode_gif_frames_bgra_reader<R: Read>(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2320,10 +2335,12 @@ fn decode_gif_frames_bgra_reader<R: Read>(
             &frame.buffer,
             original_width,
             original_height,
-            u32::from(frame.left),
-            u32::from(frame.top),
-            u32::from(frame.width),
-            u32::from(frame.height),
+            RasterRect {
+                left: u32::from(frame.left),
+                top: u32::from(frame.top),
+                width: u32::from(frame.width),
+                height: u32::from(frame.height),
+            },
         );
         let rgba = image::RgbaImage::from_raw(original_width, original_height, canvas.clone())?;
         let raster = if width == original_width && height == original_height {
@@ -2541,7 +2558,7 @@ fn decode_webp_frames_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2564,7 +2581,7 @@ fn decode_webp_frames_bgra_reader<R: Read + Seek>(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2585,7 +2602,7 @@ fn decode_png_frames_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2598,7 +2615,7 @@ fn decode_png_frames_bgra_reader<R: Read + Seek>(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2620,7 +2637,7 @@ fn decode_png_frames_bgra_reader<R: Read + Seek>(
 fn write_animation_frames(
     width: u32,
     height: u32,
-    frames: Vec<(u32, Vec<u8>)>,
+    frames: Vec<AnimationFrameBgra>,
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
@@ -2788,7 +2805,7 @@ fn decode_animation_frames_bgra(
     target_width: u32,
     target_height: u32,
     cancel_cb: Option<CancelCallback>,
-) -> Option<(u32, u32, Vec<(u32, Vec<u8>)>)> {
+) -> Option<DecodedAnimationBgra> {
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -3020,24 +3037,29 @@ fn apply_gif_disposal(
     }
 }
 
+#[derive(Clone, Copy)]
+struct RasterRect {
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+}
+
 fn composite_rgba_over_at(
     canvas: &mut [u8],
     frame: &[u8],
     canvas_width: u32,
     canvas_height: u32,
-    left: u32,
-    top: u32,
-    frame_width: u32,
-    frame_height: u32,
+    rect: RasterRect,
 ) {
-    let copy_width = frame_width.min(canvas_width.saturating_sub(left)) as usize;
-    let copy_height = frame_height.min(canvas_height.saturating_sub(top)) as usize;
+    let copy_width = rect.width.min(canvas_width.saturating_sub(rect.left)) as usize;
+    let copy_height = rect.height.min(canvas_height.saturating_sub(rect.top)) as usize;
     let canvas_stride = canvas_width as usize * 4;
-    let frame_stride = frame_width as usize * 4;
+    let frame_stride = rect.width as usize * 4;
     for y in 0..copy_height {
         for x in 0..copy_width {
             let src = y * frame_stride + x * 4;
-            let dst = (top as usize + y) * canvas_stride + (left as usize + x) * 4;
+            let dst = (rect.top as usize + y) * canvas_stride + (rect.left as usize + x) * 4;
             let a = frame[src + 3] as u32;
             if a == 0 {
                 continue;
@@ -4820,6 +4842,7 @@ unsafe fn reopen_handle_input_v2(
     Ok((file, logical_name, size, modified_unix))
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn preview_handle_v2(
     source_handle: isize,
     expected_length: u64,
@@ -5473,10 +5496,14 @@ pub unsafe extern "C" fn ql_preview_sqlite_handles(
                 preview::render_database_reader(
                     main,
                     main_expected_length,
-                    wal_reader,
-                    wal_expected_length,
-                    shm_reader,
-                    shm_expected_length,
+                    preview::DatabaseCompanionReader {
+                        reader: wal_reader,
+                        length: wal_expected_length,
+                    },
+                    preview::DatabaseCompanionReader {
+                        reader: shm_reader,
+                        length: shm_expected_length,
+                    },
                     logical_name,
                     modified_unix,
                     cancel_cb,
@@ -6083,6 +6110,7 @@ mod handle_v2_tests {
         ARCHIVE_OUTPUT_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 2
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_text_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6129,6 +6157,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_executable_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6153,6 +6182,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_torrent_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6177,6 +6207,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_archive_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6201,6 +6232,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_package_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6225,6 +6257,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_image_metadata_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6249,6 +6282,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_office_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6273,6 +6307,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_office_image_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6330,6 +6365,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_package_icon_handle(
         source_handle: isize,
         expected_length: u64,
@@ -6470,6 +6506,7 @@ mod handle_v2_tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_ebook_handle(
         source_handle: isize,
         expected_length: u64,
