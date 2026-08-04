@@ -10,6 +10,8 @@ $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
+$mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
+$mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -17,7 +19,9 @@ foreach ($path in @(
         $win32ModulePath,
         $shellThumbnailPath,
         $previewPath,
-        $fontPath)) {
+        $fontPath,
+        $mediaPath,
+        $mediaAudioPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -29,6 +33,8 @@ if ($failures.Count -eq 0) {
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
+    $mediaText = Get-Content -LiteralPath $mediaPath -Raw
+    $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -135,6 +141,88 @@ if ($failures.Count -eq 0) {
     $fontLineCount = @(Get-Content -LiteralPath $fontPath).Count
     if ($fontLineCount -gt 350) {
         $failures.Add("The bounded font preview module grew beyond 350 lines: $fontLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod media;\s*$' -or
+        $mediaText -notmatch '(?m)^mod audio;\s*$') {
+        $failures.Add(
+            "preview.rs must compose the explicit preview::media::audio module family.")
+    }
+
+    foreach ($forbidden in @(
+            'fn\s+media_container_name\s*\(',
+            'fn\s+format_duration\s*\(',
+            'struct\s+WavSummary',
+            'struct\s+FlacSummary',
+            'struct\s+OggSummary',
+            'fn\s+parse_wav_summary\s*\(',
+            'fn\s+parse_flac_summary\s*\(',
+            'fn\s+parse_ogg_summary\s*\(',
+            'fn\s+read_ogg_packets\s*\(')) {
+        if ($previewText -match $forbidden) {
+            $failures.Add(
+                "preview.rs must not regain audio-container implementation detail: $forbidden")
+        }
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn container_name\(',
+            'bytes\.get\(4\.\.8\) == Some\(b"ftyp"\)',
+            'pub\(super\) fn format_duration\(',
+            'audio::append_wav_metadata\(',
+            'audio::append_flac_metadata\(',
+            'audio::append_ogg_metadata\(')) {
+        if ($mediaText -notmatch $required) {
+            $failures.Add("Media composition module lost required boundary: $required")
+        }
+    }
+
+    foreach ($required in @(
+            'struct WavSummary',
+            'fn parse_wav_summary\(',
+            'offset\.checked_add\(8\)\? <= bytes\.len\(\)',
+            'payload\.checked_add\(chunk_size\)\? > bytes\.len\(\)',
+            'struct FlacSummary',
+            'fn parse_flac_summary\(',
+            'payload\.checked_add\(block_len\)\? > bytes\.len\(\)',
+            'struct OggSummary',
+            'fn parse_ogg_summary\(',
+            'fn read_ogg_packets\(',
+            'offset\.checked_add\(27\)\.is_some_and',
+            'packets\.len\(\) < max_packets',
+            '\.take\(128\)',
+            'fn media_info_reads_wav_format_and_duration\(',
+            'fn media_info_reads_flac_streaminfo\(',
+            'fn media_info_reads_ogg_opus_summary\(',
+            'fn media_info_reads_ogg_vorbis_summary\(')) {
+        if ($mediaAudioText -notmatch $required) {
+            $failures.Add("Audio-container module lost required boundary: $required")
+        }
+    }
+
+    if ($previewText -notmatch
+        'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,1800}append_mp4_tracks[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
+        $failures.Add(
+            "Media rendering must keep the bounded read and stable MP4/MKV/WAV/FLAC/Ogg/ID3 order.")
+    }
+
+    foreach ($module in @($mediaText, $mediaAudioText)) {
+        if ($module -match 'use\s+super::\*' -or
+            $module -match '#\[no_mangle\]' -or
+            $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Media modules must use explicit imports and must not own a C ABI surface.")
+        }
+    }
+
+    $mediaLineCount = @(Get-Content -LiteralPath $mediaPath).Count
+    if ($mediaLineCount -gt 150) {
+        $failures.Add("The media composition module grew beyond 150 lines: $mediaLineCount")
+    }
+    $mediaAudioLineCount = @(Get-Content -LiteralPath $mediaAudioPath).Count
+    if ($mediaAudioLineCount -gt 500) {
+        $failures.Add(
+            "The bounded audio-container module grew beyond 500 lines: $mediaAudioLineCount")
     }
 }
 
