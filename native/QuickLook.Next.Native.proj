@@ -1,15 +1,14 @@
 <Project DefaultTargets="Build">
+  <Import Project="$(MSBuildThisFileDirectory)QuickLook.Next.Native.props" />
+
   <PropertyGroup>
-    <QuickLookNativeSourceRoot Condition="'$(QuickLookNativeSourceRoot)' == ''">$(MSBuildThisFileDirectory)</QuickLookNativeSourceRoot>
     <QuickLookNativeManifest Condition="'$(QuickLookNativeManifest)' == ''">$(QuickLookNativeSourceRoot)Cargo.toml</QuickLookNativeManifest>
-    <QuickLookNativeTargetDir Condition="'$(QuickLookNativeTargetDir)' == ''">$(QuickLookNativeSourceRoot)target</QuickLookNativeTargetDir>
-    <QuickLookNativeDll Condition="'$(QuickLookNativeDll)' == ''">$(QuickLookNativeTargetDir)\release\quicklook_next_native.dll</QuickLookNativeDll>
-    <QuickLookNativeBuildStamp Condition="'$(QuickLookNativeBuildStamp)' == ''">$(QuickLookNativeTargetDir)\release\.quicklook-next-native.msbuild.stamp</QuickLookNativeBuildStamp>
     <QuickLookNativeCargoExecutable Condition="'$(QuickLookNativeCargoExecutable)' == ''">cargo</QuickLookNativeCargoExecutable>
   </PropertyGroup>
 
   <ItemGroup>
     <QuickLookNativeInput Include="$(MSBuildProjectFullPath)" />
+    <QuickLookNativeInput Include="$(MSBuildThisFileDirectory)QuickLook.Next.Native.props" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)**\Cargo.toml;
                                   $(QuickLookNativeSourceRoot)**\build.rs;
                                   $(QuickLookNativeSourceRoot)**\src\**\*"
@@ -36,7 +35,7 @@
           Inputs="@(QuickLookNativeInput)"
           Outputs="$(QuickLookNativeDll);$(QuickLookNativeBuildStamp)">
     <Message Text="Building QuickLook Next native DLL with Cargo" Importance="high" />
-    <Exec Command="&quot;$(QuickLookNativeCargoExecutable)&quot; build --workspace --release --locked --manifest-path &quot;$(QuickLookNativeManifest)&quot;"
+    <Exec Command="&quot;$(QuickLookNativeCargoExecutable)&quot; build --workspace --release --locked --target &quot;$(QuickLookNativeTargetTriple)&quot; --manifest-path &quot;$(QuickLookNativeManifest)&quot;"
           WorkingDirectory="$(QuickLookNativeSourceRoot)"
           EnvironmentVariables="CARGO_TARGET_DIR=$(QuickLookNativeTargetDir);QUICKLOOK_NEXT_NATIVE_OUTPUT=$(QuickLookNativeDll)" />
     <Error Condition="!Exists('$(QuickLookNativeDll)')"

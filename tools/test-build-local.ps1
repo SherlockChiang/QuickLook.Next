@@ -36,7 +36,7 @@ $workflowText = Get-Content -LiteralPath $workflowPath -Raw
 foreach ($rule in @(
     @('Invoke-CheckedScript[\s\S]{0,180}tools\\build-local\.ps1[\s\S]{0,120}Arguments\s+\$PSBoundParameters', "The root build entry must fail closed while forwarding parameters to the focused workflow."),
     @('set-version\.ps1[\s\S]*test-release-version\.ps1', "Local builds must synchronize and verify the version before compiling."),
-    @('cargo\s+build\s+--workspace\s+--release\s+--locked', "Local builds must produce the native Release DLL used by every .NET configuration."),
+    @('dotnet\s+msbuild\s+\$nativeProject[\s\S]{0,120}-target:Build', "Local builds must produce the pinned native Release DLL through its shared MSBuild project."),
     @('VersionPrefix=\$resolvedVersion[\s\S]*dotnet\s+build\s+\$solution[\s\S]*--no-restore', "Local builds must compile the solution with the synchronized version."),
     @('dotnet\s+restore[\s\S]*--disable-build-servers[\s\S]*dotnet\s+build[\s\S]*--disable-build-servers', "Local builds must bypass stale persistent build servers."),
     @('if\s*\(\$Test\)[\s\S]*cargo\s+test[\s\S]*if\s*\(\$Test\)[\s\S]*dotnet\s+test', "The Test switch must cover both Rust and .NET."),

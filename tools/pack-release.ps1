@@ -17,6 +17,8 @@ $dist = Join-Path $root "dist"
 $tfm  = "net10.0-windows10.0.19041.0\win-x64"
 $versionFile = Join-Path $root "VERSION"
 $artifacts = if ($ArtifactsDirectory) { $ArtifactsDirectory } else { Join-Path $root "artifacts" }
+$nativeProject = Join-Path $root "native\QuickLook.Next.Native.proj"
+$nativeDll = Join-Path $root "native\target\x86_64-pc-windows-msvc\release\quicklook_next_native.dll"
 
 $globalJsonPath = Join-Path $root "global.json"
 $requiredSdk = (Get-Content -LiteralPath $globalJsonPath -Raw | ConvertFrom-Json).sdk.version
@@ -40,8 +42,8 @@ if ($VersionSuffix -and
 }
 
 if (-not $SkipBuild) {
-    Write-Host "== building native (cargo) ==" -ForegroundColor Cyan
-    cargo build --workspace --release --locked --manifest-path (Join-Path $root "native\Cargo.toml")
+    Write-Host "== building native (MSBuild/Cargo, win-x64) ==" -ForegroundColor Cyan
+    dotnet msbuild $nativeProject -target:Build -verbosity:minimal
     if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
     Write-Host "== cleaning renamed RasterHost output ==" -ForegroundColor Cyan
@@ -65,7 +67,7 @@ if (-not $SkipBuild) {
 }
 
 $requiredOutputs = @(
-    (Join-Path $root "native\target\release\quicklook_next_native.dll"),
+    $nativeDll,
     (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe"),
     (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe"),
     (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe"),

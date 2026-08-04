@@ -62,7 +62,8 @@ cargo test --workspace --locked --manifest-path (Join-Path $root "native\Cargo.t
 if ($LASTEXITCODE -ne 0) { throw "Native tests failed." }
 
 Write-Host "== building native release library ==" -ForegroundColor Cyan
-cargo build --workspace --release --locked --manifest-path (Join-Path $root "native\Cargo.toml")
+dotnet msbuild (Join-Path $root "native\QuickLook.Next.Native.proj") `
+    -target:Build -verbosity:minimal
 if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
 Write-Host "== building and testing solution ==" -ForegroundColor Cyan

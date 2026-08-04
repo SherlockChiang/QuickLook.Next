@@ -76,7 +76,8 @@ if (-not $SkipGuard) {
 
 if ($Mode -eq "full") {
     Invoke-Step "native release build" {
-        cargo build --release --manifest-path (Join-Path $Root "native\quicklook_next_native\Cargo.toml")
+        dotnet msbuild (Join-Path $Root "native\QuickLook.Next.Native.proj") `
+            -target:Build -verbosity:minimal
     }
     Invoke-Step "native smoke" {
         Invoke-CheckedScript -Path (Join-Path $Root "tools\smoke-native.ps1") `

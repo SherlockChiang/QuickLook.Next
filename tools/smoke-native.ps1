@@ -23,10 +23,11 @@ function New-UIntPtr([int]$value) {
 Write-Host "== native smoke ==" -ForegroundColor Cyan
 Write-Host "root: $Root"
 
-$nativeManifest = Join-Path $Root "native\quicklook_next_native\Cargo.toml"
-$nativeDll = Join-Path $Root "native\target\release\quicklook_next_native.dll"
+$nativeProject = Join-Path $Root "native\QuickLook.Next.Native.proj"
+$nativeDll = Join-Path $Root "native\target\x86_64-pc-windows-msvc\release\quicklook_next_native.dll"
 if ($BuildNative -or -not (Test-Path $nativeDll)) {
-    cargo build --release --manifest-path $nativeManifest
+    dotnet msbuild $nativeProject -target:Build -verbosity:minimal
+    if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 }
 Assert-True (Test-Path $nativeDll) "Native DLL not found: $nativeDll"
 

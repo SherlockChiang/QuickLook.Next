@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <QuickLookNativeSourceRoot Condition="'$(QuickLookNativeSourceRoot)' == ''">$(MSBuildThisFileDirectory)</QuickLookNativeSourceRoot>
+    <QuickLookNativeProject Condition="'$(QuickLookNativeProject)' == ''">$(QuickLookNativeSourceRoot)QuickLook.Next.Native.proj</QuickLookNativeProject>
+    <QuickLookNativeTargetTriple Condition="'$(QuickLookNativeTargetTriple)' == ''">x86_64-pc-windows-msvc</QuickLookNativeTargetTriple>
+    <QuickLookNativeTargetDir Condition="'$(QuickLookNativeTargetDir)' == ''">$(QuickLookNativeSourceRoot)target</QuickLookNativeTargetDir>
+    <QuickLookNativeDll Condition="'$(QuickLookNativeDll)' == ''">$(QuickLookNativeTargetDir)\$(QuickLookNativeTargetTriple)\release\quicklook_next_native.dll</QuickLookNativeDll>
+    <QuickLookNativeBuildStamp Condition="'$(QuickLookNativeBuildStamp)' == ''">$(QuickLookNativeTargetDir)\$(QuickLookNativeTargetTriple)\release\.quicklook-next-native.msbuild.stamp</QuickLookNativeBuildStamp>
+  </PropertyGroup>
+</Project>

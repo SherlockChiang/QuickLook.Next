@@ -16,9 +16,9 @@ $proofWriterText = Get-Content -LiteralPath $proofWriterPath -Raw
 $payloadHelperText = Get-Content -LiteralPath $payloadHelperPath -Raw
 $requiredPatterns = @(
     @('dotnet\s+--list-sdks[\s\S]*\$installedSdks\s+-notcontains\s+\$requiredSdk', "Release packaging must verify the pinned SDK before building."),
-    @('cargo\s+build[\s\S]{0,300}\$LASTEXITCODE\s+-ne\s+0', "Native build failures must stop release packaging."),
+    @('dotnet\s+msbuild\s+\$nativeProject[\s\S]{0,180}\$LASTEXITCODE\s+-ne\s+0', "Native build failures must stop release packaging."),
     @('dotnet\s+@buildArgs[\s\S]{0,200}\$LASTEXITCODE\s+-ne\s+0', ".NET build failures must stop release packaging."),
-    @('if\s*\(-not\s+\$SkipBuild\)[\s\S]*cargo\s+build[\s\S]*dotnet\s+@buildArgs', "Release build work must be skippable after authoritative tests."),
+    @('if\s*\(-not\s+\$SkipBuild\)[\s\S]*dotnet\s+msbuild\s+\$nativeProject[\s\S]*dotnet\s+@buildArgs', "Release build work must be skippable after authoritative tests."),
     @('\$VersionSuffix\s+-and[\s\S]{0,100}\^\[0-9A-Za-z\][\s\S]{0,100}SemVer-compatible identifier', "Release packaging must reject unsafe suffixes before deriving artifact paths."),
     @('\$requiredOutputs[\s\S]*QuickLook\.Next\.App\.exe[\s\S]*QuickLook\.Next\.RasterHost\.exe[\s\S]*QuickLook\.Next\.ParserHost\.exe[\s\S]*QuickLook\.Next\.ShellBroker\.exe', "No-build packaging must require all release executables."),
     @('new-third-party-notices\.ps1', "Release packages must generate third-party notices."),

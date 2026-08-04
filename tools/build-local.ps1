@@ -61,6 +61,7 @@ Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-version.ps1") 
 
 $solution = Join-Path $Root "QuickLook.Next.slnx"
 $nativeManifest = Join-Path $Root "native\Cargo.toml"
+$nativeProject = Join-Path $Root "native\QuickLook.Next.Native.proj"
 if (-not $NoRestore) {
     Write-Host "== restore locked .NET dependencies ==" -ForegroundColor Cyan
     dotnet restore $solution --locked-mode --disable-build-servers
@@ -73,9 +74,9 @@ if ($Test) {
     if ($LASTEXITCODE -ne 0) { throw "Native tests failed." }
 }
 
-# Every .NET configuration stages native\target\release\quicklook_next_native.dll.
-Write-Host "== build Rust workspace (Release) ==" -ForegroundColor Cyan
-cargo build --workspace --release --locked --manifest-path $nativeManifest
+# Every .NET configuration stages the pinned win-x64 Cargo output.
+Write-Host "== build Rust workspace (Release, win-x64) ==" -ForegroundColor Cyan
+dotnet msbuild $nativeProject -target:Build -verbosity:minimal
 if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 
 $versionProperties = @("/p:VersionPrefix=$resolvedVersion")
