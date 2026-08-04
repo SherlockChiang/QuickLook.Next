@@ -34,15 +34,18 @@ $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/previe
 $nativeEbookPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
 $nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
 $nativeMediaMp4 = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4.rs"
+$nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
 $nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
 Require-Pattern $nativeMediaMp4 'MAX_TIMELINE_ENTRIES:\s*usize\s*=\s*100_000[\s\S]*MAX_CHUNK_TABLE_ENTRIES:\s*usize\s*=\s*1_000_000[\s\S]*MAX_SAMPLE_COUNT:\s*usize\s*=\s*1_000_000[\s\S]*MAX_CHUNK_DETAILS:\s*usize\s*=\s*4' `
     "MP4 timelines, chunk tables, samples, and retained chunk details must keep explicit budgets."
+Require-Pattern $nativeMediaMp4 'MAX_COLLECTED_ATOMS:\s*usize\s*=\s*1024[\s\S]*MAX_SAMPLE_DESCRIPTION_ENTRIES:\s*u32\s*=\s*16[\s\S]*\.min\(MAX_SAMPLE_DESCRIPTION_ENTRIES\)' `
+    "MP4 track collection and sample descriptions must retain their 1024/16 entry budgets."
 Require-Pattern $nativeMediaMp4 'enum\s+SampleSizes[\s\S]*Fixed\s*\{[\s\S]*Variable\s*\{[\s\S]*fn\s+sum_range\([\s\S]*checked_mul\(' `
     "Fixed-size MP4 sample tables must retain compact checked arithmetic instead of per-sample allocation."
 Require-Pattern $nativeMediaMp4 'fn\s+summarize_chunks\([\s\S]*let mut stsc_index = 0usize[\s\S]*while let Some\(next\)[\s\S]*stsc_index = stsc_index\.checked_add\(1\)\?[\s\S]*chunk_offset\.checked_add\(chunk_bytes\)[\s\S]*sample_index != sample_sizes\.len\(\)' `
     "MP4 chunk mapping must remain linear, consume every sample/table transition, and check chunk ends."
-Require-Pattern $nativeMediaMp4 'fn\s+large_stsc_mapping_remains_linear\([\s\S]*const ENTRY_COUNT:\s*u32\s*=\s*65_000' `
+Require-Pattern $nativeMediaMp4Tests 'fn\s+large_stsc_mapping_remains_linear\([\s\S]*const ENTRY_COUNT:\s*u32\s*=\s*65_000' `
     "MP4 chunk mapping must retain its near-1-MiB 65000-entry linearity regression."
 $handleHandoffBenchmark = Join-Path $Root "tools/benchmark-handle-handoff.ps1"
 Require-Pattern $handleHandoffBenchmark '\[ValidateRange\(1,\s*1024\)\][\s\S]*\[int\]\$SizeMiB\s*=\s*32[\s\S]*\[ValidateRange\(1,\s*25\)\][\s\S]*\[int\]\$Iterations\s*=\s*5' `

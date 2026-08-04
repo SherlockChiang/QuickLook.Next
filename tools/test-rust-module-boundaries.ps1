@@ -9,6 +9,7 @@ $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.r
 $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
+$previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\common.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
@@ -17,6 +18,7 @@ $mediaId3Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\
 $mediaMatroskaPath = Join-Path (
     $Root) "native\quicklook_next_native\src\preview\media\matroska.rs"
 $mediaMp4Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\mp4.rs"
+$mediaMp4TestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mp4\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -24,13 +26,15 @@ foreach ($path in @(
         $win32ModulePath,
         $shellThumbnailPath,
         $previewPath,
+        $previewCommonPath,
         $fontPath,
         $mediaPath,
         $mediaAudioPath,
         $mediaCodecPath,
         $mediaId3Path,
         $mediaMatroskaPath,
-        $mediaMp4Path)) {
+        $mediaMp4Path,
+        $mediaMp4TestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -41,6 +45,7 @@ if ($failures.Count -eq 0) {
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
+    $previewCommonText = Get-Content -LiteralPath $previewCommonPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
@@ -48,6 +53,7 @@ if ($failures.Count -eq 0) {
     $mediaId3Text = Get-Content -LiteralPath $mediaId3Path -Raw
     $mediaMatroskaText = Get-Content -LiteralPath $mediaMatroskaPath -Raw
     $mediaMp4Text = Get-Content -LiteralPath $mediaMp4Path -Raw
+    $mediaMp4TestsText = Get-Content -LiteralPath $mediaMp4TestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -156,6 +162,12 @@ if ($failures.Count -eq 0) {
         $failures.Add("The bounded font preview module grew beyond 350 lines: $fontLineCount")
     }
 
+    if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
+        $previewCommonText -notmatch 'pub\(super\) fn format_timestamp\(' -or
+        $previewCommonText -notmatch 'fn days_to_date\(') {
+        $failures.Add("Shared timestamp formatting must remain in preview::common.")
+    }
+
     if ($previewText -notmatch '(?m)^mod media;\s*$' -or
         $mediaText -notmatch '(?m)^mod audio;\s*$' -or
         $mediaText -notmatch '(?m)^mod codec;\s*$' -or
@@ -215,7 +227,14 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_mp4_(?:entry_count|chunk_summary)\s*\(',
             'fn\s+samples_per_chunk_for_chunk\s*\(',
             'fn\s+summarize_chunks\s*\(',
-            'fn\s+(?:validated_entry_count|checked_table_end)\s*\(')) {
+            'fn\s+(?:validated_entry_count|checked_table_end)\s*\(',
+            'struct\s+(?:Mp4)?TrackSummary',
+            'fn\s+(?:mp4_)?major_brand\s*\(',
+            'fn\s+(?:append_mp4_tracks|append_tracks|mp4_tracks|tracks)\s*\(',
+            'fn\s+(?:parse_mp4_track|parse_track)\s*\(',
+            'fn\s+parse_(?:hdlr_handler_type|handler_type|mdhd_\w+|media_\w+|tkhd_dimensions|track_dimensions|stsd_summary|sample_descriptions)\s*\(',
+            'fn\s+parse_(?:video|audio)_codec_detail\s*\(',
+            'fn\s+(?:estimate_bitrate|format_bitrate|format_rotation)\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -231,10 +250,7 @@ if ($failures.Count -eq 0) {
             'audio::append_ogg_metadata\(',
             'id3::append_metadata\(',
             'matroska::append_metadata\(',
-            'codec::parse_esds_detail\(',
-            'codec::parse_avcc_detail\(',
-            'codec::parse_hvcc_detail\(',
-            'mp4::apply_track_tables\(',
+            'mp4::append_metadata\(',
             'pub\(super\) fn codec_label\(',
             '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
@@ -269,12 +285,8 @@ if ($failures.Count -eq 0) {
         }
     }
 
-    if ($previewText -notmatch 'apply_mp4_track_tables\(trak, &mut summary\)') {
-        $failures.Add("MP4 track parsing must delegate sample/timeline tables to media::mp4.")
-    }
-
     foreach ($required in @(
-            'pub\(super\) fn apply_track_tables\(',
+            'fn apply_track_tables\(',
             'const MAX_TIMELINE_ENTRIES: usize = 100_000;',
             'const MAX_CHUNK_TABLE_ENTRIES: usize = 1_000_000;',
             'const MAX_SAMPLE_COUNT: usize = 1_000_000;',
@@ -298,7 +310,13 @@ if ($failures.Count -eq 0) {
             'sample_index != sample_sizes\.len\(\)',
             'stsc_index\.checked_add\(1\)\? != sample_to_chunks\.len\(\)',
             'chunk_offset\.checked_add\(chunk_bytes\)',
-            'try_reserve_exact\(count\)',
+            'try_reserve_exact\(count\)')) {
+        if ($mediaMp4Text -notmatch $required) {
+            $failures.Add("Media MP4 module lost bounded sample-table boundary: $required")
+        }
+    }
+
+    foreach ($required in @(
             'fn stsc_rejects_zero_duplicate_descending_and_truncated_entries\(',
             'fn large_stsc_mapping_remains_linear\(',
             'const ENTRY_COUNT: u32 = 65_000;',
@@ -306,8 +324,8 @@ if ($failures.Count -eq 0) {
             'fn table_parsers_reject_truncated_and_over_budget_counts\(',
             'fn timeline_tables_reject_versions_and_tick_overflow\(',
             'fn chunk_summary_rejects_offset_overflow_and_sample_mismatch\(')) {
-        if ($mediaMp4Text -notmatch $required) {
-            $failures.Add("Media MP4 module lost bounded sample-table boundary: $required")
+        if ($mediaMp4TestsText -notmatch $required) {
+            $failures.Add("Media MP4 tests lost sample-table coverage: $required")
         }
     }
 
@@ -368,13 +386,13 @@ if ($failures.Count -eq 0) {
     }
 
     foreach ($required in @(
-            'pub\(super\) fn find_atom_payload(?:<[^>]+>)?\(',
-            'pub\(super\) fn collect_atom_payloads(?:<[^>]+>)?\(',
-            'pub\(super\) fn find_atom_payload_in_range(?:<[^>]+>)?\(',
-            'pub\(super\) fn parse_movie_duration_seconds\(',
-            'pub\(super\) fn parse_movie_created_unix\(',
-            'pub\(super\) fn rotation_degrees\(',
-            'pub\(super\) fn duration_from_timescale\(',
+            'fn find_atom_payload(?:<[^>]+>)?\(',
+            'fn collect_atom_payloads(?:<[^>]+>)?\(',
+            'fn find_atom_payload_in_range(?:<[^>]+>)?\(',
+            'fn parse_movie_duration_seconds\(',
+            'fn parse_movie_created_unix\(',
+            'fn rotation_degrees\(',
+            'fn duration_from_timescale\(',
             'const MAX_ATOM_DEPTH: usize = 4;',
             'const MAX_COLLECTED_ATOMS: usize = 1024;',
             'const MP4_TO_UNIX_SECONDS: u64 = 2_082_844_800;',
@@ -393,13 +411,64 @@ if ($failures.Count -eq 0) {
             'mac_time\.checked_sub\(MP4_TO_UNIX_SECONDS\)',
             'i64::try_from\(unix_time\)',
             'matrix_offset\.checked_add\(4\)',
-            'degrees\.rem_euclid\(360\)',
+            'degrees\.rem_euclid\(360\)')) {
+        if ($mediaMp4Text -notmatch $required) {
+            $failures.Add("Media MP4 module lost bounded atom/time boundary: $required")
+        }
+    }
+
+    foreach ($required in @(
             'fn atom_traversal_accepts_empty_siblings_and_rejects_excessive_depth\(',
             'fn atom_traversal_rejects_malformed_extended_sizes\(',
             'fn atom_collection_stops_at_budget\(',
             'fn movie_header_time_and_duration_fail_closed\(')) {
+        if ($mediaMp4TestsText -notmatch $required) {
+            $failures.Add("Media MP4 tests lost atom/time coverage: $required")
+        }
+    }
+
+    foreach ($required in @(
+            '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$',
+            'pub\(super\) fn append_metadata\(',
+            'struct TrackSummary',
+            'codec::\{parse_avcc_detail, parse_esds_detail, parse_hvcc_detail\}',
+            'fn major_brand\(',
+            'fn tracks\(',
+            'fn parse_track\(',
+            'fn parse_handler_type\(',
+            'fn parse_media_duration_seconds\(',
+            'fn parse_media_language\(',
+            'fn parse_track_dimensions\(',
+            'const MAX_SAMPLE_DESCRIPTION_ENTRIES: u32 = 16;',
+            '\.min\(MAX_SAMPLE_DESCRIPTION_ENTRIES\)',
+            'fn parse_sample_descriptions\(',
+            'entry_size < 8 \|\| entry_end > payload\.len\(\)',
+            'fn parse_video_codec_detail\(',
+            'fn parse_audio_codec_detail\(',
+            'fn append_tracks\(',
+            'fn estimate_bitrate\(',
+            'fn format_bitrate\(',
+            'fn format_rotation\(')) {
         if ($mediaMp4Text -notmatch $required) {
-            $failures.Add("Media MP4 module lost bounded atom/time boundary: $required")
+            $failures.Add("Media MP4 module lost track/output boundary: $required")
+        }
+    }
+
+    $mediaMp4Exports = [regex]::Matches(
+        $mediaMp4Text,
+        '(?m)^pub\(super\) fn\s+\w+\s*\(')
+    if ($mediaMp4Exports.Count -ne 1 -or
+        $mediaMp4Exports[0].Value -notmatch 'append_metadata') {
+        $failures.Add("MP4 must expose only the append_metadata composition API.")
+    }
+
+    foreach ($required in @(
+            'fn sample_descriptions_reject_zero_and_truncated_entries\(',
+            'fn media_info_reads_mp4_tracks_and_stable_output\(',
+            'append_metadata\(&mut text, &bytes, 17_280_000\)',
+            '\\nBrand: isom[\s\S]*\\nDuration: 1:30[\s\S]*\\nBitrate: 1\.54 Mbps[\s\S]*\\nCreated: —[\s\S]*\\nRotation: 90°[\s\S]*\\nVideo track 1: avc1[\s\S]*\\nVideo chunk map:')) {
+        if ($mediaMp4TestsText -notmatch $required) {
+            $failures.Add("Media MP4 tests lost track/output coverage: $required")
         }
     }
 
@@ -469,7 +538,7 @@ if ($failures.Count -eq 0) {
     }
 
     if ($previewText -notmatch
-        'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,1800}append_mp4_tracks[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
+        'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,600}media_container_name\(path, &bytes\)[\s\S]{0,300}append_mp4_metadata[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
         $failures.Add(
             "Media rendering must keep the bounded read and stable MP4/MKV/WAV/FLAC/Ogg/ID3 order.")
     }
@@ -480,7 +549,8 @@ if ($failures.Count -eq 0) {
             $mediaCodecText,
             $mediaId3Text,
             $mediaMatroskaText,
-            $mediaMp4Text)) {
+            $mediaMp4Text,
+            $mediaMp4TestsText)) {
         if ($module -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
             $module -match '#\[no_mangle\]' -or
             $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
@@ -514,6 +584,10 @@ if ($failures.Count -eq 0) {
     $mediaMp4LineCount = @(Get-Content -LiteralPath $mediaMp4Path).Count
     if ($mediaMp4LineCount -gt 1200) {
         $failures.Add("The bounded MP4 module grew beyond 1200 lines: $mediaMp4LineCount")
+    }
+    $mediaMp4TestsLineCount = @(Get-Content -LiteralPath $mediaMp4TestsPath).Count
+    if ($mediaMp4TestsLineCount -gt 500) {
+        $failures.Add("The focused MP4 tests grew beyond 500 lines: $mediaMp4TestsLineCount")
     }
 }
 
