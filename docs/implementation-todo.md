@@ -44,7 +44,7 @@ the release-only `release:` prefix while this queue is in progress.
 
 - [x] `R26-P1-05` Make Cargo a first-class MSBuild input/output dependency so a
   direct solution build cannot silently package a missing or stale native DLL.
-- [ ] `R26-P1-06` Move the ignored Rust-first guidance into tracked `AGENTS.md`
+- [x] `R26-P1-06` Move the ignored Rust-first guidance into tracked `AGENTS.md`
   and focused ADRs for process, HANDLE ownership, cancellation, and error contracts.
 - [ ] `R26-P1-07` Split native preview code into bounded parser/core, format-family,
   Win32, and thin FFI modules or crates; generate Rust/C# ABI declarations from one
@@ -108,7 +108,7 @@ the release-only `release:` prefix while this queue is in progress.
 
 ## P3: Strategic architecture
 
-- [ ] Move durable architecture and contribution guardrails out of the ignored local `agent.md` and
+- [x] Move durable architecture and contribution guardrails out of the ignored local `agent.md` and
   into tracked documentation with focused ADRs for process, HANDLE, and cancellation contracts.
 - [ ] Replace the final CPU shared-section-to-`WriteableBitmap` animation upload with
   renderer-consumable GPU shared surfaces if profiling justifies the additional D3D synchronization
@@ -125,6 +125,21 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-06` Make tracked `AGENTS.md` the repository-wide Rust-first
+  placement and safety contract, while leaving the user's ignored lowercase
+  scratch guide untouched. Add Accepted ADRs for supervised Host processes,
+  exact-object HANDLE ownership/path authority, generation-aware cancellation
+  and bounded drain, and typed request-bound errors. Clarify that cancellation,
+  disconnect, and service failure end a local await without fabricating a Host
+  content error; record the current ShellBroker fail-stop cancellation exception
+  and the still-open diagnostics work. Correct two historical roadmaps that
+  assigned Shell thumbnails to RasterHost.
+  - Verification: `pwsh -NoProfile -File tools/test-architecture-guidance.ps1`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-build --no-restore` (274 passed)
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `9985ddd`, `de3e90a`, `6f1d494`
 - [x] `R26-P1-05` Add one incremental Native MSBuild project and shared props
   contract for every Rust FFI consumer. Missing DLLs, stale Rust source/assets,
   changes to the build rule, Cargo failures, and successful Cargo runs without
