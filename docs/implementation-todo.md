@@ -63,7 +63,7 @@ the release-only `release:` prefix while this queue is in progress.
       - [x] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus focused
         tests into `preview/media/audio.rs`, with shared media formatting in
         `preview/media/mod.rs`.
-      - [ ] `R26-P1-07c-2b` Move ID3 frame parsing and text decoding into
+      - [x] `R26-P1-07c-2b` Move ID3 frame parsing and text decoding into
         `preview/media/id3.rs` with its focused tests.
       - [ ] `R26-P1-07c-2c` Move Matroska/EBML parsing into
         `preview/media/matroska.rs` with bounded element traversal tests.
@@ -162,6 +162,21 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2b` Move ID3 tag/frame parsing, ordered metadata output,
+  Latin-1/UTF-8/UTF-16 decoding, and two focused tests out of `preview.rs` into
+  the 249-line `preview::media::id3` module. Retain the narrow media adapter and
+  preserve version acceptance, tag-size clipping to the bounded input prefix,
+  synchsafe high-bit rejection, checked frame ends, first-value precedence,
+  output field order, and paired UTF-16 decoding. Guard implementation backflow,
+  parser bounds, field order, explicit imports, no C ABI, and a 320-line ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native media::id3` (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `22ee20a`, `6f39949`
 - [x] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus four focused
   tests out of `preview.rs` into the 414-line `preview::media::audio` module.
   Establish a 65-line media composition module for signature-based container
