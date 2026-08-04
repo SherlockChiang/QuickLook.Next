@@ -13,6 +13,8 @@ $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
 $mediaId3Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\id3.rs"
+$mediaMatroskaPath = Join-Path (
+    $Root) "native\quicklook_next_native\src\preview\media\matroska.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -23,7 +25,8 @@ foreach ($path in @(
         $fontPath,
         $mediaPath,
         $mediaAudioPath,
-        $mediaId3Path)) {
+        $mediaId3Path,
+        $mediaMatroskaPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -38,6 +41,7 @@ if ($failures.Count -eq 0) {
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
     $mediaId3Text = Get-Content -LiteralPath $mediaId3Path -Raw
+    $mediaMatroskaText = Get-Content -LiteralPath $mediaMatroskaPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -148,9 +152,10 @@ if ($failures.Count -eq 0) {
 
     if ($previewText -notmatch '(?m)^mod media;\s*$' -or
         $mediaText -notmatch '(?m)^mod audio;\s*$' -or
-        $mediaText -notmatch '(?m)^mod id3;\s*$') {
+        $mediaText -notmatch '(?m)^mod id3;\s*$' -or
+        $mediaText -notmatch '(?m)^mod matroska;\s*$') {
         $failures.Add(
-            "preview.rs must compose the explicit preview::media audio and ID3 modules.")
+            "preview.rs must compose the explicit preview::media family modules.")
     }
 
     foreach ($forbidden in @(
@@ -167,7 +172,12 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_id3_text_fields\s*\(',
             'fn\s+read_id3_synchsafe\s*\(',
             'fn\s+decode_id3_text_frame\s*\(',
-            'fn\s+decode_id3_comment_frame\s*\(')) {
+            'fn\s+decode_id3_comment_frame\s*\(',
+            'struct\s+MkvSummary',
+            'fn\s+append_mkv_metadata\s*\(',
+            'fn\s+media_codec_label\s*\(',
+            'fn\s+parse_mkv_\w+\s*\(',
+            'fn\s+read_ebml_\w+\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -181,7 +191,10 @@ if ($failures.Count -eq 0) {
             'audio::append_wav_metadata\(',
             'audio::append_flac_metadata\(',
             'audio::append_ogg_metadata\(',
-            'id3::append_metadata\(')) {
+            'id3::append_metadata\(',
+            'matroska::append_metadata\(',
+            'pub\(super\) fn codec_label\(',
+            '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
             $failures.Add("Media composition module lost required boundary: $required")
         }
@@ -237,13 +250,41 @@ if ($failures.Count -eq 0) {
         $failures.Add("ID3 output fields must retain their stable precedence and order.")
     }
 
+    foreach ($required in @(
+            'pub\(super\) fn append_metadata\(',
+            'struct Summary',
+            'bytes\.starts_with\(&\[0x1A, 0x45, 0xDF, 0xA3\]\)',
+            'if depth > 6',
+            'payload\.saturating_add\(size\)\.min\(end\)\.min\(bytes\.len\(\)\)',
+            'if payload_end <= offset',
+            'summary\.tracks\.saturating_add\(1\)',
+            '\(0\.\.4\)\.find',
+            '\(0\.\.8\)\.find',
+            'value <= usize::MAX as u64',
+            '\.take\(8\)',
+            'fn media_info_reads_mkv_info_and_tracks\(',
+            'fn parser_stops_beyond_depth_budget\(')) {
+        if ($mediaMatroskaText -notmatch $required) {
+            $failures.Add("Matroska module lost required boundary: $required")
+        }
+    }
+
+    if ($mediaMatroskaText -notmatch
+        '"\\nDuration: \{\}"[\s\S]*"\\nTracks: \{\}"[\s\S]*"\\nVideo: \{\}x\{\}"[\s\S]*"\\nVideo codec: \{\}"[\s\S]*"\\nAudio channels: \{\}"[\s\S]*"\\nAudio sample rate: \{\} Hz"[\s\S]*"\\nAudio codec: \{\}"[\s\S]*"\\nWriting app: \{\}"[\s\S]*"\\nMuxing app: \{\}"') {
+        $failures.Add("Matroska metadata fields must retain their stable output order.")
+    }
+
     if ($previewText -notmatch
         'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,1800}append_mp4_tracks[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
         $failures.Add(
             "Media rendering must keep the bounded read and stable MP4/MKV/WAV/FLAC/Ogg/ID3 order.")
     }
 
-    foreach ($module in @($mediaText, $mediaAudioText, $mediaId3Text)) {
+    foreach ($module in @(
+            $mediaText,
+            $mediaAudioText,
+            $mediaId3Text,
+            $mediaMatroskaText)) {
         if ($module -match 'use\s+super::\*' -or
             $module -match '#\[no_mangle\]' -or
             $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
@@ -264,6 +305,11 @@ if ($failures.Count -eq 0) {
     $mediaId3LineCount = @(Get-Content -LiteralPath $mediaId3Path).Count
     if ($mediaId3LineCount -gt 320) {
         $failures.Add("The bounded ID3 module grew beyond 320 lines: $mediaId3LineCount")
+    }
+    $mediaMatroskaLineCount = @(Get-Content -LiteralPath $mediaMatroskaPath).Count
+    if ($mediaMatroskaLineCount -gt 460) {
+        $failures.Add(
+            "The bounded Matroska module grew beyond 460 lines: $mediaMatroskaLineCount")
     }
 }
 
