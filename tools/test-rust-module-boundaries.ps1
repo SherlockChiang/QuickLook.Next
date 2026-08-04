@@ -185,7 +185,17 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_esds_detail\s*\(',
             'fn\s+find_mpeg4_descriptor\s*\(',
             'fn\s+read_mpeg4_descriptor\s*\(',
-            'fn\s+parse_aac_audio_specific_config\s*\(')) {
+            'fn\s+parse_aac_audio_specific_config\s*\(',
+            'struct\s+BitReader',
+            'fn\s+parse_avcc_\w+\s*\(',
+            'fn\s+parse_h264_\w+\s*\(',
+            'fn\s+h264_\w+\s*\(',
+            'fn\s+skip_h264_\w+\s*\(',
+            'fn\s+parse_hvcc_\w+\s*\(',
+            'fn\s+parse_hevc_\w+\s*\(',
+            'fn\s+find_hvcc_\w+\s*\(',
+            'fn\s+skip_hevc_\w+\s*\(',
+            'fn\s+hevc_\w+\s*\(')) {
         if ($previewText -match $forbidden) {
             $failures.Add(
                 "preview.rs must not regain media implementation detail: $forbidden")
@@ -202,6 +212,8 @@ if ($failures.Count -eq 0) {
             'id3::append_metadata\(',
             'matroska::append_metadata\(',
             'codec::parse_esds_detail\(',
+            'codec::parse_avcc_detail\(',
+            'codec::parse_hvcc_detail\(',
             'pub\(super\) fn codec_label\(',
             '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
@@ -234,6 +246,53 @@ if ($failures.Count -eq 0) {
         if ($mediaAudioText -notmatch $required) {
             $failures.Add("Audio-container module lost required boundary: $required")
         }
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn parse_avcc_detail\(',
+            'fn parse_h264_sps_summary\(',
+            'bits\.read_ue\(\)\?\.min\(256\)',
+            'if chroma_format_idc == 3 \{ 12 \} else \{ 8 \}',
+            'if index < 6 \{ 16 \} else \{ 64 \}',
+            'struct BitReader',
+            'bytes\.len\(\)\.checked_mul\(8\)',
+            'count > 32',
+            'zeros > 31',
+            'u64::from\(self\.read_ue\(\)\?\)',
+            'code_number\.div_ceil\(2\)',
+            'i32::try_from\(signed\)',
+            '\.saturating_add\(crop\.1\)\.saturating_mul\(crop_x\)',
+            '\.saturating_add\(crop\.3\)\.saturating_mul\(crop_y\)',
+            '\.rem_euclid\(256\)',
+            'fn h264_sps_summary_reads_dimensions_crop_and_vui\(',
+            'fn bit_reader_rejects_overwide_and_truncated_exp_golomb_codes\(',
+            'fn signed_exp_golomb_large_positive_does_not_overflow\(',
+            'fn h264_sps_hostile_crop_offsets_do_not_overflow\(')) {
+        if ($mediaCodecText -notmatch $required) {
+            $failures.Add("Media codec module lost AVC/bit boundary: $required")
+        }
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn parse_hvcc_detail\(',
+            'fn parse_hevc_vps_summary\(',
+            'fn parse_hevc_sps_summary\(',
+            'fn find_hvcc_nal\(',
+            'arrays\.min\(32\)',
+            'nal_count\.min\(256\)',
+            'bits\.read_bits\(3\)\?\.min\(7\)',
+            'offset\.checked_add\(3\)',
+            'offset\.checked_add\(2\)\?\.checked_add\(length\)',
+            'fn hevc_config_summary_reads_parameter_set_arrays\(',
+            'fn hevc_sps_hostile_crop_offsets_do_not_overflow\(',
+            'fn hvcc_parameter_array_scan_stops_at_budget_and_fails_soft\(')) {
+        if ($mediaCodecText -notmatch $required) {
+            $failures.Add("Media codec module lost HEVC boundary: $required")
+        }
+    }
+
+    if ($mediaCodecText -match '(?m)^pub[^\r\n]*struct BitReader') {
+        $failures.Add("The bounded media bit reader must remain private to codec.rs.")
     }
 
     foreach ($required in @(
