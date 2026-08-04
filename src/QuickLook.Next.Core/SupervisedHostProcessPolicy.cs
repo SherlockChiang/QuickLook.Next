@@ -14,8 +14,8 @@ public static class SupervisedHostProcessPolicy
     private const uint WER_FAULT_REPORTING_NO_UI = 0x0020;
 
     /// <summary>
-    /// Suppresses interactive system error dialogs while preserving WER reporting,
-    /// local dumps, and the process exit code for supervisor diagnostics.
+    /// Suppresses interactive system error dialogs while preserving supervisor
+    /// exit-code and log diagnostics. WER no-UI reporting remains best effort.
     /// </summary>
     public static void SuppressInteractiveErrorUi()
     {
@@ -25,12 +25,8 @@ public static class SupervisedHostProcessPolicy
         // This policy is diagnostic hardening and must never prevent the host from starting.
         try
         {
-            uint currentErrorMode = GetErrorMode();
-            // SEM_NOGPFAULTERRORBOX suppresses WER itself, not just its UI.
-            _ = SetErrorMode(
-                (currentErrorMode & ~SEM_NOGPFAULTERRORBOX)
-                | SEM_FAILCRITICALERRORS
-                | SEM_NOOPENFILEERRORBOX);
+            if (WerGetFlags(GetCurrentProcess(), out uint currentWerFlags) >= 0)
+                _ = WerSetFlags(currentWerFlags | WER_FAULT_REPORTING_NO_UI);
         }
         catch (Exception)
         {
@@ -38,8 +34,15 @@ public static class SupervisedHostProcessPolicy
 
         try
         {
-            if (WerGetFlags(GetCurrentProcess(), out uint currentWerFlags) >= 0)
-                _ = WerSetFlags(currentWerFlags | WER_FAULT_REPORTING_NO_UI);
+            uint currentErrorMode = GetErrorMode();
+            // WER no-UI alone does not cover every UnhandledExceptionFilter path.
+            // Background hosts must fail closed without an Application Error box,
+            // even when that makes WER/local-dump collection best effort.
+            _ = SetErrorMode(
+                currentErrorMode
+                | SEM_FAILCRITICALERRORS
+                | SEM_NOGPFAULTERRORBOX
+                | SEM_NOOPENFILEERRORBOX);
         }
         catch (Exception)
         {
