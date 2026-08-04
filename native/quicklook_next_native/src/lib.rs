@@ -23,6 +23,7 @@ use image::{AnimationDecoder, ImageDecoder, ImageFormat, ImageReader};
 mod native_input;
 mod preview;
 mod rar_listing;
+mod win32;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -71,7 +72,6 @@ const WM_QL_RELOAD: u32 = WM_APP + 7;
 const WM_QL_FULLSCREEN: u32 = WM_APP + 8;
 const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
-static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
 static SVG_FONT_DATABASE: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
 
 thread_local! {
@@ -153,26 +153,6 @@ const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ANIMATION_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
-const QL_THUMBNAIL_FLAG_CACHE_ONLY: u32 = 1;
-const QL_THUMBNAIL_FLAG_BOUNDED_SIZE: u32 = 2;
-const QL_THUMBNAIL_KNOWN_FLAGS: u32 = QL_THUMBNAIL_FLAG_CACHE_ONLY | QL_THUMBNAIL_FLAG_BOUNDED_SIZE;
-const MIN_SHELL_THUMBNAIL_EDGE: i32 = 16;
-const MAX_SHELL_THUMBNAIL_EDGE: i32 = 512;
-const MAX_SHELL_THUMBNAIL_BYTES: usize = 512 * 512 * 4;
-
-type ThumbnailResult = Option<(u32, u32, Vec<u8>)>;
-
-struct ThumbnailRequest {
-    path: String,
-    size: i32,
-    flags: u32,
-    reply: mpsc::Sender<ThumbnailResult>,
-}
-
-struct ThumbnailStaWorker {
-    sender: mpsc::Sender<ThumbnailRequest>,
-}
-
 fn utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
     if ptr.is_null() || len > max_len {
         return None;
@@ -3157,44 +3137,6 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
     cancel_cb.map(|cb| cb()).unwrap_or(false)
 }
 
-fn thumbnail_flags_valid(flags: u32) -> bool {
-    flags & !QL_THUMBNAIL_KNOWN_FLAGS == 0
-}
-
-fn thumbnail_cache_only(flags: u32) -> bool {
-    flags & QL_THUMBNAIL_FLAG_CACHE_ONLY != 0
-}
-
-fn thumbnail_bounded_size(flags: u32) -> bool {
-    flags & QL_THUMBNAIL_FLAG_BOUNDED_SIZE != 0
-}
-
-fn checked_thumbnail_request_size(size: i32) -> Option<i32> {
-    let size = size.max(MIN_SHELL_THUMBNAIL_EDGE);
-    (size <= MAX_SHELL_THUMBNAIL_EDGE).then_some(size)
-}
-
-fn checked_thumbnail_bitmap_layout(width: i32, height: i32) -> Option<(u32, u32, usize)> {
-    let width = u32::try_from(width).ok()?;
-    let height = u32::try_from(height).ok()?;
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let byte_len = usize::try_from(width)
-        .ok()?
-        .checked_mul(usize::try_from(height).ok()?)?
-        .checked_mul(4)?;
-    if width > MAX_SHELL_THUMBNAIL_EDGE as u32
-        || height > MAX_SHELL_THUMBNAIL_EDGE as u32
-        || byte_len > MAX_SHELL_THUMBNAIL_BYTES
-    {
-        return None;
-    }
-
-    Some((width, height, byte_len))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3337,41 +3279,6 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_flags_reject_unknown_bits() {
-        assert!(thumbnail_flags_valid(0));
-        assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_CACHE_ONLY));
-        assert!(thumbnail_flags_valid(QL_THUMBNAIL_FLAG_BOUNDED_SIZE));
-        assert!(thumbnail_cache_only(QL_THUMBNAIL_FLAG_CACHE_ONLY));
-        assert!(thumbnail_bounded_size(QL_THUMBNAIL_FLAG_BOUNDED_SIZE));
-        assert!(!thumbnail_cache_only(0));
-        assert!(!thumbnail_flags_valid(QL_THUMBNAIL_KNOWN_FLAGS | 4));
-    }
-
-    #[test]
-    fn thumbnail_request_size_is_bounded_before_shell_dispatch() {
-        assert_eq!(checked_thumbnail_request_size(i32::MIN), Some(16));
-        assert_eq!(checked_thumbnail_request_size(1), Some(16));
-        assert_eq!(checked_thumbnail_request_size(512), Some(512));
-        assert_eq!(checked_thumbnail_request_size(513), None);
-        assert_eq!(checked_thumbnail_request_size(i32::MAX), None);
-    }
-
-    #[test]
-    fn thumbnail_bitmap_layout_rejects_invalid_and_hostile_dimensions() {
-        assert_eq!(checked_thumbnail_bitmap_layout(1, 1), Some((1, 1, 4)));
-        assert_eq!(
-            checked_thumbnail_bitmap_layout(512, 512),
-            Some((512, 512, 512 * 512 * 4))
-        );
-        assert_eq!(checked_thumbnail_bitmap_layout(0, 1), None);
-        assert_eq!(checked_thumbnail_bitmap_layout(-1, 1), None);
-        assert_eq!(checked_thumbnail_bitmap_layout(513, 1), None);
-        assert_eq!(checked_thumbnail_bitmap_layout(1, 513), None);
-        assert_eq!(checked_thumbnail_bitmap_layout(65_536, 16_384), None);
-        assert_eq!(checked_thumbnail_bitmap_layout(i32::MAX, i32::MAX), None);
-    }
-
-    #[test]
     fn thumbnail_export_rejects_oversized_request_before_shell_dispatch() {
         let path = b"missing.file";
         let mut output = [0u8; 16];
@@ -3380,7 +3287,7 @@ mod tests {
                 ql_get_thumbnail_cancelable_with_flags(
                     path.as_ptr(),
                     path.len(),
-                    MAX_SHELL_THUMBNAIL_EDGE + 1,
+                    513,
                     0,
                     output.as_mut_ptr(),
                     output.len(),
@@ -4263,72 +4170,29 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        if !thumbnail_flags_valid(flags) {
-            return -1;
-        }
-        let Some(size) = checked_thumbnail_request_size(size) else {
-            return QL_ERROR_LIMIT_EXCEEDED;
-        };
         let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
             Some(s) => s.to_string(),
             None => return -1,
         };
 
-        let result = shell_thumbnail_on_sta(path, size, flags, cancel_cb);
-        if cancel_requested(cancel_cb) {
-            return -3;
-        }
-
-        let (w, h, bgra) = match result {
-            Some(x) => x,
-            None => return -2,
-        };
-        write_raster_packet(w, h, &bgra, out, out_cap)
+        let (width, height, bgra) =
+            match win32::shell_thumbnail::request(path, size, flags, cancel_cb) {
+                Ok(thumbnail) => thumbnail,
+                Err(win32::shell_thumbnail::ThumbnailError::InvalidFlags) => {
+                    return QL_ERROR_INVALID_ARGUMENT
+                }
+                Err(win32::shell_thumbnail::ThumbnailError::LimitExceeded) => {
+                    return QL_ERROR_LIMIT_EXCEEDED
+                }
+                Err(win32::shell_thumbnail::ThumbnailError::Cancelled) => {
+                    return QL_ERROR_CANCELLED
+                }
+                Err(win32::shell_thumbnail::ThumbnailError::Unavailable) => {
+                    return QL_ERROR_BUFFER_TOO_SMALL
+                }
+            };
+        write_raster_packet(width, height, &bgra, out, out_cap)
     })
-}
-
-fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
-    THUMBNAIL_STA.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<ThumbnailRequest>();
-        std::thread::spawn(move || unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            while let Ok(request) = receiver.recv() {
-                let result = shell_thumbnail(&request.path, request.size, request.flags);
-                let _ = request.reply.send(result);
-            }
-            CoUninitialize();
-        });
-        ThumbnailStaWorker { sender }
-    })
-}
-
-fn shell_thumbnail_on_sta(
-    path: String,
-    size: i32,
-    flags: u32,
-    cancel_cb: Option<CancelCallback>,
-) -> ThumbnailResult {
-    let (reply, result) = mpsc::channel();
-    let request = ThumbnailRequest {
-        path,
-        size,
-        flags,
-        reply,
-    };
-    if thumbnail_sta_worker().sender.send(request).is_err() {
-        return None;
-    }
-    let deadline = Instant::now() + Duration::from_secs(4);
-    loop {
-        if cancel_requested(cancel_cb) || Instant::now() >= deadline {
-            return None;
-        }
-        match result.recv_timeout(Duration::from_millis(50)) {
-            Ok(value) => return value,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
-        }
-    }
 }
 
 fn checked_raster_packet_length(width: u32, height: u32, bgra_len: usize) -> Option<usize> {
@@ -4506,119 +4370,6 @@ pub unsafe extern "C" fn ql_extract_office_image_cancelable(
         }
         write_raster_packet(w, h, &bgra, out, out_cap)
     })
-}
-
-struct OwnedShellBitmap(windows::Win32::Graphics::Gdi::HBITMAP);
-
-impl OwnedShellBitmap {
-    fn new(handle: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<Self> {
-        (!handle.0.is_null()).then_some(Self(handle))
-    }
-}
-
-impl Drop for OwnedShellBitmap {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = windows::Win32::Graphics::Gdi::DeleteObject(self.0.into());
-        }
-    }
-}
-
-struct ScreenDc(windows::Win32::Graphics::Gdi::HDC);
-
-impl ScreenDc {
-    unsafe fn acquire() -> Option<Self> {
-        let handle = windows::Win32::Graphics::Gdi::GetDC(None);
-        (!handle.0.is_null()).then_some(Self(handle))
-    }
-}
-
-impl Drop for ScreenDc {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(None, self.0);
-        }
-    }
-}
-
-unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> Option<(u32, u32, Vec<u8>)> {
-    use windows::Win32::UI::Shell::{
-        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
-        SIIGBF_INCACHEONLY,
-    };
-    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-    let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None).ok()?;
-    let factory: IShellItemImageFactory = item.cast().ok()?;
-    let shell_flags = match (thumbnail_cache_only(flags), thumbnail_bounded_size(flags)) {
-        (true, true) => SIIGBF_INCACHEONLY,
-        (true, false) => SIIGBF_BIGGERSIZEOK | SIIGBF_INCACHEONLY,
-        (false, true) => Default::default(),
-        (false, false) => SIIGBF_BIGGERSIZEOK,
-    };
-    let hbm = OwnedShellBitmap::new(
-        factory
-            .GetImage(SIZE { cx: size, cy: size }, shell_flags)
-            .ok()?,
-    )?;
-    hbitmap_to_bgra(hbm.0)
-}
-
-unsafe fn hbitmap_to_bgra(
-    hbm: windows::Win32::Graphics::Gdi::HBITMAP,
-) -> Option<(u32, u32, Vec<u8>)> {
-    use windows::Win32::Graphics::Gdi::*;
-    let mut bm = BITMAP::default();
-    let got = GetObjectW(
-        hbm.into(),
-        std::mem::size_of::<BITMAP>() as i32,
-        Some(&mut bm as *mut _ as *mut _),
-    );
-    if got == 0 {
-        return None;
-    }
-    let (w, h, byte_len) = checked_thumbnail_bitmap_layout(bm.bmWidth, bm.bmHeight)?;
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(byte_len).ok()?;
-    pixels.resize(byte_len, 0);
-
-    let mut info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: w as i32,
-            biHeight: -(h as i32), // negative → top-down rows
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let hdc = ScreenDc::acquire()?;
-    let lines = GetDIBits(
-        hdc.0,
-        hbm,
-        0,
-        h,
-        Some(pixels.as_mut_ptr() as *mut _),
-        &mut info,
-        DIB_RGB_COLORS,
-    );
-    if lines != h as i32 {
-        return None;
-    }
-
-    // Shell thumbnails come back with straight alpha; the composition swapchain expects premultiplied,
-    // so premultiply here to avoid light halos around transparent icon edges.
-    for px in pixels.chunks_exact_mut(4) {
-        let a = px[3] as u32;
-        if a != 255 {
-            px[0] = ((px[0] as u32 * a + 127) / 255) as u8; // B
-            px[1] = ((px[1] as u32 * a + 127) / 255) as u8; // G
-            px[2] = ((px[2] as u32 * a + 127) / 255) as u8; // R
-        }
-    }
-    Some((w, h, pixels))
 }
 
 fn json_escape(s: &str) -> String {
