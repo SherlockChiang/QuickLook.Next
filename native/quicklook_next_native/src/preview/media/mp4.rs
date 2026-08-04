@@ -118,7 +118,7 @@ fn read_atom(bytes: &[u8], position: usize, logical_end: usize) -> Option<Atom<'
         (8usize, position.checked_add(size)?)
     };
     let payload_start = position.checked_add(header_size)?;
-    if atom_end > logical_end || atom_end <= payload_start {
+    if atom_end > logical_end || atom_end < payload_start {
         return None;
     }
     Some(Atom {
@@ -201,14 +201,32 @@ mod tests {
     };
 
     #[test]
-    fn atom_traversal_rejects_zero_progress_and_excessive_depth() {
-        assert!(find_atom_payload(&atom(b"free", &[]), b"free").is_none());
+    fn atom_traversal_accepts_empty_siblings_and_rejects_excessive_depth() {
+        let mut with_empty_sibling = atom(b"free", &[]);
+        with_empty_sibling.extend_from_slice(&atom(b"mvhd", &[0; 20]));
+        assert_eq!(
+            find_atom_payload(&with_empty_sibling, b"mvhd").map(<[u8]>::len),
+            Some(20)
+        );
 
         let mut nested = atom(b"mvhd", &[0; 20]);
         for _ in 0..6 {
             nested = atom(b"moov", &nested);
         }
         assert!(find_atom_payload(&nested, b"mvhd").is_none());
+    }
+
+    #[test]
+    fn atom_traversal_rejects_malformed_extended_sizes() {
+        let mut smaller_than_header = Vec::from([0, 0, 0, 1]);
+        smaller_than_header.extend_from_slice(b"free");
+        smaller_than_header.extend_from_slice(&15u64.to_be_bytes());
+        assert!(find_atom_payload(&smaller_than_header, b"free").is_none());
+
+        let mut beyond_input = Vec::from([0, 0, 0, 1]);
+        beyond_input.extend_from_slice(b"free");
+        beyond_input.extend_from_slice(&32u64.to_be_bytes());
+        assert!(find_atom_payload(&beyond_input, b"free").is_none());
     }
 
     #[test]
