@@ -49,7 +49,7 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P1-07` Split native preview code into bounded parser/core, format-family,
   Win32, and thin FFI modules or crates; generate Rust/C# ABI declarations from one
   schema and scope complexity lint exceptions to unavoidable FFI shims.
-  - [ ] `R26-P1-07a` Remove crate-wide complexity lint exemptions, replace complex
+  - [x] `R26-P1-07a` Remove crate-wide complexity lint exemptions, replace complex
     data tuples with named Rust types, and keep any remaining argument-count
     exemptions local to ABI-shaped shims.
   - [ ] `R26-P1-07b` Move Shell thumbnail STA, COM, GDI ownership, and allocation
@@ -136,6 +136,19 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07a` Remove crate-wide `too_many_arguments` and
+  `type_complexity` allowances. Replace animation tuples and high-arity Office,
+  SQLite, Android, archive, waveform, and compositing inputs with named Rust
+  types. Keep the remaining 20 argument-count exceptions on two ABI-shaped
+  production adapters and exact `call_*` test mirrors, with a recursive guard
+  that rejects new crate-wide or parser-level exemptions.
+  - Verification: `pwsh -NoProfile -File tools/test-rust-lint-scope.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `6fa5115`, `e60957a`
 - [x] `R26-P1-06` Make tracked `AGENTS.md` the repository-wide Rust-first
   placement and safety contract, while leaving the user's ignored lowercase
   scratch guide untouched. Add Accepted ADRs for supervised Host processes,
