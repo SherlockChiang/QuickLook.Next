@@ -65,7 +65,7 @@ the release-only `release:` prefix while this queue is in progress.
         `preview/media/mod.rs`.
       - [x] `R26-P1-07c-2b` Move ID3 frame parsing and text decoding into
         `preview/media/id3.rs` with its focused tests.
-      - [ ] `R26-P1-07c-2c` Move Matroska/EBML parsing into
+      - [x] `R26-P1-07c-2c` Move Matroska/EBML parsing into
         `preview/media/matroska.rs` with bounded element traversal tests.
       - [ ] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
         into `preview/media/codec.rs` with a private bounded bit reader.
@@ -162,6 +162,23 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2c` Move Matroska/EBML metadata composition, bounded element
+  traversal, track parsing, scalar decoders, and the valid-container test out of
+  `preview.rs` into the 383-line `preview::media::matroska` module. Move the
+  MP4/MKV codec-label formatter into the shared media module and add a hostile
+  nested-container test proving traversal stops beyond depth six. Preserve
+  clipped payload ends, forward-progress checks, saturating track counts,
+  four/eight-byte EBML identifier/size limits, eight-byte integer reads, and
+  stable metadata field order. Guard implementation backflow, these bounds,
+  explicit imports, no C ABI, and a 460-line ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native media::matroska` (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (228 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `b2947a4`, `adfe461`
 - [x] `R26-P1-07c-2b` Move ID3 tag/frame parsing, ordered metadata output,
   Latin-1/UTF-8/UTF-16 decoding, and two focused tests out of `preview.rs` into
   the 249-line `preview::media::id3` module. Retain the narrow media adapter and
