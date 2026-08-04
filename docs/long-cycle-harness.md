@@ -44,7 +44,7 @@ pwsh -NoProfile -File tools\harness-long-cycle.ps1 -Mode full -AllowDirty
 
 Full mode includes quick mode and adds:
 
-- Release native build via `cargo build --release`.
+- Pinned win-x64 release native build via `native/QuickLook.Next.Native.proj`.
 - Native FFI smoke via `tools\smoke-native.ps1`.
 
 The architecture guard already runs the image corpus guard, external image

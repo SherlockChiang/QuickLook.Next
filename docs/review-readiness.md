@@ -180,7 +180,7 @@ Run these from the repository root:
 
 ```powershell
 cargo test --locked --manifest-path native\quicklook_next_native\Cargo.toml
-cargo build --release --locked --manifest-path native\quicklook_next_native\Cargo.toml
+dotnet msbuild native\QuickLook.Next.Native.proj -target:Build -verbosity:minimal
 dotnet test tests\QuickLook.Next.Core.Tests\QuickLook.Next.Core.Tests.csproj -c Release
 dotnet test tests\QuickLook.Next.ParserHost.IntegrationTests\QuickLook.Next.ParserHost.IntegrationTests.csproj -c Release
 dotnet test tests\QuickLook.Next.RasterHost.IntegrationTests\QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release

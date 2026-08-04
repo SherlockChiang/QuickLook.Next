@@ -42,7 +42,7 @@ the release-only `release:` prefix while this queue is in progress.
 
 ### Rust-first architecture and performance
 
-- [ ] `R26-P1-05` Make Cargo a first-class MSBuild input/output dependency so a
+- [x] `R26-P1-05` Make Cargo a first-class MSBuild input/output dependency so a
   direct solution build cannot silently package a missing or stale native DLL.
 - [ ] `R26-P1-06` Move the ignored Rust-first guidance into tracked `AGENTS.md`
   and focused ADRs for process, HANDLE ownership, cancellation, and error contracts.
@@ -125,6 +125,26 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-05` Add one incremental Native MSBuild project and shared props
+  contract for every Rust FFI consumer. Missing DLLs, stale Rust source/assets,
+  changes to the build rule, Cargo failures, and successful Cargo runs without
+  an output now fail closed. Four parallel consumers share one Cargo build,
+  copy the verified DLL unconditionally, and pin the Cargo/PE target to
+  `x86_64-pc-windows-msvc`; all local, release, long-cycle, and smoke entry
+  points use the same build contract.
+  - Verification: `dotnet restore QuickLook.Next.slnx --locked-mode --verbosity minimal`
+  - Verification: `dotnet msbuild native/QuickLook.Next.Native.proj -target:Build -verbosity:minimal`
+  - Verification: `pwsh -NoProfile -File tools/test-native-msbuild-dependency.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --maxcpucount:1` (360 passed)
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Result: the canonical DLL and all four Release consumer copies had identical
+    SHA-256 hashes; the canonical PE machine was `0x8664` (x64).
+  - Commits: `33d912b`, `738300d`, `fb6c518`, `51f60ab`
 - [x] `R26-P1-01` Bind every preview error and its queued focus/action state to
   the failing path, generation, and cancellation token. Keep the previously
   committed path available for old-host cleanup while Retry, Open, and Reveal
