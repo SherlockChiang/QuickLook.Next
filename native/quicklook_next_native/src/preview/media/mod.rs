@@ -1,6 +1,7 @@
 use std::path::Path;
 
 mod audio;
+mod id3;
 
 pub(super) fn append_wav_metadata(text: &mut String, bytes: &[u8]) {
     audio::append_wav_metadata(text, bytes);
@@ -12,6 +13,10 @@ pub(super) fn append_flac_metadata(text: &mut String, bytes: &[u8]) {
 
 pub(super) fn append_ogg_metadata(text: &mut String, bytes: &[u8]) {
     audio::append_ogg_metadata(text, bytes);
+}
+
+pub(super) fn append_id3_metadata(text: &mut String, bytes: &[u8]) {
+    id3::append_metadata(text, bytes);
 }
 
 pub(super) fn container_name(path: &str, bytes: &[u8]) -> &'static str {
