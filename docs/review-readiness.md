@@ -12,16 +12,17 @@ left visible instead of hidden behind vague TODOs.
 - The native preview implementation is being split by bounded format family: shared DTO/common
   helpers, folder listing, Text/Markdown/CSV/TSV, JPEG/PNG/GIF/WebP/TIFF image metadata,
   GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode, and
-  EPUB/FB2 ebook parsing now live in focused submodules with their own tests. Archive, Office,
-  package, database, and the mixed info/media family remain in the parent module and are the next
-  extraction boundaries.
+  EPUB/FB2 ebook parsing and the media format family now live in focused submodules with their own
+  tests. Archive, Office, package, database, and the remaining binary-info families stay in the
+  parent module and are the next extraction boundaries.
 - RasterHost is lazy-started and scoped to surface-producing work: images, PDF
   page rasterization, shell thumbnails, and fallback media/image surfaces.
 - Supervised RasterHost, ParserHost, and ShellBroker processes apply a shared
   process-wide error policy before any argument parsing or native initialization.
-  Native failures keep their WER/local-dump evidence and exit codes, while
-  interactive system error dialogs are suppressed; the RasterHost supervisor
-  records the exact decimal/hex exit code before scheduling a restart.
+  They request WER no-UI reporting and fail closed against interactive system
+  error dialogs with the process no-GP-fault-box mode. That guarantee takes
+  priority over best-effort WER/local-dump capture; the RasterHost supervisor
+  still records the exact decimal/hex exit code before scheduling a restart.
 - Tray context menu handling is isolated in `TrayIconManager`. It uses a native
   popup menu because the preview window is normally hidden/no-activate, so a
   WinUI `MenuFlyout` anchored to the App XAML root is not reliable for tray

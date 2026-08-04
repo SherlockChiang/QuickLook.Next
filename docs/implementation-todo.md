@@ -26,7 +26,7 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P0-03` Move the live signing certificate and password out of the
   workspace, verify their storage policy, and rotate them if exposure cannot be
   excluded. This is an owner-operated credential task and must not be automated.
-- [ ] `R26-P0-04` Fail closed against supervised-host `Application Error`
+- [x] `R26-P0-04` Fail closed against supervised-host `Application Error`
   dialogs after the observed RasterHost DXGI `0x0000087a` crash. Keep the
   process-wide no-dialog error mode active, retain supervisor exit-code/log
   diagnostics, and add a runtime policy test instead of relying only on static
@@ -63,7 +63,7 @@ the release-only `release:` prefix while this queue is in progress.
     parser primitives out of the `preview.rs` aggregation module by format family.
     - [x] `R26-P1-07c-1` Establish the format-module pattern by moving bounded
       font metadata rendering and SFNT/WOFF table parsing into `preview/font.rs`.
-    - [ ] `R26-P1-07c-2` Move media container, stream, waveform, and duration
+    - [x] `R26-P1-07c-2` Move media container, stream, waveform, and duration
       parsing into bounded `preview/media/` family modules.
       - [x] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus focused
         tests into `preview/media/audio.rs`, with shared media formatting in
@@ -90,7 +90,7 @@ the release-only `release:` prefix while this queue is in progress.
         - [x] `R26-P1-07c-2e-3` Move track parsing, codec payload adapters,
           summary/output composition, and the MP4 integration test into the
           MP4 module.
-      - [ ] `R26-P1-07c-2f` Move media routing, container detection, and output
+      - [x] `R26-P1-07c-2f` Move media routing, container detection, and output
         composition into `preview/media/mod.rs`, leaving one explicit route in
         `preview.rs`.
     - [ ] `R26-P1-07c-3` Move database, mail, dump, ELF, and related binary
@@ -181,6 +181,47 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P0-04` Close the supervised-host no-dialog gap exposed by a live
+  CSRSS `QuickLook.Next.RasterHost.exe - Application Error` window reporting
+  DXGI facility exception `0x0000087a`. Request WER no-UI reporting first, then
+  fail closed by preserving the process error mode and enabling
+  `SEM_FAILCRITICALERRORS`, `SEM_NOGPFAULTERRORBOX`, and
+  `SEM_NOOPENFILEERRORBOX`. Retain supervisor exit-code and file-log evidence;
+  document WER/local-dump capture as best effort because the no-GP-fault-box
+  mode can bypass WER. Add a Windows runtime test that clears the relevant
+  process/WER bits, invokes the real policy, verifies all four no-UI bits, and
+  restores the test process state. Update the static guard to require that
+  runtime coverage instead of enforcing the ineffective WER-only policy.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore --disable-build-servers --maxcpucount:1 --filter "FullyQualifiedName~SupervisedHostProcessPolicyTests"` (1 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore --disable-build-servers --maxcpucount:1` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (361 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Result: desktop window enumeration after the full RasterHost suite and the
+    architecture gate found no RasterHost, ParserHost, or ShellBroker
+    `Application Error` window.
+  - Commits: `b2b5ee2`, `bfd48da`
+- [x] `R26-P1-07c-2f` Complete the media family split with a 92-line
+  `preview/media/mod.rs` composition root. Move bounded file-prefix reading,
+  container detection, base/output composition, and the stable
+  MP4/MKV/WAV/FLAC/Ogg/ID3 order out of `preview.rs`; leave exactly one explicit
+  `media::render_media_info` route and make it the media module's only
+  parent-visible item. Keep the shared 1 MiB reader limit, fail-soft empty
+  fallback, JSON envelope, private container/duration/codec helpers, explicit
+  imports, no C ABI surface, and the 150-line composition ceiling under both
+  architecture and performance guards. This also completes parent item
+  `R26-P1-07c-2`.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::media` (29 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (245 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (361 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `5d427ae`, `0cb57be`
 - [x] `R26-P1-07c-2e-3` Complete the ISO BMFF/MP4 split with a 998-line
   production module and 415 lines of focused tests. Move brand, track/header,
   sample-description, codec-payload, bitrate, rotation, summary, and stable text
@@ -573,9 +614,11 @@ Completed entries move here with the verification commands and commit hash.
   - Guard: `pwsh -NoProfile -File tools/test-rust-ffi-safety.ps1`
   - Commits: `df65526`, `0610063`, `9fb2ae5`
 
-- [x] Keep supervised RasterHost, ParserHost, and ShellBroker crashes non-interactive without
-  disabling WER/local-dump evidence. Apply the shared process policy before initialization and log
-  the exact RasterHost process/exit code before restart.
+- [x] Keep supervised RasterHost, ParserHost, and ShellBroker crashes
+  non-interactive. Apply the shared process policy before initialization, request
+  WER no-UI reporting, and log the exact RasterHost process/exit code before
+  restart. `R26-P0-04` later added the fail-closed no-GP-fault-box fallback after
+  a real DXGI `Application Error` dialog exposed the WER-only gap.
   - Verification: `dotnet build QuickLook.Next.slnx -c Debug --no-restore`
   - Guard: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
   - Commit: `5d771ee`

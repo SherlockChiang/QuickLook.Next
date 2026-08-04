@@ -33,9 +33,13 @@ fails pending work and recycles the affected host.
 Once untrusted input has entered a host, those failures never trigger a retry in
 a broader-privilege process.
 
-Background hosts suppress interactive Windows fault dialogs while preserving
-exit codes, WER reporting, and local-dump evidence for the supervisor. AppContainer
-and enforced network denial are future hardening, not properties of this decision.
+Background hosts request WER no-UI reporting and set the process error mode to
+fail closed against interactive Windows fault dialogs, including the
+`UnhandledExceptionFilter` `Application Error` path. The no-dialog guarantee
+takes priority over WER/local-dump collection, which remains best effort because
+`SEM_NOGPFAULTERRORBOX` can prevent WER invocation. Supervisor exit codes and
+bounded file logs remain available. AppContainer and enforced network denial
+are future hardening, not properties of this decision.
 
 ## Consequences
 
