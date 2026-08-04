@@ -69,7 +69,7 @@ the release-only `release:` prefix while this queue is in progress.
         `preview/media/matroska.rs` with bounded element traversal tests.
       - [ ] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
         into `preview/media/codec.rs` with a private bounded bit reader.
-        - [ ] `R26-P1-07c-2d-1` Move MPEG-4 descriptor and AAC AudioSpecificConfig
+        - [x] `R26-P1-07c-2d-1` Move MPEG-4 descriptor and AAC AudioSpecificConfig
           parsing into `preview/media/codec.rs` behind a narrow media adapter.
         - [ ] `R26-P1-07c-2d-2` Move AVC configuration, SPS/VUI parsing, and the
           bounded bit reader into the codec module with hostile crop/bit tests.
@@ -168,6 +168,20 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2d-1` Establish the media codec module by moving MPEG-4
+  descriptor scanning, AudioSpecificConfig decoding, object/sample-rate labels,
+  and the AAC integration test out of `preview.rs` into a 151-line
+  `preview::media::codec` module. Keep MP4 atom location in the aggregation layer
+  behind a narrow payload adapter. Add hostile tests for unterminated four-byte
+  descriptor lengths and truncated payloads; guard checked cursor/length
+  arithmetic, bounded base-128 length decoding, forward progress, explicit
+  imports, no C ABI, and the final codec-family line ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native media::codec` (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (229 passed, 1 external-corpus test ignored)
+  - Commits: `818bbc9`, `917916d`
 - [x] `R26-P1-07c-2c` Move Matroska/EBML metadata composition, bounded element
   traversal, track parsing, scalar decoders, and the valid-container test out of
   `preview.rs` into the 383-line `preview::media::matroska` module. Move the
