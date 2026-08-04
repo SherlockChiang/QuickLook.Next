@@ -67,13 +67,13 @@ the release-only `release:` prefix while this queue is in progress.
         `preview/media/id3.rs` with its focused tests.
       - [x] `R26-P1-07c-2c` Move Matroska/EBML parsing into
         `preview/media/matroska.rs` with bounded element traversal tests.
-      - [ ] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
+      - [x] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
         into `preview/media/codec.rs` with a private bounded bit reader.
         - [x] `R26-P1-07c-2d-1` Move MPEG-4 descriptor and AAC AudioSpecificConfig
           parsing into `preview/media/codec.rs` behind a narrow media adapter.
-        - [ ] `R26-P1-07c-2d-2` Move AVC configuration, SPS/VUI parsing, and the
+        - [x] `R26-P1-07c-2d-2` Move AVC configuration, SPS/VUI parsing, and the
           bounded bit reader into the codec module with hostile crop/bit tests.
-        - [ ] `R26-P1-07c-2d-3` Move HEVC configuration, VPS/SPS/VUI, and bounded
+        - [x] `R26-P1-07c-2d-3` Move HEVC configuration, VPS/SPS/VUI, and bounded
           parameter-set array parsing into the codec module.
       - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
         chunk summaries into `preview/media/mp4.rs`.
@@ -168,6 +168,25 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2d` Complete the 1,027-line `preview::media::codec` family
+  module with three narrow payload APIs for `esds`, `avcC`, and `hvcC`; keep MP4
+  atom location in the aggregation layer for the next slice. Move AVC SPS/VUI,
+  HEVC VPS/SPS/VUI, parameter-set arrays, colour labels, and the private bit
+  reader with their existing tests. Add five hostile-input tests and fix bit
+  capacity multiplication, signed Exp-Golomb conversion, scaling-list signed
+  arithmetic, and H.264/HEVC crop-offset overflows. Guard 32-bit reads,
+  31-zero Exp-Golomb codes, 256-entry H.264 cycles, 12 bounded scaling lists,
+  32 HEVC arrays, 256 NALs per array, seven sub-layers, checked offsets, private
+  visibility, no C ABI, implementation backflow, and a 1,100-line ceiling.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native media::codec` (9 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-format-registry.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (234 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `818bbc9`, `917916d`, `9849a40`, `c48ede2`
 - [x] `R26-P1-07c-2d-1` Establish the media codec module by moving MPEG-4
   descriptor scanning, AudioSpecificConfig decoding, object/sample-rate labels,
   and the AAC integration test out of `preview.rs` into a 151-line
