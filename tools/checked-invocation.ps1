@@ -3,7 +3,7 @@ function Invoke-CheckedScript {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Path,
-        [hashtable]$Arguments = @{},
+        [System.Collections.IDictionary]$Arguments = @{},
         [string]$FailureMessage = ""
     )
 

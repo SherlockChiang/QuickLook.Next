@@ -9,11 +9,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 
 function Invoke-Step([string]$Name, [scriptblock]$Script) {
     Write-Host "== $Name ==" -ForegroundColor Cyan
     $started = Get-Date
-    & $Script
+    Invoke-CheckedScriptBlock -Script $Script -FailureMessage "$Name failed"
     $elapsed = (Get-Date) - $started
     Write-Host ("passed in {0:n1}s" -f $elapsed.TotalSeconds) -ForegroundColor Green
 }
@@ -67,7 +68,9 @@ if (-not $SkipBuild) {
 
 if (-not $SkipGuard) {
     Invoke-Step "architecture guard" {
-        & (Join-Path $Root "tools\guard-architecture.ps1") -Root $Root -SkipDist
+        Invoke-CheckedScript -Path (Join-Path $Root "tools\guard-architecture.ps1") `
+            -Arguments @{ Root = $Root; SkipDist = $true } `
+            -FailureMessage "Architecture guard failed"
     }
 }
 
@@ -76,7 +79,9 @@ if ($Mode -eq "full") {
         cargo build --release --manifest-path (Join-Path $Root "native\quicklook_next_native\Cargo.toml")
     }
     Invoke-Step "native smoke" {
-        & (Join-Path $Root "tools\smoke-native.ps1") -Root $Root
+        Invoke-CheckedScript -Path (Join-Path $Root "tools\smoke-native.ps1") `
+            -Arguments @{ Root = $Root } `
+            -FailureMessage "Native smoke failed"
     }
 }
 

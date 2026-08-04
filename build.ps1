@@ -14,4 +14,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-& (Join-Path $PSScriptRoot "tools\build-local.ps1") @PSBoundParameters
+. (Join-Path $PSScriptRoot "tools\checked-invocation.ps1")
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "tools\build-local.ps1") `
+    -Arguments $PSBoundParameters `
+    -FailureMessage "Local build workflow failed"

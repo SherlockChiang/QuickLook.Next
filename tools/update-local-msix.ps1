@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 
 if (-not $PackageOnly) {
     $requestedWhatIf = $WhatIfPreference
@@ -72,7 +73,9 @@ $resolveArgs = @{
     KnownVersions = $knownVersions
 }
 $numericVersion = @(
-    & (Join-Path $PSScriptRoot "resolve-local-msix-version.ps1") @resolveArgs
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "resolve-local-msix-version.ps1") `
+        -Arguments $resolveArgs `
+        -FailureMessage "Local MSIX version resolution failed"
 )[-1]
 if (-not $numericVersion) {
     throw "The local MSIX version could not be resolved."
@@ -97,9 +100,12 @@ if (-not $PSCmdlet.ShouldProcess(
     return
 }
 
-& (Join-Path $PSScriptRoot "pack-msix.ps1") `
-    -Version $numericVersion `
-    -SkipBuild | Out-Host
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "pack-msix.ps1") `
+    -Arguments @{
+        Version = $numericVersion
+        SkipBuild = $true
+    } `
+    -FailureMessage "Local MSIX packaging failed" | Out-Host
 
 $msixPath = Join-Path (
     $artifacts) "QuickLook.Next-$numericVersion-win-x64.msix"

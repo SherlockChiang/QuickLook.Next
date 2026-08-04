@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 
 if ($VersionSuffix -and $VersionSuffix -notmatch '^[0-9A-Za-z](?:[0-9A-Za-z.-]{0,63})$') {
     throw "VersionSuffix must be a short SemVer-compatible identifier."
@@ -41,15 +42,22 @@ $setVersionArgs = @{
 if ($Version) {
     $setVersionArgs.Version = $Version
 }
-$resolvedVersion = & (Join-Path $PSScriptRoot "set-version.ps1") @setVersionArgs
+$resolvedVersion = @(
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "set-version.ps1") `
+        -Arguments $setVersionArgs `
+        -FailureMessage "Local version synchronization failed"
+)[-1]
 if (-not $resolvedVersion) {
     throw "The synchronized build version could not be resolved."
 }
 $resolvedVersion = @($resolvedVersion)[-1]
 
-& (Join-Path $PSScriptRoot "test-release-version.ps1") `
-    -Root $Root `
-    -ExpectedVersion $resolvedVersion
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-version.ps1") `
+    -Arguments @{
+        Root = $Root
+        ExpectedVersion = $resolvedVersion
+    } `
+    -FailureMessage "Local release version validation failed"
 
 $solution = Join-Path $Root "QuickLook.Next.slnx"
 $nativeManifest = Join-Path $Root "native\Cargo.toml"
@@ -91,15 +99,21 @@ if ($Test) {
 
 $localPackageVersion = ""
 if ($packageRequested) {
-    & (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
-        -Root $Root `
-        -VersionPrefix $resolvedVersion `
-        -VersionSuffix $VersionSuffix | Out-Null
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "write-tested-release-proof.ps1") `
+        -Arguments @{
+            Root = $Root
+            VersionPrefix = $resolvedVersion
+            VersionSuffix = $VersionSuffix
+        } `
+        -FailureMessage "Writing the local tested-build proof failed" | Out-Null
     $localPackageVersion = @(
-        & (Join-Path $PSScriptRoot "update-local-msix.ps1") `
-            -Root $Root `
-            -VersionPrefix $resolvedVersion `
-            -PackageOnly:(-not $Install)
+        Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "update-local-msix.ps1") `
+            -Arguments @{
+                Root = $Root
+                VersionPrefix = $resolvedVersion
+                PackageOnly = -not [bool]$Install
+            } `
+            -FailureMessage "Local MSIX update failed"
     )[-1]
 }
 

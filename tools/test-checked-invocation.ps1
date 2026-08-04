@@ -77,6 +77,12 @@ try {
     Assert-True $nestedFailure "The real image guard must propagate a nested smoke failure."
     Assert-True (-not (Test-Path -LiteralPath $downstreamMarker)) `
         "A later image capability step must not run after a failed smoke."
+
+    $harnessText = Get-Content -LiteralPath (Join-Path $Root "tools\harness-long-cycle.ps1") -Raw
+    Assert-True ($harnessText -match 'Invoke-CheckedScriptBlock\s+-Script\s+\$Script') `
+        "The long-cycle harness must check each step before reporting it passed."
+    Assert-True ($harnessText -match 'Invoke-CheckedScript[\s\S]{0,240}guard-architecture\.ps1') `
+        "The long-cycle harness must fail closed on the architecture guard."
 }
 finally {
     $resolvedTemp = [IO.Path]::GetFullPath($tempRoot)
