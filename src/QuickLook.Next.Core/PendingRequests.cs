@@ -3,10 +3,10 @@ using System.Collections.Concurrent;
 namespace QuickLook.Next.Core;
 
 /// <summary>
-/// Enforces the protocol invariant: every opened RequestId terminates in exactly one of
-/// PreviewReady | PreviewError | timeout. The App opens a request, awaits the returned task, and the
-/// channel dispatcher calls <see cref="TryComplete"/> when a terminal message arrives. A per-request
-/// watchdog fails the task if the host doesn't answer in time (so a hung viewer never wedges the UI).
+/// Enforces the protocol invariant that at most one terminal Host message is accepted per RequestId.
+/// The App opens a request, awaits the returned task, and the channel dispatcher calls
+/// <see cref="TryComplete"/> when a terminal message arrives. Cancellation removes the await, service
+/// failure can fail it, and a per-request watchdog times it out so a hung viewer never wedges the UI.
 /// </summary>
 public sealed class PendingRequests
 {

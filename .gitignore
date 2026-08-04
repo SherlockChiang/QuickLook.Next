@@ -30,6 +30,7 @@ dist*/
 msix/
 installer/
 .signing/
+# Legacy local scratch guide; repository policy lives in tracked AGENTS.md.
 agent.md
 
 *.pdb

@@ -155,7 +155,8 @@ and packaging entry point; release artifacts are written to `artifacts/`.
 
 Pull requests run CI; contribution and verification requirements are defined in [`CONTRIBUTING.md`](CONTRIBUTING.md). A tested commit whose subject starts with `release:` runs the stable packaging workflow. Published assets include signed packages, checksums, release metadata, update metadata, build manifests, and an SBOM.
 
-See [`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries and verification details.
+See [`AGENTS.md`](AGENTS.md), the [`architecture decision records`](docs/adr/README.md), and
+[`docs/review-readiness.md`](docs/review-readiness.md) for engineering boundaries and verification details.
 
 </details>
 

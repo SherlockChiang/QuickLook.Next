@@ -8,8 +8,9 @@ namespace QuickLook.Next.Core;
 /// Bulk pixels never travel here — they flow through the shared composition surface referenced by
 /// <see cref="PreviewSurface"/>. Validated by Spike 1 (see spikes/spike1-composition/SPIKE1_FINDINGS.md).
 ///
-/// Contract invariant: every <c>RequestId</c> opened with <see cref="PreviewOpen"/> terminates in
-/// exactly one of <see cref="PreviewReady"/> | <see cref="PreviewError"/> | (client-side) timeout.
+/// Contract invariant: the App accepts at most one terminal Host message per <c>RequestId</c>.
+/// It may instead stop waiting because of client cancellation, timeout, disconnect, or service
+/// failure; late and duplicate Host terminals are rejected.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(Hello), "hello")]

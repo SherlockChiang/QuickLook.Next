@@ -292,10 +292,14 @@ Expected impact: more useful previews without heavy rendering work.
 
 - Prefer Rust/native preview logic for parsing and metadata.
 - Keep App focused on WinUI presentation, lifecycle, keyboard, and window logic.
-- Keep RasterHost scoped to image/PDF/shell thumbnail/surface production.
+- Keep RasterHost scoped to image/PDF/system-codec/surface production.
+- Keep explicit Explorer/Shell thumbnail compatibility in ShellBroker.
 - Keep all parsing bounded.
 - Do not add WebView/WebView2 rendering.
 - Do not restore default `.NET Plugin.*` discovery.
+
+`AGENTS.md` and `docs/adr/` are authoritative for durable placement and trust
+boundaries; this PRD is a prioritization document.
 
 ## Success Metrics
 

@@ -46,6 +46,9 @@ Do not run release signing or packaging with production credentials for a normal
 
 ## Engineering Expectations
 
+Repository-wide placement and safety rules live in [`AGENTS.md`](AGENTS.md),
+with durable decisions indexed in [`docs/adr/README.md`](docs/adr/README.md).
+
 - Keep changes focused and independently reviewable.
 - Preserve parser size, count, depth, time, decompression, and retained-memory limits.
 - Keep untrusted structured parsing in `ParserHost`, raster/WinRT work in `RasterHost`, and explicit

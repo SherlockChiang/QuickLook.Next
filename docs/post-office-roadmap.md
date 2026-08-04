@@ -172,10 +172,14 @@ The architecture should remain Rust-first with a thin WinUI shell:
 - Rust owns bounded parsing, metadata, file probing, preview decisions, and
   structured preview data.
 - App owns WinUI presentation, lifecycle, keyboard/window behavior, and dispatch.
-- RasterHost owns Windows-only surface production: images, PDF, shell thumbnails,
-  D3D surfaces.
+- RasterHost owns Windows-only surface production: images, PDF, system codecs,
+  and D3D surfaces.
+- ShellBroker owns explicit Explorer/Shell thumbnail compatibility.
 - Do not reintroduce WebView/WebView2 preview rendering.
 - Do not restore default-path `.NET Plugin.*` discovery.
+
+Durable placement and trust boundaries are authoritative in `AGENTS.md` and
+`docs/adr/`; this roadmap only orders product work.
 
 The most valuable maintainability improvements are:
 
