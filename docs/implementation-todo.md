@@ -77,6 +77,14 @@ the release-only `release:` prefix while this queue is in progress.
           parameter-set array parsing into the codec module.
       - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
         chunk summaries into `preview/media/mp4.rs`.
+        - [ ] `R26-P1-07c-2e-1` Move bounded atom traversal, movie-header time,
+          creation, and rotation primitives into `preview/media/mp4.rs`.
+        - [ ] `R26-P1-07c-2e-2` Move sample tables, edit/composition timelines,
+          and chunk mapping into the MP4 module with linear-or-better `stsc`
+          lookup and hostile table tests.
+        - [ ] `R26-P1-07c-2e-3` Move track parsing, codec payload adapters,
+          summary/output composition, and the MP4 integration test into the
+          MP4 module.
       - [ ] `R26-P1-07c-2f` Move media routing, container detection, and output
         composition into `preview/media/mod.rs`, leaving one explicit route in
         `preview.rs`.
