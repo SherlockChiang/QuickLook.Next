@@ -81,6 +81,47 @@ else {
     }
 }
 
+$previewSessionPath = Join-Path $appRoot "PreviewSession.cs"
+$mainWindowPath = Join-Path $appRoot "MainWindow.xaml.cs"
+$mainWindowXamlPath = Join-Path $appRoot "MainWindow.xaml"
+if (-not (Test-Path -LiteralPath $previewSessionPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $mainWindowPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $mainWindowXamlPath -PathType Leaf)) {
+    Add-Failure "Preview error generation/path state files are missing."
+}
+else {
+    $previewSessionText = Get-Content -LiteralPath $previewSessionPath -Raw
+    $mainWindowText = Get-Content -LiteralPath $mainWindowPath -Raw
+    $mainWindowXaml = Get-Content -LiteralPath $mainWindowXamlPath -Raw
+    if ($previewSessionText -notmatch 'ActivePath\s*=>\s*PendingPath\s*\?\?\s*CurrentPath' -or
+        $previewSessionText -notmatch 'TryBindError\([\s\S]{0,500}IsCurrent\(snapshot\)[\s\S]{0,300}ActivePath[\s\S]{0,200}snapshot\.Path' -or
+        $previewSessionText -notmatch 'IsCurrentError\([\s\S]{0,400}IsCurrent\(context\.Snapshot\)') {
+        Add-Failure "Preview errors must bind to the active path, generation, and cancellation token."
+    }
+    if ($previewSessionText -notmatch 'Begin\([\s\S]{0,400}_errorContext\s*=\s*null' -or
+        $previewSessionText -notmatch 'BeginClose\([\s\S]{0,300}_errorContext\s*=\s*null' -or
+        $previewSessionText -notmatch 'Clear\(\)[\s\S]{0,300}_errorContext\s*=\s*null') {
+        Add-Failure "Navigation, close, and clear must invalidate preview error actions."
+    }
+    if ($mainWindowText -notmatch 'TryShowErrorPreview\([\s\S]{0,900}TryBindError\(' -or
+        $mainWindowText -notmatch 'DispatcherQueue\.TryEnqueue\([\s\S]{0,240}IsCurrentError\(context\)' -or
+        $mainWindowText -notmatch 'OnRetryPreviewClick[\s\S]{0,500}ErrorContext[\s\S]{0,250}IsCurrentError\(context\)' -or
+        $mainWindowText -notmatch 'OnOpenErrorPreviewFileClick[\s\S]{0,160}ErrorActionPath' -or
+        $mainWindowText -notmatch 'OnRevealErrorPreviewFileClick[\s\S]{0,160}ErrorActionPath') {
+        Add-Failure "Error UI actions and queued focus must consume the current PreviewErrorContext."
+    }
+    $retryHandler = [regex]::Match(
+        $mainWindowText,
+        'private\s+async\s+void\s+OnRetryPreviewClick[\s\S]*?(?=\r?\n\s*private\s+)').Value
+    if ($retryHandler -match '_previewSession\.CurrentPath') {
+        Add-Failure "Preview retry must not fall back to the previously committed path."
+    }
+    if ($mainWindowXaml -notmatch 'ErrorOpenFileButton[\s\S]{0,500}Click="OnOpenErrorPreviewFileClick"' -or
+        $mainWindowXaml -notmatch 'ErrorRevealFileButton[\s\S]{0,500}Click="OnRevealErrorPreviewFileClick"') {
+        Add-Failure "Error Open and Reveal buttons must use their generation-bound handlers."
+    }
+}
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Stale callback guard failed:" -ForegroundColor Red

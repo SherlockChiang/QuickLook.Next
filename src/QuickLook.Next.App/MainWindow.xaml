@@ -1266,7 +1266,7 @@
                         Background="{ThemeResource PreviewHeroSurfaceBrush}"
                         BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                         BorderThickness="1"
-                        Click="OnOpenPreviewFileClick">
+                        Click="OnOpenErrorPreviewFileClick">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE8E5;" FontSize="14" />
                         <TextBlock x:Uid="ErrorOpenFileText" Text="Open file" FontSize="12" />
@@ -1280,7 +1280,7 @@
                         Background="Transparent"
                         BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
                         BorderThickness="1"
-                        Click="OnOpenFileLocationClick">
+                        Click="OnRevealErrorPreviewFileClick">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <FontIcon Glyph="&#xE838;" FontSize="14" />
                         <TextBlock x:Uid="ErrorRevealFileText" Text="Reveal in Explorer" FontSize="12" />

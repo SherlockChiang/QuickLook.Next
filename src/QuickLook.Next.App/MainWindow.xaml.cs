@@ -569,8 +569,6 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", "intent handler FAILED: " + ex);
             DiagLog.Write("App", "intent error: " + ex.Message);
-            StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
-            RevealPreviewWindow(activate: false);
         }
     }
 
@@ -959,8 +957,7 @@ public sealed partial class MainWindow : Window
                 if (!IsPreviewGenerationCurrent(generation, previewToken) || !_previewSession.IsCurrentRequest(parserRequestId)) return;
                 if (parserResult is PreviewError parserError)
                 {
-                    StatusText.Text = ShowHostError(parserError);
-                    RevealPreviewWindow(activate: false);
+                    TryShowHostError(session, parserError);
                     return;
                 }
                 nativeReady = parserResult as PreviewReady;
@@ -1100,6 +1097,11 @@ public sealed partial class MainWindow : Window
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { DiagLog.Write("App", "ShellBroker fallback failed: " + ex); }
             }
+            if (result is PreviewError previewError)
+            {
+                TryShowHostError(session, previewError);
+                return;
+            }
             StatusText.Text = result switch
             {
                 PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
@@ -1110,7 +1112,6 @@ public sealed partial class MainWindow : Window
                 PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                 PreviewReady r when r.MediaPath is not null => ShowMediaPreview(r),
                 PreviewReady r => ShowRasterPreview(r),
-                PreviewError er => ShowHostError(er),
                 _ => "?",
             };
             RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
@@ -1127,8 +1128,7 @@ public sealed partial class MainWindow : Window
         catch (TimeoutException ex)
         {
             DiagLog.Write("App", "preview timed out: " + ex.Message);
-            StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.TimedOut, true));
-            RevealPreviewWindow(activate: false);
+            TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.TimedOut, true));
             CompletePreviewTiming(generation, "timed-out");
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
@@ -1136,8 +1136,7 @@ public sealed partial class MainWindow : Window
             DiagLog.Write("App", "preview service failed: " + ex);
             if (IsPreviewGenerationCurrent(generation, previewToken))
             {
-                StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Service, true));
-                RevealPreviewWindow(activate: false);
+                TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Service, true));
                 CompletePreviewTiming(generation, "failed");
             }
         }
@@ -1145,6 +1144,12 @@ public sealed partial class MainWindow : Window
         {
             DiagLog.Write("App", $"preview canceled: path={path}");
             CompletePreviewTiming(generation, "canceled");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "preview failed: " + ex);
+            TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Content, false));
+            CompletePreviewTiming(generation, "failed");
         }
         finally
         {
@@ -1723,7 +1728,7 @@ public sealed partial class MainWindow : Window
            && !string.IsNullOrWhiteSpace(path)
            && string.Equals(probe.Path, path, StringComparison.OrdinalIgnoreCase);
 
-    private string ShowHostError(PreviewError error)
+    private bool TryShowHostError(PreviewSessionSnapshot session, PreviewError error)
     {
         string? normalizedFormat = ImageCodecPolicy.NormalizeFormat('.' + error.Format);
         string knownCode = error.Code is PreviewErrorCodes.ImageCodecRequired or PreviewErrorCodes.ImageDecodeFailed
@@ -1733,13 +1738,14 @@ public sealed partial class MainWindow : Window
         if (error.Code == PreviewErrorCodes.ImageCodecRequired
             && normalizedFormat is string format)
         {
-            return ShowErrorPreview(
+            return TryShowErrorPreview(
+                session,
                 UiStrings.ImageCodecRequiredTitle,
                 UiStrings.Format(UiStrings.ImageCodecRequiredMessageFormat, ImageFormatDisplayName(format)));
         }
         if (error.Code == PreviewErrorCodes.ImageDecodeFailed)
-            return ShowErrorPreview(UiStrings.ImageDecodeFailedTitle, UiStrings.ImageDecodeFailedMessage);
-        return ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
+            return TryShowErrorPreview(session, UiStrings.ImageDecodeFailedTitle, UiStrings.ImageDecodeFailedMessage);
+        return TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Content, false));
     }
 
     private static string ImageFormatDisplayName(string format)
@@ -1751,7 +1757,7 @@ public sealed partial class MainWindow : Window
             _ => format.ToUpperInvariant(),
         };
 
-    private string ShowErrorPreview(PreviewFailure failure)
+    private bool TryShowErrorPreview(PreviewSessionSnapshot session, PreviewFailure failure)
     {
         (string title, string message) = failure.Kind switch
         {
@@ -1760,28 +1766,38 @@ public sealed partial class MainWindow : Window
             PreviewFailureKind.Surface => (UiStrings.PreviewDisplayFailedTitle, UiStrings.PreviewDisplayFailedMessage),
             _ => (UiStrings.PreviewContentFailedTitle, UiStrings.PreviewContentFailedMessage),
         };
-        return ShowErrorPreview(title, message, failure.CanRetry);
+        return TryShowErrorPreview(session, title, message, failure.CanRetry);
     }
 
-    private string ShowErrorPreview(string title, string message, bool canRetry = false)
+    private bool TryShowErrorPreview(
+        PreviewSessionSnapshot session,
+        string title,
+        string message,
+        bool canRetry = false)
     {
+        if (!_previewSession.TryBindError(session, canRetry, out PreviewErrorContext context))
+            return false;
+
         _panelController.ShowError();
         ErrorText.Text = message;
         PreviewTitleText.Text = title;
         PreviewMetaText.Text = ErrorText.Text;
         PreviewKindPillText.Text = UiStrings.ErrorKind;
-        bool hasPath = !string.IsNullOrWhiteSpace(_previewSession.CurrentPath);
-        ErrorActionsPanel.Visibility = hasPath ? Visibility.Visible : Visibility.Collapsed;
-        ErrorRetryButton.Visibility = hasPath && canRetry ? Visibility.Visible : Visibility.Collapsed;
+        ErrorActionsPanel.Visibility = Visibility.Visible;
+        ErrorRetryButton.Visibility = canRetry ? Visibility.Visible : Visibility.Collapsed;
         ResizeWindowForContent(520, 300, MaxTextWindowWidth, MaxTextWindowHeight);
+        StatusText.Text = UiStrings.Format(UiStrings.Get("PreviewErrorStatusFormat"), ErrorText.Text);
+        RevealPreviewWindow(activate: false);
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (!_previewSession.IsCurrentError(context))
+                return;
             if (ErrorRetryButton.Visibility == Visibility.Visible)
                 ErrorRetryButton.Focus(FocusState.Programmatic);
             else if (ErrorActionsPanel.Visibility == Visibility.Visible)
                 ErrorOpenFileButton.Focus(FocusState.Programmatic);
         });
-        return UiStrings.Format(UiStrings.Get("PreviewErrorStatusFormat"), ErrorText.Text);
+        return true;
     }
 
     private void FadeInPreviewContent()
@@ -1908,23 +1924,24 @@ public sealed partial class MainWindow : Window
 
     private void ShowSurfaceFailure(string requestId, string message)
     {
-        if (!_previewSession.IsCurrentRequest(requestId))
+        string? path = _previewSession.ActivePath;
+        if (!_previewSession.IsCurrentRequest(requestId)
+            || string.IsNullOrWhiteSpace(path)
+            || !_previewSession.TryGetActiveSnapshot(path, out PreviewSessionSnapshot session))
             return;
 
         DiagLog.Write("App", "surface preview failed: " + message);
         _previewSession.SetRequestId(null);
         _ = CloseCurrentAsync(requestId);
-        StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Surface, false));
-        RevealPreviewWindow(activate: false);
+        TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Surface, false));
     }
 
     private void OnMediaPreviewFailed(string path)
     {
-        if (!_previewSession.IsCurrentPath(path))
+        if (!_previewSession.TryGetActiveSnapshot(path, out PreviewSessionSnapshot session))
             return;
 
-        StatusText.Text = ShowErrorPreview(new PreviewFailure(PreviewFailureKind.Content, false));
-        RevealPreviewWindow(activate: false);
+        TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Content, false));
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs e)
@@ -3280,11 +3297,22 @@ public sealed partial class MainWindow : Window
     private void OnOpenPreviewFileClick(object sender, RoutedEventArgs e)
         => OpenCurrentPreviewPath(revealInExplorer: false);
 
+    private void OnOpenErrorPreviewFileClick(object sender, RoutedEventArgs e)
+        => OpenPreviewPath(_previewSession.ErrorActionPath, revealInExplorer: false);
+
+    private void OnRevealErrorPreviewFileClick(object sender, RoutedEventArgs e)
+        => OpenPreviewPath(_previewSession.ErrorActionPath, revealInExplorer: true);
+
     private async void OnRetryPreviewClick(object sender, RoutedEventArgs e)
     {
-        string? path = _previewSession.CurrentPath;
-        if (!string.IsNullOrWhiteSpace(path))
-            await PreviewWindowPathAsync(path);
+        if (_previewSession.ErrorContext is not PreviewErrorContext context
+            || !context.CanRetry
+            || !_previewSession.IsCurrentError(context))
+        {
+            return;
+        }
+
+        await PreviewWindowPathAsync(context.Path);
     }
 
     private async void OnCopyPreviewFileClick(object sender, RoutedEventArgs e)
@@ -3384,8 +3412,10 @@ public sealed partial class MainWindow : Window
     }
 
     private void OpenCurrentPreviewPath(bool revealInExplorer)
+        => OpenPreviewPath(_previewSession.CurrentPath, revealInExplorer);
+
+    private void OpenPreviewPath(string? path, bool revealInExplorer)
     {
-        string? path = _previewSession.CurrentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
 
@@ -3399,7 +3429,8 @@ public sealed partial class MainWindow : Window
                     Arguments = "/select,\"" + path + "\"",
                     UseShellExecute = true,
                 });
-                RefreshCurrentImageFilmstrip();
+                if (_previewSession.IsCurrentPath(path))
+                    RefreshCurrentImageFilmstrip();
                 return;
             }
 
@@ -3410,7 +3441,8 @@ public sealed partial class MainWindow : Window
                     FileName = path,
                     UseShellExecute = true,
                 });
-                RefreshCurrentImageFilmstrip();
+                if (_previewSession.IsCurrentPath(path))
+                    RefreshCurrentImageFilmstrip();
                 return;
             }
 
@@ -3421,7 +3453,8 @@ public sealed partial class MainWindow : Window
                     FileName = path,
                     UseShellExecute = true,
                 });
-                RefreshCurrentImageFilmstrip();
+                if (_previewSession.IsCurrentPath(path))
+                    RefreshCurrentImageFilmstrip();
             }
         }
         catch (Exception ex)
