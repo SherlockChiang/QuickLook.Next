@@ -75,14 +75,14 @@ the release-only `release:` prefix while this queue is in progress.
           bounded bit reader into the codec module with hostile crop/bit tests.
         - [x] `R26-P1-07c-2d-3` Move HEVC configuration, VPS/SPS/VUI, and bounded
           parameter-set array parsing into the codec module.
-      - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
+      - [x] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
         chunk summaries into `preview/media/mp4.rs`.
         - [x] `R26-P1-07c-2e-1` Move bounded atom traversal, movie-header time,
           creation, and rotation primitives into `preview/media/mp4.rs`.
         - [x] `R26-P1-07c-2e-2` Move sample tables, edit/composition timelines,
           and chunk mapping into the MP4 module with linear-or-better `stsc`
           lookup and hostile table tests.
-        - [ ] `R26-P1-07c-2e-3` Move track parsing, codec payload adapters,
+        - [x] `R26-P1-07c-2e-3` Move track parsing, codec payload adapters,
           summary/output composition, and the MP4 integration test into the
           MP4 module.
       - [ ] `R26-P1-07c-2f` Move media routing, container detection, and output
@@ -176,6 +176,30 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2e-3` Complete the ISO BMFF/MP4 split with a 998-line
+  production module and 415 lines of focused tests. Move brand, track/header,
+  sample-description, codec-payload, bitrate, rotation, summary, and stable text
+  composition out of `preview.rs`; let `mp4.rs` call the sibling codec module
+  directly and expose only `append_metadata`. Reduce `media/mod.rs` to one MP4
+  adapter and 99 total lines, move shared timestamp formatting into
+  `preview/common.rs`, and keep the upper renderer as a bounded read followed by
+  MP4/MKV/WAV/FLAC/Ogg/ID3 composition. Reject zero or truncated sample entries,
+  retain the 16-entry sample-description and 1,024-track/atom budgets, and lock
+  the complete MP4 output order with an integration snapshot. Keep production
+  and test ceilings at 1,200 and 500 lines while forbidding implementation
+  backflow, wildcard imports, extra MP4 exports, and C ABI ownership. This also
+  completes parent item `R26-P1-07c-2e`.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native mp4` (13 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::common` (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (245 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --maxcpucount:1` (360 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `ef4d18a`, `0dc92d8`
 - [x] `R26-P1-07c-2e-2` Move `stsz`, `stts`, `ctts`, `elst`, `stco`, `co64`,
   `stsc`, timeline summaries, and chunk mapping into the 849-line
   `preview::media::mp4` module behind one temporary track-summary adapter.
