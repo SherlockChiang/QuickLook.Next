@@ -17,9 +17,16 @@ $appRoot = Join-Path $Root "src/QuickLook.Next.App"
 $mainWindowPath = Join-Path $appRoot "MainWindow.xaml.cs"
 $sidecarPath = Join-Path $appRoot "ImageSidecarController.cs"
 $schedulerPath = Join-Path $appRoot "NativeThumbnailScheduler.cs"
-$nativePath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+$nativeFfiPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+$nativeShellPath = Join-Path (
+    $Root) "native/quicklook_next_native/src/win32/shell_thumbnail.rs"
 
-foreach ($path in @($mainWindowPath, $sidecarPath, $schedulerPath, $nativePath)) {
+foreach ($path in @(
+        $mainWindowPath,
+        $sidecarPath,
+        $schedulerPath,
+        $nativeFfiPath,
+        $nativeShellPath)) {
     if (-not (Test-Path $path)) {
         Add-Failure "Missing thumbnail priority source: $path"
     }
@@ -82,13 +89,18 @@ if (Test-Path $schedulerPath) {
     }
 }
 
-if (Test-Path $nativePath) {
-    $nativeText = Get-Content -LiteralPath $nativePath -Raw
-    if ($nativeText -notmatch 'ql_get_thumbnail_cancelable_with_flags' -or $nativeText -notmatch 'SIIGBF_INCACHEONLY') {
+if ((Test-Path $nativeFfiPath) -and (Test-Path $nativeShellPath)) {
+    $nativeFfiText = Get-Content -LiteralPath $nativeFfiPath -Raw
+    $nativeShellText = Get-Content -LiteralPath $nativeShellPath -Raw
+    if ($nativeFfiText -notmatch 'ql_get_thumbnail_cancelable_with_flags' -or
+        $nativeShellText -notmatch 'SIIGBF_INCACHEONLY') {
         Add-Failure "Native thumbnail ABI must expose and apply cache-only requests"
     }
-    if ($nativeText -notmatch 'ql_get_thumbnail_cancelable_with_flags\(path_utf8, path_len, size, 0, out, out_cap, None\)') {
+    if ($nativeFfiText -notmatch 'ql_get_thumbnail_cancelable_with_flags\(path_utf8, path_len, size, 0, out, out_cap, None\)') {
         Add-Failure "Legacy thumbnail ABI must preserve non-cache-only behavior"
+    }
+    if ($nativeFfiText -notmatch 'win32::shell_thumbnail::request\(') {
+        Add-Failure "Native thumbnail exports must delegate to the bounded Win32 module"
     }
 }
 

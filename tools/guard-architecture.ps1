@@ -1846,6 +1846,13 @@ if (-not (Test-Path -LiteralPath $rustLintScopeTest -PathType Leaf)) {
 Invoke-CheckedScript -Path $rustLintScopeTest -Arguments @{ Root = $Root } `
     -FailureMessage "Rust lint-scope tests failed"
 
+$rustModuleBoundaryTest = Join-Path $PSScriptRoot "test-rust-module-boundaries.ps1"
+if (-not (Test-Path -LiteralPath $rustModuleBoundaryTest -PathType Leaf)) {
+    throw "Missing Rust module-boundary guard: $rustModuleBoundaryTest"
+}
+Invoke-CheckedScript -Path $rustModuleBoundaryTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Rust module-boundary tests failed"
+
 $supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
 if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
     throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"
