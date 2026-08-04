@@ -12,7 +12,7 @@
     <QuickLookNativeInput Include="$(MSBuildProjectFullPath)" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)**\Cargo.toml;
                                   $(QuickLookNativeSourceRoot)**\build.rs;
-                                  $(QuickLookNativeSourceRoot)**\src\**\*.rs"
+                                  $(QuickLookNativeSourceRoot)**\src\**\*"
                           Exclude="$(QuickLookNativeTargetDir)\**\*" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)Cargo.lock" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)rust-toolchain.toml"
