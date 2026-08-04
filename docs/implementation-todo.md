@@ -26,11 +26,14 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P0-03` Move the live signing certificate and password out of the
   workspace, verify their storage policy, and rotate them if exposure cannot be
   excluded. This is an owner-operated credential task and must not be automated.
-- [x] `R26-P0-04` Fail closed against supervised-host `Application Error`
+- [ ] `R26-P0-04` Fail closed against supervised-host `Application Error`
   dialogs after the observed RasterHost DXGI `0x0000087a` crash. Keep the
   process-wide no-dialog error mode active, retain supervisor exit-code/log
-  diagnostics, and add a runtime policy test instead of relying only on static
-  source-pattern checks.
+  diagnostics, and cover a real crashing child instead of relying only on
+  source-pattern or in-process flag checks. Reopened on 2026-08-04 after a live
+  RasterHost error window recurred following commits `b2b5ee2` and `bfd48da`;
+  clear conflicting WER always-show-UI state and make the child inherit the
+  no-dialog error mode before its CLR/apphost loader runs.
 
 ### Correctness and user-visible state
 
@@ -193,27 +196,6 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
-- [x] `R26-P0-04` Close the supervised-host no-dialog gap exposed by a live
-  CSRSS `QuickLook.Next.RasterHost.exe - Application Error` window reporting
-  DXGI facility exception `0x0000087a`. Request WER no-UI reporting first, then
-  fail closed by preserving the process error mode and enabling
-  `SEM_FAILCRITICALERRORS`, `SEM_NOGPFAULTERRORBOX`, and
-  `SEM_NOOPENFILEERRORBOX`. Retain supervisor exit-code and file-log evidence;
-  document WER/local-dump capture as best effort because the no-GP-fault-box
-  mode can bypass WER. Add a Windows runtime test that clears the relevant
-  process/WER bits, invokes the real policy, verifies all four no-UI bits, and
-  restores the test process state. Update the static guard to require that
-  runtime coverage instead of enforcing the ineffective WER-only policy.
-  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore --disable-build-servers --maxcpucount:1 --filter "FullyQualifiedName~SupervisedHostProcessPolicyTests"` (1 passed)
-  - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
-  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
-  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore --disable-build-servers --maxcpucount:1` (0 warnings, 0 errors)
-  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (361 passed)
-  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
-  - Result: desktop window enumeration after the full RasterHost suite and the
-    architecture gate found no RasterHost, ParserHost, or ShellBroker
-    `Application Error` window.
-  - Commits: `b2b5ee2`, `bfd48da`
 - [x] `R26-P1-07c-2f` Complete the media family split with a 92-line
   `preview/media/mod.rs` composition root. Move bounded file-prefix reading,
   container detection, base/output composition, and the stable
