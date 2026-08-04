@@ -18,9 +18,9 @@ the release-only `release:` prefix while this queue is in progress.
 
 ### Release blockers
 
-- [ ] `R26-P0-01` Bound Shell thumbnail dimensions and allocation arithmetic in
+- [x] `R26-P0-01` Bound Shell thumbnail dimensions and allocation arithmetic in
   Rust before calling `GetDIBits`; cover hostile dimensions and overflow edges.
-- [ ] `R26-P0-02` Make every release, packaging, long-cycle, and nested guard
+- [x] `R26-P0-02` Make every release, packaging, long-cycle, and nested guard
   invocation fail closed on a non-zero child-script exit code; add fault-injection
   coverage so a later successful guard cannot erase an earlier failure.
 - [ ] `R26-P0-03` Move the live signing certificate and password out of the
@@ -29,7 +29,7 @@ the release-only `release:` prefix while this queue is in progress.
 
 ### Correctness and user-visible state
 
-- [ ] `R26-P1-01` Bind preview errors to the failing path and generation so Retry,
+- [x] `R26-P1-01` Bind preview errors to the failing path and generation so Retry,
   Open, and Reveal can never act on the previous file; cover first-open and A-to-B
   early-failure transitions.
 - [ ] `R26-P1-02` Resolve the text-search contract drift between the presenter,
@@ -124,6 +124,48 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-01` Bind every preview error and its queued focus/action state to
+  the failing path, generation, and cancellation token. Keep the previously
+  committed path available for old-host cleanup while Retry, Open, and Reveal
+  consume only the current `PreviewErrorContext`. Cover first-open failure,
+  A-to-B early failure, old generations, same-path new generations, commit,
+  close, and clear transitions.
+  - Verification: `dotnet format QuickLook.Next.slnx --verify-no-changes --no-restore --verbosity minimal`
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-restore --nologo --maxcpucount:1` (360 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-stale-callbacks.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
+  - Commit: `f6f3355`
+- [x] `R26-P0-02` Introduce a checked PowerShell child-script boundary that
+  clears stale exit state, captures `$?` and `$LASTEXITCODE` immediately, and
+  throws before later work can erase a failure. Apply it to nested guards,
+  formal release/package workflows, the composite release action, local build
+  and MSIX workflows, and long-cycle steps. Fault injection verifies that a
+  child exiting 23 prevents downstream scripts from running.
+  - Verification: `pwsh -NoProfile -File tools/test-checked-invocation.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-pack-msix-version.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-pack-release-failfast.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-release-workflows.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-build-local.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-local-msix-update.ps1`
+  - Commits: `04976d0`, `6786de8`, `632b6f1`
+- [x] `R26-P0-01` Bound Shell thumbnail requests and returned HBITMAP layouts to
+  512 pixels, use checked byte arithmetic and fallible allocation, require a
+  complete `GetDIBits` row count, reuse the checked raster writer, and release
+  HBITMAP/HDC resources with RAII on all exits.
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --locked --workspace --all-targets --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --locked --workspace --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `pwsh -NoProfile -File tools/smoke-native.ps1 -BuildNative`
+  - Commit: `3f5d1ce`
+- [x] Run the post-batch architecture gate in a normal Windows user context,
+  including checked-invocation fault injection, restricted-host launch, native
+  external image corpus, system image codecs, localization, FFI, performance,
+  stale-callback, thumbnail-priority, format-registry, and title-bar guards.
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Result: system image smoke decoded 4/5 optional formats; JPEG, AVIF, and HEIC
+    passed, while the installed system codec did not provide JPEG XL support.
+  - Queue commit: `c64ffa3`
 
 - [x] Synchronize `VERSION`, the native crate manifest, and `Cargo.lock` at 0.3.4. The local
   release workflow passed the 224 native tests with one external-corpus test ignored in the
