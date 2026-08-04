@@ -69,6 +69,12 @@ the release-only `release:` prefix while this queue is in progress.
         `preview/media/matroska.rs` with bounded element traversal tests.
       - [ ] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
         into `preview/media/codec.rs` with a private bounded bit reader.
+        - [ ] `R26-P1-07c-2d-1` Move MPEG-4 descriptor and AAC AudioSpecificConfig
+          parsing into `preview/media/codec.rs` behind a narrow media adapter.
+        - [ ] `R26-P1-07c-2d-2` Move AVC configuration, SPS/VUI parsing, and the
+          bounded bit reader into the codec module with hostile crop/bit tests.
+        - [ ] `R26-P1-07c-2d-3` Move HEVC configuration, VPS/SPS/VUI, and bounded
+          parameter-set array parsing into the codec module.
       - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
         chunk summaries into `preview/media/mp4.rs`.
       - [ ] `R26-P1-07c-2f` Move media routing, container detection, and output
