@@ -1825,6 +1825,13 @@ if (-not (Test-Path -LiteralPath $localizationTest -PathType Leaf)) {
 Invoke-CheckedScript -Path $localizationTest -Arguments @{ Root = $Root } `
     -FailureMessage "Localization consistency test failed"
 
+$architectureGuidanceTest = Join-Path $PSScriptRoot "test-architecture-guidance.ps1"
+if (-not (Test-Path -LiteralPath $architectureGuidanceTest -PathType Leaf)) {
+    throw "Missing tracked architecture guidance test: $architectureGuidanceTest"
+}
+Invoke-CheckedScript -Path $architectureGuidanceTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Architecture guidance tests failed"
+
 $rustFfiSafetyTest = Join-Path $PSScriptRoot "test-rust-ffi-safety.ps1"
 if (-not (Test-Path -LiteralPath $rustFfiSafetyTest -PathType Leaf)) {
     throw "Missing Rust FFI safety guard: $rustFfiSafetyTest"
