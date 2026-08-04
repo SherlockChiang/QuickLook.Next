@@ -178,7 +178,19 @@ if ($failures.Count -eq 0) {
             "preview.rs must compose the explicit preview::media family modules.")
     }
 
+    $mediaRouteCount = [regex]::Matches(
+        $previewText,
+        'media::render_media_info\(').Count
+    if ($mediaRouteCount -ne 1 -or
+        $previewText -notmatch
+        '"video"\s*\|\s*"audio"\s*\|\s*"media"\s*=>\s*\{[\s\S]{0,160}return\s+media::render_media_info\(path,\s*kind,\s*size,\s*modified_unix\)') {
+        $failures.Add(
+            "preview.rs must route media kinds exactly once through media::render_media_info.")
+    }
+
     foreach ($forbidden in @(
+            '(?m)^\s*use\s+media::',
+            'fn\s+render_media_info\s*\(',
             'fn\s+media_container_name\s*\(',
             'fn\s+format_duration\s*\(',
             'struct\s+WavSummary',
@@ -231,6 +243,7 @@ if ($failures.Count -eq 0) {
             'struct\s+(?:Mp4)?TrackSummary',
             'fn\s+(?:mp4_)?major_brand\s*\(',
             'fn\s+(?:append_mp4_tracks|append_tracks|mp4_tracks|tracks)\s*\(',
+            'fn\s+append_(?:mp4|mkv|wav|flac|ogg|id3)_metadata\s*\(',
             'fn\s+(?:parse_mp4_track|parse_track)\s*\(',
             'fn\s+parse_(?:hdlr_handler_type|handler_type|mdhd_\w+|media_\w+|tkhd_dimensions|track_dimensions|stsd_summary|sample_descriptions)\s*\(',
             'fn\s+parse_(?:video|audio)_codec_detail\s*\(',
@@ -242,20 +255,31 @@ if ($failures.Count -eq 0) {
     }
 
     foreach ($required in @(
-            'pub\(super\) fn container_name\(',
+            'pub\(super\) fn render_media_info\(',
+            'read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)\.unwrap_or_default\(\)',
+            'generic_info_json\(path, kind, size, modified_unix, Some\(text\)\)',
+            '(?m)^fn container_name\(',
             'bytes\.get\(4\.\.8\) == Some\(b"ftyp"\)',
-            'pub\(super\) fn format_duration\(',
+            '(?m)^fn format_duration\(',
             'audio::append_wav_metadata\(',
             'audio::append_flac_metadata\(',
             'audio::append_ogg_metadata\(',
             'id3::append_metadata\(',
             'matroska::append_metadata\(',
             'mp4::append_metadata\(',
-            'pub\(super\) fn codec_label\(',
+            '(?m)^fn codec_label\(',
             '"A_OPUS" => "Opus"\.to_string\(\)')) {
         if ($mediaText -notmatch $required) {
             $failures.Add("Media composition module lost required boundary: $required")
         }
+    }
+
+    $mediaParentVisibleItemCount = [regex]::Matches(
+        $mediaText,
+        '(?m)^pub(?:\([^)]+\))?\s+').Count
+    if ($mediaParentVisibleItemCount -ne 1) {
+        $failures.Add(
+            "The media composition module must expose only render_media_info.")
     }
 
     foreach ($required in @(
@@ -537,10 +561,10 @@ if ($failures.Count -eq 0) {
         }
     }
 
-    if ($previewText -notmatch
-        'fn render_media_info[\s\S]{0,600}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)[\s\S]{0,600}media_container_name\(path, &bytes\)[\s\S]{0,300}append_mp4_metadata[\s\S]*append_mkv_metadata[\s\S]*append_wav_metadata[\s\S]*append_flac_metadata[\s\S]*append_ogg_metadata[\s\S]*append_id3_metadata') {
+    if ($mediaText -notmatch
+        'pub\(super\) fn render_media_info[\s\S]{0,400}read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)\.unwrap_or_default\(\)[\s\S]{0,400}base_info_text\(filename, kind, size, modified_unix\)[\s\S]{0,300}"\\nContainer: \{\}"[\s\S]{0,200}container_name\(path, &bytes\)[\s\S]{0,200}mp4::append_metadata[\s\S]{0,200}matroska::append_metadata[\s\S]{0,200}audio::append_wav_metadata[\s\S]{0,200}audio::append_flac_metadata[\s\S]{0,200}audio::append_ogg_metadata[\s\S]{0,200}id3::append_metadata[\s\S]{0,200}generic_info_json\(path, kind, size, modified_unix, Some\(text\)\)') {
         $failures.Add(
-            "Media rendering must keep the bounded read and stable MP4/MKV/WAV/FLAC/Ogg/ID3 order.")
+            "Media composition must keep its bounded read, base/container text, stable MP4/MKV/WAV/FLAC/Ogg/ID3 order, and JSON envelope.")
     }
 
     foreach ($module in @(

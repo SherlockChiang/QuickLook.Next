@@ -33,6 +33,7 @@ $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
 $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
 $nativeEbookPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
 $nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
+$nativeMedia = Join-Path $Root "native/quicklook_next_native/src/preview/media/mod.rs"
 $nativeMediaMp4 = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4.rs"
 $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
@@ -47,6 +48,10 @@ Require-Pattern $nativeMediaMp4 'fn\s+summarize_chunks\([\s\S]*let mut stsc_inde
     "MP4 chunk mapping must remain linear, consume every sample/table transition, and check chunk ends."
 Require-Pattern $nativeMediaMp4Tests 'fn\s+large_stsc_mapping_remains_linear\([\s\S]*const ENTRY_COUNT:\s*u32\s*=\s*65_000' `
     "MP4 chunk mapping must retain its near-1-MiB 65000-entry linearity regression."
+Require-Pattern $nativeMedia 'pub\(super\) fn render_media_info\([\s\S]*read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)\.unwrap_or_default\(\)' `
+    "Media previews must retain their bounded 1 MiB prefix read and fail-soft fallback."
+Require-Pattern $nativePreview 'fn read_reader_prefix<R:\s*Read>\([\s\S]{0,300}reader\.take\(max_bytes as u64\)[\s\S]{0,300}read_to_end\(&mut bytes\)' `
+    "Shared native prefix reads must apply the byte limit before reading to the end."
 $handleHandoffBenchmark = Join-Path $Root "tools/benchmark-handle-handoff.ps1"
 Require-Pattern $handleHandoffBenchmark '\[ValidateRange\(1,\s*1024\)\][\s\S]*\[int\]\$SizeMiB\s*=\s*32[\s\S]*\[ValidateRange\(1,\s*25\)\][\s\S]*\[int\]\$Iterations\s*=\s*5' `
     "The HANDLE handoff microbenchmark must retain bounded 32 MiB/five-iteration defaults."
