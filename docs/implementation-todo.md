@@ -49,6 +49,17 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P1-07` Split native preview code into bounded parser/core, format-family,
   Win32, and thin FFI modules or crates; generate Rust/C# ABI declarations from one
   schema and scope complexity lint exceptions to unavoidable FFI shims.
+  - [ ] `R26-P1-07a` Remove crate-wide complexity lint exemptions, replace complex
+    data tuples with named Rust types, and keep any remaining argument-count
+    exemptions local to ABI-shaped shims.
+  - [ ] `R26-P1-07b` Move Shell thumbnail STA, COM, GDI ownership, and allocation
+    validation into a bounded `win32` module while keeping exported functions thin.
+  - [ ] `R26-P1-07c` Split Office, archive/package, database/media, and shared
+    parser primitives out of the `preview.rs` aggregation module by format family.
+  - [ ] `R26-P1-07d` Move exported entry points and raw-pointer validation into
+    focused FFI modules, leaving `lib.rs` as a small composition root.
+  - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
+    reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
   output sizing, and measurable cancellation latency for RasterHost image work.
 - [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
