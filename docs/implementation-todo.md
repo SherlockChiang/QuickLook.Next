@@ -60,7 +60,7 @@ the release-only `release:` prefix while this queue is in progress.
       font metadata rendering and SFNT/WOFF table parsing into `preview/font.rs`.
     - [ ] `R26-P1-07c-2` Move media container, stream, waveform, and duration
       parsing into bounded `preview/media/` family modules.
-      - [ ] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus focused
+      - [x] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus focused
         tests into `preview/media/audio.rs`, with shared media formatting in
         `preview/media/mod.rs`.
       - [ ] `R26-P1-07c-2b` Move ID3 frame parsing and text decoding into
@@ -162,6 +162,24 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus four focused
+  tests out of `preview.rs` into the 414-line `preview::media::audio` module.
+  Establish a 65-line media composition module for signature-based container
+  detection and shared duration formatting, while retaining temporary narrow
+  adapters until the remaining media families move. Preserve the 1 MiB render
+  read cap, MP4/MKV/WAV/FLAC/Ogg/ID3 output order, checked chunk/block offsets,
+  eight-packet Ogg inspection budget, and bounded vendor text. Guard explicit
+  imports, implementation backflow, parser bounds, output order, no C ABI, and
+  150/500-line module ceilings.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native media::audio` (4 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-format-registry.ps1`
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (227 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke`
+  - Commits: `770dcfd`, `18c7e01`, `65f6c1e`
 - [x] `R26-P1-07c-1` Move font info rendering, SFNT/WOFF metadata parsing,
   and their focused tests out of the aggregation module into the 291-line
   `preview::font` module. Keep `preview.rs` as the explicit format router and
