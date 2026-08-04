@@ -59,7 +59,21 @@ the release-only `release:` prefix while this queue is in progress.
     - [x] `R26-P1-07c-1` Establish the format-module pattern by moving bounded
       font metadata rendering and SFNT/WOFF table parsing into `preview/font.rs`.
     - [ ] `R26-P1-07c-2` Move media container, stream, waveform, and duration
-      parsing into a bounded `preview/media.rs` family module.
+      parsing into bounded `preview/media/` family modules.
+      - [ ] `R26-P1-07c-2a` Move RIFF/WAV, FLAC, and Ogg parsing plus focused
+        tests into `preview/media/audio.rs`, with shared media formatting in
+        `preview/media/mod.rs`.
+      - [ ] `R26-P1-07c-2b` Move ID3 frame parsing and text decoding into
+        `preview/media/id3.rs` with its focused tests.
+      - [ ] `R26-P1-07c-2c` Move Matroska/EBML parsing into
+        `preview/media/matroska.rs` with bounded element traversal tests.
+      - [ ] `R26-P1-07c-2d` Move AVC, HEVC, and AAC bitstream/config parsing
+        into `preview/media/codec.rs` with a private bounded bit reader.
+      - [ ] `R26-P1-07c-2e` Move ISO BMFF/MP4 atoms, tracks, timelines, and
+        chunk summaries into `preview/media/mp4.rs`.
+      - [ ] `R26-P1-07c-2f` Move media routing, container detection, and output
+        composition into `preview/media/mod.rs`, leaving one explicit route in
+        `preview.rs`.
     - [ ] `R26-P1-07c-3` Move database, mail, dump, ELF, and related binary
       metadata parsing into focused family modules with local tests.
     - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
