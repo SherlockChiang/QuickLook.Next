@@ -117,6 +117,23 @@ try {
         }
     }
 
+    $crashProbeLeak = Join-Path (
+        $appOutput) "QuickLook.Next.SupervisedHostCrashProbe.exe"
+    Set-FixtureFile $crashProbeLeak "test-only probe"
+    try {
+        Assert-Rejected `
+            -Action {
+                Get-QuickLookReleasePayload `
+                    -Root $fixtureRoot `
+                    -ArtifactsDirectory $artifacts
+            } `
+            -ExpectedMessage "Test-only supervised-host crash probe cannot enter" `
+            -Scenario "A test-only crash probe copied into App output"
+    }
+    finally {
+        [IO.File]::Delete($crashProbeLeak)
+    }
+
     $hashes = New-QuickLookReleasePayloadHashes -Payload $payload
     Assert-QuickLookReleasePayloadProof `
         -Payload $payload `

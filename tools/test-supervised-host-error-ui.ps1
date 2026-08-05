@@ -63,6 +63,109 @@ else {
     }
 }
 
+$crashProbeProjectPath = Join-Path $Root (
+    "tests/QuickLook.Next.SupervisedHostCrashProbe/" +
+    "QuickLook.Next.SupervisedHostCrashProbe.csproj")
+if (-not (Test-Path -LiteralPath $crashProbeProjectPath -PathType Leaf)) {
+    Add-Failure "The supervised-host real crash probe project is missing."
+}
+else {
+    $crashProbeProjectText = Get-Content -LiteralPath $crashProbeProjectPath -Raw
+    foreach ($projectRequirement in @(
+            '<OutputType>WinExe</OutputType>',
+            '<RuntimeIdentifier>win-x64</RuntimeIdentifier>',
+            '<SelfContained>false</SelfContained>',
+            '<UseAppHost>true</UseAppHost>',
+            '<IsPackable>false</IsPackable>',
+            '<IsPublishable>false</IsPublishable>',
+            '<QuickLookUsesNative>false</QuickLookUsesNative>',
+            '<ProjectReference Include="\.\.\\\.\.\\src\\QuickLook\.Next\.Core\\QuickLook\.Next\.Core\.csproj"')) {
+        if ($crashProbeProjectText -notmatch $projectRequirement) {
+            Add-Failure "The supervised-host crash probe project lost its test-only x64 contract: $projectRequirement"
+        }
+    }
+}
+
+$crashProbeProgramPath = Join-Path $Root (
+    "tests/QuickLook.Next.SupervisedHostCrashProbe/Program.cs")
+if (-not (Test-Path -LiteralPath $crashProbeProgramPath -PathType Leaf)) {
+    Add-Failure "The supervised-host real crash probe entry point is missing."
+}
+else {
+    $crashProbeProgramText = Get-Content -LiteralPath $crashProbeProgramPath -Raw
+    foreach ($programRequirement in @(
+            '\A(?:using\s+[^;]+;\s*)+SupervisedHostProcessPolicy\.SuppressInteractiveErrorUi\(\);\s*return\s+await',
+            'READY \{token\}[\s\S]*ARM \{token\}[\s\S]*ARMED \{token\}[\s\S]*FIRE \{token\}',
+            'DxgiFacilityException\s*=\s*0x0*87A',
+            'RaiseFailFastException\(ref\s+exceptionRecord,\s*nint\.Zero,\s*0\)',
+            'StructLayout\(LayoutKind\.Explicit,\s*Size\s*=\s*152\)',
+            'Environment\.FailFast\("QuickLook Next supervised-host no-dialog probe\."\)',
+            "character is >= '0' and <= '9'",
+            "character is >= 'A' and <= 'F'")) {
+        if ($crashProbeProgramText -notmatch $programRequirement) {
+            Add-Failure "The supervised-host crash probe lost required behavior: $programRequirement"
+        }
+    }
+}
+
+$crashProbeTestPath = Join-Path $Root (
+    "tests/QuickLook.Next.Core.Tests/SupervisedHostCrashProbeTests.cs")
+if (-not (Test-Path -LiteralPath $crashProbeTestPath -PathType Leaf)) {
+    Add-Failure "The supervised-host real crash no-dialog test is missing."
+}
+else {
+    $crashProbeTestText = Get-Content -LiteralPath $crashProbeTestPath -Raw
+    foreach ($testRequirement in @(
+            'DisableParallelization\s*=\s*true',
+            'InlineData\(DxgiMode\)[\s\S]*InlineData\(FailFastMode\)',
+            'CreateNoWindow\s*=\s*true',
+            'NamedPipeServerStream\([\s\S]*PipeOptions\.CurrentUserOnly',
+            'READY \{token\}[\s\S]*ARM \{token\}[\s\S]*ARMED \{token\}[\s\S]*FIRE \{token\}',
+            'PostExitWindowGrace\s*=\s*TimeSpan\.FromSeconds\(2\)',
+            'aliveBeforeEnumeration[\s\S]*aliveAfterEnumeration[\s\S]*window\.OwnerProcessId\s*==\s*\(uint\)probe\.Id',
+            'EnumWindows\(callback,\s*nint\.Zero\)',
+            'Application Error[\s\S]*应用程序错误',
+            'Assert\.Equal\(DxgiFacilityException,\s*outcome\.ExitCode\)',
+            'Kill\(entireProcessTree:\s*true\)[\s\S]*WaitForExitAsync\(\)\.WaitAsync\(ProcessStopTimeout\)')) {
+        if ($crashProbeTestText -notmatch $testRequirement) {
+            Add-Failure "The supervised-host real crash test lost required coverage: $testRequirement"
+        }
+    }
+    if ($crashProbeTestText -match 'DOTNET_STARTUP_HOOKS|File\.Copy\(|PostMessage|WM_CLOSE') {
+        Add-Failure "The real crash test must use its dedicated probe and must not copy apphosts or manipulate dialogs."
+    }
+}
+
+$coreTestsProjectPath = Join-Path $Root (
+    "tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj")
+if (-not (Test-Path -LiteralPath $coreTestsProjectPath -PathType Leaf)) {
+    Add-Failure "The Core test project is missing."
+}
+else {
+    $coreTestsProjectText = Get-Content -LiteralPath $coreTestsProjectPath -Raw
+    foreach ($stagingRequirement in @(
+            'QuickLook\.Next\.SupervisedHostCrashProbe\.csproj"\s+ReferenceOutputAssembly="false"',
+            'StageSupervisedHostCrashProbe',
+            "Exists\('\$\(SupervisedHostCrashProbeOutput\)QuickLook\.Next\.SupervisedHostCrashProbe\.exe'\)",
+            "DestinationFiles=.*\$\(OutDir\)CrashProbe")) {
+        if ($coreTestsProjectText -notmatch $stagingRequirement) {
+            Add-Failure "Core tests no longer stage the dedicated crash probe safely: $stagingRequirement"
+        }
+    }
+}
+
+$releasePayloadPath = Join-Path $Root "tools/release-payload.ps1"
+if (-not (Test-Path -LiteralPath $releasePayloadPath -PathType Leaf)) {
+    Add-Failure "The release payload helper is missing."
+}
+else {
+    $releasePayloadText = Get-Content -LiteralPath $releasePayloadPath -Raw
+    if ($releasePayloadText -notmatch
+            'QuickLook\\\.Next\\\.SupervisedHostCrashProbe[\s\S]*cannot enter the release payload') {
+        Add-Failure "The release payload must fail closed if the test-only crash probe leaks into production output."
+    }
+}
+
 if ($IsWindows) {
     $kernel32 = [Runtime.InteropServices.NativeLibrary]::Load("kernel32.dll")
     try {

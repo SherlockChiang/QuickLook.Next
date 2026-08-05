@@ -33,6 +33,13 @@ function Get-QuickLookReleasePayload {
         {
             throw "Release payload path is unsafe: '$RelativePath'"
         }
+        if ($normalizedRelativePath -match
+                '(?i)(?:^|/)QuickLook\.Next\.SupervisedHostCrashProbe(?:\.|/|$)')
+        {
+            throw (
+                "Test-only supervised-host crash probe cannot enter the release payload: " +
+                $normalizedRelativePath)
+        }
 
         if ($entries.ContainsKey($normalizedRelativePath) -and -not $Replace) {
             throw "Release payload path is duplicated: $normalizedRelativePath"
