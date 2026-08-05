@@ -12,6 +12,61 @@ const MAX_CHM_COMPRESSED_STREAMS: usize = 8;
 const MAX_CHM_SYSTEM_STREAM_BYTES: usize = 4 * 1024;
 const MAX_CHM_SYSTEM_FIELDS: usize = 8;
 const MAX_CHM_ENCINT_BYTES: usize = 8;
+const CHM_ITSF_V2_HEADER_LEN: usize = 0x58;
+const CHM_ITSF_V3_HEADER_LEN: usize = 0x60;
+const CHM_ITSF_LAST_MODIFIED_OFFSET: usize = 0x10;
+const CHM_ITSF_LANG_ID_OFFSET: usize = 0x14;
+const CHM_ITSF_DIR_OFFSET: usize = 0x48;
+const CHM_ITSF_DIR_LEN_OFFSET: usize = 0x50;
+const CHM_ITSF_DATA_OFFSET: usize = 0x58;
+const CHM_ITSP_HEADER_LEN: usize = 0x54;
+const CHM_PMGL_HEADER_LEN: usize = 0x14;
+
+struct ChmItsfHeader {
+    version: u32,
+    header_len: usize,
+    last_modified: u32,
+    lang_id: u32,
+    dir_offset: u64,
+    dir_len: u64,
+    data_offset: u64,
+}
+
+impl ChmItsfHeader {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        if bytes.get(..4) != Some(b"ITSF") {
+            return None;
+        }
+        let version = read_u32(bytes, 4)?;
+        let expected_header_len = match version {
+            2 => CHM_ITSF_V2_HEADER_LEN,
+            3 => CHM_ITSF_V3_HEADER_LEN,
+            _ => return None,
+        };
+        let header_len = usize::try_from(read_u32(bytes, 8)?).ok()?;
+        if header_len != expected_header_len || header_len > bytes.len() {
+            return None;
+        }
+        let last_modified = read_u32(bytes, CHM_ITSF_LAST_MODIFIED_OFFSET)?;
+        let lang_id = read_u32(bytes, CHM_ITSF_LANG_ID_OFFSET)?;
+        let dir_offset = read_u64(bytes, CHM_ITSF_DIR_OFFSET)?;
+        let dir_len = read_u64(bytes, CHM_ITSF_DIR_LEN_OFFSET)?;
+        let data_offset = match version {
+            2 => dir_offset.checked_add(dir_len)?,
+            3 => read_u64(bytes, CHM_ITSF_DATA_OFFSET)?,
+            _ => unreachable!(),
+        };
+        Some(Self {
+            version,
+            header_len,
+            last_modified,
+            lang_id,
+            dir_offset,
+            dir_len,
+            data_offset,
+        })
+    }
+}
 
 pub(super) fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
@@ -19,48 +74,62 @@ pub(super) fn render_chm_info(path: &str, size: i64, modified_unix: i64) -> Stri
     let mut text = base_info_text(filename, "chm", size, modified_unix);
     if bytes.starts_with(b"ITSF") {
         text.push_str("\nFormat: Microsoft Compiled HTML Help");
-        if let Some(version) = read_u32(&bytes, 4) {
-            text.push_str(&format!("\nITSF version: {}", version));
+        let itsf = ChmItsfHeader::parse(&bytes);
+        if let Some(header) = itsf.as_ref() {
+            text.push_str(&format!("\nITSF version: {}", header.version));
+            text.push_str(&format!("\nHeader length: {} bytes", header.header_len));
+        } else {
+            if let Some(version) = read_u32(&bytes, 4) {
+                text.push_str(&format!("\nITSF version: {version}"));
+            }
+            if let Some(header_len) = read_u32(&bytes, 8) {
+                text.push_str(&format!("\nHeader length: {header_len} bytes"));
+            }
         }
-        if let Some(header_len) = read_u32(&bytes, 8) {
-            text.push_str(&format!("\nHeader length: {} bytes", header_len));
+        if let Some(header) = itsf {
+            text.push_str(&format!("\nLanguage ID: 0x{:08X}", header.lang_id));
+            if header.last_modified > 0 {
+                text.push_str(&format!(
+                    "\nTimestamp: {}",
+                    format_timestamp(i64::from(header.last_modified))
+                ));
+            }
+            if header.dir_offset > 0 {
+                text.push_str(&format!("\nDirectory offset: 0x{:016X}", header.dir_offset));
+            }
+            if header.dir_len > 0 {
+                let formatted_len = i64::try_from(header.dir_len)
+                    .map(format_bytes)
+                    .unwrap_or_else(|_| format!("{} bytes", header.dir_len));
+                text.push_str(&format!("\nDirectory length: {formatted_len}"));
+            }
+            append_chm_itsp_summary(&mut text, &bytes, &header);
         }
-        if let Some(lang_id) = read_u32(&bytes, 20) {
-            text.push_str(&format!("\nLanguage ID: 0x{lang_id:08X}"));
-        }
-        if let Some(timestamp) = read_u32(&bytes, 24).filter(|value| *value > 0) {
-            text.push_str(&format!(
-                "\nTimestamp: {}",
-                format_timestamp(timestamp as i64)
-            ));
-        }
-        if let Some(dir_offset) = read_u64(&bytes, 40).filter(|value| *value > 0) {
-            text.push_str(&format!("\nDirectory offset: 0x{dir_offset:016X}"));
-        }
-        if let Some(dir_len) = read_u64(&bytes, 48).filter(|value| *value > 0) {
-            let formatted_len = i64::try_from(dir_len)
-                .map(format_bytes)
-                .unwrap_or_else(|_| format!("{dir_len} bytes"));
-            text.push_str(&format!("\nDirectory length: {}", formatted_len));
-        }
-        append_chm_itsp_summary(&mut text, &bytes);
     } else {
         text.push_str("\nFormat: CHM-like help file");
     }
     generic_info_json(path, "chm", size, modified_unix, Some(text))
 }
 
-fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
-    let Some(dir_offset) = read_u64(bytes, 40)
-        .and_then(|value| usize::try_from(value).ok())
-        .filter(|value| *value > 0)
-    else {
+fn append_chm_itsp_summary(text: &mut String, bytes: &[u8], itsf: &ChmItsfHeader) {
+    let Some(dir_end_u64) = itsf.dir_offset.checked_add(itsf.dir_len) else {
         return;
     };
-    let Some(header_end) = dir_offset.checked_add(56) else {
+    let (Ok(dir_offset), Ok(dir_end)) = (
+        usize::try_from(itsf.dir_offset),
+        usize::try_from(dir_end_u64),
+    ) else {
         return;
     };
-    if header_end > bytes.len() || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP") {
+    let data_offset = usize::try_from(itsf.data_offset).ok();
+    let Some(min_header_end) = dir_offset.checked_add(CHM_ITSP_HEADER_LEN) else {
+        return;
+    };
+    if dir_offset == 0
+        || min_header_end > dir_end
+        || min_header_end > bytes.len()
+        || bytes.get(dir_offset..dir_offset + 4) != Some(b"ITSP")
+    {
         return;
     }
     let version = read_u32(bytes, dir_offset + 4).unwrap_or(0);
@@ -70,10 +139,27 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
     let index_root = read_u32(bytes, dir_offset + 28).unwrap_or(0);
     let index_head = read_u32(bytes, dir_offset + 32).unwrap_or(0);
     let block_count = read_u32(bytes, dir_offset + 40).unwrap_or(0);
+    let Ok(header_len_usize) = usize::try_from(header_len) else {
+        return;
+    };
+    if version != 1
+        || header_len_usize != CHM_ITSP_HEADER_LEN
+        || dir_offset
+            .checked_add(header_len_usize)
+            .is_none_or(|end| end > dir_end || end > bytes.len())
+    {
+        return;
+    }
     text.push_str(&format!(
         "\nITSP version: {version}\nITSP header length: {header_len} bytes\nDirectory block length: {block_len} bytes\nDirectory block count: {block_count}\nDirectory index depth/root/head: {index_depth}/{index_root}/{index_head}"
     ));
-    let entries = chm_directory_entries(bytes, dir_offset, header_len as usize, block_len as usize);
+    let entries = chm_directory_entries(
+        bytes,
+        dir_offset,
+        dir_end,
+        header_len_usize,
+        usize::try_from(block_len).unwrap_or(0),
+    );
     if !entries.is_empty() {
         text.push_str(&format!(
             "\nDirectory entries: {}",
@@ -87,8 +173,10 @@ fn append_chm_itsp_summary(text: &mut String, bytes: &[u8]) {
         if !compressed.is_empty() {
             text.push_str(&format!("\nCompressed streams: {}", compressed.join(", ")));
         }
-        for (label, value) in chm_system_summary(bytes, &entries) {
-            text.push_str(&format!("\n{label}: {value}"));
+        if let Some(data_offset) = data_offset {
+            for (label, value) in chm_system_summary(bytes, data_offset, &entries) {
+                text.push_str(&format!("\n{label}: {value}"));
+            }
         }
     }
 }
@@ -107,18 +195,25 @@ impl ChmDirectoryEntry {
             self.name,
             self.section,
             self.offset,
-            format_bytes(self.len as i64)
+            format_chm_bytes(self.len)
         )
     }
+}
+
+fn format_chm_bytes(value: usize) -> String {
+    i64::try_from(value)
+        .map(format_bytes)
+        .unwrap_or_else(|_| format!("{value} bytes"))
 }
 
 fn chm_directory_entries(
     bytes: &[u8],
     dir_offset: usize,
+    dir_end: usize,
     header_len: usize,
     block_len: usize,
 ) -> Vec<ChmDirectoryEntry> {
-    if header_len == 0 || block_len < 32 {
+    if header_len < CHM_ITSP_HEADER_LEN || block_len < CHM_PMGL_HEADER_LEN {
         return Vec::new();
     }
     let Some(block_offset) = dir_offset.checked_add(header_len) else {
@@ -126,16 +221,22 @@ fn chm_directory_entries(
     };
     let Some(block_end) = block_offset
         .checked_add(block_len)
-        .filter(|end| *end <= bytes.len())
+        .filter(|end| *end <= dir_end && *end <= bytes.len())
     else {
         return Vec::new();
     };
     if bytes.get(block_offset..block_offset + 4) != Some(b"PMGL") {
         return Vec::new();
     }
-    let free_space = read_u32(bytes, block_offset + 4).unwrap_or(0) as usize;
+    let Some(free_space) =
+        read_u32(bytes, block_offset + 4).and_then(|value| usize::try_from(value).ok())
+    else {
+        return Vec::new();
+    };
     let entries_end = block_end.saturating_sub(free_space.min(block_len));
-    let mut offset = block_offset + 20;
+    let Some(mut offset) = block_offset.checked_add(CHM_PMGL_HEADER_LEN) else {
+        return Vec::new();
+    };
     let mut entries = Vec::new();
     while offset < entries_end && entries.len() < MAX_CHM_DIRECTORY_ENTRIES {
         let Some((name_len, next)) = read_chm_encint(bytes, offset, entries_end) else {
@@ -182,15 +283,11 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
     for entry in entries.iter().take(MAX_CHM_COMPRESSED_STREAM_SCAN) {
         let lower = entry.name.to_ascii_lowercase();
         if lower.contains("::dataspace/storage/") || lower.contains("::dataspace/namelist") {
-            summary.push(format!(
-                "{} ({})",
-                entry.name,
-                format_bytes(entry.len as i64)
-            ));
+            summary.push(format!("{} ({})", entry.name, format_chm_bytes(entry.len)));
         } else if lower.ends_with("/content") && lower.contains("mscompressed") {
             summary.push(format!(
                 "compressed content {}",
-                format_bytes(entry.len as i64)
+                format_chm_bytes(entry.len)
             ));
         }
         if summary.len() >= MAX_CHM_COMPRESSED_STREAMS {
@@ -200,7 +297,11 @@ fn chm_compressed_stream_summary(entries: &[ChmDirectoryEntry]) -> Vec<String> {
     summary
 }
 
-fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'static str, String)> {
+fn chm_system_summary(
+    bytes: &[u8],
+    data_offset: usize,
+    entries: &[ChmDirectoryEntry],
+) -> Vec<(&'static str, String)> {
     let Some(system) = entries
         .iter()
         .find(|entry| entry.name.eq_ignore_ascii_case("/#SYSTEM") && entry.section == 0)
@@ -210,22 +311,29 @@ fn chm_system_summary(bytes: &[u8], entries: &[ChmDirectoryEntry]) -> Vec<(&'sta
     if system.len == 0 || system.len > MAX_CHM_SYSTEM_STREAM_BYTES {
         return Vec::new();
     }
-    let Some(system_end) = system
-        .offset
+    let Some(system_offset) = data_offset.checked_add(system.offset) else {
+        return Vec::new();
+    };
+    let Some(system_end) = system_offset
         .checked_add(system.len)
         .filter(|end| *end <= bytes.len())
     else {
         return Vec::new();
     };
-    let data = &bytes[system.offset..system_end];
-    let mut offset = 0usize;
+    let data = &bytes[system_offset..system_end];
+    if data.len() < 4 {
+        return Vec::new();
+    }
+    let mut offset = 4usize;
+    let mut fields_scanned = 0usize;
     let mut values = Vec::new();
-    while values.len() < MAX_CHM_SYSTEM_FIELDS {
+    while fields_scanned < MAX_CHM_SYSTEM_FIELDS {
         let Some(header_end) = offset.checked_add(4).filter(|end| *end <= data.len()) else {
             break;
         };
         let code = u16::from_le_bytes([data[offset], data[offset + 1]]);
-        let len = u16::from_le_bytes([data[offset + 2], data[offset + 3]]) as usize;
+        let len = usize::from(u16::from_le_bytes([data[offset + 2], data[offset + 3]]));
+        fields_scanned += 1;
         offset = header_end;
         if len == 0 {
             break;
@@ -255,7 +363,7 @@ fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, 
         current += 1;
         value = value
             .checked_mul(128)?
-            .checked_add((byte & 0x7F) as usize)?;
+            .checked_add(usize::from(byte & 0x7F))?;
         if byte & 0x80 == 0 {
             return Some((value, current));
         }
@@ -264,73 +372,4 @@ fn read_chm_encint(bytes: &[u8], offset: usize, limit: usize) -> Option<(usize, 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::append_chm_itsp_summary;
-
-    #[test]
-    fn chm_itsp_summary_rejects_hostile_directory_offsets() {
-        let mut bytes = vec![0u8; 56];
-        bytes[0..4].copy_from_slice(b"ITSF");
-        bytes[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
-        let mut text = String::new();
-
-        append_chm_itsp_summary(&mut text, &bytes);
-
-        assert!(text.is_empty());
-    }
-
-    #[test]
-    fn chm_itsp_summary_reads_directory_header() {
-        let mut bytes = vec![0u8; 512];
-        bytes[0..4].copy_from_slice(b"ITSF");
-        bytes[40..48].copy_from_slice(&0x100u64.to_le_bytes());
-        bytes[0x100..0x104].copy_from_slice(b"ITSP");
-        bytes[0x104..0x108].copy_from_slice(&1u32.to_le_bytes());
-        bytes[0x108..0x10C].copy_from_slice(&84u32.to_le_bytes());
-        bytes[0x110..0x114].copy_from_slice(&128u32.to_le_bytes());
-        bytes[0x118..0x11C].copy_from_slice(&2u32.to_le_bytes());
-        bytes[0x11C..0x120].copy_from_slice(&3u32.to_le_bytes());
-        bytes[0x120..0x124].copy_from_slice(&4u32.to_le_bytes());
-        bytes[0x128..0x12C].copy_from_slice(&7u32.to_le_bytes());
-        bytes[0x154..0x158].copy_from_slice(b"PMGL");
-        bytes[0x158..0x15C].copy_from_slice(&36u32.to_le_bytes());
-        bytes[0x168] = 10;
-        bytes[0x169..0x173].copy_from_slice(b"/index.htm");
-        bytes[0x173] = 0;
-        bytes[0x174] = 123;
-        bytes[0x175] = 45;
-        bytes[0x176] = 40;
-        bytes[0x177..0x19F].copy_from_slice(b"::DataSpace/Storage/MSCompressed/Content");
-        bytes[0x19F] = 1;
-        bytes[0x1A0] = 0;
-        bytes[0x1A1] = 0x81;
-        bytes[0x1A2] = 0x48;
-        bytes[0x1A3] = 8;
-        bytes[0x1A4..0x1AC].copy_from_slice(b"/#SYSTEM");
-        bytes[0x1AC] = 0;
-        bytes[0x1AD] = 0x83;
-        bytes[0x1AE] = 0x40;
-        bytes[0x1AF] = 28;
-        bytes[0x1C0..0x1C2].copy_from_slice(&3u16.to_le_bytes());
-        bytes[0x1C2..0x1C4].copy_from_slice(&10u16.to_le_bytes());
-        bytes[0x1C4..0x1CE].copy_from_slice(b"Help Title");
-        bytes[0x1CE..0x1D0].copy_from_slice(&2u16.to_le_bytes());
-        bytes[0x1D0..0x1D2].copy_from_slice(&10u16.to_le_bytes());
-        bytes[0x1D2..0x1DC].copy_from_slice(b"/index.htm");
-        let mut text = String::new();
-
-        append_chm_itsp_summary(&mut text, &bytes);
-
-        assert!(text.contains("ITSP version: 1"));
-        assert!(text.contains("ITSP header length: 84 bytes"));
-        assert!(text.contains("Directory block length: 128 bytes"));
-        assert!(text.contains("Directory block count: 7"));
-        assert!(text.contains("Directory index depth/root/head: 2/3/4"));
-        assert!(text.contains("Directory entries: /index.htm [section 0, offset 123, 45 B]"));
-        assert!(
-            text.contains("Compressed streams: ::DataSpace/Storage/MSCompressed/Content (200 B)")
-        );
-        assert!(text.contains("Title: Help Title"));
-        assert!(text.contains("Default topic: /index.htm"));
-    }
-}
+mod tests;
