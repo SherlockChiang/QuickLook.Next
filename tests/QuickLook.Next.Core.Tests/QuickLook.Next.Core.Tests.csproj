@@ -2,6 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
+    <SupervisedHostCrashProbeOutput>$(MSBuildThisFileDirectory)..\QuickLook.Next.SupervisedHostCrashProbe\bin\$(Configuration)\net10.0\win-x64\</SupervisedHostCrashProbeOutput>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.0" />
@@ -12,9 +13,22 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
+    <ProjectReference Include="..\QuickLook.Next.SupervisedHostCrashProbe\QuickLook.Next.SupervisedHostCrashProbe.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewSession.cs"
              Link="AppModel\PreviewSession.cs" />
   </ItemGroup>
+  <Target Name="StageSupervisedHostCrashProbe" AfterTargets="Build">
+    <Error Condition="!Exists('$(SupervisedHostCrashProbeOutput)QuickLook.Next.SupervisedHostCrashProbe.exe')"
+           Text="Supervised-host crash probe is missing: $(SupervisedHostCrashProbeOutput)QuickLook.Next.SupervisedHostCrashProbe.exe" />
+    <ItemGroup>
+      <SupervisedHostCrashProbeFiles Include="$(SupervisedHostCrashProbeOutput)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SupervisedHostCrashProbeFiles)"
+          DestinationFiles="@(SupervisedHostCrashProbeFiles->'$(OutDir)CrashProbe\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

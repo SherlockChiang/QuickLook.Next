@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <QuickLookUsesNative>false</QuickLookUsesNative>
+    <AssemblyName>QuickLook.Next.SupervisedHostCrashProbe</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuickLook.Next.Core\QuickLook.Next.Core.csproj" />
+  </ItemGroup>
+</Project>

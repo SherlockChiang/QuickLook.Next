@@ -12,5 +12,6 @@
     <Project Path="tests/QuickLook.Next.ParserHost.IntegrationTests/QuickLook.Next.ParserHost.IntegrationTests.csproj" />
     <Project Path="tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj" />
     <Project Path="tests/QuickLook.Next.ShellBroker.IntegrationTests/QuickLook.Next.ShellBroker.IntegrationTests.csproj" />
+    <Project Path="tests/QuickLook.Next.SupervisedHostCrashProbe/QuickLook.Next.SupervisedHostCrashProbe.csproj" />
   </Folder>
 </Solution>
