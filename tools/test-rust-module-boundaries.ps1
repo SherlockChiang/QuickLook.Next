@@ -25,6 +25,10 @@ $mediaMatroskaPath = Join-Path (
     $Root) "native\quicklook_next_native\src\preview\media\matroska.rs"
 $mediaMp4Path = Join-Path $Root "native\quicklook_next_native\src\preview\media\mp4.rs"
 $mediaMp4TestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mp4\tests.rs"
+$databasePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\mod.rs"
+$databaseWalPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\wal.rs"
+$databaseSqlitePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\sqlite.rs"
+$databaseTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -46,7 +50,11 @@ foreach ($path in @(
         $mediaId3Path,
         $mediaMatroskaPath,
         $mediaMp4Path,
-        $mediaMp4TestsPath)) {
+        $mediaMp4TestsPath,
+        $databasePath,
+        $databaseWalPath,
+        $databaseSqlitePath,
+        $databaseTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -72,6 +80,10 @@ if ($failures.Count -eq 0) {
     $mediaMatroskaText = Get-Content -LiteralPath $mediaMatroskaPath -Raw
     $mediaMp4Text = Get-Content -LiteralPath $mediaMp4Path -Raw
     $mediaMp4TestsText = Get-Content -LiteralPath $mediaMp4TestsPath -Raw
+    $databaseText = Get-Content -LiteralPath $databasePath -Raw
+    $databaseWalText = Get-Content -LiteralPath $databaseWalPath -Raw
+    $databaseSqliteText = Get-Content -LiteralPath $databaseSqlitePath -Raw
+    $databaseTestsText = Get-Content -LiteralPath $databaseTestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -370,6 +382,113 @@ if ($failures.Count -eq 0) {
     $elfTestsLineCount = @(Get-Content -LiteralPath $elfTestsPath).Count
     if ($elfTestsLineCount -gt 450) {
         $failures.Add("The focused ELF tests grew beyond 450 lines: $elfTestsLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod database;\s*$' -or
+        [regex]::Matches($previewText, 'database::render_database_info\(').Count -ne 1 -or
+        $previewText -match 'fn\s+render_database_info\s*\(' -or
+        $previewText -match 'struct\s+SqliteWalSnapshot' -or
+        $previewText -match 'fn\s+(?:inspect|apply|append)_sqlite_') {
+        $failures.Add(
+            "preview.rs must compose and route database metadata through preview::database without regaining SQLite implementation detail.")
+    }
+
+    foreach ($requiredDatabase in @(
+            'pub fn render_database_info\(',
+            'pub fn render_database_reader(?:<[^>]+>)?\(',
+            'pub\(crate\) struct DatabaseCompanionReader',
+            'MAX_DATABASE_HANDLE_BYTES',
+            'MAX_SQLITE_WAL_BYTES',
+            'read_exact_cancelable\(',
+            'generic_info_json\(')) {
+        if ($databaseText -notmatch $requiredDatabase) {
+            $failures.Add("Database composition module lost its bounded reader/API contract: $requiredDatabase")
+        }
+    }
+    $databaseParentVisibleItemCount = [regex]::Matches(
+        $databaseText,
+        '(?m)^pub(?:\([^)]+\))?\s+').Count
+    if ($databaseParentVisibleItemCount -ne 3) {
+        $failures.Add(
+            "Database composition module must expose exactly its two readers and companion descriptor: $databaseParentVisibleItemCount")
+    }
+
+    foreach ($requiredWal in @(
+            'pub\(super\) fn inspect_sqlite_wal_snapshot\(',
+            'pub\(super\) fn apply_sqlite_wal_snapshot\(',
+            'pub\(super\) fn inspect_sqlite_shm\(',
+            'pub\(super\) fn append_sqlite_wal_summary\(',
+            'MAX_SQLITE_WAL_BYTES',
+            'drain_exact_cancelable\(',
+            'frame_size',
+            'checked_mul\(',
+            'trailing_bytes',
+            'sqlite_wal_checksum\(')) {
+        if ($databaseWalText -notmatch $requiredWal) {
+            $failures.Add("SQLite WAL module lost a bounded snapshot/checksum invariant: $requiredWal")
+        }
+    }
+    $walParentVisibleItemCount = [regex]::Matches(
+        $databaseWalText,
+        '(?m)^pub\(super\)\s+').Count
+    if ($walParentVisibleItemCount -ne 6) {
+        $failures.Add(
+            "SQLite WAL module must keep its sibling API narrow: $walParentVisibleItemCount parent-visible items")
+    }
+
+    foreach ($requiredSqlite in @(
+            'pub\(super\) fn database_page_size\(',
+            'pub\(super\) fn encoding_name\(',
+            'pub\(super\) fn append_sqlite_header_details\(',
+            'pub\(super\) fn append_sqlite_schema_summary\(',
+            'pub\(super\) fn build_sqlite_table_preview\(',
+            'MAX_SQLITE_SCHEMA_OBJECTS',
+            'MAX_SQLITE_SAMPLE_RETAINED_CHARS',
+            'read_sqlite_varint\(',
+            'decode_sqlite_utf16\(',
+            'checked_add\(',
+            '\.min\(256\)',
+            '\.min\(512\)',
+            'fn\s+parse_sqlite_schema_record\(',
+            'fn\s+parse_sqlite_table_record\(')) {
+        if ($databaseSqliteText -notmatch $requiredSqlite) {
+            $failures.Add("SQLite parser module lost a bounded schema/record invariant: $requiredSqlite")
+        }
+    }
+    if ($databaseSqliteText -match '(?m)^pub\s+(?!\(super\))' -or
+        $databaseSqliteText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $databaseSqliteText -match '#\[no_mangle\]' -or
+        $databaseSqliteText -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add(
+            "SQLite parser module must use explicit imports, restricted sibling visibility, and no C ABI surface.")
+    }
+
+    foreach ($requiredDatabaseTest in @(
+            'fn sqlite_wal_snapshot_rejects_bad_first_frame_and_page_size\(',
+            'fn sqlite_wal_snapshot_rejects_page_one_header_page_size_change\(',
+            'fn database_reader_enforces_companion_limits_and_cancellation\(',
+            'fn sqlite_schema_leaf_marks_invalid_cells_partial\(',
+            'fn sqlite_record_integer_decodes_wide_root_pages\(',
+            'fn sqlite_row_counter_marks_missing_pages_partial\(')) {
+        if ($databaseTestsText -notmatch $requiredDatabaseTest) {
+            $failures.Add("Database tests lost hostile offset/count/size coverage: $requiredDatabaseTest")
+        }
+    }
+    $databaseLineCount = @(Get-Content -LiteralPath $databasePath).Count
+    if ($databaseLineCount -gt 300) {
+        $failures.Add("The database composition module grew beyond 300 lines: $databaseLineCount")
+    }
+    $databaseWalLineCount = @(Get-Content -LiteralPath $databaseWalPath).Count
+    if ($databaseWalLineCount -gt 340) {
+        $failures.Add("The bounded SQLite WAL module grew beyond 340 lines: $databaseWalLineCount")
+    }
+    $databaseSqliteLineCount = @(Get-Content -LiteralPath $databaseSqlitePath).Count
+    if ($databaseSqliteLineCount -gt 1100) {
+        $failures.Add("The bounded SQLite parser module grew beyond 1100 lines: $databaseSqliteLineCount")
+    }
+    $databaseTestsLineCount = @(Get-Content -LiteralPath $databaseTestsPath).Count
+    if ($databaseTestsLineCount -gt 750) {
+        $failures.Add("The focused database tests grew beyond 750 lines: $databaseTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
