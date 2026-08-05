@@ -102,7 +102,7 @@ the release-only `release:` prefix while this queue is in progress.
         `preview.rs`.
     - [ ] `R26-P1-07c-3` Move database, mail, CHM, dump, ELF, and related binary
       metadata parsing into focused family modules with local tests.
-      - [ ] `R26-P1-07c-3a` Move CHM routing, ITSF/ITSP directory parsing,
+      - [x] `R26-P1-07c-3a` Move CHM routing, ITSF/ITSP directory parsing,
         compressed-stream discovery, and `/#SYSTEM` metadata into
         `preview/chm.rs`; harden hostile offsets and preserve bounded reads.
       - [ ] `R26-P1-07c-3b` Move MIME/EML and Compound File Binary MSG parsing
@@ -199,6 +199,28 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-3a` Complete the focused 375-line Rust CHM metadata
+  module with one explicit parent route and 268 lines of local tests. Parse the
+  real ITSF v2/v3 layouts (`0x58`/`0x60`), use the `0x48` directory offset and
+  v3 `0x58` data base, derive the v2 data base with checked addition, validate
+  the fixed ITSP/PMGL headers, and resolve section-zero `/#SYSTEM` offsets from
+  that data base. Preserve the 8 KiB prefix, 12-entry, 260-byte name,
+  32-stream scan/eight-result, 4 KiB system stream/eight-field, and eight-byte
+  ENCINT budgets. Hostile offsets, truncated headers, out-of-range PMGL blocks,
+  unterminated ENCINTs, and relative system-stream overflows all fail soft.
+  Architecture and performance guards lock the module boundary, real offsets,
+  checked arithmetic, budgets, and malformed-input tests.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::chm::tests` (8 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (252 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet msbuild native/QuickLook.Next.Native.proj -target:Build -property:Configuration=Release -verbosity:minimal`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --maxcpucount:1` (363 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `777c4fa`, `d7a3073`, `03d809f`, `2a14368`
 
 - [x] `R26-P0-04` Close both layers of the recurring RasterHost error-window
   blocker. Preserve inherited no-dialog process policy, clear conflicting WER
