@@ -35,6 +35,7 @@ public sealed class RasterHostPdfTests
         using Process host = Process.Start(startInfo) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-pdf-cycle-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-pdf-cycle-{Guid.NewGuid():N}.pdf");
+        bool hostExited = false;
 
         try
         {
@@ -98,16 +99,23 @@ public sealed class RasterHostPdfTests
                 return host.HandleCount <= baselineHandles + handleRecoveryBudget
                     && host.PrivateMemorySize64 <= baselinePrivateBytes + privateByteRecoveryBudget;
             }, timeout.Token);
+            await Task.Delay(TimeSpan.FromSeconds(5), timeout.Token);
+            Assert.False(host.HasExited, "RasterHost exited while the PDF idle-trim pipe remained connected.");
             Assert.True(peakHandles >= baselineHandles);
             Assert.False(File.Exists(logicalPath));
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -127,6 +135,7 @@ public sealed class RasterHostPdfTests
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.pdf");
+        bool hostExited = false;
 
         try
         {
@@ -200,11 +209,16 @@ public sealed class RasterHostPdfTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -224,6 +238,7 @@ public sealed class RasterHostPdfTests
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-pdf-inflight-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-pdf-inflight-{Guid.NewGuid():N}.pdf");
+        bool hostExited = false;
 
         try
         {
@@ -256,11 +271,16 @@ public sealed class RasterHostPdfTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -280,6 +300,7 @@ public sealed class RasterHostPdfTests
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-pdf-waiter-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-pdf-waiter-{Guid.NewGuid():N}.pdf");
+        bool hostExited = false;
 
         try
         {
@@ -311,11 +332,16 @@ public sealed class RasterHostPdfTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     private static async Task<string> OpenPinnedPdfAsync(

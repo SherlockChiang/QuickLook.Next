@@ -41,6 +41,7 @@ public sealed class RasterHostStaticImageHandleTests
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-wic-cycle-{Guid.NewGuid():N}.png");
         byte[] image = Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=");
+        bool hostExited = false;
 
         try
         {
@@ -125,11 +126,16 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -159,6 +165,7 @@ public sealed class RasterHostStaticImageHandleTests
         byte[] image = await File.ReadAllBytesAsync(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"),
             timeout.Token);
+        bool hostExited = false;
 
         try
         {
@@ -228,11 +235,16 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Theory]
@@ -259,6 +271,7 @@ public sealed class RasterHostStaticImageHandleTests
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.{format}");
+        bool hostExited = false;
 
         try
         {
@@ -351,11 +364,16 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -381,6 +399,7 @@ public sealed class RasterHostStaticImageHandleTests
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-metadata-{Guid.NewGuid():N}.png");
         byte[] image = Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=");
+        bool hostExited = false;
 
         try
         {
@@ -466,11 +485,16 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -495,6 +519,7 @@ public sealed class RasterHostStaticImageHandleTests
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-wic-metadata-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-wic-metadata-{Guid.NewGuid():N}.bmp");
         byte[] image = CreateOnePixelBmp();
+        bool hostExited = false;
 
         try
         {
@@ -583,11 +608,16 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Fact]
@@ -779,6 +809,7 @@ public sealed class RasterHostStaticImageHandleTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
 
         try
         {
@@ -803,10 +834,9 @@ public sealed class RasterHostStaticImageHandleTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     private static async Task ReceiveStaticImagePreviewAsync(
