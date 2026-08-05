@@ -214,7 +214,10 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: focused Release PDF idle/EOF regression repeated 3 times (3 passed; 0 new RasterHost `.NET Runtime`, `Application Error`, or WER events)
   - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
-  - Commits: `06084f3`, `2ea91e1`, `1d76f11`, `8263146`, `93d0412`, `50294bb`, `e538869`, `613998c`, `a803eb6`, `a8e61f0`, `d6e79c0`, `616789e`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (363 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `06084f3`, `2ea91e1`, `1d76f11`, `8263146`, `93d0412`, `50294bb`, `e538869`, `613998c`, `a803eb6`, `a8e61f0`, `d6e79c0`, `616789e`, `17e7a88`
 
 - [x] `R26-P1-07c-2f` Complete the media family split with a 92-line
   `preview/media/mod.rs` composition root. Move bounded file-prefix reading,
