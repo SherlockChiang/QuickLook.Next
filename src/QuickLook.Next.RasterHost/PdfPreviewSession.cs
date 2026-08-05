@@ -619,7 +619,13 @@ internal sealed class PdfPreviewSession : IAsyncDisposable
             catch { }
         }
 
+        PdfDocument? document = _document;
         _document = null;
+        // PdfDocument is not IClosable, but its CsWinRT wrapper owns a native object reference.
+        // Release that reference only after every operation and render task has drained so the
+        // native PDF engine cannot be finalized later during process/graphics teardown.
+        if (document is WinRT.IWinRTObject winrtDocument)
+            winrtDocument.NativeObject.Dispose();
         _inputRandomAccessStream?.Dispose();
         _inputRandomAccessStream = null;
         _inputFileStream?.Dispose();
