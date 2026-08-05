@@ -1,4 +1,4 @@
-use super::append_summary;
+use super::{append_summary, render_info};
 
 #[test]
 fn elf_summary_detects_64_bit_little_endian() {
@@ -6,11 +6,14 @@ fn elf_summary_detects_64_bit_little_endian() {
     bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
     bytes[4] = 2;
     bytes[5] = 1;
+    bytes[6] = 1;
+    bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
     bytes[16..18].copy_from_slice(&3u16.to_le_bytes());
     bytes[18..20].copy_from_slice(&62u16.to_le_bytes());
     bytes[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
     bytes[32..40].copy_from_slice(&0x40u64.to_le_bytes());
     bytes[40..48].copy_from_slice(&0x500u64.to_le_bytes());
+    bytes[52..54].copy_from_slice(&64u16.to_le_bytes());
     bytes[54..56].copy_from_slice(&56u16.to_le_bytes());
     bytes[56..58].copy_from_slice(&4u16.to_le_bytes());
     bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
@@ -133,6 +136,9 @@ fn elf_summary_reads_gnu_version_sections() {
     bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
     bytes[4] = 2;
     bytes[5] = 1;
+    bytes[6] = 1;
+    bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+    bytes[52..54].copy_from_slice(&64u16.to_le_bytes());
     bytes[40..48].copy_from_slice(&0x100u64.to_le_bytes());
     bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
     bytes[60..62].copy_from_slice(&6u16.to_le_bytes());
@@ -209,7 +215,8 @@ fn elf_summary_reads_gnu_version_sections() {
     bytes[0x3A4..0x3A6].copy_from_slice(&2u16.to_le_bytes());
     bytes[0x3A8..0x3AC].copy_from_slice(&1u32.to_le_bytes());
     bytes[0x3C0..0x3C2].copy_from_slice(&1u16.to_le_bytes());
-    bytes[0x3C4..0x3C6].copy_from_slice(&1u16.to_le_bytes());
+    bytes[0x3C4..0x3C6].copy_from_slice(&0u16.to_le_bytes());
+    bytes[0x3C6..0x3C8].copy_from_slice(&1u16.to_le_bytes());
     bytes[0x3CC..0x3D0].copy_from_slice(&20u32.to_le_bytes());
     bytes[0x3D4..0x3D8].copy_from_slice(&13u32.to_le_bytes());
     let mut text = String::new();
@@ -219,4 +226,104 @@ fn elf_summary_reads_gnu_version_sections() {
     assert!(text.contains("GNU versions: .gnu.version 3 entries (2/3)"));
     assert!(text.contains(".gnu.version_r needs GLIBC_2.2.5"));
     assert!(text.contains(".gnu.version_d defines QUICKLOOK_1.0"));
+}
+
+#[test]
+fn elf_summary_accepts_elf32_big_endian() {
+    let mut bytes = vec![0u8; 128];
+    bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+    bytes[4] = 1;
+    bytes[5] = 2;
+    bytes[6] = 1;
+    bytes[16..18].copy_from_slice(&2u16.to_be_bytes());
+    bytes[18..20].copy_from_slice(&40u16.to_be_bytes());
+    bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+    bytes[24..28].copy_from_slice(&0x0010_0000u32.to_be_bytes());
+    bytes[36..40].copy_from_slice(&0u32.to_be_bytes());
+    bytes[40..42].copy_from_slice(&52u16.to_be_bytes());
+    bytes[42..44].copy_from_slice(&32u16.to_be_bytes());
+    bytes[44..46].copy_from_slice(&0u16.to_be_bytes());
+    bytes[46..48].copy_from_slice(&40u16.to_be_bytes());
+    bytes[48..50].copy_from_slice(&0u16.to_be_bytes());
+    bytes[50..52].copy_from_slice(&0u16.to_be_bytes());
+
+    let mut text = String::new();
+    append_summary(&mut text, &bytes);
+
+    assert!(text.contains("ELF32"));
+    assert!(text.contains("Endian: big"));
+    assert!(text.contains("Machine: ARM"));
+    assert!(text.contains("Entry: 0x00100000"));
+}
+
+#[test]
+fn elf_summary_rejects_truncated_and_hostile_offsets_without_panicking() {
+    let mut hostile = vec![0u8; 128];
+    hostile[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+    hostile[4] = 2;
+    hostile[5] = 1;
+    hostile[6] = 1;
+    hostile[20..24].copy_from_slice(&1u32.to_le_bytes());
+    hostile[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+    hostile[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+    hostile[52..54].copy_from_slice(&64u16.to_le_bytes());
+    hostile[54..56].copy_from_slice(&56u16.to_le_bytes());
+    hostile[56..58].copy_from_slice(&64u16.to_le_bytes());
+    hostile[58..60].copy_from_slice(&64u16.to_le_bytes());
+    hostile[60..62].copy_from_slice(&128u16.to_le_bytes());
+    hostile[62..64].copy_from_slice(&0u16.to_le_bytes());
+
+    let cases = [hostile, vec![0x7F, b'E', b'L', b'F'], {
+        let mut invalid = vec![0u8; 64];
+        invalid[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+        invalid[4] = 3;
+        invalid[5] = 9;
+        invalid
+    }];
+    for bytes in cases {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut text = String::new();
+            append_summary(&mut text, &bytes);
+        }));
+        assert!(result.is_ok(), "hostile ELF input must fail soft");
+    }
+}
+
+#[test]
+fn render_info_reads_bounded_metadata_beyond_legacy_prefix() {
+    let mut bytes = vec![0u8; 2048];
+    bytes[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);
+    bytes[4] = 2;
+    bytes[5] = 1;
+    bytes[6] = 1;
+    bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+    bytes[40..48].copy_from_slice(&0x600u64.to_le_bytes());
+    bytes[52..54].copy_from_slice(&64u16.to_le_bytes());
+    bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+    bytes[60..62].copy_from_slice(&2u16.to_le_bytes());
+    bytes[62..64].copy_from_slice(&1u16.to_le_bytes());
+    let section = 0x600 + 64;
+    bytes[section..section + 4].copy_from_slice(&1u32.to_le_bytes());
+    bytes[section + 4..section + 8].copy_from_slice(&3u32.to_le_bytes());
+    bytes[section + 24..section + 32].copy_from_slice(&0x700u64.to_le_bytes());
+    bytes[section + 32..section + 40].copy_from_slice(&11u64.to_le_bytes());
+    bytes[0x700..0x70B].copy_from_slice(b"\0.shstrtab\0");
+
+    let path = std::env::temp_dir().join(format!(
+        "quicklook-next-elf-render-{}-{}.elf",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock must be after epoch")
+            .as_nanos()
+    ));
+    std::fs::write(&path, &bytes).expect("temporary ELF fixture should be writable");
+    let rendered = render_info(
+        path.to_str().expect("temporary path must be valid UTF-8"),
+        bytes.len() as i64,
+        0,
+    );
+    let _ = std::fs::remove_file(&path);
+
+    assert!(rendered.contains("Section names: .shstrtab"));
 }
