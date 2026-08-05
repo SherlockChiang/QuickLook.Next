@@ -43,6 +43,8 @@ var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
 var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
+var openAndPageWorkers = new ConcurrentDictionary<long, Task>();
+long nextOpenAndPageWorkerId = 0;
 var surfacePublishGate = new SemaphoreSlim(1, 1);
 var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, NativeAnimationPacket>();
@@ -78,7 +80,7 @@ while (true)
                     || !string.Equals(hello.SessionToken, sessionToken, StringComparison.Ordinal))
                 {
                     DiagLog.Write("RasterHost", "rejected unauthenticated pipe client");
-                    return;
+                    goto Shutdown;
                 }
                 try
                 {
@@ -90,18 +92,18 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("RasterHost", "authentication initialization failed: " + ex.Message);
-                    return;
+                    goto Shutdown;
                 }
                 DiagLog.Write("RasterHost", $"initialized; sent host.ready");
                 break;
 
             case var _ when !authenticated:
                 DiagLog.Write("RasterHost", "rejected control message before authentication");
-                return;
+                goto Shutdown;
 
             case Hello:
                 DiagLog.Write("RasterHost", "rejected repeated authentication");
-                return;
+                goto Shutdown;
 
             case PreviewOpen open when IsValidRequestId(open.RequestId)
                                        && !string.IsNullOrWhiteSpace(open.Path)
@@ -254,7 +256,7 @@ while (true)
                                        && page.PageGeneration > 0
                                        && double.IsFinite(page.Scale)
                                        && page.Scale > 0:
-                _ = HandlePageOpenAsync(page);
+                TrackOpenOrPageWorker(HandlePageOpenAsync(page));
                 break;
 
             case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
@@ -303,12 +305,13 @@ while (true)
 
             default:
                 DiagLog.Write("RasterHost", $"rejected invalid control message: {msg.GetType().Name}");
-                return;
+                goto Shutdown;
         }
     }
     catch (Exception ex) { DiagLog.Write("RasterHost", "handler error: " + ex.Message); }
 }
 
+Shutdown:
 CancellationTokenSource[] remainingOpenCts;
 lock (openCtsLock)
 {
@@ -319,6 +322,12 @@ foreach (var cts in remainingOpenCts)
 {
     try { cts.Cancel(); } catch { }
 }
+CancellationTokenSource[] remainingPageCts = pdfPageRenderCts.Values.ToArray();
+foreach (var cts in remainingPageCts)
+{
+    try { cts.Cancel(); } catch { }
+}
+await DrainOpenAndPageWorkersAsync();
 foreach (string requestId in animationCts.Keys)
     await CloseAnimationAsync(requestId);
 ImageMetadataRequestState[] remainingMetadataRequests = metadataRequests.Values.ToArray();
@@ -337,6 +346,52 @@ foreach (string requestId in preparedGifDecodes.Keys)
     DeletePreparedGifDecode(requestId);
 foreach (var packet in animationPackets.Values)
     packet.Dispose();
+
+// The App owns this supervised process and pipe EOF is terminal. Windows can reclaim the remaining
+// process-scoped WinRT/DXGI graph atomically; unwinding that graph through CLR shutdown can otherwise
+// let injected graphics layers raise a non-continuable bare FACILITY_DXGI exception after all managed
+// work has drained.
+DiagLog.Write("RasterHost", "pipe cleanup complete; exiting process");
+Environment.Exit(0);
+
+void TrackOpenOrPageWorker(Task worker)
+{
+    long workerId = Interlocked.Increment(ref nextOpenAndPageWorkerId);
+    openAndPageWorkers[workerId] = worker;
+    _ = worker.ContinueWith(
+        completed =>
+        {
+            openAndPageWorkers.TryRemove(workerId, out _);
+            if (completed.IsFaulted)
+                DiagLog.Write("RasterHost", "open/page worker ERROR: " + completed.Exception);
+        },
+        CancellationToken.None,
+        TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
+}
+
+async Task DrainOpenAndPageWorkersAsync()
+{
+    Task[] workers = openAndPageWorkers.Values.ToArray();
+    if (workers.Length == 0)
+        return;
+
+    try
+    {
+        await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+    catch (TimeoutException)
+    {
+        // Matching the existing PDF render-drain policy, do not tear down the producer while a
+        // canceled worker may still be publishing or releasing a D3D/WinRT resource.
+        DiagLog.Write("RasterHost", $"open/page worker drain timed out; exiting host: workers={workers.Length}");
+        Environment.Exit(31);
+    }
+    catch (Exception ex)
+    {
+        DiagLog.Write("RasterHost", "open/page worker drain failed: " + ex);
+    }
+}
 
 void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long sourceLength = 0)
 {
@@ -362,7 +417,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     var cts = new CancellationTokenSource();
     lock (openCtsLock)
         openCts[open.RequestId] = cts;
-    _ = Task.Run(async () =>
+    Task worker = Task.Run(async () =>
     {
         try
         {
@@ -475,6 +530,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             cts.Dispose();
         }
     });
+    TrackOpenOrPageWorker(worker);
 }
 
 async Task<bool> HandleImageOpenAsync(
@@ -1314,25 +1370,36 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
         }
 
         var rendered = await session.RenderPageAsync(page.PageIndex, page.Scale, pageCts.Token);
-        if (!pdfSessions.TryGetValue(page.RequestId, out var current) || !ReferenceEquals(current, session))
-            return;
-        if (!pdfPageRenderCts.TryGetValue(key, out var currentCts) || !ReferenceEquals(currentCts, pageCts))
-            return;
-
-        var uploadWatch = Stopwatch.StartNew();
-        SurfaceTransfer handle = producer.CreatePresentedPageSurface(
-            page.RequestId, page.PageIndex, page.PageGeneration, rendered.Bgra, rendered.Width, rendered.Height);
-        uploadWatch.Stop();
-        DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
-        var sendWatch = Stopwatch.StartNew();
-        await channel.SendAsync(new PreviewSurface(
-            page.RequestId, handle.HostHandle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
-            "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration)
+        await surfacePublishGate.WaitAsync(pageCts.Token);
+        try
         {
-            TransferId = handle.TransferId,
-        });
-        sendWatch.Stop();
-        DiagLog.Write("RasterHost", $"pdf page surface send {sendWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}");
+            pageCts.Token.ThrowIfCancellationRequested();
+            if (!string.Equals(page.RequestId, activeRequestId, StringComparison.Ordinal))
+                return;
+            if (!pdfSessions.TryGetValue(page.RequestId, out var current) || !ReferenceEquals(current, session))
+                return;
+            if (!pdfPageRenderCts.TryGetValue(key, out var currentCts) || !ReferenceEquals(currentCts, pageCts))
+                return;
+
+            var uploadWatch = Stopwatch.StartNew();
+            SurfaceTransfer handle = producer.CreatePresentedPageSurface(
+                page.RequestId, page.PageIndex, page.PageGeneration, rendered.Bgra, rendered.Width, rendered.Height);
+            uploadWatch.Stop();
+            DiagLog.Write("RasterHost", $"pdf page surface upload/create {uploadWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}; bytes={rendered.Bgra.Length}");
+            var sendWatch = Stopwatch.StartNew();
+            await channel.SendAsync(new PreviewSurface(
+                page.RequestId, handle.HostHandle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
+                "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration)
+            {
+                TransferId = handle.TransferId,
+            });
+            sendWatch.Stop();
+            DiagLog.Write("RasterHost", $"pdf page surface send {sendWatch.ElapsedMilliseconds}ms; request={page.RequestId}; page={page.PageIndex}");
+        }
+        finally
+        {
+            surfacePublishGate.Release();
+        }
     }
     catch (OperationCanceledException)
     {
