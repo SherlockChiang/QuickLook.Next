@@ -26,14 +26,18 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P0-03` Move the live signing certificate and password out of the
   workspace, verify their storage policy, and rotate them if exposure cannot be
   excluded. This is an owner-operated credential task and must not be automated.
-- [ ] `R26-P0-04` Fail closed against supervised-host `Application Error`
+- [x] `R26-P0-04` Fail closed against supervised-host `Application Error`
   dialogs after the observed RasterHost DXGI `0x0000087a` crash. Keep the
   process-wide no-dialog error mode active, retain supervisor exit-code/log
   diagnostics, and cover a real crashing child instead of relying only on
   source-pattern or in-process flag checks. Reopened on 2026-08-04 after a live
   RasterHost error window recurred following commits `b2b5ee2` and `bfd48da`;
   clear conflicting WER always-show-UI state and make the child inherit the
-  no-dialog error mode before its CLR/apphost loader runs.
+  no-dialog error mode before its CLR/apphost loader runs. A first-chance native
+  dump then isolated the remaining bare DXGI facility exception to CLR/WinRT/D3D
+  teardown after pipe EOF, not the connected preview lifetime. RasterHost now
+  quiesces idle trim, cancels and drains all registered graphics workers, and
+  terminates the supervised process atomically after logical cleanup.
 
 ### Correctness and user-visible state
 
@@ -195,6 +199,22 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P0-04` Close both layers of the recurring RasterHost error-window
+  blocker. Preserve inherited no-dialog process policy, clear conflicting WER
+  always-show-UI state, and exercise real DXGI/fail-fast child crashes without
+  manipulating their windows. For the underlying PDF idle regression, prove the
+  host remains alive for five seconds while its pipe is connected, serialize
+  idle compaction against preview activation, serialize D3D ownership, track and
+  drain open/page/animation/prepared-GIF workers, and use a process-atomic exit
+  after terminal logical cleanup so asynchronous WinRT/driver teardown cannot
+  raise the non-continuable bare `FACILITY_DXGI` exception. Every integration
+  test that launches RasterHost now fails on timeout or a non-zero exit code.
+  - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release --no-restore` (29 passed)
+  - Verification: focused Release PDF idle/EOF regression repeated 3 times (3 passed; 0 new RasterHost `.NET Runtime`, `Application Error`, or WER events)
+  - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commits: `06084f3`, `2ea91e1`, `1d76f11`, `8263146`, `93d0412`, `50294bb`, `e538869`, `613998c`, `a803eb6`, `a8e61f0`, `d6e79c0`, `616789e`
 
 - [x] `R26-P1-07c-2f` Complete the media family split with a 92-line
   `preview/media/mod.rs` composition root. Move bounded file-prefix reading,
