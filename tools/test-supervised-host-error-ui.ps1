@@ -131,6 +131,35 @@ foreach ($hostProgram in $hostPrograms) {
     }
 }
 
+$launcherPath = Join-Path $Root "src/QuickLook.Next.App/HostProcessLauncher.cs"
+if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
+    Add-Failure "The supervised host launcher is missing."
+}
+else {
+    $launcherText = Get-Content -LiteralPath $launcherPath -Raw
+    foreach ($launcherRequirement in @(
+            @{ Pattern = 'RequiredChildErrorMode\s*=\s*[\s\S]{0,160}SemFailCriticalErrors\s*\|\s*SemNoGpFaultErrorBox\s*\|\s*SemNoOpenFileErrorBox'; Message = "The launcher must define the complete inherited no-dialog error mode." },
+            @{ Pattern = 'lock\s*\(ProcessCreationLock\)[\s\S]*GetErrorMode\(\)[\s\S]*SetErrorMode\(originalErrorMode\s*\|\s*RequiredChildErrorMode\)[\s\S]*CreateProcessAsUser\([\s\S]*finally[\s\S]*SetErrorMode\(originalErrorMode\)'; Message = "Restricted child creation must inherit the no-dialog mode and restore the App mode in a serialized finally block." },
+            @{ Pattern = 'processCreationError\s*=\s*Marshal\.GetLastWin32Error\(\)[\s\S]*SetErrorMode\(originalErrorMode\)[\s\S]*Win32Exception\(processCreationError'; Message = "CreateProcessAsUser failure must be captured before restoring the App error mode." },
+            @{ Pattern = 'bool\s+CurrentProcessHasNoDialogErrorMode\(\)[\s\S]*GetErrorMode\(\)\s*&\s*RequiredChildErrorMode'; Message = "The runtime smoke must be able to inspect the inherited child error mode." })) {
+        if ($launcherText -notmatch $launcherRequirement.Pattern) {
+            Add-Failure $launcherRequirement.Message
+        }
+    }
+}
+
+$appProgramPath = Join-Path $Root "src/QuickLook.Next.App/Program.cs"
+if (-not (Test-Path -LiteralPath $appProgramPath -PathType Leaf)) {
+    Add-Failure "The App restricted-host runtime probe is missing."
+}
+else {
+    $appProgramText = Get-Content -LiteralPath $appProgramPath -Raw
+    if ($appProgramText -notmatch
+            'restricted-host-probe-child[\s\S]*CurrentProcessHasNoDialogErrorMode\(\)[\s\S]*Environment\.ExitCode\s*=\s*31') {
+        Add-Failure "The restricted-host runtime probe must fail when the child did not inherit the no-dialog mode."
+    }
+}
+
 $supervisorPath = Join-Path $Root "src/QuickLook.Next.App/RasterHostSupervisor.cs"
 if (-not (Test-Path -LiteralPath $supervisorPath -PathType Leaf)) {
     Add-Failure "RasterHost supervisor is missing."

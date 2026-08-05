@@ -18,9 +18,15 @@ internal static class HostProcessLauncher
     private const uint CreateSuspended = 0x00000004;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint SemFailCriticalErrors = 0x0001;
+    private const uint SemNoGpFaultErrorBox = 0x0002;
+    private const uint SemNoOpenFileErrorBox = 0x8000;
+    private const uint RequiredChildErrorMode =
+        SemFailCriticalErrors | SemNoGpFaultErrorBox | SemNoOpenFileErrorBox;
     private const nuint ProcThreadAttributeMitigationPolicy = 0x00020007;
     private const ulong RequiredMitigationPolicy = 0x0000000100111005;
 
+    private static readonly object ProcessCreationLock = new();
     private static readonly SecurityIdentifier RestrictedCodeSid = new("S-1-5-12");
     // WRITE_RESTRICTED consults these SIDs only for write access. World permits CLR/BCrypt kernel
     // object initialization; Restricted Code remains the explicit grant for host output and pipes.
@@ -96,20 +102,38 @@ internal static class HostProcessLauncher
                         {
                             throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
                         }
-                        if (!CreateProcessAsUser(
-                            restrictedToken,
-                            executablePath,
-                            mutableCommandLine,
-                            0,
-                            0,
-                            false,
-                            CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
-                            0,
-                            Path.GetDirectoryName(executablePath),
-                            ref startup,
-                            out ProcessInformation information))
+                        ProcessInformation information = default;
+                        bool processCreated;
+                        int processCreationError = 0;
+                        lock (ProcessCreationLock)
                         {
-                            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed.");
+                            uint originalErrorMode = GetErrorMode();
+                            try
+                            {
+                                _ = SetErrorMode(originalErrorMode | RequiredChildErrorMode);
+                                processCreated = CreateProcessAsUser(
+                                    restrictedToken,
+                                    executablePath,
+                                    mutableCommandLine,
+                                    0,
+                                    0,
+                                    false,
+                                    CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
+                                    0,
+                                    Path.GetDirectoryName(executablePath),
+                                    ref startup,
+                                    out information);
+                                if (!processCreated)
+                                    processCreationError = Marshal.GetLastWin32Error();
+                            }
+                            finally
+                            {
+                                _ = SetErrorMode(originalErrorMode);
+                            }
+                        }
+                        if (!processCreated)
+                        {
+                            throw new Win32Exception(processCreationError, "CreateProcessAsUser failed.");
                         }
 
                         try
@@ -208,6 +232,9 @@ internal static class HostProcessLauncher
 
     public static bool CurrentProcessHasWorldWriteRestriction()
         => CurrentProcessHasRestrictedSid(WorldSid);
+
+    public static bool CurrentProcessHasNoDialogErrorMode()
+        => (GetErrorMode() & RequiredChildErrorMode) == RequiredChildErrorMode;
 
     private static bool CurrentProcessHasRestrictedSid(SecurityIdentifier sid)
     {
@@ -394,6 +421,14 @@ internal static class HostProcessLauncher
 
     [DllImport("kernel32.dll")]
     private static extern nint GetCurrentProcess();
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint GetErrorMode();
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint SetErrorMode(uint mode);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

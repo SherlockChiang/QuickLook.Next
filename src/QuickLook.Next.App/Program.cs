@@ -24,7 +24,8 @@ public static class Program
         {
             try
             {
-                if (!HostProcessLauncher.IsCurrentProcessInJob()) Environment.ExitCode = 10;
+                if (!HostProcessLauncher.CurrentProcessHasNoDialogErrorMode()) Environment.ExitCode = 31;
+                else if (!HostProcessLauncher.IsCurrentProcessInJob()) Environment.ExitCode = 10;
                 else if (!HostProcessLauncher.CurrentProcessHasOnlyTraversalPrivilege()) Environment.ExitCode = 12;
                 else if (!HostProcessLauncher.CurrentProcessIsWriteRestricted()) Environment.ExitCode = 17;
                 else if (!HostProcessLauncher.CurrentProcessHasWorldWriteRestriction()) Environment.ExitCode = 29;
