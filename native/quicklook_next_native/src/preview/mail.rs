@@ -1,6 +1,7 @@
 use super::{
-    append_msg_compound_summary, base_info_text, common::format_number, file_name,
-    generic_info_json, read_file_prefix,
+    base_info_text,
+    common::{format_number, format_timestamp, read_u16, read_u32},
+    file_name, generic_info_json, read_file_prefix,
 };
 
 const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
@@ -451,3 +452,151 @@ fn percent_decode(value: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests;
+#[derive(Clone)]
+struct CfbDirectoryEntry {
+    name: String,
+    object_type: u8,
+    start_sector: u32,
+    size: u64,
+}
+
+fn append_msg_compound_summary(text: &mut String, bytes: &[u8]) {
+    let entries = cfb_directory_entries(bytes);
+    if entries.is_empty() {
+        return;
+    }
+    let attachments = entries
+        .iter()
+        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__attach_version1.0_"))
+        .count();
+    let recipients = entries
+        .iter()
+        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__recip_version1.0_"))
+        .count();
+    if recipients > 0 {
+        text.push_str(&format!("\nRecipients: {recipients}"));
+    }
+    if attachments > 0 {
+        text.push_str(&format!("\nAttachments: {attachments}"));
+    }
+    for (label, property) in [
+        ("Subject", "0037001F"),
+        ("Sender", "0C1A001F"),
+        ("Recipients display", "0E04001F"),
+    ] {
+        if let Some(value) = msg_unicode_property(bytes, &entries, property) {
+            text.push_str(&format!("\n{label}: {value}"));
+        }
+    }
+    if let Some(sent_time) = msg_filetime_property(bytes, &entries, "0E060040") {
+        text.push_str(&format!("\nSent time: {sent_time}"));
+    }
+    let has_body = entries.iter().any(|entry| {
+        entry.object_type == 2
+            && (entry.name.eq_ignore_ascii_case("__substg1.0_1000001F")
+                || entry.name.eq_ignore_ascii_case("__substg1.0_10090102"))
+    });
+    if has_body {
+        text.push_str("\nBody available: yes");
+    }
+}
+
+fn cfb_directory_entries(bytes: &[u8]) -> Vec<CfbDirectoryEntry> {
+    if !bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+        return Vec::new();
+    }
+    let sector_shift = read_u16(bytes, 30).unwrap_or(9).min(12);
+    let sector_size = 1usize << sector_shift;
+    let first_directory_sector = read_u32(bytes, 48).unwrap_or(0xFFFF_FFFF);
+    if first_directory_sector == 0xFFFF_FFFF {
+        return Vec::new();
+    }
+    let Some(directory_offset) = cfb_sector_offset(first_directory_sector, sector_size) else {
+        return Vec::new();
+    };
+    if directory_offset.saturating_add(sector_size) > bytes.len() {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for chunk in bytes[directory_offset..directory_offset + sector_size]
+        .chunks_exact(128)
+        .take(64)
+    {
+        let name_len = u16::from_le_bytes([chunk[64], chunk[65]]) as usize;
+        if !(2..=64).contains(&name_len) {
+            continue;
+        }
+        let name_bytes = &chunk[..name_len.saturating_sub(2).min(64)];
+        let units = name_bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        let name = String::from_utf16_lossy(&units);
+        let object_type = chunk[66];
+        if name.is_empty() || object_type == 0 {
+            continue;
+        }
+        let start_sector = u32::from_le_bytes([chunk[116], chunk[117], chunk[118], chunk[119]]);
+        let size = u64::from_le_bytes(chunk[120..128].try_into().ok().unwrap_or([0; 8]));
+        entries.push(CfbDirectoryEntry {
+            name,
+            object_type,
+            start_sector,
+            size,
+        });
+    }
+    entries
+}
+
+fn cfb_sector_offset(sector: u32, sector_size: usize) -> Option<usize> {
+    (sector as usize).checked_add(1)?.checked_mul(sector_size)
+}
+
+fn msg_property_stream<'a>(
+    bytes: &'a [u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<&'a [u8]> {
+    let entry = entries.iter().find(|entry| {
+        entry.object_type == 2
+            && entry
+                .name
+                .eq_ignore_ascii_case(&format!("__substg1.0_{property}"))
+    })?;
+    let sector_size = 1usize << read_u16(bytes, 30).unwrap_or(9).min(12);
+    let offset = cfb_sector_offset(entry.start_sector, sector_size)?;
+    let len = (entry.size as usize).min(4096);
+    bytes.get(offset..offset.checked_add(len)?)
+}
+
+fn msg_unicode_property(
+    bytes: &[u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<String> {
+    let stream = msg_property_stream(bytes, entries, property)?;
+    let units = stream
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .take(512)
+        .collect::<Vec<_>>();
+    let value = String::from_utf16_lossy(&units)
+        .trim_matches('\0')
+        .trim()
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn msg_filetime_property(
+    bytes: &[u8],
+    entries: &[CfbDirectoryEntry],
+    property: &str,
+) -> Option<String> {
+    let stream = msg_property_stream(bytes, entries, property)?;
+    let filetime = u64::from_le_bytes(stream.get(0..8)?.try_into().ok()?);
+    if filetime < 116_444_736_000_000_000 {
+        return None;
+    }
+    let unix = ((filetime - 116_444_736_000_000_000) / 10_000_000) as i64;
+    Some(format_timestamp(unix))
+}
