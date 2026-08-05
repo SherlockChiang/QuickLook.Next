@@ -109,7 +109,7 @@ the release-only `release:` prefix while this queue is in progress.
         into `preview/mail.rs` with malformed/truncated Outlook-message tests.
       - [x] `R26-P1-07c-3c` Move ELF headers, sections, symbols, notes, and GNU
         version parsing into `preview/elf.rs` with checked hostile offsets.
-      - [ ] `R26-P1-07c-3d` Move minidump streams and ELF-core composition into
+      - [x] `R26-P1-07c-3d` Move minidump streams and ELF-core composition into
         `preview/dump.rs` behind narrow sibling-module APIs.
       - [ ] `R26-P1-07c-3e` Split SQLite/database rendering into bounded
         `preview/database/` composition, WAL, and SQLite parser modules while
@@ -200,6 +200,25 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `R26-P1-07c-3d` Move the Rust minidump stream summaries and ELF-core
+  composition out of `preview.rs` into a focused `preview/dump.rs` module with
+  one `render_info` parent API and explicit sibling access to
+  `preview::elf::append_summary`. Keep the minidump header/directory and stream
+  metadata bounded: path reads stop at 1 MiB, directory entries are capped at
+  64, all RVA/entry arithmetic uses checked slices and checked integer
+  conversion, UTF-16 names are limited to 4 KiB and even byte lengths, and
+  known ThreadNames streams are labeled correctly. Hostile offsets, oversized
+  string lengths, truncated streams, and metadata placed beyond the legacy
+  512-byte prefix fail soft; the real path route is covered by a dump fixture.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native dump::` (5 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (265 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: full `tools/guard-architecture.ps1 -SkipDist` reached the unrelated restricted-host launch smoke, which exited 23 in this environment; all preceding architecture, module, performance, and error-UI guards passed
+  - Commits: `b1534e4`, `637161b`
+
 - [x] `R26-P1-07c-3c` Complete the 1,344-line Rust ELF metadata module with
   329 lines of focused tests and two narrow parent APIs. Raise the path-based
   read from the legacy 512-byte prefix to an explicit bounded 1 MiB budget so
@@ -283,6 +302,10 @@ Completed entries move here with the verification commands and commit hash.
   test that launches RasterHost now fails on timeout or a non-zero exit code.
   - Verification: `dotnet test tests/QuickLook.Next.RasterHost.IntegrationTests/QuickLook.Next.RasterHost.IntegrationTests.csproj -c Release --no-restore` (29 passed)
   - Verification: focused Release PDF idle/EOF regression repeated 3 times (3 passed; 0 new RasterHost `.NET Runtime`, `Application Error`, or WER events)
+  - Live 2026-08-05 check: the only installed RasterHost was package
+    `0.3.4.0` (`c5731c…`, built 2026-08-03), older than the current repository
+    fixes; no new RasterHost WER/Application Error event or visible `WerFault`
+    window was present after 10:55, and existing `.dmp` evidence was retained.
   - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
   - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
