@@ -13,6 +13,8 @@ $previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\c
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mailPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail.rs"
 $mailTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\tests.rs"
+$elfPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf.rs"
+$elfTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf\tests.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
 $mediaCodecPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\codec.rs"
@@ -32,6 +34,8 @@ foreach ($path in @(
         $fontPath,
         $mailPath,
         $mailTestsPath,
+        $elfPath,
+        $elfTestsPath,
         $mediaPath,
         $mediaAudioPath,
         $mediaCodecPath,
@@ -53,6 +57,8 @@ if ($failures.Count -eq 0) {
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mailText = Get-Content -LiteralPath $mailPath -Raw
     $mailTestsText = Get-Content -LiteralPath $mailTestsPath -Raw
+    $elfText = Get-Content -LiteralPath $elfPath -Raw
+    $elfTestsText = Get-Content -LiteralPath $elfTestsPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
     $mediaCodecText = Get-Content -LiteralPath $mediaCodecPath -Raw
@@ -249,6 +255,64 @@ if ($failures.Count -eq 0) {
     $mailTestsLineCount = @(Get-Content -LiteralPath $mailTestsPath).Count
     if ($mailTestsLineCount -gt 550) {
         $failures.Add("The focused mail tests grew beyond 550 lines: $mailTestsLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod elf;\s*$' -or
+        [regex]::Matches($previewText, 'elf::render_info\(').Count -ne 1 -or
+        [regex]::Matches($previewText, 'elf::append_summary\(').Count -ne 1 -or
+        $previewText -match 'fn\s+render_elf_info\s*\(' -or
+        $previewText -match 'fn\s+append_elf_summary\s*\(') {
+        $failures.Add(
+            "preview.rs must route ELF metadata through the two narrow preview::elf APIs.")
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn render_info\(',
+            'pub\(super\) fn append_summary\(',
+            'const MAX_ELF_READ_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024',
+            'fn\s+elf_identity\(',
+            'fn\s+checked_range\(',
+            'usize::try_from',
+            'checked_range_u64',
+            'MAX_ELF_DYNAMIC_ENTRIES',
+            'MAX_ELF_NOTE_RECORDS',
+            'vd_cnt at \+6')) {
+        if ($elfText -notmatch $required) {
+            $failures.Add("ELF module lost a bounded parsing invariant: $required")
+        }
+    }
+
+    foreach ($requiredTest in @(
+            'fn elf_summary_accepts_elf32_big_endian\(',
+            'fn elf_summary_rejects_truncated_and_hostile_offsets_without_panicking\(',
+            'fn render_info_reads_bounded_metadata_beyond_legacy_prefix\(',
+            'fn elf_summary_reads_gnu_version_sections\(')) {
+        if ($elfTestsText -notmatch $requiredTest) {
+            $failures.Add("ELF tests lost hostile-format coverage: $requiredTest")
+        }
+    }
+
+    if ($elfText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $elfTestsText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $elfText -match '#\[no_mangle\]' -or
+        $elfText -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add("ELF modules must use explicit imports and must not own a C ABI surface.")
+    }
+
+    $elfParentVisibleItemCount = [regex]::Matches(
+        $elfText,
+        '(?m)^pub\(super\)\s+').Count
+    if ($elfParentVisibleItemCount -ne 2) {
+        $failures.Add(
+            "The ELF module must expose only render_info and append_summary to its parent.")
+    }
+    $elfLineCount = @(Get-Content -LiteralPath $elfPath).Count
+    if ($elfLineCount -gt 1500) {
+        $failures.Add("The bounded ELF module grew beyond 1500 lines: $elfLineCount")
+    }
+    $elfTestsLineCount = @(Get-Content -LiteralPath $elfTestsPath).Count
+    if ($elfTestsLineCount -gt 450) {
+        $failures.Add("The focused ELF tests grew beyond 450 lines: $elfTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or

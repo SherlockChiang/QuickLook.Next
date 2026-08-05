@@ -35,6 +35,8 @@ $nativeChmPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ch
 $nativeChmTests = Join-Path $Root "native/quicklook_next_native/src/preview/chm/tests.rs"
 $nativeMailPreview = Join-Path $Root "native/quicklook_next_native/src/preview/mail.rs"
 $nativeMailTests = Join-Path $Root "native/quicklook_next_native/src/preview/mail/tests.rs"
+$nativeElfPreview = Join-Path $Root "native/quicklook_next_native/src/preview/elf.rs"
+$nativeElfTests = Join-Path $Root "native/quicklook_next_native/src/preview/elf/tests.rs"
 $nativeEbookPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
 $nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
 $nativeMedia = Join-Path $Root "native/quicklook_next_native/src/preview/media/mod.rs"
@@ -60,6 +62,14 @@ Require-Pattern $nativeMailPreview 'match major_version\s*\{[\s\S]*3\s*=>\s*9[\s
     "Outlook CFB v3/v4 parsing must retain byte-order validation and bounded FAT, regular-chain, and mini-chain readers."
 Require-Pattern $nativeMailTests 'fn\s+mail_header_parser_caps_header_count_and_values\([\s\S]*fn\s+mail_mime_summary_caps_parts_and_rejects_hostile_boundary\([\s\S]*fn\s+mail_mime_summary_caps_nesting_depth\([\s\S]*fn\s+mail_decoders_keep_header_and_body_budgets\([\s\S]*fn\s+msg_compound_summary_reads_real_fat_and_mini_streams\([\s\S]*fn\s+msg_compound_summary_rejects_truncated_and_invalid_headers\([\s\S]*fn\s+msg_compound_summary_rejects_directory_fat_and_tree_cycles\([\s\S]*fn\s+msg_compound_summary_rejects_truncated_directory_and_mini_stream\([\s\S]*fn\s+msg_compound_summary_fails_soft_on_hostile_mini_properties\(' `
     "Mail tests must retain hostile MIME budgets and real FAT/mini-FAT MSG boundary coverage."
+Require-Pattern $nativeElfPreview 'MAX_ELF_READ_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024[\s\S]*MAX_ELF_PROGRAM_HEADERS:\s*usize\s*=\s*64[\s\S]*MAX_ELF_SECTION_HEADERS:\s*usize\s*=\s*128[\s\S]*MAX_ELF_DYNAMIC_ENTRIES:\s*usize\s*=\s*256[\s\S]*MAX_ELF_NOTE_RECORDS:\s*usize\s*=\s*64' `
+    "ELF metadata must retain its bounded 1 MiB read and program/section/dynamic/note budgets."
+Require-Pattern $nativeElfPreview 'fn\s+elf_identity\([\s\S]*bytes\[6\]\s*!=\s*1[\s\S]*read_u32_endian\(bytes, 20, endian\)[\s\S]*checked_range_u64[\s\S]*usize::try_from[\s\S]*header\.file_size' `
+    "ELF parsing must validate identity/version, use checked range conversion, and map only file-backed bytes."
+Require-Pattern $nativeElfPreview 'for\s+index\s+in\s+0\.\.MAX_ELF_DYNAMIC_ENTRIES[\s\S]*for\s+_\s+in\s+0\.\.MAX_ELF_VERSION_ENTRIES[\s\S]*records\s*<\s*MAX_ELF_NOTE_RECORDS' `
+    "ELF dynamic/version/note scans must have independent record-count bounds."
+Require-Pattern $nativeElfTests 'fn\s+elf_summary_accepts_elf32_big_endian\([\s\S]*fn\s+elf_summary_rejects_truncated_and_hostile_offsets_without_panicking\([\s\S]*fn\s+render_info_reads_bounded_metadata_beyond_legacy_prefix\(' `
+    "ELF tests must retain 32-bit, hostile-offset, and real path-read coverage."
 Require-Pattern $nativeMediaMp4 'MAX_TIMELINE_ENTRIES:\s*usize\s*=\s*100_000[\s\S]*MAX_CHUNK_TABLE_ENTRIES:\s*usize\s*=\s*1_000_000[\s\S]*MAX_SAMPLE_COUNT:\s*usize\s*=\s*1_000_000[\s\S]*MAX_CHUNK_DETAILS:\s*usize\s*=\s*4' `
     "MP4 timelines, chunk tables, samples, and retained chunk details must keep explicit budgets."
 Require-Pattern $nativeMediaMp4 'MAX_COLLECTED_ATOMS:\s*usize\s*=\s*1024[\s\S]*MAX_SAMPLE_DESCRIPTION_ENTRIES:\s*u32\s*=\s*16[\s\S]*\.min\(MAX_SAMPLE_DESCRIPTION_ENTRIES\)' `
