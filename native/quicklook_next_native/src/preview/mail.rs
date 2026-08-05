@@ -1,16 +1,39 @@
+use std::collections::BTreeSet;
+
 use super::{
     base_info_text,
-    common::{format_number, format_timestamp, read_u16, read_u32},
+    common::{format_number, format_timestamp, read_u16, read_u32, read_u64},
     file_name, generic_info_json, read_file_prefix,
 };
 
 const MAX_MAIL_HEADER_BYTES: usize = 256 * 1024;
+const CFB_SIGNATURE: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const CFB_MAX_REGULAR_SECTOR: u32 = 0xFFFF_FFFA;
+const CFB_DIFAT_SECTOR: u32 = 0xFFFF_FFFC;
+const CFB_FAT_SECTOR: u32 = 0xFFFF_FFFD;
+const CFB_END_OF_CHAIN: u32 = 0xFFFF_FFFE;
+const CFB_FREE_SECTOR: u32 = 0xFFFF_FFFF;
+const CFB_NO_STREAM: u32 = 0xFFFF_FFFF;
+const MAX_CFB_FAT_SECTORS: usize = 16;
+const MAX_CFB_DIFAT_SECTORS: usize = 8;
+const MAX_CFB_DIRECTORY_SECTORS: usize = 16;
+const MAX_CFB_DIRECTORY_ENTRIES: usize = 256;
+const MAX_CFB_MINI_FAT_SECTORS: usize = 16;
+const MAX_CFB_MINI_STREAM_BYTES: usize = MAX_MAIL_HEADER_BYTES;
+const MAX_CFB_MINI_STREAM_SECTORS: usize = MAX_CFB_MINI_STREAM_BYTES / 512;
+const MAX_CFB_TREE_NODES: usize = MAX_CFB_DIRECTORY_ENTRIES;
+const MAX_CFB_PROPERTY_SECTORS: usize = 128;
+const MAX_CFB_MINI_CHAIN_SECTORS: usize = 1024;
+const MAX_MSG_PROPERTY_BYTES: usize = 4 * 1024;
+const MAX_MSG_PROPERTIES_STREAM_BYTES: usize = 64 * 1024;
+const MAX_MSG_PROPERTY_ENTRIES: usize = 128;
+const MAX_MSG_UTF16_UNITS: usize = 512;
 
 pub(super) fn render_mail_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
     let bytes = read_file_prefix(path, MAX_MAIL_HEADER_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, "mail", size, modified_unix);
-    if bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+    if bytes.starts_with(&CFB_SIGNATURE) {
         text.push_str("\nFormat: Outlook MSG / Compound File");
         append_msg_compound_summary(&mut text, &bytes);
     } else {
@@ -452,26 +475,276 @@ fn percent_decode(value: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Clone, Copy)]
+struct CfbHeader {
+    major_version: u16,
+    sector_size: usize,
+    mini_sector_size: usize,
+    directory_sector_count: usize,
+    fat_sector_count: usize,
+    first_directory_sector: u32,
+    mini_stream_cutoff: usize,
+    first_mini_fat_sector: u32,
+    mini_fat_sector_count: usize,
+    first_difat_sector: u32,
+    difat_sector_count: usize,
+}
+
+impl CfbHeader {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        if bytes.get(..CFB_SIGNATURE.len()) != Some(CFB_SIGNATURE.as_slice()) || bytes.len() < 512 {
+            return None;
+        }
+        let major_version = read_u16(bytes, 26)?;
+        let sector_shift = read_u16(bytes, 30)?;
+        let expected_sector_shift = match major_version {
+            3 => 9,
+            4 => 12,
+            _ => return None,
+        };
+        if read_u16(bytes, 28)? != 0xFFFE
+            || sector_shift != expected_sector_shift
+            || read_u16(bytes, 32)? != 6
+        {
+            return None;
+        }
+        let sector_size = 1usize.checked_shl(u32::from(sector_shift))?;
+        if bytes.len() < sector_size {
+            return None;
+        }
+        let directory_sector_count = usize::try_from(read_u32(bytes, 40)?).ok()?;
+        if (major_version == 3 && directory_sector_count != 0)
+            || directory_sector_count > MAX_CFB_DIRECTORY_SECTORS
+            || (major_version == 4 && directory_sector_count == 0)
+        {
+            return None;
+        }
+        let fat_sector_count = usize::try_from(read_u32(bytes, 44)?).ok()?;
+        if fat_sector_count == 0 || fat_sector_count > MAX_CFB_FAT_SECTORS {
+            return None;
+        }
+        let first_directory_sector = read_u32(bytes, 48)?;
+        if !cfb_is_regular_sector(first_directory_sector) {
+            return None;
+        }
+        let mini_stream_cutoff = usize::try_from(read_u32(bytes, 56)?).ok()?;
+        if mini_stream_cutoff != 4096 {
+            return None;
+        }
+        let first_mini_fat_sector = read_u32(bytes, 60)?;
+        let mini_fat_sector_count = usize::try_from(read_u32(bytes, 64)?).ok()?;
+        if mini_fat_sector_count > MAX_CFB_MINI_FAT_SECTORS
+            || (mini_fat_sector_count > 0 && !cfb_is_regular_sector(first_mini_fat_sector))
+            || (mini_fat_sector_count == 0
+                && !matches!(first_mini_fat_sector, CFB_END_OF_CHAIN | CFB_FREE_SECTOR))
+        {
+            return None;
+        }
+        let first_difat_sector = read_u32(bytes, 68)?;
+        let difat_sector_count = usize::try_from(read_u32(bytes, 72)?).ok()?;
+        if difat_sector_count > MAX_CFB_DIFAT_SECTORS
+            || (difat_sector_count > 0 && !cfb_is_regular_sector(first_difat_sector))
+            || (difat_sector_count == 0
+                && !matches!(first_difat_sector, CFB_END_OF_CHAIN | CFB_FREE_SECTOR))
+        {
+            return None;
+        }
+        Some(Self {
+            major_version,
+            sector_size,
+            mini_sector_size: 64,
+            directory_sector_count,
+            fat_sector_count,
+            first_directory_sector,
+            mini_stream_cutoff,
+            first_mini_fat_sector,
+            mini_fat_sector_count,
+            first_difat_sector,
+            difat_sector_count,
+        })
+    }
+}
+
 #[derive(Clone)]
 struct CfbDirectoryEntry {
     name: String,
     object_type: u8,
+    left_sibling: u32,
+    right_sibling: u32,
+    child: u32,
     start_sector: u32,
     size: u64,
 }
 
-fn append_msg_compound_summary(text: &mut String, bytes: &[u8]) {
-    let entries = cfb_directory_entries(bytes);
-    if entries.is_empty() {
-        return;
+impl CfbDirectoryEntry {
+    fn empty() -> Self {
+        Self {
+            name: String::new(),
+            object_type: 0,
+            left_sibling: CFB_NO_STREAM,
+            right_sibling: CFB_NO_STREAM,
+            child: CFB_NO_STREAM,
+            start_sector: CFB_END_OF_CHAIN,
+            size: 0,
+        }
     }
-    let attachments = entries
+}
+
+struct CfbDocument<'a> {
+    bytes: &'a [u8],
+    header: CfbHeader,
+    fat: Vec<u32>,
+    entries: Vec<CfbDirectoryEntry>,
+    root_children: Vec<usize>,
+    mini_fat: Vec<u32>,
+    mini_stream: Vec<u8>,
+}
+
+impl<'a> CfbDocument<'a> {
+    fn parse(bytes: &'a [u8]) -> Option<Self> {
+        let header = CfbHeader::parse(bytes)?;
+        let fat = cfb_read_fat(bytes, &header)?;
+        let directory_bytes = cfb_read_regular_chain(
+            bytes,
+            &header,
+            &fat,
+            header.first_directory_sector,
+            None,
+            MAX_CFB_DIRECTORY_SECTORS,
+            MAX_CFB_DIRECTORY_SECTORS.checked_mul(header.sector_size)?,
+        )?;
+        if header.major_version == 4
+            && directory_bytes.len()
+                != header
+                    .directory_sector_count
+                    .checked_mul(header.sector_size)?
+        {
+            return None;
+        }
+        let entries = cfb_parse_directory_entries(&directory_bytes, header.major_version)?;
+        let root = entries.first()?;
+        if root.object_type != 5 || !root.name.eq_ignore_ascii_case("Root Entry") {
+            return None;
+        }
+        let root_children = cfb_tree_children(&entries, root.child)?;
+        let (mini_fat, mini_stream) = if header.mini_fat_sector_count == 0 {
+            if root.size != 0 {
+                return None;
+            }
+            (Vec::new(), Vec::new())
+        } else {
+            let mini_fat_bytes = header
+                .mini_fat_sector_count
+                .checked_mul(header.sector_size)?;
+            let raw_mini_fat = cfb_read_regular_chain(
+                bytes,
+                &header,
+                &fat,
+                header.first_mini_fat_sector,
+                Some(mini_fat_bytes),
+                MAX_CFB_MINI_FAT_SECTORS,
+                MAX_CFB_MINI_FAT_SECTORS.checked_mul(header.sector_size)?,
+            )?;
+            let mini_fat = raw_mini_fat
+                .chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect::<Vec<_>>();
+            let mini_stream_bytes = usize::try_from(root.size).ok()?;
+            if mini_stream_bytes > MAX_CFB_MINI_STREAM_BYTES {
+                return None;
+            }
+            let mini_stream = cfb_read_regular_chain(
+                bytes,
+                &header,
+                &fat,
+                root.start_sector,
+                Some(mini_stream_bytes),
+                MAX_CFB_MINI_STREAM_SECTORS,
+                MAX_CFB_MINI_STREAM_BYTES,
+            )?;
+            (mini_fat, mini_stream)
+        };
+        Some(Self {
+            bytes,
+            header,
+            fat,
+            entries,
+            root_children,
+            mini_fat,
+            mini_stream,
+        })
+    }
+
+    fn root_entry_named(&self, name: &str) -> Option<&CfbDirectoryEntry> {
+        self.root_children.iter().find_map(|index| {
+            self.entries
+                .get(*index)
+                .filter(|entry| entry.name.eq_ignore_ascii_case(name))
+        })
+    }
+
+    fn read_root_stream(&self, name: &str, max_bytes: usize) -> Option<Vec<u8>> {
+        let entry = self.root_entry_named(name)?;
+        if entry.object_type != 2 {
+            return None;
+        }
+        let size = usize::try_from(entry.size).ok()?;
+        if size > max_bytes {
+            return None;
+        }
+        if size == 0 {
+            return Some(Vec::new());
+        }
+        if size < self.header.mini_stream_cutoff {
+            return cfb_read_mini_chain(
+                &self.mini_stream,
+                &self.mini_fat,
+                self.header.mini_sector_size,
+                entry.start_sector,
+                size,
+                MAX_CFB_MINI_CHAIN_SECTORS,
+            );
+        }
+        cfb_read_regular_chain(
+            self.bytes,
+            &self.header,
+            &self.fat,
+            entry.start_sector,
+            Some(size),
+            MAX_CFB_PROPERTY_SECTORS,
+            max_bytes,
+        )
+    }
+}
+
+fn append_msg_compound_summary(text: &mut String, bytes: &[u8]) {
+    let Some(document) = CfbDocument::parse(bytes) else {
+        return;
+    };
+    let attachments = document
+        .root_children
         .iter()
-        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__attach_version1.0_"))
+        .filter_map(|index| document.entries.get(*index))
+        .filter(|entry| {
+            entry.object_type == 1
+                && entry
+                    .name
+                    .to_ascii_lowercase()
+                    .starts_with("__attach_version1.0_")
+        })
         .count();
-    let recipients = entries
+    let recipients = document
+        .root_children
         .iter()
-        .filter(|entry| entry.object_type == 1 && entry.name.starts_with("__recip_version1.0_"))
+        .filter_map(|index| document.entries.get(*index))
+        .filter(|entry| {
+            entry.object_type == 1
+                && entry
+                    .name
+                    .to_ascii_lowercase()
+                    .starts_with("__recip_version1.0_")
+        })
         .count();
     if recipients > 0 {
         text.push_str(&format!("\nRecipients: {recipients}"));
@@ -484,101 +757,296 @@ fn append_msg_compound_summary(text: &mut String, bytes: &[u8]) {
         ("Sender", "0C1A001F"),
         ("Recipients display", "0E04001F"),
     ] {
-        if let Some(value) = msg_unicode_property(bytes, &entries, property) {
+        if let Some(value) = msg_unicode_property(&document, property) {
             text.push_str(&format!("\n{label}: {value}"));
         }
     }
-    if let Some(sent_time) = msg_filetime_property(bytes, &entries, "0E060040") {
+    if let Some(sent_time) = msg_fixed_filetime_property(&document, 0x0E06)
+        .or_else(|| msg_fixed_filetime_property(&document, 0x0039))
+        .or_else(|| msg_filetime_stream_property(&document, "0E060040"))
+    {
         text.push_str(&format!("\nSent time: {sent_time}"));
     }
-    let has_body = entries.iter().any(|entry| {
-        entry.object_type == 2
-            && (entry.name.eq_ignore_ascii_case("__substg1.0_1000001F")
-                || entry.name.eq_ignore_ascii_case("__substg1.0_10090102"))
+    let has_body = document.root_children.iter().any(|index| {
+        document.entries.get(*index).is_some_and(|entry| {
+            entry.object_type == 2
+                && (entry.name.eq_ignore_ascii_case("__substg1.0_1000001F")
+                    || entry.name.eq_ignore_ascii_case("__substg1.0_10090102"))
+        })
     });
     if has_body {
         text.push_str("\nBody available: yes");
     }
 }
 
-fn cfb_directory_entries(bytes: &[u8]) -> Vec<CfbDirectoryEntry> {
-    if !bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
-        return Vec::new();
+fn cfb_is_regular_sector(sector: u32) -> bool {
+    sector <= CFB_MAX_REGULAR_SECTOR
+}
+
+fn cfb_sector_bytes<'a>(bytes: &'a [u8], header: &CfbHeader, sector: u32) -> Option<&'a [u8]> {
+    if !cfb_is_regular_sector(sector) {
+        return None;
     }
-    let sector_shift = read_u16(bytes, 30).unwrap_or(9).min(12);
-    let sector_size = 1usize << sector_shift;
-    let first_directory_sector = read_u32(bytes, 48).unwrap_or(0xFFFF_FFFF);
-    if first_directory_sector == 0xFFFF_FFFF {
-        return Vec::new();
-    }
-    let Some(directory_offset) = cfb_sector_offset(first_directory_sector, sector_size) else {
-        return Vec::new();
-    };
-    if directory_offset.saturating_add(sector_size) > bytes.len() {
-        return Vec::new();
-    }
-    let mut entries = Vec::new();
-    for chunk in bytes[directory_offset..directory_offset + sector_size]
-        .chunks_exact(128)
-        .take(64)
-    {
-        let name_len = u16::from_le_bytes([chunk[64], chunk[65]]) as usize;
-        if !(2..=64).contains(&name_len) {
+    let sector_index = usize::try_from(sector).ok()?.checked_add(1)?;
+    let offset = sector_index.checked_mul(header.sector_size)?;
+    bytes.get(offset..offset.checked_add(header.sector_size)?)
+}
+
+fn cfb_read_fat(bytes: &[u8], header: &CfbHeader) -> Option<Vec<u32>> {
+    let mut fat_sector_ids = Vec::with_capacity(header.fat_sector_count);
+    let mut seen_fat_sectors = BTreeSet::new();
+    for index in 0..109usize {
+        let offset = 76usize.checked_add(index.checked_mul(4)?)?;
+        let sector = read_u32(bytes, offset)?;
+        if sector == CFB_FREE_SECTOR {
             continue;
         }
-        let name_bytes = &chunk[..name_len.saturating_sub(2).min(64)];
-        let units = name_bytes
+        if fat_sector_ids.len() >= header.fat_sector_count
+            || !cfb_is_regular_sector(sector)
+            || !seen_fat_sectors.insert(sector)
+        {
+            return None;
+        }
+        fat_sector_ids.push(sector);
+    }
+
+    let mut difat_sector_ids = Vec::with_capacity(header.difat_sector_count);
+    let mut seen_difat_sectors = BTreeSet::new();
+    let mut current_difat = header.first_difat_sector;
+    for _ in 0..header.difat_sector_count {
+        if !cfb_is_regular_sector(current_difat) || !seen_difat_sectors.insert(current_difat) {
+            return None;
+        }
+        difat_sector_ids.push(current_difat);
+        let sector_bytes = cfb_sector_bytes(bytes, header, current_difat)?;
+        let entry_count = header.sector_size.checked_div(4)?.checked_sub(1)?;
+        for index in 0..entry_count {
+            let sector = read_u32(sector_bytes, index.checked_mul(4)?)?;
+            if sector == CFB_FREE_SECTOR {
+                continue;
+            }
+            if fat_sector_ids.len() >= header.fat_sector_count
+                || !cfb_is_regular_sector(sector)
+                || !seen_fat_sectors.insert(sector)
+            {
+                return None;
+            }
+            fat_sector_ids.push(sector);
+        }
+        current_difat = read_u32(sector_bytes, header.sector_size.checked_sub(4)?)?;
+    }
+    if current_difat != CFB_END_OF_CHAIN || fat_sector_ids.len() != header.fat_sector_count {
+        return None;
+    }
+
+    let entries_per_sector = header.sector_size.checked_div(4)?;
+    let mut fat = Vec::with_capacity(header.fat_sector_count.checked_mul(entries_per_sector)?);
+    for sector in &fat_sector_ids {
+        let sector_bytes = cfb_sector_bytes(bytes, header, *sector)?;
+        fat.extend(
+            sector_bytes
+                .chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
+        );
+    }
+    for sector in fat_sector_ids {
+        if fat.get(usize::try_from(sector).ok()?) != Some(&CFB_FAT_SECTOR) {
+            return None;
+        }
+    }
+    for sector in difat_sector_ids {
+        if fat.get(usize::try_from(sector).ok()?) != Some(&CFB_DIFAT_SECTOR) {
+            return None;
+        }
+    }
+    Some(fat)
+}
+
+fn cfb_read_regular_chain(
+    bytes: &[u8],
+    header: &CfbHeader,
+    fat: &[u32],
+    start_sector: u32,
+    expected_bytes: Option<usize>,
+    max_sectors: usize,
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
+    if expected_bytes == Some(0) {
+        return matches!(start_sector, CFB_END_OF_CHAIN | CFB_FREE_SECTOR).then(Vec::new);
+    }
+    if expected_bytes.is_some_and(|size| size > max_bytes) {
+        return None;
+    }
+    let required_sectors = if let Some(size) = expected_bytes {
+        Some(
+            size.checked_add(header.sector_size.checked_sub(1)?)?
+                .checked_div(header.sector_size)?,
+        )
+    } else {
+        None
+    };
+    if required_sectors.is_some_and(|count| count == 0 || count > max_sectors) {
+        return None;
+    }
+    let mut output = Vec::with_capacity(expected_bytes.unwrap_or(0).min(max_bytes));
+    let mut visited = BTreeSet::new();
+    let mut current = start_sector;
+    for index in 0..max_sectors {
+        if !cfb_is_regular_sector(current) || !visited.insert(current) {
+            return None;
+        }
+        let sector_bytes = cfb_sector_bytes(bytes, header, current)?;
+        let take = expected_bytes
+            .map(|size| size.saturating_sub(output.len()).min(header.sector_size))
+            .unwrap_or(header.sector_size);
+        if output.len().checked_add(take)? > max_bytes {
+            return None;
+        }
+        output.extend_from_slice(sector_bytes.get(..take)?);
+        let next = *fat.get(usize::try_from(current).ok()?)?;
+        if let Some(required) = required_sectors {
+            if index + 1 == required {
+                return (next == CFB_END_OF_CHAIN).then_some(output);
+            }
+            if index + 1 > required || !cfb_is_regular_sector(next) {
+                return None;
+            }
+        } else if next == CFB_END_OF_CHAIN {
+            return Some(output);
+        } else if !cfb_is_regular_sector(next) {
+            return None;
+        }
+        current = next;
+    }
+    None
+}
+
+fn cfb_parse_directory_entries(bytes: &[u8], major_version: u16) -> Option<Vec<CfbDirectoryEntry>> {
+    let mut entries = Vec::new();
+    for chunk in bytes.chunks_exact(128).take(MAX_CFB_DIRECTORY_ENTRIES) {
+        let object_type = *chunk.get(66)?;
+        if object_type == 0 {
+            entries.push(CfbDirectoryEntry::empty());
+            continue;
+        }
+        if !matches!(object_type, 1 | 2 | 5) {
+            return None;
+        }
+        let name_len = usize::from(read_u16(chunk, 64)?);
+        if !(2..=64).contains(&name_len)
+            || name_len % 2 != 0
+            || chunk.get(name_len.checked_sub(2)?..name_len) != Some([0, 0].as_slice())
+        {
+            return None;
+        }
+        let units = chunk
+            .get(..name_len.checked_sub(2)?)?
             .chunks_exact(2)
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
-        let name = String::from_utf16_lossy(&units);
-        let object_type = chunk[66];
-        if name.is_empty() || object_type == 0 {
-            continue;
+        let name = String::from_utf16(&units).ok()?;
+        if name.is_empty() {
+            return None;
         }
-        let start_sector = u32::from_le_bytes([chunk[116], chunk[117], chunk[118], chunk[119]]);
-        let size = u64::from_le_bytes(chunk[120..128].try_into().ok().unwrap_or([0; 8]));
+        let size = if major_version == 3 {
+            u64::from(read_u32(chunk, 120)?)
+        } else {
+            read_u64(chunk, 120)?
+        };
         entries.push(CfbDirectoryEntry {
             name,
             object_type,
-            start_sector,
+            left_sibling: read_u32(chunk, 68)?,
+            right_sibling: read_u32(chunk, 72)?,
+            child: read_u32(chunk, 76)?,
+            start_sector: read_u32(chunk, 116)?,
             size,
         });
     }
-    entries
+    (!entries.is_empty()).then_some(entries)
 }
 
-fn cfb_sector_offset(sector: u32, sector_size: usize) -> Option<usize> {
-    (sector as usize).checked_add(1)?.checked_mul(sector_size)
+fn cfb_tree_children(entries: &[CfbDirectoryEntry], root: u32) -> Option<Vec<usize>> {
+    if root == CFB_NO_STREAM {
+        return Some(Vec::new());
+    }
+    let mut children = Vec::new();
+    let mut stack = vec![root];
+    let mut visited = BTreeSet::new();
+    while let Some(stream_id) = stack.pop() {
+        if stream_id == CFB_NO_STREAM {
+            continue;
+        }
+        if children.len() >= MAX_CFB_TREE_NODES || !visited.insert(stream_id) {
+            return None;
+        }
+        let index = usize::try_from(stream_id).ok()?;
+        if index == 0 {
+            return None;
+        }
+        let entry = entries.get(index)?;
+        if entry.object_type == 0 {
+            return None;
+        }
+        children.push(index);
+        stack.push(entry.right_sibling);
+        stack.push(entry.left_sibling);
+    }
+    Some(children)
 }
 
-fn msg_property_stream<'a>(
-    bytes: &'a [u8],
-    entries: &[CfbDirectoryEntry],
-    property: &str,
-) -> Option<&'a [u8]> {
-    let entry = entries.iter().find(|entry| {
-        entry.object_type == 2
-            && entry
-                .name
-                .eq_ignore_ascii_case(&format!("__substg1.0_{property}"))
-    })?;
-    let sector_size = 1usize << read_u16(bytes, 30).unwrap_or(9).min(12);
-    let offset = cfb_sector_offset(entry.start_sector, sector_size)?;
-    let len = (entry.size as usize).min(4096);
-    bytes.get(offset..offset.checked_add(len)?)
+fn cfb_read_mini_chain(
+    mini_stream: &[u8],
+    mini_fat: &[u32],
+    mini_sector_size: usize,
+    start_sector: u32,
+    expected_bytes: usize,
+    max_sectors: usize,
+) -> Option<Vec<u8>> {
+    if expected_bytes == 0 {
+        return matches!(start_sector, CFB_END_OF_CHAIN | CFB_FREE_SECTOR).then(Vec::new);
+    }
+    let required_sectors = expected_bytes
+        .checked_add(mini_sector_size.checked_sub(1)?)?
+        .checked_div(mini_sector_size)?;
+    if required_sectors == 0 || required_sectors > max_sectors {
+        return None;
+    }
+    let mut output = Vec::with_capacity(expected_bytes);
+    let mut visited = BTreeSet::new();
+    let mut current = start_sector;
+    for index in 0..required_sectors {
+        if !cfb_is_regular_sector(current) || !visited.insert(current) {
+            return None;
+        }
+        let mini_index = usize::try_from(current).ok()?;
+        let offset = mini_index.checked_mul(mini_sector_size)?;
+        let take = expected_bytes
+            .saturating_sub(output.len())
+            .min(mini_sector_size);
+        output.extend_from_slice(mini_stream.get(offset..offset.checked_add(take)?)?);
+        let next = *mini_fat.get(mini_index)?;
+        if index + 1 == required_sectors {
+            return (next == CFB_END_OF_CHAIN).then_some(output);
+        }
+        if !cfb_is_regular_sector(next) {
+            return None;
+        }
+        current = next;
+    }
+    None
 }
 
-fn msg_unicode_property(
-    bytes: &[u8],
-    entries: &[CfbDirectoryEntry],
-    property: &str,
-) -> Option<String> {
-    let stream = msg_property_stream(bytes, entries, property)?;
+fn msg_unicode_property(document: &CfbDocument<'_>, property: &str) -> Option<String> {
+    let stream =
+        document.read_root_stream(&format!("__substg1.0_{property}"), MAX_MSG_PROPERTY_BYTES)?;
+    if stream.len() % 2 != 0 {
+        return None;
+    }
     let units = stream
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .take(512)
+        .take(MAX_MSG_UTF16_UNITS)
         .collect::<Vec<_>>();
     let value = String::from_utf16_lossy(&units)
         .trim_matches('\0')
@@ -587,16 +1055,27 @@ fn msg_unicode_property(
     (!value.is_empty()).then_some(value)
 }
 
-fn msg_filetime_property(
-    bytes: &[u8],
-    entries: &[CfbDirectoryEntry],
-    property: &str,
-) -> Option<String> {
-    let stream = msg_property_stream(bytes, entries, property)?;
-    let filetime = u64::from_le_bytes(stream.get(0..8)?.try_into().ok()?);
-    if filetime < 116_444_736_000_000_000 {
-        return None;
+fn msg_fixed_filetime_property(document: &CfbDocument<'_>, property_id: u16) -> Option<String> {
+    let stream =
+        document.read_root_stream("__properties_version1.0", MAX_MSG_PROPERTIES_STREAM_BYTES)?;
+    let entries = stream.get(32..)?;
+    let expected_tag = (u32::from(property_id) << 16) | 0x0040;
+    for entry in entries.chunks_exact(16).take(MAX_MSG_PROPERTY_ENTRIES) {
+        if read_u32(entry, 0)? == expected_tag {
+            return format_msg_filetime(read_u64(entry, 8)?);
+        }
     }
-    let unix = ((filetime - 116_444_736_000_000_000) / 10_000_000) as i64;
-    Some(format_timestamp(unix))
+    None
+}
+
+fn msg_filetime_stream_property(document: &CfbDocument<'_>, property: &str) -> Option<String> {
+    let stream =
+        document.read_root_stream(&format!("__substg1.0_{property}"), MAX_MSG_PROPERTY_BYTES)?;
+    format_msg_filetime(read_u64(&stream, 0)?)
+}
+
+fn format_msg_filetime(filetime: u64) -> Option<String> {
+    const WINDOWS_TO_UNIX_TICKS: u64 = 116_444_736_000_000_000;
+    let unix = filetime.checked_sub(WINDOWS_TO_UNIX_TICKS)? / 10_000_000;
+    Some(format_timestamp(i64::try_from(unix).ok()?))
 }
