@@ -42,8 +42,14 @@ $nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/pre
 $nativeMedia = Join-Path $Root "native/quicklook_next_native/src/preview/media/mod.rs"
 $nativeMediaMp4 = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4.rs"
 $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4/tests.rs"
+$nativeDatabase = Join-Path $Root "native/quicklook_next_native/src/preview/database/mod.rs"
+$nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/database/wal.rs"
+$nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
 $nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
+$nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeDatabaseWal -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
 Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
@@ -503,17 +509,17 @@ Require-Pattern $nativePreview 'MAX_SQLITE_WAL_BYTES:\s*u64\s*=\s*64\s*\*\s*1024
     "Native SQLite WAL reads must remain capped at 64 MiB."
 Require-Pattern $nativePreview 'MAX_SQLITE_SHM_BYTES:\s*u64\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
     "Native SQLite SHM reads must remain capped at 4 MiB."
-Require-Pattern $nativePreview 'render_database_reader<R:\s*Read>[\s\S]*main_length\.min\(MAX_INFO_HEADER_BYTES\s+as\s+u64\)[\s\S]*read_exact_cancelable\(reader,\s*&mut bytes,\s*cancel_cb\)' `
+Require-TextPattern $nativeDatabaseText 'render_database_reader<R:\s*Read>[\s\S]*main_length\.min\(MAX_INFO_HEADER_BYTES\s+as\s+u64\)[\s\S]*read_exact_cancelable\(reader,\s*&mut bytes,\s*cancel_cb\)' `
     "SQLite HANDLE previews must read only the cancellable 1 MiB main-file prefix."
-Require-Pattern $nativePreview 'inspect_sqlite_wal_snapshot\([\s\S]*wal_length\s*>\s*MAX_SQLITE_WAL_BYTES[\s\S]*while\s+remaining\s*>=\s*frame_size\s*\{[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut frame_header,\s*cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut page,\s*cancel_cb\)' `
+Require-TextPattern $nativeDatabaseText 'inspect_sqlite_wal_snapshot\([\s\S]*wal_length\s*>\s*MAX_SQLITE_WAL_BYTES[\s\S]*while\s+remaining\s*>=\s*frame_size\s*\{[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut frame_header,\s*cancel_cb\)[\s\S]*read_exact_cancelable\(reader,\s*&mut page,\s*cancel_cb\)' `
     "SQLite WAL scanning must enforce its cap and check cancellation for every frame read."
-Require-Pattern $nativePreview 'fn inspect_sqlite_wal_snapshot\([\s\S]*sqlite_wal_checksum\(&header\[\.\.24\][\s\S]*read_u32_be\(&header,\s*24\)\s*!=\s*Some\(checksum\.0\)[\s\S]*read_u32_be\(&header,\s*28\)\s*!=\s*Some\(checksum\.1\)' `
+Require-TextPattern $nativeDatabaseText 'fn inspect_sqlite_wal_snapshot\([\s\S]*sqlite_wal_checksum\(&header\[\.\.24\][\s\S]*read_u32_be\(&header,\s*24\)\s*!=\s*Some\(checksum\.0\)[\s\S]*read_u32_be\(&header,\s*28\)\s*!=\s*Some\(checksum\.1\)' `
     "SQLite WAL scanning must reject a stored header checksum mismatch."
-Require-Pattern $nativePreview 'fn inspect_sqlite_wal_snapshot\([\s\S]*frame_salt\s*!=\s*salt[\s\S]*sqlite_wal_checksum\(&frame_header\[\.\.8\][\s\S]*if\s+commit_pages\s*!=\s*0\s*\{[\s\S]*std::mem::take\(&mut pending_prefix_pages\)[\s\S]*committed_prefix_pages\.insert\(page_number,\s*page\)' `
+Require-TextPattern $nativeDatabaseText 'fn inspect_sqlite_wal_snapshot\([\s\S]*frame_salt\s*!=\s*salt[\s\S]*sqlite_wal_checksum\(&frame_header\[\.\.8\][\s\S]*if\s+commit_pages\s*!=\s*0\s*\{[\s\S]*std::mem::take\(&mut pending_prefix_pages\)[\s\S]*committed_prefix_pages\.insert\(page_number,\s*page\)' `
     "SQLite WAL overlays must validate checksums and linearly merge pending pages at each commit."
-Require-Pattern $nativePreview 'fn apply_sqlite_wal_snapshot\([\s\S]*committed_pages[\s\S]*database_prefix\.resize\(prefix_size,\s*0\)[\s\S]*for\s*\(page_number,\s*page\)\s+in\s+&snapshot\.committed_prefix_pages[\s\S]*if\s+end\s*<=\s*database_prefix\.len\(\)[\s\S]*copy_from_slice\(page\)[\s\S]*sqlite_database_page_size\(database_prefix\)\s*!=\s*Some\(page_size\)' `
+Require-TextPattern $nativeDatabaseText 'fn apply_sqlite_wal_snapshot\([\s\S]*committed_pages[\s\S]*database_prefix\.resize\(prefix_size,\s*0\)[\s\S]*for\s*\(page_number,\s*page\)\s+in\s+&snapshot\.committed_prefix_pages[\s\S]*if\s+end\s*<=\s*database_prefix\.len\(\)[\s\S]*copy_from_slice\(page\)[\s\S]*sqlite_database_page_size\(database_prefix\)\s*!=\s*Some\(page_size\)' `
     "SQLite WAL application must bound historical page frames by the final committed database prefix."
-Require-Pattern $nativePreview 'inspect_sqlite_shm\([\s\S]*shm_length\s*>\s*MAX_SQLITE_SHM_BYTES[\s\S]*shm_length\.min\(4096\)[\s\S]*"SHM HANDLE: diagnostic only' `
+Require-TextPattern $nativeDatabaseText 'inspect_sqlite_shm\([\s\S]*shm_length\s*>\s*MAX_SQLITE_SHM_BYTES[\s\S]*shm_length\.min\(4096\)[\s\S]*"SHM HANDLE: diagnostic only' `
     "SQLite SHM must remain a bounded diagnostic input rather than snapshot authority."
 Require-Pattern $nativeTextPreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Native text inputs must remain capped at 512 KiB."
@@ -642,29 +648,29 @@ Require-Pattern $nativeTextPreview 'MAX_TABLE_RETAINED_CELLS:\s*usize\s*=\s*65_5
     "Delimited table models must retain their 65536-cell budget."
 Require-Pattern $nativeTextPreview 'MAX_TABLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
     "Delimited table models must retain their 512 KiB character budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_OBJECTS:\s*usize\s*=\s*32' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SCHEMA_OBJECTS:\s*usize\s*=\s*32' `
     "SQLite previews must retain their 32-object schema budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP:\s*usize\s*=\s*8' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SCHEMA_OBJECTS_PER_GROUP:\s*usize\s*=\s*8' `
     "SQLite schema groups must retain their eight-object display budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SCHEMA_PAGES:\s*usize\s*=\s*32' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SCHEMA_PAGES:\s*usize\s*=\s*32' `
     "SQLite schema traversal must retain its 32-page budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_TABLE_ROW_PAGES:\s*usize\s*=\s*128' `
     "SQLite row observations must retain their 128-page per-table budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_ROWS:\s*usize\s*=\s*100' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SAMPLE_ROWS:\s*usize\s*=\s*100' `
     "SQLite table previews must retain their 100-row sample budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_COLUMNS:\s*usize\s*=\s*32' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SAMPLE_COLUMNS:\s*usize\s*=\s*32' `
     "SQLite table previews must retain their 32-column sample budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_CELL_CHARS:\s*usize\s*=\s*256' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SAMPLE_CELL_CHARS:\s*usize\s*=\s*256' `
     "SQLite table previews must retain their 256-character cell budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_SHEETS:\s*usize\s*=\s*8' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SAMPLE_SHEETS:\s*usize\s*=\s*8' `
     "SQLite previews must retain their eight-sheet budget."
-Require-Pattern $nativePreview 'MAX_SQLITE_SAMPLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
+Require-TextPattern $nativeDatabaseText 'MAX_SQLITE_SAMPLE_RETAINED_CHARS:\s*usize\s*=\s*512\s*\*\s*1024' `
     "SQLite sheets must share a 512 KiB retained-character budget."
-Require-Pattern $nativePreview 'append_sqlite_wal_summary[\s\S]*Frames observed' `
+Require-TextPattern $nativeDatabaseText 'append_sqlite_wal_summary[\s\S]*Frames observed' `
     "SQLite WAL files must remain metadata previews instead of generic file icons."
-Require-Pattern $nativePreview 'text_encoding\s*=\s*read_u32_be\(bytes,\s*56\)[\s\S]*decode_sqlite_utf16' `
+Require-TextPattern $nativeDatabaseText 'text_encoding\s*=\s*read_u32_be\(bytes,\s*56\)[\s\S]*decode_sqlite_utf16' `
     "SQLite schema text must honor the database header encoding."
-Require-Pattern $nativePreview 'count_sqlite_table_rows\([\s\S]*while let Some\(page_no\)[\s\S]*preview_cancelled\(cancel_cb\)' `
+Require-TextPattern $nativeDatabaseText 'count_sqlite_table_rows\([\s\S]*while let Some\(page_no\)[\s\S]*preview_cancelled\(cancel_cb\)' `
     "SQLite row traversal must remain cancelable between pages."
 Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Android resource table decoding must retain its 32 MiB input cap."
