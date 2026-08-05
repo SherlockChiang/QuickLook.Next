@@ -43,8 +43,8 @@ var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
 var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
 var openCtsLock = new object();
-var openAndPageWorkers = new ConcurrentDictionary<long, Task>();
-long nextOpenAndPageWorkerId = 0;
+var terminalWorkers = new ConcurrentDictionary<long, Task>();
+long nextTerminalWorkerId = 0;
 var surfacePublishGate = new SemaphoreSlim(1, 1);
 var animationCts = new ConcurrentDictionary<string, CancellationTokenSource>();
 var animationPackets = new ConcurrentDictionary<string, NativeAnimationPacket>();
@@ -256,16 +256,16 @@ while (true)
                                        && page.PageGeneration > 0
                                        && double.IsFinite(page.Scale)
                                        && page.Scale > 0:
-                TrackOpenOrPageWorker(HandlePageOpenAsync(page));
+                TrackTerminalWorker(HandlePageOpenAsync(page));
                 break;
 
             case PreviewPageClose pageClose when IsValidRequestId(pageClose.RequestId)
                                              && pageClose.PageIndex >= 0
                                              && pageClose.PageGeneration > 0:
                 CancelPageRender(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration);
-                _ = Task.Delay(250).ContinueWith(
+                TrackTerminalWorker(Task.Delay(250).ContinueWith(
                     _ => producer.ReleasePage(pageClose.RequestId, pageClose.PageIndex, pageClose.PageGeneration),
-                    TaskContinuationOptions.OnlyOnRanToCompletion);
+                    TaskContinuationOptions.OnlyOnRanToCompletion));
                 break;
 
             case PreviewClose close when IsValidRequestId(close.RequestId):
@@ -312,85 +312,104 @@ while (true)
 }
 
 Shutdown:
-await idleTrimmer.DisposeAsync();
-CancellationTokenSource[] remainingOpenCts;
-lock (openCtsLock)
+int terminalExitCode = 0;
+try
 {
-    remainingOpenCts = openCts.Values.ToArray();
-    openCts.Clear();
+    await idleTrimmer.DisposeAsync();
+    CancellationTokenSource[] remainingOpenCts;
+    lock (openCtsLock)
+    {
+        remainingOpenCts = openCts.Values.ToArray();
+        openCts.Clear();
+    }
+    foreach (var cts in remainingOpenCts)
+    {
+        try { cts.Cancel(); } catch { }
+    }
+    CancellationTokenSource[] remainingPageCts = pdfPageRenderCts.Values.ToArray();
+    foreach (var cts in remainingPageCts)
+    {
+        try { cts.Cancel(); } catch { }
+    }
+    foreach (string requestId in animationCts.Keys)
+        await CloseAnimationAsync(requestId);
+    foreach (string requestId in preparedGifDecodes.Keys)
+        DeletePreparedGifDecode(requestId);
+    ImageMetadataRequestState[] remainingMetadataRequests = metadataRequests.Values.ToArray();
+    foreach (ImageMetadataRequestState request in remainingMetadataRequests)
+    {
+        metadataRequests.TryRemove(request.RequestId, out _);
+        request.Cancel();
+    }
+    await DrainTerminalWorkersAsync();
+    await Task.WhenAll(remainingMetadataRequests.Select(static request => request.Worker));
+    foreach (PdfPreviewSession session in pdfSessions.Values)
+        await DisposePdfSessionAsync(session, "pipe-disconnect");
+    pdfSessions.Clear();
+    foreach (string requestId in retainedRasterSources.Keys)
+        DeleteRetainedRasterSource(requestId);
+    foreach (var packet in animationPackets.Values)
+        packet.Dispose();
 }
-foreach (var cts in remainingOpenCts)
+catch (Exception ex)
 {
-    try { cts.Cancel(); } catch { }
+    terminalExitCode = 31;
+    DiagLog.Write("RasterHost", "terminal cleanup failed: " + ex);
 }
-CancellationTokenSource[] remainingPageCts = pdfPageRenderCts.Values.ToArray();
-foreach (var cts in remainingPageCts)
-{
-    try { cts.Cancel(); } catch { }
-}
-await DrainOpenAndPageWorkersAsync();
-foreach (string requestId in animationCts.Keys)
-    await CloseAnimationAsync(requestId);
-ImageMetadataRequestState[] remainingMetadataRequests = metadataRequests.Values.ToArray();
-foreach (ImageMetadataRequestState request in remainingMetadataRequests)
-{
-    metadataRequests.TryRemove(request.RequestId, out _);
-    request.Cancel();
-}
-await Task.WhenAll(remainingMetadataRequests.Select(static request => request.Worker));
-foreach (PdfPreviewSession session in pdfSessions.Values)
-    await DisposePdfSessionAsync(session, "pipe-disconnect");
-pdfSessions.Clear();
-foreach (string requestId in retainedRasterSources.Keys)
-    DeleteRetainedRasterSource(requestId);
-foreach (string requestId in preparedGifDecodes.Keys)
-    DeletePreparedGifDecode(requestId);
-foreach (var packet in animationPackets.Values)
-    packet.Dispose();
 
 // The App owns this supervised process and pipe EOF is terminal. Windows can reclaim the remaining
 // process-scoped WinRT/DXGI graph atomically; unwinding that graph through CLR shutdown can otherwise
 // let injected graphics layers raise a non-continuable bare FACILITY_DXGI exception after all managed
 // work has drained.
-DiagLog.Write("RasterHost", "pipe cleanup complete; exiting process");
-Environment.Exit(0);
+DiagLog.Write("RasterHost", $"pipe cleanup complete; exiting process code={terminalExitCode}");
+Environment.Exit(terminalExitCode);
 
-void TrackOpenOrPageWorker(Task worker)
+void TrackTerminalWorker(Task worker)
 {
-    long workerId = Interlocked.Increment(ref nextOpenAndPageWorkerId);
-    openAndPageWorkers[workerId] = worker;
+    long workerId = Interlocked.Increment(ref nextTerminalWorkerId);
+    terminalWorkers[workerId] = worker;
     _ = worker.ContinueWith(
         completed =>
         {
-            openAndPageWorkers.TryRemove(workerId, out _);
+            terminalWorkers.TryRemove(workerId, out _);
             if (completed.IsFaulted)
-                DiagLog.Write("RasterHost", "open/page worker ERROR: " + completed.Exception);
+                DiagLog.Write("RasterHost", "terminal worker ERROR: " + completed.Exception);
         },
         CancellationToken.None,
         TaskContinuationOptions.ExecuteSynchronously,
         TaskScheduler.Default);
 }
 
-async Task DrainOpenAndPageWorkersAsync()
+async Task DrainTerminalWorkersAsync()
 {
-    Task[] workers = openAndPageWorkers.Values.ToArray();
-    if (workers.Length == 0)
-        return;
+    TimeSpan budget = TimeSpan.FromSeconds(5);
+    long started = Stopwatch.GetTimestamp();
+    while (true)
+    {
+        Task[] workers = terminalWorkers.Values.ToArray();
+        if (workers.Length == 0)
+            return;
 
-    try
-    {
-        await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(5));
-    }
-    catch (TimeoutException)
-    {
-        // Matching the existing PDF render-drain policy, do not tear down the producer while a
-        // canceled worker may still be publishing or releasing a D3D/WinRT resource.
-        DiagLog.Write("RasterHost", $"open/page worker drain timed out; exiting host: workers={workers.Length}");
-        Environment.Exit(31);
-    }
-    catch (Exception ex)
-    {
-        DiagLog.Write("RasterHost", "open/page worker drain failed: " + ex);
+        TimeSpan remaining = budget - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero)
+        {
+            DiagLog.Write("RasterHost", $"terminal worker drain timed out; exiting host: workers={workers.Length}");
+            Environment.Exit(31);
+        }
+
+        try
+        {
+            await Task.WhenAll(workers).WaitAsync(remaining);
+        }
+        catch (TimeoutException)
+        {
+            DiagLog.Write("RasterHost", $"terminal worker drain timed out; exiting host: workers={workers.Length}");
+            Environment.Exit(31);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("RasterHost", "terminal worker drain observed a failed task: " + ex);
+        }
     }
 }
 
@@ -531,7 +550,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             cts.Dispose();
         }
     });
-    TrackOpenOrPageWorker(worker);
+    TrackTerminalWorker(worker);
 }
 
 async Task<bool> HandleImageOpenAsync(
@@ -842,7 +861,8 @@ void StartPreparedGifHandleDecode(RasterOpen open, RetainedRasterSourceLease sou
             "RasterHost",
             $"could not start concurrent GIF HANDLE decode request={open.RequestId}: {ex.Message}");
     }
-    state?.CancelAndDispose();
+    if (state is not null)
+        TrackTerminalWorker(state.CancelAndDisposeAsync());
 }
 
 void StartPreparedGifPathDecode(RasterOpen open)
@@ -852,7 +872,7 @@ void StartPreparedGifPathDecode(RasterOpen open)
         open.TargetWidth,
         open.TargetHeight);
     if (!preparedGifDecodes.TryAdd(open.RequestId, state))
-        state.CancelAndDispose();
+        TrackTerminalWorker(state.CancelAndDisposeAsync());
 }
 
 async Task<PreparedGifDecodeState?> TryTakePreparedGifDecodeAsync(
@@ -892,7 +912,7 @@ void StartPreparedAnimationHandoff(
 {
     if (animationPackets.ContainsKey(animation.RequestId))
     {
-        preparedDecode.CancelAndDispose();
+        TrackTerminalWorker(preparedDecode.CancelAndDisposeAsync());
         _ = channel.SendAsync(new PreviewError(
             animation.RequestId,
             "Animation frame packet has not been released."));
@@ -907,13 +927,13 @@ void StartPreparedAnimationHandoff(
         animationCts.TryRemove(animation.RequestId, out _);
         cts.Dispose();
         gate.Dispose();
-        preparedDecode.CancelAndDispose();
+        TrackTerminalWorker(preparedDecode.CancelAndDisposeAsync());
         _ = channel.SendAsync(new PreviewError(animation.RequestId, "Duplicate animation request ID."));
         return;
     }
     animationParents[animation.RequestId] = animation.PreviewRequestId;
 
-    _ = Task.Run(async () =>
+    TrackTerminalWorker(Task.Run(async () =>
     {
         NativeAnimationPacket? packet = null;
         try
@@ -985,7 +1005,7 @@ void StartPreparedAnimationHandoff(
                 animationParents.TryRemove(animation.RequestId, out _);
             animationHandoffGates.TryRemove(animation.RequestId, out _);
         }
-    });
+    }));
 }
 
 void StartAnimationDecode(
@@ -1014,7 +1034,7 @@ void StartAnimationDecode(
     }
     animationParents[animation.RequestId] = animation.PreviewRequestId;
 
-    _ = Task.Run(async () =>
+    TrackTerminalWorker(Task.Run(async () =>
     {
         NativeAnimationPacket? packet = null;
         try
@@ -1082,7 +1102,7 @@ void StartAnimationDecode(
                 animationParents.TryRemove(animation.RequestId, out _);
             animationHandoffGates.TryRemove(animation.RequestId, out _);
         }
-    });
+    }));
 }
 
 async Task CloseAnimationAsync(string requestId)
@@ -1107,7 +1127,7 @@ void CancelAnimationsForParent(string previewRequestId)
 {
     foreach (var pair in animationParents)
         if (string.Equals(pair.Value, previewRequestId, StringComparison.Ordinal))
-            _ = CloseAnimationAsync(pair.Key);
+            TrackTerminalWorker(CloseAnimationAsync(pair.Key));
 }
 
 void CancelOpen(string requestId)
@@ -1477,7 +1497,7 @@ static bool ShouldPrepareGifAnimation(RasterOpen open)
 void DeletePreparedGifDecode(string requestId)
 {
     if (preparedGifDecodes.TryRemove(requestId, out PreparedGifDecodeState? state))
-        state.CancelAndDispose();
+        TrackTerminalWorker(state.CancelAndDisposeAsync());
 }
 
 void DeleteRetainedRasterSource(string requestId)
@@ -1646,9 +1666,6 @@ internal sealed class PreparedGifDecodeState
             _cancellation.Dispose();
         }
     }
-
-    public void CancelAndDispose()
-        => _ = CancelAndDisposeAsync();
 
     public async Task CancelAndDisposeAsync()
     {
