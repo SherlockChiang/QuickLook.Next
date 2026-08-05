@@ -31,33 +31,64 @@ internal sealed unsafe class CompositionProducer : IDisposable
     private readonly Dictionary<(string RequestId, int PageIndex, long PageGeneration), IDXGISwapChain1> _pageSwapchains = new();
     private readonly List<IDXGISwapChain1> _retired = new(); // closed previews, freed on the next open
     private readonly Dictionary<string, HANDLE> _surfaceTransfers = new(StringComparer.Ordinal);
+    private bool _initialized;
+    private bool _disposed;
+    private int _presentFailureHResult;
 
     public long AdapterLuid { get; private set; }
 
     public void Initialize()
     {
-        ReadOnlySpan<D3D_FEATURE_LEVEL> levels = stackalloc[]
+        lock (_sync)
         {
-            D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_1,
-            D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0,
-        };
-        HRESULT hr = PInvoke.D3D11CreateDevice(
-            null, D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE, default,
-            D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            levels, PInvoke.D3D11_SDK_VERSION,
-            out ID3D11Device? device, out _, out ID3D11DeviceContext? ctx);
-        if (hr.Failed || device is null || ctx is null)
-            throw new InvalidOperationException($"D3D11CreateDevice failed 0x{hr.Value:X8}");
-        _device = device;
-        _ctx = ctx;
-        AdapterLuid = ReadAdapterLuid(_device);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_initialized)
+                return;
 
-        Guid mediaIid = typeof(IDXGIFactoryMedia).GUID;
-        hr = PInvoke.CreateDXGIFactory2((DXGI_CREATE_FACTORY_FLAGS)0, &mediaIid, out object factoryObj);
-        if (hr.Failed || factoryObj is null)
-            throw new InvalidOperationException($"CreateDXGIFactory2 failed 0x{hr.Value:X8}");
-        _factory = (IDXGIFactoryMedia)factoryObj;
+            ReadOnlySpan<D3D_FEATURE_LEVEL> levels = stackalloc[]
+            {
+                D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_1,
+                D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0,
+            };
+            D3D11_CREATE_DEVICE_FLAG flags = D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#if !DEBUG
+            flags |= D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_PREVENT_ALTERING_LAYER_SETTINGS_FROM_REGISTRY;
+#endif
+            ID3D11Device? device = null;
+            ID3D11DeviceContext? ctx = null;
+            IDXGIFactoryMedia? factory = null;
+            object? factoryObject = null;
+            try
+            {
+                HRESULT hr = PInvoke.D3D11CreateDevice(
+                    null, D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE, default,
+                    flags, levels, PInvoke.D3D11_SDK_VERSION,
+                    out device, out _, out ctx);
+                if (hr.Failed || device is null || ctx is null)
+                    throw new InvalidOperationException($"D3D11CreateDevice failed 0x{hr.Value:X8}");
 
+                long adapterLuid = ReadAdapterLuid(device);
+                Guid mediaIid = typeof(IDXGIFactoryMedia).GUID;
+                hr = PInvoke.CreateDXGIFactory2((DXGI_CREATE_FACTORY_FLAGS)0, &mediaIid, out factoryObject);
+                if (hr.Failed || factoryObject is null)
+                    throw new InvalidOperationException($"CreateDXGIFactory2 failed 0x{hr.Value:X8}");
+                factory = (IDXGIFactoryMedia)factoryObject;
+
+                _device = device;
+                _ctx = ctx;
+                _factory = factory;
+                AdapterLuid = adapterLuid;
+                _presentFailureHResult = 0;
+                _initialized = true;
+            }
+            catch
+            {
+                ReleaseCom(factory ?? factoryObject);
+                ReleaseCom(ctx);
+                ReleaseCom(device);
+                throw;
+            }
+        }
     }
 
     private static long ReadAdapterLuid(ID3D11Device device)
@@ -77,23 +108,44 @@ internal sealed unsafe class CompositionProducer : IDisposable
 
     public SurfaceTransfer CreateSurface(uint width, uint height)
     {
-        var (surface, sc) = CreateSwapchain(width, height);
         lock (_sync)
         {
-            if (_swapchain != null)
+            EnsureAvailableCore();
+            EnsureSurfaceTransferCapacityCore();
+            var (surface, sc) = CreateSwapchainCore(width, height);
+            SurfaceTransfer transfer = default;
+            bool retained = false;
+            try
             {
-                _retired.Add(_swapchain);
-                _liveSwapchains.Remove(_swapchain);
-                while (_retired.Count > 3)
+                transfer = RetainSurfaceTransferCore(surface);
+                retained = true;
+                _liveSwapchains.Add(sc);
+                if (_swapchain != null)
                 {
-                    ReleaseCom(_retired[0]);
-                    _retired.RemoveAt(0);
+                    _retired.Add(_swapchain);
+                    _liveSwapchains.Remove(_swapchain);
+                    while (_retired.Count > 3)
+                    {
+                        ReleaseCom(_retired[0]);
+                        _retired.RemoveAt(0);
+                    }
                 }
+                _swapchain = sc;
+                return transfer;
             }
-            _swapchain = sc;
-            _liveSwapchains.Add(sc);
+            catch
+            {
+                if (retained)
+                    ReleaseSurfaceTransferCore(transfer.TransferId);
+                else
+                    PInvoke.CloseHandle(surface);
+                _liveSwapchains.Remove(sc);
+                if (ReferenceEquals(_swapchain, sc))
+                    _swapchain = null;
+                ReleaseCom(sc);
+                throw;
+            }
         }
-        return RetainSurfaceTransfer(surface);
     }
 
     public SurfaceTransfer CreatePresentedSurface(byte[] bgra, int width, int height)
@@ -103,13 +155,32 @@ internal sealed unsafe class CompositionProducer : IDisposable
         if (bgra.Length != expected)
             throw new ArgumentException($"BGRA buffer length {bgra.Length} does not match {width}x{height}.", nameof(bgra));
 
-        var (surface, sc) = CreateSwapchain((uint)width, (uint)height);
         lock (_sync)
         {
-            _liveSwapchains.Add(sc);
-            PresentPixelsCore(sc, bgra, width, height);
+            EnsureAvailableCore();
+            EnsureSurfaceTransferCapacityCore();
+            var (surface, sc) = CreateSwapchainCore((uint)width, (uint)height);
+            SurfaceTransfer transfer = default;
+            bool retained = false;
+            try
+            {
+                PresentPixelsCore(sc, bgra, width, height);
+                transfer = RetainSurfaceTransferCore(surface);
+                retained = true;
+                _liveSwapchains.Add(sc);
+                return transfer;
+            }
+            catch
+            {
+                if (retained)
+                    ReleaseSurfaceTransferCore(transfer.TransferId);
+                else
+                    PInvoke.CloseHandle(surface);
+                _liveSwapchains.Remove(sc);
+                ReleaseCom(sc);
+                throw;
+            }
         }
-        return RetainSurfaceTransfer(surface);
     }
 
     /// <summary>Page surface keyed by request and page, so stale closes cannot release a newer preview.</summary>
@@ -121,15 +192,33 @@ internal sealed unsafe class CompositionProducer : IDisposable
         if (bgra.Length != expected)
             throw new ArgumentException($"BGRA buffer length {bgra.Length} does not match {width}x{height}.", nameof(bgra));
 
-        var (surface, sc) = CreateSwapchain((uint)width, (uint)height);
         lock (_sync)
         {
-            var key = (requestId, pageIndex, pageGeneration);
-            if (_pageSwapchains.Remove(key, out var old)) ReleaseCom(old);
-            _pageSwapchains[key] = sc;
-            PresentPixelsCore(sc, bgra, width, height);
+            EnsureAvailableCore();
+            EnsureSurfaceTransferCapacityCore();
+            var (surface, sc) = CreateSwapchainCore((uint)width, (uint)height);
+            SurfaceTransfer transfer = default;
+            bool retained = false;
+            try
+            {
+                PresentPixelsCore(sc, bgra, width, height);
+                transfer = RetainSurfaceTransferCore(surface);
+                retained = true;
+                var key = (requestId, pageIndex, pageGeneration);
+                if (_pageSwapchains.Remove(key, out var old)) ReleaseCom(old);
+                _pageSwapchains[key] = sc;
+                return transfer;
+            }
+            catch
+            {
+                if (retained)
+                    ReleaseSurfaceTransferCore(transfer.TransferId);
+                else
+                    PInvoke.CloseHandle(surface);
+                ReleaseCom(sc);
+                throw;
+            }
         }
-        return RetainSurfaceTransfer(surface);
     }
 
     public void ReleasePage(string requestId, int pageIndex, long pageGeneration)
@@ -143,11 +232,12 @@ internal sealed unsafe class CompositionProducer : IDisposable
     private static void ReleaseCom(object? com)
     {
         if (com is null) return;
-        try { while (Marshal.ReleaseComObject(com) > 0) { } }
-        catch { /* not an RCW; let GC reclaim it */ }
+        if (!Marshal.IsComObject(com)) return;
+        try { _ = Marshal.FinalReleaseComObject(com); }
+        catch (InvalidComObjectException) { }
     }
 
-    private (HANDLE Surface, IDXGISwapChain1 Swapchain) CreateSwapchain(uint width, uint height)
+    private (HANDLE Surface, IDXGISwapChain1 Swapchain) CreateSwapchainCore(uint width, uint height)
     {
         HANDLE surface;
         HRESULT hr = PInvoke.DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, null, &surface);
@@ -165,30 +255,41 @@ internal sealed unsafe class CompositionProducer : IDisposable
             SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
             AlphaMode = DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED,
         };
-        _factory.CreateSwapChainForCompositionSurfaceHandle(_device, surface, &desc, null, out IDXGISwapChain1 sc);
-        return (surface, sc);
+        try
+        {
+            _factory.CreateSwapChainForCompositionSurfaceHandle(_device, surface, &desc, null, out IDXGISwapChain1 sc);
+            return (surface, sc);
+        }
+        catch
+        {
+            PInvoke.CloseHandle(surface);
+            throw;
+        }
     }
 
-    private SurfaceTransfer RetainSurfaceTransfer(HANDLE surface)
+    private void EnsureSurfaceTransferCapacityCore()
+    {
+        if (_surfaceTransfers.Count >= MaxPendingSurfaceTransfers)
+            throw new InvalidOperationException("Too many unacknowledged surface transfers.");
+    }
+
+    private SurfaceTransfer RetainSurfaceTransferCore(HANDLE surface)
     {
         string transferId = Guid.NewGuid().ToString("n");
-        lock (_sync)
-        {
-            if (_surfaceTransfers.Count >= MaxPendingSurfaceTransfers)
-            {
-                PInvoke.CloseHandle(surface);
-                throw new InvalidOperationException("Too many unacknowledged surface transfers.");
-            }
-            _surfaceTransfers.Add(transferId, surface);
-        }
+        _surfaceTransfers.Add(transferId, surface);
         return new SurfaceTransfer(transferId, (long)(nint)surface.Value);
+    }
+
+    private void ReleaseSurfaceTransferCore(string transferId)
+    {
+        if (_surfaceTransfers.Remove(transferId, out HANDLE surface))
+            PInvoke.CloseHandle(surface);
     }
 
     public void ReleaseSurfaceTransfer(string transferId)
     {
         lock (_sync)
-            if (_surfaceTransfers.Remove(transferId, out HANDLE surface))
-                PInvoke.CloseHandle(surface);
+            ReleaseSurfaceTransferCore(transferId);
     }
 
     public void PresentPixels(byte[] bgra, int width, int height)
@@ -200,6 +301,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
 
         lock (_sync)
         {
+            EnsureAvailableCore();
             var sc = _swapchain ?? throw new InvalidOperationException("Surface has not been created.");
             PresentPixelsCore(sc, bgra, width, height);
         }
@@ -230,15 +332,21 @@ internal sealed unsafe class CompositionProducer : IDisposable
                 SysMemSlicePitch = (uint)expected,
             };
 
-            _device.CreateTexture2D(desc, data, out ID3D11Texture2D source);
-            sc.GetBuffer<ID3D11Texture2D>(0, out ID3D11Texture2D backbuffer);
-            _ctx.CopyResource((ID3D11Resource)backbuffer, (ID3D11Resource)source);
-            sc.Present(1, 0);
-            // Release the per-present D3D objects. The backbuffer RCW in particular keeps the swapchain
-            // alive, so leaking it means swapchains never fully release even after Retire/Reset — handle
-            // and GPU-memory growth on every preview and every PDF page.
-            ReleaseCom(backbuffer);
-            ReleaseCom(source);
+            ID3D11Texture2D? source = null;
+            ID3D11Texture2D? backbuffer = null;
+            try
+            {
+                _device.CreateTexture2D(desc, data, out source);
+                sc.GetBuffer<ID3D11Texture2D>(0, out backbuffer);
+                _ctx.CopyResource((ID3D11Resource)backbuffer, (ID3D11Resource)source);
+                ThrowIfPresentFailed(sc.Present(1, 0));
+            }
+            finally
+            {
+                // The backbuffer RCW keeps the swapchain alive; always release both per-present objects.
+                ReleaseCom(backbuffer);
+                ReleaseCom(source);
+            }
         }
     }
 
@@ -246,14 +354,32 @@ internal sealed unsafe class CompositionProducer : IDisposable
     {
         lock (_sync)
         {
+            EnsureAvailableCore();
             var sc = _swapchain;
             if (sc is null) return;
-            sc.GetBuffer<ID3D11Texture2D>(0, out ID3D11Texture2D backbuffer);
-            _device.CreateRenderTargetView(backbuffer, null, out ID3D11RenderTargetView rtv);
-            _ctx.ClearRenderTargetView(rtv, new float[] { r, g, b, a });
-            sc.Present(1, 0);
-            ReleaseCom(rtv);
-            ReleaseCom(backbuffer);
+            ID3D11Texture2D? backbuffer = null;
+            ID3D11RenderTargetView? rtv = null;
+            try
+            {
+                sc.GetBuffer<ID3D11Texture2D>(0, out backbuffer);
+                _device.CreateRenderTargetView(backbuffer, null, out rtv);
+                _ctx.ClearRenderTargetView(rtv, new float[] { r, g, b, a });
+                ThrowIfPresentFailed(sc.Present(1, 0));
+            }
+            finally
+            {
+                ReleaseCom(rtv);
+                ReleaseCom(backbuffer);
+            }
+        }
+    }
+
+    private void ThrowIfPresentFailed(HRESULT hr)
+    {
+        if (hr.Failed)
+        {
+            _presentFailureHResult = hr.Value;
+            throw new COMException($"DXGI Present failed 0x{hr.Value:X8}", hr.Value);
         }
     }
 
@@ -267,6 +393,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
     {
         lock (_sync)
         {
+            if (_disposed) return;
             foreach (var sc in _pageSwapchains.Values) _retired.Add(sc);
             _pageSwapchains.Clear();
             _retired.AddRange(_liveSwapchains);
@@ -280,6 +407,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
     {
         lock (_sync)
         {
+            if (_disposed) return;
             foreach (var sc in _retired) ReleaseCom(sc);
             _retired.Clear();
         }
@@ -289,27 +417,63 @@ internal sealed unsafe class CompositionProducer : IDisposable
     {
         lock (_sync)
         {
-            foreach (var sc in _retired) ReleaseCom(sc);
-            _retired.Clear();
-            foreach (var sc in _pageSwapchains.Values) ReleaseCom(sc);
-            _pageSwapchains.Clear();
-            foreach (var sc in _liveSwapchains) ReleaseCom(sc);
-            _swapchain = null;
-            _liveSwapchains.Clear();
-            foreach (HANDLE surface in _surfaceTransfers.Values) PInvoke.CloseHandle(surface);
-            _surfaceTransfers.Clear();
+            if (_disposed) return;
+            ResetCore();
         }
+    }
+
+    private void ResetCore()
+    {
+        foreach (var sc in _retired) ReleaseCom(sc);
+        _retired.Clear();
+        foreach (var sc in _pageSwapchains.Values) ReleaseCom(sc);
+        _pageSwapchains.Clear();
+        foreach (var sc in _liveSwapchains) ReleaseCom(sc);
+        _swapchain = null;
+        _liveSwapchains.Clear();
+        foreach (HANDLE surface in _surfaceTransfers.Values) PInvoke.CloseHandle(surface);
+        _surfaceTransfers.Clear();
+    }
+
+    private void EnsureAvailableCore()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_initialized)
+            throw new InvalidOperationException("Composition producer is not initialized.");
+        if (_presentFailureHResult != 0)
+            throw new COMException(
+                $"Composition producer is unavailable after DXGI Present failed 0x{_presentFailureHResult:X8}.",
+                _presentFailureHResult);
     }
 
     public void Dispose()
     {
-        Reset();
-        ReleaseCom(_factory);
-        ReleaseCom(_ctx);
-        ReleaseCom(_device);
-        _factory = null!;
-        _ctx = null!;
-        _device = null!;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_initialized)
+            {
+                try
+                {
+                    _ctx.ClearState();
+                    _ctx.Flush();
+                }
+                catch (Exception)
+                {
+                    // Continue releasing the owned graph even if a poisoned device rejects cleanup.
+                }
+            }
+            ResetCore();
+            ReleaseCom(_ctx);
+            ReleaseCom(_device);
+            ReleaseCom(_factory);
+            _factory = null!;
+            _ctx = null!;
+            _device = null!;
+            _initialized = false;
+            _presentFailureHResult = 0;
+        }
     }
 }
 
