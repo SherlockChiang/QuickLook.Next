@@ -1176,6 +1176,23 @@ if (Test-Path $parserHostProgram) {
     } else {
         ""
     }
+    $nativeChmPreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/chm.rs"
+    $nativeChmPreviewText = if (Test-Path -LiteralPath $nativeChmPreviewPath) {
+        Get-Content -LiteralPath $nativeChmPreviewPath -Raw
+    } else {
+        ""
+    }
+    if ($nativePreviewText -notmatch 'mod\s+chm\s*;' -or
+        $nativePreviewText -notmatch '"chm"\s*=>\s*return\s+chm::render_chm_info' -or
+        $nativePreviewText -match '(?:struct\s+ChmItsfHeader|fn\s+chm_directory_entries|fn\s+chm_system_summary)' -or
+        $nativeChmPreviewText -notmatch 'CHM_ITSF_V2_HEADER_LEN:\s*usize\s*=\s*0x58[\s\S]*CHM_ITSF_V3_HEADER_LEN:\s*usize\s*=\s*0x60' -or
+        $nativeChmPreviewText -notmatch 'CHM_ITSF_LAST_MODIFIED_OFFSET:\s*usize\s*=\s*0x10[\s\S]*CHM_ITSF_LANG_ID_OFFSET:\s*usize\s*=\s*0x14[\s\S]*CHM_ITSF_DIR_OFFSET:\s*usize\s*=\s*0x48[\s\S]*CHM_ITSF_DIR_LEN_OFFSET:\s*usize\s*=\s*0x50[\s\S]*CHM_ITSF_DATA_OFFSET:\s*usize\s*=\s*0x58' -or
+        $nativeChmPreviewText -notmatch '2\s*=>\s*dir_offset\.checked_add\(dir_len\)\?' -or
+        $nativeChmPreviewText -notmatch '3\s*=>\s*read_u64\(bytes,\s*CHM_ITSF_DATA_OFFSET\)\?' -or
+        $nativeChmPreviewText -notmatch 'data_offset\.checked_add\(system\.offset\)') {
+        Add-Failure "CHM routing and real ITSF/ITSP metadata parsing must remain in the focused Rust module"
+    }
     if ($nativePreviewText -notmatch 'mod\s+animation_probe\s*;' -or
         $nativePreviewText -notmatch 'mod\s+torrent\s*;' -or
         $nativePreviewText -notmatch 'use\s+animation_probe::probe_image_animation_reader' -or

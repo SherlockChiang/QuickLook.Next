@@ -31,6 +31,8 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
 $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
+$nativeChmPreview = Join-Path $Root "native/quicklook_next_native/src/preview/chm.rs"
+$nativeChmTests = Join-Path $Root "native/quicklook_next_native/src/preview/chm/tests.rs"
 $nativeEbookPreview = Join-Path $Root "native/quicklook_next_native/src/preview/ebook.rs"
 $nativeExecutablePreview = Join-Path $Root "native/quicklook_next_native/src/preview/executable.rs"
 $nativeMedia = Join-Path $Root "native/quicklook_next_native/src/preview/media/mod.rs"
@@ -38,6 +40,14 @@ $nativeMediaMp4 = Join-Path $Root "native/quicklook_next_native/src/preview/medi
 $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview/media/mp4/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
 $nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
+Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
+    "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
+Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
+    "CHM path reads and retained directory/compressed-stream summaries must consume their declared budgets."
+Require-Pattern $nativeChmPreview 'system\.len\s*>\s*MAX_CHM_SYSTEM_STREAM_BYTES[\s\S]*data_offset\.checked_add\(system\.offset\)[\s\S]*while\s+fields_scanned\s*<\s*MAX_CHM_SYSTEM_FIELDS[\s\S]*for\s+_\s+in\s+0\.\.MAX_CHM_ENCINT_BYTES' `
+    "CHM /#SYSTEM and ENCINT parsing must retain checked offsets and bounded scans."
+Require-Pattern $nativeChmTests 'fn\s+chm_v3_uses_real_itsf_layout_and_data_base\([\s\S]*fn\s+chm_v2_derives_data_base_with_checked_addition\([\s\S]*fn\s+chm_itsp_summary_rejects_hostile_directory_offsets\([\s\S]*fn\s+chm_header_and_itsp_truncation_fail_soft\([\s\S]*fn\s+chm_directory_rejects_out_of_bounds_pmgl\([\s\S]*fn\s+chm_directory_rejects_unterminated_encint\([\s\S]*fn\s+chm_system_stream_rejects_relative_range_overflow\([\s\S]*fn\s+chm_system_stream_caps_all_scanned_fields\(' `
+    "CHM tests must retain real v2/v3 layouts and hostile boundary coverage."
 Require-Pattern $nativeMediaMp4 'MAX_TIMELINE_ENTRIES:\s*usize\s*=\s*100_000[\s\S]*MAX_CHUNK_TABLE_ENTRIES:\s*usize\s*=\s*1_000_000[\s\S]*MAX_SAMPLE_COUNT:\s*usize\s*=\s*1_000_000[\s\S]*MAX_CHUNK_DETAILS:\s*usize\s*=\s*4' `
     "MP4 timelines, chunk tables, samples, and retained chunk details must keep explicit budgets."
 Require-Pattern $nativeMediaMp4 'MAX_COLLECTED_ATOMS:\s*usize\s*=\s*1024[\s\S]*MAX_SAMPLE_DESCRIPTION_ENTRIES:\s*u32\s*=\s*16[\s\S]*\.min\(MAX_SAMPLE_DESCRIPTION_ENTRIES\)' `
