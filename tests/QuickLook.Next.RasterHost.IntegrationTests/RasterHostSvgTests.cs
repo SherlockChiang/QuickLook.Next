@@ -26,6 +26,7 @@ public sealed class RasterHostSvgTests
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.svg");
+        bool hostExited = false;
 
         try
         {
@@ -90,11 +91,16 @@ public sealed class RasterHostSvgTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     private static bool TryOverwriteFile(string path)

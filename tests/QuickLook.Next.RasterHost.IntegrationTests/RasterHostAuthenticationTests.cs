@@ -38,6 +38,7 @@ public sealed class RasterHostAuthenticationTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
 
         try
         {
@@ -51,9 +52,8 @@ public sealed class RasterHostAuthenticationTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
+            hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 }

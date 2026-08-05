@@ -35,6 +35,7 @@ public sealed class RasterHostAnimationTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
 
         try
         {
@@ -166,11 +167,16 @@ public sealed class RasterHostAnimationTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     [Theory]
@@ -197,6 +203,7 @@ public sealed class RasterHostAnimationTests
             CreateNoWindow = true,
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
 
         try
         {
@@ -255,11 +262,16 @@ public sealed class RasterHostAnimationTests
         }
         finally
         {
-            try { pipe.Dispose(); } catch { }
-            try { await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch { try { host.Kill(entireProcessTree: true); } catch { } }
-            try { File.Delete(physicalPath); } catch { }
+            try
+            {
+                hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host);
+            }
+            finally
+            {
+                try { File.Delete(physicalPath); } catch { }
+            }
         }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
     private static bool TryOverwriteFile(string path)
