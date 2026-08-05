@@ -105,7 +105,7 @@ the release-only `release:` prefix while this queue is in progress.
       - [x] `R26-P1-07c-3a` Move CHM routing, ITSF/ITSP directory parsing,
         compressed-stream discovery, and `/#SYSTEM` metadata into
         `preview/chm.rs`; harden hostile offsets and preserve bounded reads.
-      - [ ] `R26-P1-07c-3b` Move MIME/EML and Compound File Binary MSG parsing
+      - [x] `R26-P1-07c-3b` Move MIME/EML and Compound File Binary MSG parsing
         into `preview/mail.rs` with malformed/truncated Outlook-message tests.
       - [ ] `R26-P1-07c-3c` Move ELF headers, sections, symbols, notes, and GNU
         version parsing into `preview/elf.rs` with checked hostile offsets.
@@ -199,6 +199,34 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-3b` Complete the focused 1,300-line Rust mail metadata
+  module with one explicit parent route and 545 lines of local tests. Move RFC
+  5322 header unfolding, RFC 2047 encoded words, RFC 2231 filenames, MIME part
+  discovery, attachment summaries, and bounded text previews out of
+  `preview.rs`. Accept only exact line-delimited MIME boundaries and preserve
+  the 256 KiB prefix, 128-header, 8 KiB header-value, 64-parameter/encoded-word,
+  five-name, 32-segment, 512-byte filename, four-level/32-part, 200-byte
+  boundary, 1 MiB decoded-body, and 120-character preview budgets. Parse real
+  CFB v3/v4 MSG files through bounded DIFAT/FAT, directory tree, regular stream,
+  mini-FAT, and mini-stream chains; read fixed and Unicode MAPI properties,
+  FILETIME values, recipients, and attachments. Truncated headers/directories,
+  hostile sector chains, tree cycles, oversized mini properties, malformed
+  Base64, false MIME delimiters, and excessive recursion all fail soft.
+  Architecture, module-boundary, and performance guards lock the single route,
+  implementation ownership, 1,300/550 line ceilings, parser budgets, real CFB
+  semantics, and hostile-input tests.
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml mail` (14 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (260 passed, 1 external-corpus test ignored)
+  - Verification: `dotnet msbuild native/QuickLook.Next.Native.proj -target:Build -property:Configuration=Release -verbosity:minimal`
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (363 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist`
+  - Commits: `47aa44f`, `94c2e0e`, `6d5a41c`, `57d4ad2`, `6ac3142`
 
 - [x] `R26-P1-07c-3a` Complete the focused 375-line Rust CHM metadata
   module with one explicit parent route and 268 lines of local tests. Parse the
