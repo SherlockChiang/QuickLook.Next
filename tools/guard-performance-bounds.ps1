@@ -216,13 +216,15 @@ Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."
 Require-Pattern $idleTrimmer 'GC\.Collect\([\s\S]*GC\.WaitForPendingFinalizers\(\)[\s\S]*GC\.Collect\(' `
     "RasterHost idle trim must complete finalizers before its post-finalization collection."
-Require-Pattern $idleTrimmer 'SetPreviewActive\(bool active\)[\s\S]*Volatile\.Read\(ref _previewActive\)\s*!=\s*0' `
-    "RasterHost must not force compacting GC while a preview remains active."
+Require-Pattern $idleTrimmer 'private readonly object _sync[\s\S]*Touch\(\)[\s\S]*lock \(_sync\)[\s\S]*SetPreviewActive\(bool active\)[\s\S]*lock \(_sync\)[\s\S]*Tick\(\)[\s\S]*lock \(_sync\)[\s\S]*_disposed \|\| _previewActive[\s\S]*GC\.Collect\(' `
+    "RasterHost idle compaction must be mutually exclusive with preview activation."
 Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_resources_after_idle_trim[\s\S]*privateByteRecoveryBudget\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*QL_IDLE_TRIM_SECONDS[\s\S]*QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*peakHandles\s*>\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
     "RasterHost must verify that repeated system-codec HANDLE usage recovers after idle trim."
 $pdfHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostPdfTests.cs"
 Require-Pattern $pdfHostIntegration 'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*measuredCycleCount\s*=\s*24[\s\S]*minimumMeasuredCacheGrowth\s*=\s*4L\s*\*\s*1024\s*\*\s*1024[\s\S]*PreviewSurfaceRelease[\s\S]*PreviewPageClose[\s\S]*peakPrivateBytes\s*>=\s*baselinePrivateBytes\s*\+\s*minimumMeasuredCacheGrowth[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `
     "RasterHost must verify PDF session, page cache, projection, and surface recovery after idle trim."
+Require-Pattern $pdfHostIntegration 'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*Task\.Delay\(TimeSpan\.FromSeconds\(5\)[\s\S]*Assert\.False\(host\.HasExited[\s\S]*RasterHostProcessTestHelper\.AssertCleanExit' `
+    "RasterHost PDF idle recovery must remain alive while connected and then exit cleanly on pipe EOF."
 Require-Pattern $pdfHostIntegration 'Closing_inflight_pdf_render_drains_projection_before_next_session[\s\S]*pageWidth:\s*2200[\s\S]*preRenderHandles[\s\S]*PreviewPageOpen\(firstRequestId[\s\S]*host\.HandleCount\s*>\s*preRenderHandles[\s\S]*PreviewClose\(firstRequestId\)[\s\S]*TryOverwriteFile\(physicalPath\)[\s\S]*OpenPinnedPdfAsync[\s\S]*PreviewClose\(secondRequestId\)' `
     "RasterHost must drain an in-flight PDF render before reusing the host for a later session."
 $waveformPresenter = Join-Path $Root "src/QuickLook.Next.App/ImageWaveformPresenter.cs"

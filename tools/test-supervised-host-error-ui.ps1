@@ -234,6 +234,76 @@ foreach ($hostProgram in $hostPrograms) {
     }
 }
 
+$rasterHostProgramPath = Join-Path $Root "src/QuickLook.Next.RasterHost/Program.cs"
+$rasterHostIdleTrimmerPath = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
+$rasterHostProcessHelperPath = Join-Path $Root (
+    "tests/QuickLook.Next.RasterHost.IntegrationTests/" +
+    "RasterHostProcessTestHelper.cs")
+$rasterHostPdfTestsPath = Join-Path $Root (
+    "tests/QuickLook.Next.RasterHost.IntegrationTests/" +
+    "RasterHostPdfTests.cs")
+if (-not (Test-Path -LiteralPath $rasterHostProgramPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $rasterHostIdleTrimmerPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $rasterHostProcessHelperPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $rasterHostPdfTestsPath -PathType Leaf)) {
+    Add-Failure "RasterHost terminal-exit source and integration coverage must remain tracked."
+}
+else {
+    $rasterHostProgramText = Get-Content -LiteralPath $rasterHostProgramPath -Raw
+    foreach ($shutdownRequirement in @(
+            @{ Pattern = 'terminalWorkers[\s\S]*TrackTerminalWorker\(HandlePageOpenAsync\(page\)\)[\s\S]*remainingPageCts[\s\S]*await DrainTerminalWorkersAsync\(\)'; Message = "RasterHost must track, cancel, and drain terminal workers before process cleanup." },
+            @{ Pattern = 'StartPreparedAnimationHandoff[\s\S]*TrackTerminalWorker\(Task\.Run[\s\S]*StartAnimationDecode[\s\S]*TrackTerminalWorker\(Task\.Run[\s\S]*DeletePreparedGifDecode[\s\S]*TrackTerminalWorker\(state\.CancelAndDisposeAsync\(\)\)'; Message = "RasterHost must include animation and prepared-GIF work in its terminal drain." },
+            @{ Pattern = 'DrainTerminalWorkersAsync\(\)[\s\S]*TimeSpan\.FromSeconds\(5\)[\s\S]*while \(true\)[\s\S]*Task\.WhenAll\(workers\)\.WaitAsync\(remaining\)[\s\S]*terminal worker drain timed out[\s\S]*Environment\.Exit\(31\)'; Message = "RasterHost terminal-worker drain must keep its bounded fail-stop timeout." },
+            @{ Pattern = 'Shutdown:\s*int terminalExitCode\s*=\s*0;\s*try[\s\S]*await idleTrimmer\.DisposeAsync\(\);[\s\S]*await DrainTerminalWorkersAsync\(\)[\s\S]*Task\.WhenAll\(remainingMetadataRequests[\s\S]*DisposePdfSessionAsync\(session,[\s\S]*packet\.Dispose\(\)[\s\S]*catch \(Exception ex\)[\s\S]*terminalExitCode\s*=\s*31[\s\S]*Environment\.Exit\(terminalExitCode\)'; Message = "RasterHost pipe termination must quiesce and drain owned work, then atomically fail-stop on cleanup errors." })) {
+        if ($rasterHostProgramText -notmatch $shutdownRequirement.Pattern) {
+            Add-Failure $shutdownRequirement.Message
+        }
+    }
+
+    $rasterHostIdleTrimmerText = Get-Content -LiteralPath $rasterHostIdleTrimmerPath -Raw
+    if ($rasterHostIdleTrimmerText -notmatch
+            'class IdleTrimmer\s*:\s*IAsyncDisposable[\s\S]*private readonly object _sync[\s\S]*void Touch\(\)[\s\S]*lock \(_sync\)[\s\S]*SetPreviewActive\(bool active\)[\s\S]*lock \(_sync\)[\s\S]*void Tick\(\)[\s\S]*lock \(_sync\)[\s\S]*_disposed \|\| _previewActive[\s\S]*GC\.Collect\([\s\S]*ValueTask DisposeAsync\(\)[\s\S]*_timer\.DisposeAsync\(\)') {
+        Add-Failure "RasterHost idle trim must exclude preview activation and await in-flight timer callbacks."
+    }
+
+    $rasterHostProcessHelperText = Get-Content -LiteralPath $rasterHostProcessHelperPath -Raw
+    foreach ($helperRequirement in @(
+            'ExitTimeout\s*=\s*TimeSpan\.FromSeconds\(5\)',
+            'pipe\.Dispose\(\)[\s\S]*host\.WaitForExitAsync\(\)\.WaitAsync\(ExitTimeout\)',
+            'TryKill\(host\)[\s\S]*host\.WaitForExitAsync\(\)\.WaitAsync\(KillTimeout\)',
+            'Assert\.True\(\s*exited[\s\S]*Assert\.Equal\(0,\s*host\.ExitCode\)')) {
+        if ($rasterHostProcessHelperText -notmatch $helperRequirement) {
+            Add-Failure "RasterHost real-process cleanup lost required clean-exit coverage: $helperRequirement"
+        }
+    }
+
+    $rasterHostPdfTestsText = Get-Content -LiteralPath $rasterHostPdfTestsPath -Raw
+    if ($rasterHostPdfTestsText -notmatch
+            'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*Task\.Delay\(TimeSpan\.FromSeconds\(5\)[\s\S]*Assert\.False\(host\.HasExited,[\s\S]*RasterHostProcessTestHelper\.AssertCleanExit') {
+        Add-Failure "The PDF idle regression must prove both connected-host survival and a clean terminal exit."
+    }
+
+    $rasterHostTestRoot = Split-Path $rasterHostProcessHelperPath -Parent
+    foreach ($testSource in Get-ChildItem -LiteralPath $rasterHostTestRoot -File -Filter "*.cs") {
+        $testSourceText = Get-Content -LiteralPath $testSource.FullName -Raw
+        $startCount = ([regex]::Matches($testSourceText, 'Process\.Start\(')).Count
+        if ($startCount -eq 0) {
+            continue
+        }
+        $completeCount = ([regex]::Matches(
+                $testSourceText,
+                'RasterHostProcessTestHelper\.CompleteAsync')).Count
+        $assertCount = ([regex]::Matches(
+                $testSourceText,
+                'RasterHostProcessTestHelper\.AssertCleanExit')).Count
+        if ($completeCount -lt $startCount -or $assertCount -lt $startCount) {
+            Add-Failure (
+                "$($testSource.Name) launches $startCount real RasterHost process(es), " +
+                "but records $completeCount completion(s) and $assertCount clean exit(s).")
+        }
+    }
+}
+
 $launcherPath = Join-Path $Root "src/QuickLook.Next.App/HostProcessLauncher.cs"
 if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
     Add-Failure "The supervised host launcher is missing."
