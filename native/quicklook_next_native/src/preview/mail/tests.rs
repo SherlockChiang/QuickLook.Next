@@ -1,7 +1,12 @@
 use super::{
-    append_msg_compound_summary, decode_mail_header_value, mail_attachment_filenames,
-    mail_header_parameter, mail_mime_part_summaries, parse_mail_headers, CFB_END_OF_CHAIN,
-    CFB_FAT_SECTOR, CFB_FREE_SECTOR,
+    append_msg_compound_summary, decode_base64, decode_mail_header_value,
+    mail_attachment_filename_from_disposition, mail_attachment_summary, mail_header_parameter,
+    mail_header_parameters, mail_mime_part_summaries, mail_text_body_preview, parse_mail_headers,
+    CFB_END_OF_CHAIN, CFB_FAT_SECTOR, CFB_FREE_SECTOR, MAX_MAIL_DECODED_BODY_BYTES,
+    MAX_MAIL_DECODED_HEADER_BYTES, MAX_MAIL_ENCODED_WORDS, MAX_MAIL_FILENAME_BYTES,
+    MAX_MAIL_HEADERS, MAX_MAIL_HEADER_PARAMETERS, MAX_MAIL_HEADER_VALUE_BYTES,
+    MAX_MAIL_MIME_BOUNDARY_BYTES, MAX_MAIL_MIME_DEPTH, MAX_MAIL_MIME_PARTS,
+    MAX_MAIL_TEXT_PREVIEW_CHARS,
 };
 
 const CFB_SECTOR_SIZE: usize = 512;
@@ -249,6 +254,121 @@ fn msg_summary(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn mail_header_parser_caps_header_count_and_values() {
+    let mut content = format!(
+        "Subject: {}\r\n",
+        "x".repeat(MAX_MAIL_HEADER_VALUE_BYTES + 100)
+    );
+    for index in 0..(MAX_MAIL_HEADERS + 8) {
+        content.push_str(&format!("X-Test-{index}: value\r\n"));
+    }
+    content.push_str("\r\n");
+
+    let headers = parse_mail_headers(&content);
+
+    assert_eq!(headers.len(), MAX_MAIL_HEADERS);
+    assert_eq!(headers[0].1.len(), MAX_MAIL_HEADER_VALUE_BYTES);
+
+    let utf8 = format!(
+        "Subject: {}\r\n\r\n",
+        "é".repeat(MAX_MAIL_HEADER_VALUE_BYTES)
+    );
+    let utf8_headers = parse_mail_headers(&utf8);
+    assert_eq!(utf8_headers[0].1.len(), MAX_MAIL_HEADER_VALUE_BYTES);
+    assert!(utf8_headers[0].1.is_char_boundary(utf8_headers[0].1.len()));
+}
+
+#[test]
+fn mail_mime_summary_caps_parts_and_rejects_hostile_boundary() {
+    let mut content = String::new();
+    for _ in 0..(MAX_MAIL_MIME_PARTS + 8) {
+        content.push_str("--parts\r\nContent-Type: text/plain\r\n\r\nhello\r\n");
+    }
+    content.push_str("--parts--\r\n");
+
+    assert_eq!(
+        mail_mime_part_summaries(&content, "parts").len(),
+        MAX_MAIL_MIME_PARTS
+    );
+    assert!(
+        mail_mime_part_summaries(&content, &"x".repeat(MAX_MAIL_MIME_BOUNDARY_BYTES + 1))
+            .is_empty()
+    );
+    assert!(mail_mime_part_summaries(&content, "bad\0boundary").is_empty());
+
+    let nested_boundary = "x".repeat(MAX_MAIL_MIME_BOUNDARY_BYTES + 1);
+    let nested = format!(
+        "--root\r\nContent-Type: multipart/mixed; boundary=\"{nested_boundary}\"\r\n\r\n--{nested_boundary}\r\nContent-Type: text/plain\r\n\r\nchild\r\n--{nested_boundary}--\r\n--root--\r\n"
+    );
+    assert_eq!(mail_mime_part_summaries(&nested, "root").len(), 1);
+
+    let false_delimiters = "--root\r\nContent-Type: text/plain\r\n\r\nprefix --root suffix\r\n--rootSuffix\r\n--root--\r\n";
+    assert_eq!(mail_mime_part_summaries(false_delimiters, "root").len(), 1);
+}
+
+#[test]
+fn mail_mime_summary_caps_nesting_depth() {
+    fn nested_part(depth: usize) -> String {
+        let boundary = format!("nested-{}", depth + 1);
+        let body = if depth > MAX_MAIL_MIME_DEPTH {
+            "Content-Type: text/plain\r\n\r\nleaf".to_string()
+        } else {
+            nested_part(depth + 1)
+        };
+        format!(
+            "Content-Type: multipart/mixed; boundary={boundary}\r\n\r\n--{boundary}\r\n{body}\r\n--{boundary}--\r\n"
+        )
+    }
+
+    let content = format!("--root\r\n{}\r\n--root--\r\n", nested_part(0));
+    let summaries = mail_mime_part_summaries(&content, "root");
+    assert_eq!(summaries.len(), MAX_MAIL_MIME_DEPTH + 1);
+    assert!(!summaries
+        .iter()
+        .any(|summary| summary.contains("text/plain")));
+}
+
+#[test]
+fn mail_decoders_keep_header_and_body_budgets() {
+    let encoded_words = "=?UTF-8?Q?xxxxxxxxxxxxxxxx?=".repeat(1024);
+    assert!(decode_mail_header_value(&encoded_words).len() <= MAX_MAIL_DECODED_HEADER_BYTES);
+    let limited_words = "=?UTF-8?Q?x?=".repeat(MAX_MAIL_ENCODED_WORDS + 1);
+    assert!(decode_mail_header_value(&limited_words).contains("=?UTF-8?Q?x?="));
+
+    assert_eq!(
+        decode_base64("QUJDRA==", 4).as_deref(),
+        Some(b"ABCD".as_slice())
+    );
+    assert!(decode_base64("QUJDRA==", 3).is_none());
+    assert!(decode_base64("QQ==trailing", 64).is_none());
+
+    let oversized_body = "x".repeat(MAX_MAIL_DECODED_BODY_BYTES + 1);
+    assert!(mail_text_body_preview(&oversized_body, None).is_none());
+
+    let preview_source = format!("{} second", "x".repeat(MAX_MAIL_TEXT_PREVIEW_CHARS - 1));
+    let preview = mail_text_body_preview(&preview_source, None).expect("text preview");
+    assert!(preview.chars().count() <= MAX_MAIL_TEXT_PREVIEW_CHARS);
+    assert!(!preview.ends_with(char::is_whitespace));
+
+    let disposition = format!(
+        "attachment; filename=\"{}\"",
+        "x".repeat(MAX_MAIL_FILENAME_BYTES + 100)
+    );
+    let filename =
+        mail_attachment_filename_from_disposition(&disposition).expect("attachment filename");
+    assert_eq!(filename.len(), MAX_MAIL_FILENAME_BYTES);
+
+    let parameters = (0..MAX_MAIL_HEADER_PARAMETERS + 8)
+        .map(|index| format!("key{index}=value"))
+        .collect::<Vec<_>>()
+        .join(";");
+    assert_eq!(
+        mail_header_parameters(&format!("text/plain;{parameters}")).len(),
+        MAX_MAIL_HEADER_PARAMETERS
+    );
+}
+
+#[test]
 fn msg_compound_summary_reads_real_fat_and_mini_streams() {
     let text = msg_summary(&real_msg_fixture());
 
@@ -379,19 +499,22 @@ fn mail_header_decoder_reads_q_encoded_words_and_filenames() {
         decode_mail_header_value("=?UTF-8?B?UmVwb3J0IEphbnVhcnk=?="),
         "Report January"
     );
-    let names = mail_attachment_filenames(
+    let names = mail_attachment_summary(
         "Content-Disposition: attachment; filename=\"=?UTF-8?Q?report_Q1.pdf?=\"\r\n",
-    );
+    )
+    .1;
     assert_eq!(names, vec!["report Q1.pdf".to_string()]);
 
-    let names = mail_attachment_filenames(
+    let names = mail_attachment_summary(
         "Content-Disposition: attachment; filename*=UTF-8''report%20Q2.pdf\r\n",
-    );
+    )
+    .1;
     assert_eq!(names, vec!["report Q2.pdf".to_string()]);
 
-    let names = mail_attachment_filenames(
+    let names = mail_attachment_summary(
         "Content-Disposition: attachment; filename*0*=UTF-8''quarterly%20; filename*1*=summary.pdf\r\n",
-    );
+    )
+    .1;
     assert_eq!(names, vec!["quarterly summary.pdf".to_string()]);
 }
 
