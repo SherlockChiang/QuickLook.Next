@@ -107,7 +107,7 @@ the release-only `release:` prefix while this queue is in progress.
         `preview/chm.rs`; harden hostile offsets and preserve bounded reads.
       - [x] `R26-P1-07c-3b` Move MIME/EML and Compound File Binary MSG parsing
         into `preview/mail.rs` with malformed/truncated Outlook-message tests.
-      - [ ] `R26-P1-07c-3c` Move ELF headers, sections, symbols, notes, and GNU
+      - [x] `R26-P1-07c-3c` Move ELF headers, sections, symbols, notes, and GNU
         version parsing into `preview/elf.rs` with checked hostile offsets.
       - [ ] `R26-P1-07c-3d` Move minidump streams and ELF-core composition into
         `preview/dump.rs` behind narrow sibling-module APIs.
@@ -199,6 +199,27 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-3c` Complete the 1,344-line Rust ELF metadata module with
+  329 lines of focused tests and two narrow parent APIs. Raise the path-based
+  read from the legacy 512-byte prefix to an explicit bounded 1 MiB budget so
+  section/string metadata beyond the ELF header is reachable. Validate ELF32/
+  ELF64 identity, endian/version fields, header and table entry sizes, checked
+  u64-to-usize conversions, table ranges, bounded dynamic/version/note scans,
+  string-table ownership, and file-backed virtual-address mapping. Fail soft on
+  truncated, big-endian, hostile-offset, unterminated-dynamic, oversized-entry,
+  and malformed-note inputs; keep GNU `vd_cnt` at its specified `+6` field and
+  cap interpreter, symbol, relocation, version, note-owner, and build-id output.
+  The real `render_info` route is covered with metadata placed beyond 512 bytes.
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml elf` (5 passed)
+  - Verification: `cargo test --release --workspace --locked --manifest-path native/Cargo.toml elf` (5 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (263 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist` (passed outside the sandbox)
+  - Commits: `b409225`, `6ed54ae`, `3501b14`
 
 - [x] `R26-P1-07c-3b` Complete the focused 1,300-line Rust mail metadata
   module with one explicit parent route and 545 lines of local tests. Move RFC
