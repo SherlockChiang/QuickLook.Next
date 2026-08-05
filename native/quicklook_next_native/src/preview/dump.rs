@@ -5,9 +5,14 @@ use super::{
     file_name, generic_info_json, read_file_prefix,
 };
 
+const MAX_DUMP_READ_BYTES: usize = 1024 * 1024;
+const MAX_MINIDUMP_STREAMS: u32 = 64;
+const MAX_MINIDUMP_UTF16_BYTES: usize = 4096;
+const MINIDUMP_DIRECTORY_ENTRY_BYTES: usize = 12;
+
 pub(super) fn render_info(path: &str, size: i64, modified_unix: i64) -> String {
     let filename = file_name(path);
-    let bytes = read_file_prefix(path, 512).unwrap_or_default();
+    let bytes = read_file_prefix(path, MAX_DUMP_READ_BYTES).unwrap_or_default();
     let mut text = base_info_text(filename, "dump", size, modified_unix);
     if bytes.starts_with(b"MDMP") {
         text.push_str("\nFormat: Windows minidump");
@@ -23,7 +28,7 @@ pub(super) fn render_info(path: &str, size: i64, modified_unix: i64) -> String {
         if let Some(timestamp) = read_u32(&bytes, 20) {
             text.push_str(&format!(
                 "\nTimestamp: {}",
-                format_timestamp(timestamp as i64)
+                format_timestamp(i64::from(timestamp))
             ));
         }
         if let Some(flags) = read_u64(&bytes, 24) {
@@ -39,9 +44,28 @@ pub(super) fn render_info(path: &str, size: i64, modified_unix: i64) -> String {
     generic_info_json(path, "dump", size, modified_unix, Some(text))
 }
 
+fn checked_slice(bytes: &[u8], offset: usize, size: usize) -> Option<&[u8]> {
+    let end = offset.checked_add(size)?;
+    bytes.get(offset..end)
+}
+
+fn indexed_slice(bytes: &[u8], start: usize, index: usize, entry_size: usize) -> Option<&[u8]> {
+    let offset = index.checked_mul(entry_size)?.checked_add(start)?;
+    checked_slice(bytes, offset, entry_size)
+}
+
+fn checked_stream(bytes: &[u8], offset: usize, size: usize, minimum_size: usize) -> Option<&[u8]> {
+    (size >= minimum_size)
+        .then(|| checked_slice(bytes, offset, size))
+        .flatten()
+}
+
 fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
-    let streams = read_u32(bytes, 8).unwrap_or(0).min(64) as usize;
-    let directory_rva = read_u32(bytes, 12).unwrap_or(0) as usize;
+    let streams = read_u32(bytes, 8).unwrap_or(0).min(MAX_MINIDUMP_STREAMS);
+    let Some(directory_rva) = read_u32(bytes, 12).and_then(|value| usize::try_from(value).ok())
+    else {
+        return;
+    };
     if streams == 0 || directory_rva == 0 {
         return;
     }
@@ -58,43 +82,51 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
     let mut unloaded_module_info = None;
     let mut misc_info = None;
     for index in 0..streams {
-        let offset = directory_rva + index * 12;
-        let Some(stream_type) = read_u32(bytes, offset) else {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
         };
-        let Some(data_size) = read_u32(bytes, offset + 4) else {
+        let Some(directory) =
+            indexed_slice(bytes, directory_rva, index, MINIDUMP_DIRECTORY_ENTRY_BYTES)
+        else {
             break;
         };
-        let Some(rva) = read_u32(bytes, offset + 8) else {
+        let Some(stream_type) = read_u32(directory, 0) else {
+            break;
+        };
+        let Some(data_size) = read_u32(directory, 4) else {
+            break;
+        };
+        let Some(rva) = read_u32(directory, 8) else {
             break;
         };
         names.push(format!(
             "{} ({} @ 0x{rva:08X})",
             minidump_stream_name(stream_type),
-            format_bytes(data_size as i64)
+            format_bytes(i64::from(data_size))
         ));
-        if stream_type == 7 {
-            system_info = parse_minidump_system_info(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 6 {
-            exception_info = parse_minidump_exception(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 3 {
-            thread_info = parse_minidump_thread_list(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 4 {
-            module_info = parse_minidump_module_list(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 5 {
-            memory_info = parse_minidump_memory_list(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 9 {
-            memory64_info = parse_minidump_memory64_list(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 24 {
-            thread_names_info =
-                parse_minidump_thread_names(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 17 {
-            handle_info = parse_minidump_handle_data(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 11 {
-            unloaded_module_info =
-                parse_minidump_unloaded_module_list(bytes, rva as usize, data_size as usize);
-        } else if stream_type == 12 {
-            misc_info = parse_minidump_misc_info(bytes, rva as usize, data_size as usize);
+        let Some(stream_offset) = usize::try_from(rva).ok() else {
+            continue;
+        };
+        let Some(stream_size) = usize::try_from(data_size).ok() else {
+            continue;
+        };
+        match stream_type {
+            3 => thread_info = parse_minidump_thread_list(bytes, stream_offset, stream_size),
+            4 => module_info = parse_minidump_module_list(bytes, stream_offset, stream_size),
+            5 => memory_info = parse_minidump_memory_list(bytes, stream_offset, stream_size),
+            6 => exception_info = parse_minidump_exception(bytes, stream_offset, stream_size),
+            7 => system_info = parse_minidump_system_info(bytes, stream_offset, stream_size),
+            9 => memory64_info = parse_minidump_memory64_list(bytes, stream_offset, stream_size),
+            11 => {
+                unloaded_module_info =
+                    parse_minidump_unloaded_module_list(bytes, stream_offset, stream_size)
+            }
+            12 => misc_info = parse_minidump_misc_info(bytes, stream_offset, stream_size),
+            17 => handle_info = parse_minidump_handle_data(bytes, stream_offset, stream_size),
+            24 => {
+                thread_names_info = parse_minidump_thread_names(bytes, stream_offset, stream_size)
+            }
+            _ => {}
         }
     }
     if !names.is_empty() {
@@ -133,36 +165,33 @@ fn append_minidump_streams(text: &mut String, bytes: &[u8]) {
 }
 
 fn parse_minidump_misc_info(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 8 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let size_of_info = read_u32(bytes, offset).unwrap_or(0) as usize;
-    let available = size
-        .min(size_of_info)
-        .min(bytes.len().saturating_sub(offset));
+    let stream = checked_stream(bytes, offset, size, 8)?;
+    let size_of_info = usize::try_from(read_u32(stream, 0)?).ok()?;
+    let available = stream.len().min(size_of_info);
     if available < 8 {
         return None;
     }
-    let flags = read_u32(bytes, offset + 4).unwrap_or(0);
+    let info = stream.get(..available)?;
+    let flags = read_u32(info, 4).unwrap_or(0);
     let mut lines = vec![format!("\nMiscInfo flags: 0x{flags:08X}")];
     if flags & 0x1 != 0 && available >= 12 {
-        let process_id = read_u32(bytes, offset + 8).unwrap_or(0);
+        let process_id = read_u32(info, 8).unwrap_or(0);
         lines.push(format!("Process ID: {process_id}"));
     }
     if flags & 0x2 != 0 && available >= 24 {
-        let create_time = read_u32(bytes, offset + 12).unwrap_or(0);
-        let user_time = read_u32(bytes, offset + 16).unwrap_or(0);
-        let kernel_time = read_u32(bytes, offset + 20).unwrap_or(0);
+        let create_time = read_u32(info, 12).unwrap_or(0);
+        let user_time = read_u32(info, 16).unwrap_or(0);
+        let kernel_time = read_u32(info, 20).unwrap_or(0);
         lines.push(format!("Process create time: {create_time}"));
         lines.push(format!("Process user time: {user_time}s"));
         lines.push(format!("Process kernel time: {kernel_time}s"));
     }
     if flags & 0x4 != 0 && available >= 44 {
-        let max_mhz = read_u32(bytes, offset + 24).unwrap_or(0);
-        let current_mhz = read_u32(bytes, offset + 28).unwrap_or(0);
-        let mhz_limit = read_u32(bytes, offset + 32).unwrap_or(0);
-        let max_idle_state = read_u32(bytes, offset + 36).unwrap_or(0);
-        let current_idle_state = read_u32(bytes, offset + 40).unwrap_or(0);
+        let max_mhz = read_u32(info, 24).unwrap_or(0);
+        let current_mhz = read_u32(info, 28).unwrap_or(0);
+        let mhz_limit = read_u32(info, 32).unwrap_or(0);
+        let max_idle_state = read_u32(info, 36).unwrap_or(0);
+        let current_idle_state = read_u32(info, 40).unwrap_or(0);
         lines.push(format!(
             "Processor power: max {max_mhz} MHz; current {current_mhz} MHz; limit {mhz_limit} MHz; idle {current_idle_state}/{max_idle_state}"
         ));
@@ -171,119 +200,116 @@ fn parse_minidump_misc_info(bytes: &[u8], offset: usize, size: usize) -> Option<
 }
 
 fn parse_minidump_unloaded_module_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 12 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let header_size = read_u32(bytes, offset).unwrap_or(0).max(12) as usize;
-    let entry_size = read_u32(bytes, offset + 4).unwrap_or(0) as usize;
-    let count = read_u32(bytes, offset + 8).unwrap_or(0) as usize;
-    if entry_size < 24 || header_size > size {
+    let stream = checked_stream(bytes, offset, size, 12)?;
+    let header_size = usize::try_from(read_u32(stream, 0)?.max(12)).ok()?;
+    let entry_size = usize::try_from(read_u32(stream, 4)?).ok()?;
+    let count = read_u32(stream, 8)?;
+    if entry_size < 24 || header_size > stream.len() {
         return None;
     }
     let mut lines = vec![format!("\nUnloaded modules: {count}")];
-    let mut entry_offset = offset + header_size;
-    for _ in 0..count.min(12) {
-        if entry_offset + entry_size > offset + size || entry_offset + 24 > bytes.len() {
+    for index in 0..count.min(12) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let base = read_u64(bytes, entry_offset).unwrap_or(0);
-        let image_size = read_u32(bytes, entry_offset + 8).unwrap_or(0) as u64;
+        };
+        let Some(entry) = indexed_slice(stream, header_size, index, entry_size) else {
+            break;
+        };
+        let base = read_u64(entry, 0).unwrap_or(0);
+        let image_size = u64::from(read_u32(entry, 8).unwrap_or(0));
         let end = base.saturating_add(image_size);
-        let checksum = read_u32(bytes, entry_offset + 12).unwrap_or(0);
-        let timestamp = read_u32(bytes, entry_offset + 16).unwrap_or(0);
-        let name_rva = read_u32(bytes, entry_offset + 20).unwrap_or(0) as usize;
-        let name =
-            read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        let checksum = read_u32(entry, 12).unwrap_or(0);
+        let timestamp = read_u32(entry, 16).unwrap_or(0);
+        let name = usize::try_from(read_u32(entry, 20).unwrap_or(0))
+            .ok()
+            .and_then(|name_rva| read_minidump_utf16_string(bytes, name_rva))
+            .unwrap_or_else(|| "<unnamed>".to_string());
         lines.push(format!(
             "Unloaded module {name}: range 0x{base:016X}-0x{end:016X}; timestamp 0x{timestamp:08X}; checksum 0x{checksum:08X}"
         ));
-        entry_offset += entry_size;
     }
     Some(lines.join("\n"))
 }
 
 fn parse_minidump_handle_data(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 16 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let header_size = read_u32(bytes, offset).unwrap_or(0).max(16) as usize;
-    let descriptor_size = read_u32(bytes, offset + 4).unwrap_or(0) as usize;
-    let count = read_u32(bytes, offset + 8).unwrap_or(0) as usize;
-    if descriptor_size < 32 || header_size > size {
+    let stream = checked_stream(bytes, offset, size, 16)?;
+    let header_size = usize::try_from(read_u32(stream, 0)?.max(16)).ok()?;
+    let descriptor_size = usize::try_from(read_u32(stream, 4)?).ok()?;
+    let count = read_u32(stream, 8)?;
+    if descriptor_size < 32 || header_size > stream.len() {
         return None;
     }
     let mut lines = vec![format!("\nHandles: {count}")];
-    let mut descriptor_offset = offset + header_size;
-    for _ in 0..count.min(8) {
-        if descriptor_offset + descriptor_size > offset + size
-            || descriptor_offset + 32 > bytes.len()
-        {
+    for index in 0..count.min(8) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let handle = read_u64(bytes, descriptor_offset).unwrap_or(0);
-        let type_name_rva = read_u32(bytes, descriptor_offset + 8).unwrap_or(0) as usize;
-        let object_name_rva = read_u32(bytes, descriptor_offset + 12).unwrap_or(0) as usize;
-        let attributes = read_u32(bytes, descriptor_offset + 16).unwrap_or(0);
-        let granted_access = read_u32(bytes, descriptor_offset + 20).unwrap_or(0);
-        let handle_count = read_u32(bytes, descriptor_offset + 24).unwrap_or(0);
-        let pointer_count = read_u32(bytes, descriptor_offset + 28).unwrap_or(0);
-        let type_name = read_minidump_utf16_string(bytes, type_name_rva)
+        };
+        let Some(descriptor) = indexed_slice(stream, header_size, index, descriptor_size) else {
+            break;
+        };
+        let handle = read_u64(descriptor, 0).unwrap_or(0);
+        let type_name_rva = usize::try_from(read_u32(descriptor, 8).unwrap_or(0)).ok();
+        let object_name_rva = usize::try_from(read_u32(descriptor, 12).unwrap_or(0)).ok();
+        let attributes = read_u32(descriptor, 16).unwrap_or(0);
+        let granted_access = read_u32(descriptor, 20).unwrap_or(0);
+        let handle_count = read_u32(descriptor, 24).unwrap_or(0);
+        let pointer_count = read_u32(descriptor, 28).unwrap_or(0);
+        let type_name = type_name_rva
+            .and_then(|name_rva| read_minidump_utf16_string(bytes, name_rva))
             .unwrap_or_else(|| "<unknown>".to_string());
-        let object_name = read_minidump_utf16_string(bytes, object_name_rva)
+        let object_name = object_name_rva
+            .and_then(|name_rva| read_minidump_utf16_string(bytes, name_rva))
             .unwrap_or_else(|| "<unnamed>".to_string());
         lines.push(format!(
             "Handle 0x{handle:016X}: {type_name} {object_name}; access 0x{granted_access:08X}; attributes 0x{attributes:08X}; handles {handle_count}; pointers {pointer_count}"
         ));
-        descriptor_offset += descriptor_size;
     }
     Some(lines.join("\n"))
 }
 
 fn parse_minidump_thread_names(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 4 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let count = read_u32(bytes, offset)? as usize;
+    let stream = checked_stream(bytes, offset, size, 4)?;
+    let count = read_u32(stream, 0)?;
     let mut lines = vec![format!("\nThread names: {count}")];
-    let mut entry_offset = offset + 4;
-    for _ in 0..count.min(12) {
-        if entry_offset + 16 > offset + size || entry_offset + 16 > bytes.len() {
+    for index in 0..count.min(12) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let id = read_u32(bytes, entry_offset).unwrap_or(0);
-        let name_rva = read_u64(bytes, entry_offset + 8).unwrap_or(0) as usize;
-        if let Some(name) = read_minidump_utf16_string(bytes, name_rva) {
+        };
+        let Some(entry) = indexed_slice(stream, 4, index, 16) else {
+            break;
+        };
+        let id = read_u32(entry, 0).unwrap_or(0);
+        let name_rva = usize::try_from(read_u64(entry, 8).unwrap_or(0)).ok();
+        if let Some(name) = name_rva.and_then(|rva| read_minidump_utf16_string(bytes, rva)) {
             lines.push(format!("Thread {id} name: {name}"));
         }
-        entry_offset += 16;
     }
     Some(lines.join("\n"))
 }
 
 fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 16 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let count = read_u64(bytes, offset)? as usize;
-    let base_rva = read_u64(bytes, offset + 8).unwrap_or(0);
+    let stream = checked_stream(bytes, offset, size, 16)?;
+    let count = read_u64(stream, 0)?;
+    let base_rva = read_u64(stream, 8).unwrap_or(0);
     let mut total = 0u64;
     let mut lines = vec![
         format!("\nMemory64 ranges: {count}"),
         format!("Memory64 base RVA: 0x{base_rva:X}"),
     ];
-    let mut descriptor_offset = offset + 16;
-    for _ in 0..count.min(8) {
-        if descriptor_offset + 16 > offset + size || descriptor_offset + 16 > bytes.len() {
+    for index in 0..count.min(8) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let start = read_u64(bytes, descriptor_offset).unwrap_or(0);
-        let data_size = read_u64(bytes, descriptor_offset + 8).unwrap_or(0);
+        };
+        let Some(descriptor) = indexed_slice(stream, 16, index, 16) else {
+            break;
+        };
+        let start = read_u64(descriptor, 0).unwrap_or(0);
+        let data_size = read_u64(descriptor, 8).unwrap_or(0);
         total = total.saturating_add(data_size);
         let end = start.saturating_add(data_size);
         lines.push(format!(
             "Memory64 0x{start:016X}-0x{end:016X} ({data_size} bytes)"
         ));
-        descriptor_offset += 16;
     }
     if count > 0 {
         lines.insert(2, format!("Memory64 bytes listed: {total}"));
@@ -292,25 +318,24 @@ fn parse_minidump_memory64_list(bytes: &[u8], offset: usize, size: usize) -> Opt
 }
 
 fn parse_minidump_memory_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 4 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let count = read_u32(bytes, offset)? as usize;
+    let stream = checked_stream(bytes, offset, size, 4)?;
+    let count = read_u32(stream, 0)?;
     let mut total = 0u64;
     let mut lines = vec![format!("\nMemory ranges: {count}")];
-    let mut descriptor_offset = offset + 4;
-    for _ in 0..count.min(8) {
-        if descriptor_offset + 16 > offset + size || descriptor_offset + 16 > bytes.len() {
+    for index in 0..count.min(8) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let start = read_u64(bytes, descriptor_offset).unwrap_or(0);
-        let data_size = read_u32(bytes, descriptor_offset + 8).unwrap_or(0) as u64;
+        };
+        let Some(descriptor) = indexed_slice(stream, 4, index, 16) else {
+            break;
+        };
+        let start = read_u64(descriptor, 0).unwrap_or(0);
+        let data_size = u64::from(read_u32(descriptor, 8).unwrap_or(0));
         total = total.saturating_add(data_size);
         let end = start.saturating_add(data_size);
         lines.push(format!(
             "Memory 0x{start:016X}-0x{end:016X} ({data_size} bytes)"
         ));
-        descriptor_offset += 16;
     }
     if count > 0 {
         lines.insert(1, format!("Memory bytes listed: {total}"));
@@ -319,48 +344,49 @@ fn parse_minidump_memory_list(bytes: &[u8], offset: usize, size: usize) -> Optio
 }
 
 fn parse_minidump_module_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 4 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let count = read_u32(bytes, offset)? as usize;
+    let stream = checked_stream(bytes, offset, size, 4)?;
+    let count = read_u32(stream, 0)?;
     let mut lines = vec![format!("\nModules: {count}")];
-    let mut module_offset = offset + 4;
-    for _ in 0..count.min(12) {
-        if module_offset + 108 > offset + size || module_offset + 108 > bytes.len() {
+    for index in 0..count.min(12) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let base = read_u64(bytes, module_offset).unwrap_or(0);
-        let image_size = read_u32(bytes, module_offset + 8).unwrap_or(0);
-        let timestamp = read_u32(bytes, module_offset + 16).unwrap_or(0);
-        let name_rva = read_u32(bytes, module_offset + 20).unwrap_or(0) as usize;
-        let name =
-            read_minidump_utf16_string(bytes, name_rva).unwrap_or_else(|| "<unnamed>".to_string());
+        };
+        let Some(module) = indexed_slice(stream, 4, index, 108) else {
+            break;
+        };
+        let base = read_u64(module, 0).unwrap_or(0);
+        let image_size = read_u32(module, 8).unwrap_or(0);
+        let timestamp = read_u32(module, 16).unwrap_or(0);
+        let name = usize::try_from(read_u32(module, 20).unwrap_or(0))
+            .ok()
+            .and_then(|name_rva| read_minidump_utf16_string(bytes, name_rva))
+            .unwrap_or_else(|| "<unnamed>".to_string());
         let mut line = format!(
             "Module {name}: base 0x{base:016X}; size {image_size}; timestamp 0x{timestamp:08X}"
         );
-        if let Some(version) = parse_minidump_fixed_version(bytes, module_offset + 24) {
+        if let Some(version) = parse_minidump_fixed_version(module, 24) {
             line.push_str(&format!(
                 "; file version {}; product version {}; type {}; flags 0x{:08X}",
                 version.file_version, version.product_version, version.file_type, version.flags
             ));
         }
         lines.push(line);
-        module_offset += 108;
     }
     Some(lines.join("\n"))
 }
 
 fn parse_minidump_fixed_version(bytes: &[u8], offset: usize) -> Option<PeFixedVersion> {
-    if offset + 52 > bytes.len() || read_u32(bytes, offset)? != 0xFEEF_04BD {
+    let version = checked_slice(bytes, offset, 52)?;
+    if read_u32(version, 0)? != 0xFEEF_04BD {
         return None;
     }
-    let file_ms = read_u32(bytes, offset + 8)?;
-    let file_ls = read_u32(bytes, offset + 12)?;
-    let product_ms = read_u32(bytes, offset + 16)?;
-    let product_ls = read_u32(bytes, offset + 20)?;
-    let flags_mask = read_u32(bytes, offset + 24).unwrap_or(0);
-    let flags = read_u32(bytes, offset + 28).unwrap_or(0) & flags_mask;
-    let file_type = read_u32(bytes, offset + 36).unwrap_or(0);
+    let file_ms = read_u32(version, 8)?;
+    let file_ls = read_u32(version, 12)?;
+    let product_ms = read_u32(version, 16)?;
+    let product_ls = read_u32(version, 20)?;
+    let flags_mask = read_u32(version, 24).unwrap_or(0);
+    let flags = read_u32(version, 28).unwrap_or(0) & flags_mask;
+    let file_type = read_u32(version, 36).unwrap_or(0);
     Some(PeFixedVersion {
         file_version: format_pe_version(file_ms, file_ls),
         product_version: format_pe_version(product_ms, product_ls),
@@ -370,38 +396,35 @@ fn parse_minidump_fixed_version(bytes: &[u8], offset: usize) -> Option<PeFixedVe
 }
 
 fn parse_minidump_thread_list(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 4 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let count = read_u32(bytes, offset)? as usize;
+    let stream = checked_stream(bytes, offset, size, 4)?;
+    let count = read_u32(stream, 0)?;
     let mut lines = vec![format!("\nThreads: {count}")];
-    let mut thread_offset = offset + 4;
-    for _ in 0..count.min(6) {
-        if thread_offset + 48 > offset + size || thread_offset + 48 > bytes.len() {
+    for index in 0..count.min(6) {
+        let Some(index) = usize::try_from(index).ok() else {
             break;
-        }
-        let id = read_u32(bytes, thread_offset).unwrap_or(0);
-        let priority = read_u32(bytes, thread_offset + 12).unwrap_or(0);
-        let stack_start = read_u64(bytes, thread_offset + 24).unwrap_or(0);
-        let stack_size = read_u32(bytes, thread_offset + 32).unwrap_or(0);
-        let stack_end = stack_start.saturating_add(stack_size as u64);
+        };
+        let Some(thread) = indexed_slice(stream, 4, index, 48) else {
+            break;
+        };
+        let id = read_u32(thread, 0).unwrap_or(0);
+        let priority = read_u32(thread, 12).unwrap_or(0);
+        let stack_start = read_u64(thread, 24).unwrap_or(0);
+        let stack_size = read_u32(thread, 32).unwrap_or(0);
+        let stack_end = stack_start.saturating_add(u64::from(stack_size));
         lines.push(format!(
             "Thread {id}: priority {priority}; stack 0x{stack_start:016X}-0x{stack_end:016X}"
         ));
-        thread_offset += 48;
     }
     Some(lines.join("\n"))
 }
 
 fn parse_minidump_exception(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 32 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let thread_id = read_u32(bytes, offset)?;
-    let code = read_u32(bytes, offset + 8)?;
-    let flags = read_u32(bytes, offset + 12)?;
-    let address = read_u64(bytes, offset + 24)?;
-    let parameters = read_u32(bytes, offset + 32).unwrap_or(0);
+    let stream = checked_stream(bytes, offset, size, 32)?;
+    let thread_id = read_u32(stream, 0)?;
+    let code = read_u32(stream, 8)?;
+    let flags = read_u32(stream, 12)?;
+    let address = read_u64(stream, 24)?;
+    let parameters = read_u32(stream, 32).unwrap_or(0);
     Some(format!(
         "\nException thread: {thread_id}\nException code: {}\nException flags: 0x{flags:08X}\nException address: 0x{address:016X}\nException parameters: {parameters}",
         minidump_exception_name(code)
@@ -420,18 +443,16 @@ fn minidump_exception_name(code: u32) -> String {
 }
 
 fn parse_minidump_system_info(bytes: &[u8], offset: usize, size: usize) -> Option<String> {
-    if size < 32 || offset.checked_add(size)? > bytes.len() {
-        return None;
-    }
-    let arch = read_u16(bytes, offset)?;
-    let processors = *bytes.get(offset + 6)?;
-    let product_type = *bytes.get(offset + 7)?;
-    let major = read_u32(bytes, offset + 8)?;
-    let minor = read_u32(bytes, offset + 12)?;
-    let build = read_u32(bytes, offset + 16)?;
-    let platform = read_u32(bytes, offset + 20)?;
-    let csd_rva = read_u32(bytes, offset + 24).unwrap_or(0);
-    let suite_mask = read_u16(bytes, offset + 28).unwrap_or(0);
+    let stream = checked_stream(bytes, offset, size, 32)?;
+    let arch = read_u16(stream, 0)?;
+    let processors = *stream.get(6)?;
+    let product_type = *stream.get(7)?;
+    let major = read_u32(stream, 8)?;
+    let minor = read_u32(stream, 12)?;
+    let build = read_u32(stream, 16)?;
+    let platform = read_u32(stream, 20)?;
+    let csd_rva = read_u32(stream, 24).unwrap_or(0);
+    let suite_mask = read_u16(stream, 28).unwrap_or(0);
     let mut text = format!(
         "\nSystem architecture: {}\nProcessors: {}\nWindows version: {}.{}.{}\nProduct type: {}\nPlatform ID: {}",
         minidump_processor_architecture(arch),
@@ -445,20 +466,26 @@ fn parse_minidump_system_info(bytes: &[u8], offset: usize, size: usize) -> Optio
     if suite_mask > 0 {
         text.push_str(&format!("\nSuite mask: 0x{suite_mask:04X}"));
     }
-    if let Some(csd) = read_minidump_utf16_string(bytes, csd_rva as usize) {
+    if let Some(csd) = usize::try_from(csd_rva)
+        .ok()
+        .and_then(|rva| read_minidump_utf16_string(bytes, rva))
+    {
         text.push_str(&format!("\nService pack: {csd}"));
     }
     Some(text)
 }
 
 fn read_minidump_utf16_string(bytes: &[u8], offset: usize) -> Option<String> {
-    if offset == 0 || offset + 4 > bytes.len() {
+    if offset == 0 {
         return None;
     }
-    let len = read_u32(bytes, offset)? as usize;
-    let start = offset + 4;
-    let end = start.checked_add(len)?;
-    let raw = bytes.get(start..end)?;
+    let header = checked_slice(bytes, offset, 4)?;
+    let len = usize::try_from(read_u32(header, 0)?).ok()?;
+    if len == 0 || len > MAX_MINIDUMP_UTF16_BYTES || !len.is_multiple_of(2) {
+        return None;
+    }
+    let start = offset.checked_add(4)?;
+    let raw = checked_slice(bytes, start, len)?;
     let units = raw
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -502,6 +529,7 @@ fn minidump_stream_name(value: u32) -> &'static str {
         15 => "MemoryInfoList",
         16 => "ThreadInfoList",
         17 => "HandleData",
+        24 => "ThreadNames",
         _ => "Unknown",
     }
 }

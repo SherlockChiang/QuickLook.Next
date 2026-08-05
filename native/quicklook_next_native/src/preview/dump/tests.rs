@@ -1,5 +1,6 @@
 use super::{
-    append_minidump_streams, parse_minidump_misc_info, parse_minidump_unloaded_module_list,
+    append_minidump_streams, parse_minidump_fixed_version, parse_minidump_misc_info,
+    parse_minidump_unloaded_module_list, read_minidump_utf16_string, render_info,
 };
 
 #[test]
@@ -133,6 +134,7 @@ fn minidump_stream_summary_lists_known_streams() {
 
     assert!(text.contains("ModuleList"));
     assert!(text.contains("SystemInfo"));
+    assert!(text.contains("ThreadNames"));
     assert!(text.contains("System architecture: x64"));
     assert!(text.contains("Processors: 8"));
     assert!(text.contains("Windows version: 10.0.22631"));
@@ -207,4 +209,67 @@ fn minidump_misc_info_summarizes_process_and_power_fields() {
     assert!(
         text.contains("Processor power: max 4800 MHz; current 3600 MHz; limit 4200 MHz; idle 1/3")
     );
+}
+
+#[test]
+fn minidump_hostile_offsets_and_strings_fail_soft() {
+    let mut bytes = vec![0u8; 64];
+    bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut text = String::new();
+        append_minidump_streams(&mut text, &bytes);
+    }));
+    assert!(result.is_ok(), "hostile directory RVA must not panic");
+
+    let mut string_header = vec![0u8; 16];
+    string_header[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    string_header[8..12].copy_from_slice(&3u32.to_le_bytes());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(parse_minidump_fixed_version(&string_header, usize::MAX).is_none());
+        assert!(read_minidump_utf16_string(&string_header, usize::MAX).is_none());
+        assert!(read_minidump_utf16_string(&string_header, 4).is_none());
+        assert!(read_minidump_utf16_string(&string_header, 8).is_none());
+    }));
+    assert!(
+        result.is_ok(),
+        "hostile offsets and string lengths must fail soft"
+    );
+}
+
+#[test]
+fn render_info_reads_minidump_metadata_beyond_legacy_prefix() {
+    let mut bytes = vec![0u8; 1024];
+    bytes[0..4].copy_from_slice(b"MDMP");
+    bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[12..16].copy_from_slice(&600u32.to_le_bytes());
+    bytes[600..604].copy_from_slice(&7u32.to_le_bytes());
+    bytes[604..608].copy_from_slice(&32u32.to_le_bytes());
+    bytes[608..612].copy_from_slice(&800u32.to_le_bytes());
+    bytes[800..802].copy_from_slice(&9u16.to_le_bytes());
+    bytes[806] = 8;
+    bytes[807] = 1;
+    bytes[808..812].copy_from_slice(&10u32.to_le_bytes());
+    bytes[812..816].copy_from_slice(&0u32.to_le_bytes());
+    bytes[816..820].copy_from_slice(&22631u32.to_le_bytes());
+    bytes[820..824].copy_from_slice(&2u32.to_le_bytes());
+
+    let path = std::env::temp_dir().join(format!(
+        "quicklook-next-dump-render-{}-{}.dmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock must be after epoch")
+            .as_nanos()
+    ));
+    std::fs::write(&path, &bytes).expect("temporary dump fixture should be writable");
+    let rendered = render_info(
+        path.to_str().expect("temporary path must be valid UTF-8"),
+        bytes.len() as i64,
+        0,
+    );
+    let _ = std::fs::remove_file(&path);
+
+    assert!(rendered.contains("System architecture: x64"));
+    assert!(rendered.contains("Windows version: 10.0.22631"));
 }

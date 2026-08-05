@@ -15,6 +15,8 @@ $mailPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail.rs"
 $mailTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\tests.rs"
 $elfPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf.rs"
 $elfTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf\tests.rs"
+$dumpPath = Join-Path $Root "native\quicklook_next_native\src\preview\dump.rs"
+$dumpTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\dump\tests.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
 $mediaCodecPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\codec.rs"
@@ -36,6 +38,8 @@ foreach ($path in @(
         $mailTestsPath,
         $elfPath,
         $elfTestsPath,
+        $dumpPath,
+        $dumpTestsPath,
         $mediaPath,
         $mediaAudioPath,
         $mediaCodecPath,
@@ -59,6 +63,8 @@ if ($failures.Count -eq 0) {
     $mailTestsText = Get-Content -LiteralPath $mailTestsPath -Raw
     $elfText = Get-Content -LiteralPath $elfPath -Raw
     $elfTestsText = Get-Content -LiteralPath $elfTestsPath -Raw
+    $dumpText = Get-Content -LiteralPath $dumpPath -Raw
+    $dumpTestsText = Get-Content -LiteralPath $dumpTestsPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
     $mediaCodecText = Get-Content -LiteralPath $mediaCodecPath -Raw
@@ -259,11 +265,62 @@ if ($failures.Count -eq 0) {
 
     if ($previewText -notmatch '(?m)^mod elf;\s*$' -or
         [regex]::Matches($previewText, 'elf::render_info\(').Count -ne 1 -or
-        [regex]::Matches($previewText, 'elf::append_summary\(').Count -ne 1 -or
+        $previewText -match 'elf::append_summary\(' -or
         $previewText -match 'fn\s+render_elf_info\s*\(' -or
         $previewText -match 'fn\s+append_elf_summary\s*\(') {
         $failures.Add(
-            "preview.rs must route ELF metadata through the two narrow preview::elf APIs.")
+            "preview.rs must route ELF metadata through the narrow preview::elf render API.")
+    }
+
+    if ($previewText -notmatch '(?m)^mod dump;\s*$' -or
+        [regex]::Matches($previewText, 'dump::render_info\(').Count -ne 1 -or
+        $previewText -match 'fn\s+render_dump_info\s*\(') {
+        $failures.Add(
+            "preview.rs must route dump metadata through the narrow preview::dump render API.")
+    }
+
+    if ($dumpText -notmatch 'super::elf::append_summary\(' -or
+        [regex]::Matches($dumpText, '(?m)^pub\(super\)\s+').Count -ne 1 -or
+        $dumpText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $dumpText -match '#\[no_mangle\]' -or
+        $dumpText -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add(
+            "The dump module must expose one narrow API, use explicit imports, and compose ELF through its sibling API.")
+    }
+
+    foreach ($requiredDump in @(
+            'pub\(super\) fn render_info\(',
+            'const MAX_DUMP_READ_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024',
+            'fn\s+checked_slice\(',
+            'fn\s+indexed_slice\(',
+            'fn\s+checked_stream\(',
+            'MAX_MINIDUMP_STREAMS',
+            'MAX_MINIDUMP_UTF16_BYTES',
+            'usize::try_from',
+            'checked_add\(')) {
+        if ($dumpText -notmatch $requiredDump) {
+            $failures.Add("Dump module lost a bounded parsing invariant: $requiredDump")
+        }
+    }
+
+    foreach ($requiredDumpTest in @(
+            'fn minidump_hostile_offsets_and_strings_fail_soft\(',
+            'fn render_info_reads_minidump_metadata_beyond_legacy_prefix\(',
+            'fn minidump_stream_summary_lists_known_streams\(',
+            'fn minidump_unloaded_module_list_summarizes_names_and_ranges\(',
+            'fn minidump_misc_info_summarizes_process_and_power_fields\(')) {
+        if ($dumpTestsText -notmatch $requiredDumpTest) {
+            $failures.Add("Dump tests lost hostile/stream coverage: $requiredDumpTest")
+        }
+    }
+
+    $dumpLineCount = @(Get-Content -LiteralPath $dumpPath).Count
+    if ($dumpLineCount -gt 650) {
+        $failures.Add("The bounded dump module grew beyond 650 lines: $dumpLineCount")
+    }
+    $dumpTestsLineCount = @(Get-Content -LiteralPath $dumpTestsPath).Count
+    if ($dumpTestsLineCount -gt 330) {
+        $failures.Add("The focused dump tests grew beyond 330 lines: $dumpTestsLineCount")
     }
 
     foreach ($required in @(
