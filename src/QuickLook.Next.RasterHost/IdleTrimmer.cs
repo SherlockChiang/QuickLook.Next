@@ -22,10 +22,11 @@ internal sealed class IdleTrimmer : IAsyncDisposable
 
     private readonly CompositionProducer _producer;
     private readonly Timer _timer;
+    private readonly object _sync = new();
     private long _lastTicks;
-    private int _trimmed; // 0 = active since last trim, 1 = already trimmed this idle period
-    private int _previewActive;
-    private int _disposed;
+    private bool _trimmed;
+    private bool _previewActive;
+    private bool _disposed;
 
     public IdleTrimmer(CompositionProducer producer)
     {
@@ -37,40 +38,59 @@ internal sealed class IdleTrimmer : IAsyncDisposable
     /// <summary>Mark activity; called for every control message the host handles.</summary>
     public void Touch()
     {
-        Interlocked.Exchange(ref _lastTicks, DateTime.UtcNow.Ticks);
-        Interlocked.Exchange(ref _trimmed, 0);
+        lock (_sync)
+        {
+            if (_disposed) return;
+            TouchCore();
+        }
     }
 
     public void SetPreviewActive(bool active)
     {
-        Interlocked.Exchange(ref _previewActive, active ? 1 : 0);
-        Touch();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _previewActive = active;
+            TouchCore();
+        }
     }
 
     private void Tick()
     {
-        if (Volatile.Read(ref _previewActive) != 0) return;
-        var idle = DateTime.UtcNow - new DateTime(Interlocked.Read(ref _lastTicks), DateTimeKind.Utc);
-        if (idle < IdleThreshold) return;
-        if (Interlocked.Exchange(ref _trimmed, 1) == 1) return; // trim once per idle stretch
-
-        try
+        lock (_sync)
         {
-            PdfPreviewSession.ClearCache();
-            _producer.ReleaseRetired();
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
+            if (_disposed || _previewActive) return;
+            var idle = DateTime.UtcNow - new DateTime(_lastTicks, DateTimeKind.Utc);
+            if (idle < IdleThreshold || _trimmed) return;
+            _trimmed = true;
+
+            try
+            {
+                PdfPreviewSession.ClearCache();
+                _producer.ReleaseRetired();
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
+            }
+            catch (Exception ex) { DiagLog.Write("Host", "idle trim failed: " + ex.Message); }
         }
-        catch (Exception ex) { DiagLog.Write("Host", "idle trim failed: " + ex.Message); }
+    }
+
+    private void TouchCore()
+    {
+        _lastTicks = DateTime.UtcNow.Ticks;
+        _trimmed = false;
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
 
         await _timer.DisposeAsync().ConfigureAwait(false);
     }
