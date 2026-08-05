@@ -11,6 +11,8 @@ $shellThumbnailPath = Join-Path (
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\common.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
+$mailPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail.rs"
+$mailTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\tests.rs"
 $mediaPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\mod.rs"
 $mediaAudioPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\audio.rs"
 $mediaCodecPath = Join-Path $Root "native\quicklook_next_native\src\preview\media\codec.rs"
@@ -28,6 +30,8 @@ foreach ($path in @(
         $previewPath,
         $previewCommonPath,
         $fontPath,
+        $mailPath,
+        $mailTestsPath,
         $mediaPath,
         $mediaAudioPath,
         $mediaCodecPath,
@@ -47,6 +51,8 @@ if ($failures.Count -eq 0) {
     $previewText = Get-Content -LiteralPath $previewPath -Raw
     $previewCommonText = Get-Content -LiteralPath $previewCommonPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
+    $mailText = Get-Content -LiteralPath $mailPath -Raw
+    $mailTestsText = Get-Content -LiteralPath $mailTestsPath -Raw
     $mediaText = Get-Content -LiteralPath $mediaPath -Raw
     $mediaAudioText = Get-Content -LiteralPath $mediaAudioPath -Raw
     $mediaCodecText = Get-Content -LiteralPath $mediaCodecPath -Raw
@@ -160,6 +166,89 @@ if ($failures.Count -eq 0) {
     $fontLineCount = @(Get-Content -LiteralPath $fontPath).Count
     if ($fontLineCount -gt 350) {
         $failures.Add("The bounded font preview module grew beyond 350 lines: $fontLineCount")
+    }
+
+    $mailRouteCount = [regex]::Matches(
+        $previewText,
+        'mail::render_mail_info\(').Count
+    if ($previewText -notmatch '(?m)^mod mail;\s*$' -or
+        $mailRouteCount -ne 1 -or
+        $previewText -notmatch '"mail"\s*=>\s*return\s+mail::render_mail_info\(') {
+        $failures.Add(
+            "preview.rs must compose and route mail exactly once through preview::mail.")
+    }
+
+    foreach ($forbidden in @(
+            'fn\s+render_mail_info\s*\(',
+            'fn\s+parse_mail_headers\s*\(',
+            'fn\s+mail_mime_part_summaries\s*\(',
+            'struct\s+CfbHeader',
+            'struct\s+CfbDocument',
+            'fn\s+cfb_read_\w+\s*\(')) {
+        if ($previewText -match $forbidden) {
+            $failures.Add(
+                "preview.rs must not regain mail/MIME/CFB implementation detail: $forbidden")
+        }
+    }
+
+    foreach ($required in @(
+            'pub\(super\) fn render_mail_info\(',
+            'read_file_prefix\(path, MAX_MAIL_HEADER_BYTES\)',
+            'fn parse_mail_headers\(',
+            'fn decode_mail_header_value\(',
+            'fn mail_mime_part_summaries\(',
+            'fn mail_mime_boundary_is_valid\(',
+            'fn mail_mime_delimiter\(',
+            'struct CfbHeader',
+            'struct CfbDocument<''a>',
+            'fn cfb_read_fat\(',
+            'fn cfb_read_regular_chain\(',
+            'fn cfb_read_mini_chain\(',
+            'fn cfb_parse_directory_entries\(',
+            '"__properties_version1\.0"')) {
+        if ($mailText -notmatch $required) {
+            $failures.Add("Mail preview module lost required boundary: $required")
+        }
+    }
+
+    foreach ($requiredTest in @(
+            'fn mail_header_parser_caps_header_count_and_values\(',
+            'fn mail_mime_summary_caps_parts_and_rejects_hostile_boundary\(',
+            'fn mail_mime_summary_caps_nesting_depth\(',
+            'fn mail_decoders_keep_header_and_body_budgets\(',
+            'fn msg_compound_summary_reads_real_fat_and_mini_streams\(',
+            'fn msg_compound_summary_rejects_truncated_and_invalid_headers\(',
+            'fn msg_compound_summary_rejects_directory_fat_and_tree_cycles\(',
+            'fn msg_compound_summary_rejects_truncated_directory_and_mini_stream\(',
+            'fn msg_compound_summary_fails_soft_on_hostile_mini_properties\(')) {
+        if ($mailTestsText -notmatch $requiredTest) {
+            $failures.Add("Mail tests lost bounded MIME/CFB coverage: $requiredTest")
+        }
+    }
+
+    $mailParentVisibleItemCount = [regex]::Matches(
+        $mailText,
+        '(?m)^pub(?:\([^)]+\))?\s+').Count
+    if ($mailParentVisibleItemCount -ne 1) {
+        $failures.Add("The mail module must expose only render_mail_info to its parent.")
+    }
+
+    foreach ($module in @($mailText, $mailTestsText)) {
+        if ($module -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+            $module -match '#\[no_mangle\]' -or
+            $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Mail modules must use explicit imports and must not own a C ABI surface.")
+        }
+    }
+
+    $mailLineCount = @(Get-Content -LiteralPath $mailPath).Count
+    if ($mailLineCount -gt 1300) {
+        $failures.Add("The bounded mail module grew beyond 1300 lines: $mailLineCount")
+    }
+    $mailTestsLineCount = @(Get-Content -LiteralPath $mailTestsPath).Count
+    if ($mailTestsLineCount -gt 550) {
+        $failures.Add("The focused mail tests grew beyond 550 lines: $mailTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or

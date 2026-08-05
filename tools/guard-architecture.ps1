@@ -1183,6 +1183,13 @@ if (Test-Path $parserHostProgram) {
     } else {
         ""
     }
+    $nativeMailPreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/mail.rs"
+    $nativeMailPreviewText = if (Test-Path -LiteralPath $nativeMailPreviewPath) {
+        Get-Content -LiteralPath $nativeMailPreviewPath -Raw
+    } else {
+        ""
+    }
     if ($nativePreviewText -notmatch 'mod\s+chm\s*;' -or
         $nativePreviewText -notmatch '"chm"\s*=>\s*return\s+chm::render_chm_info' -or
         $nativePreviewText -match '(?:struct\s+ChmItsfHeader|fn\s+chm_directory_entries|fn\s+chm_system_summary)' -or
@@ -1192,6 +1199,21 @@ if (Test-Path $parserHostProgram) {
         $nativeChmPreviewText -notmatch '3\s*=>\s*read_u64\(bytes,\s*CHM_ITSF_DATA_OFFSET\)\?' -or
         $nativeChmPreviewText -notmatch 'data_offset\.checked_add\(system\.offset\)') {
         Add-Failure "CHM routing and real ITSF/ITSP metadata parsing must remain in the focused Rust module"
+    }
+    $nativeMailRouteCount = [regex]::Matches(
+        $nativePreviewText,
+        'mail::render_mail_info\(').Count
+    if ($nativePreviewText -notmatch 'mod\s+mail\s*;' -or
+        $nativeMailRouteCount -ne 1 -or
+        $nativePreviewText -notmatch '"mail"\s*=>\s*return\s+mail::render_mail_info' -or
+        $nativePreviewText -match '(?:fn\s+parse_mail_headers|fn\s+mail_mime_part_summaries|struct\s+CfbHeader|fn\s+cfb_read_fat)' -or
+        $nativeMailPreviewText -notmatch 'fn\s+mail_mime_boundary_is_valid\([\s\S]*fn\s+mail_mime_delimiter\(' -or
+        $nativeMailPreviewText -notmatch 'fn\s+decode_base64_into\([\s\S]*checked_add\(output_count\)' -or
+        $nativeMailPreviewText -notmatch 'match\s+major_version\s*\{[\s\S]*3\s*=>\s*9[\s\S]*4\s*=>\s*12' -or
+        $nativeMailPreviewText -notmatch 'read_u16\(bytes,\s*28\)\?\s*!=\s*0xFFFE' -or
+        $nativeMailPreviewText -notmatch 'fn\s+cfb_read_fat\([\s\S]*fn\s+cfb_read_regular_chain\([\s\S]*fn\s+cfb_read_mini_chain\(' -or
+        $nativeMailPreviewText -notmatch '"__properties_version1\.0"') {
+        Add-Failure "Mail routing, bounded MIME parsing, and real Outlook CFB FAT/mini-FAT parsing must remain in the focused Rust module"
     }
     if ($nativePreviewText -notmatch 'mod\s+animation_probe\s*;' -or
         $nativePreviewText -notmatch 'mod\s+torrent\s*;' -or
