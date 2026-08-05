@@ -20,6 +20,8 @@ public sealed class SupervisedHostCrashProbeTests
     private const uint DxgiFacilityException = 0x0000087A;
     private const string DxgiMode = "dxgi";
     private const string FailFastMode = "failfast";
+    private const uint DesktopReadObjects = 0x0001;
+    private const uint DesktopEnumerate = 0x0040;
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan ProcessStopTimeout = TimeSpan.FromSeconds(5);
@@ -310,12 +312,31 @@ public sealed class SupervisedHostCrashProbeTests
                 title.ToString()));
             return true;
         };
-        if (!EnumWindows(callback, nint.Zero))
+        nint desktop = OpenInputDesktop(
+            flags: 0,
+            inherit: false,
+            DesktopReadObjects | DesktopEnumerate);
+        if (desktop == 0)
         {
             int error = Marshal.GetLastPInvokeError();
             throw new Win32Exception(
                 error,
-                "EnumWindows failed while observing the supervised-host crash probe.");
+                "OpenInputDesktop failed while observing the supervised-host crash probe.");
+        }
+
+        try
+        {
+            if (!EnumDesktopWindows(desktop, callback, nint.Zero))
+            {
+                int error = Marshal.GetLastPInvokeError();
+                throw new Win32Exception(
+                    error,
+                    "EnumDesktopWindows failed while observing the supervised-host crash probe.");
+            }
+        }
+        finally
+        {
+            _ = CloseDesktop(desktop);
         }
 
         return windows.ToArray();
@@ -346,8 +367,23 @@ public sealed class SupervisedHostCrashProbeTests
 
     [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern nint OpenInputDesktop(
+        uint flags,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit,
+        uint desiredAccess);
+
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool EnumWindows(EnumWindowsProc callback, nint parameter);
+    private static extern bool EnumDesktopWindows(
+        nint desktop,
+        EnumWindowsProc callback,
+        nint parameter);
+
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseDesktop(nint desktop);
 
     [DllImport("user32.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

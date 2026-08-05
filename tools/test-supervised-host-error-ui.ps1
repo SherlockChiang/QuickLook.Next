@@ -123,7 +123,7 @@ else {
             'READY \{token\}[\s\S]*ARM \{token\}[\s\S]*ARMED \{token\}[\s\S]*FIRE \{token\}',
             'PostExitWindowGrace\s*=\s*TimeSpan\.FromSeconds\(2\)',
             'aliveBeforeEnumeration[\s\S]*aliveAfterEnumeration[\s\S]*window\.OwnerProcessId\s*==\s*\(uint\)probe\.Id',
-            'EnumWindows\(callback,\s*nint\.Zero\)',
+            'OpenInputDesktop\([\s\S]*DesktopReadObjects\s*\|\s*DesktopEnumerate[\s\S]*EnumDesktopWindows\(desktop,\s*callback,\s*nint\.Zero\)[\s\S]*CloseDesktop\(desktop\)',
             'Application Error[\s\S]*应用程序错误',
             'Assert\.Equal\(DxgiFacilityException,\s*outcome\.ExitCode\)',
             'Kill\(entireProcessTree:\s*true\)[\s\S]*WaitForExitAsync\(\)\.WaitAsync\(ProcessStopTimeout\)')) {
