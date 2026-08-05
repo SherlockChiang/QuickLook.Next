@@ -9,7 +9,7 @@ namespace QuickLook.Next.RasterHost;
 /// the large-object heap — keeping resident memory low without paying a host cold-start on the next
 /// preview (we deliberately keep the host process + plugins warm for instant previews).
 /// </summary>
-internal sealed class IdleTrimmer : IDisposable
+internal sealed class IdleTrimmer : IAsyncDisposable
 {
     // Idle threshold defaults to 2 minutes; override with QL_IDLE_TRIM_SECONDS (e.g. for testing/tuning).
     private static readonly TimeSpan IdleThreshold = TimeSpan.FromSeconds(
@@ -25,6 +25,7 @@ internal sealed class IdleTrimmer : IDisposable
     private long _lastTicks;
     private int _trimmed; // 0 = active since last trim, 1 = already trimmed this idle period
     private int _previewActive;
+    private int _disposed;
 
     public IdleTrimmer(CompositionProducer producer)
     {
@@ -66,5 +67,11 @@ internal sealed class IdleTrimmer : IDisposable
         catch (Exception ex) { DiagLog.Write("Host", "idle trim failed: " + ex.Message); }
     }
 
-    public void Dispose() => _timer.Dispose();
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        await _timer.DisposeAsync().ConfigureAwait(false);
+    }
 }

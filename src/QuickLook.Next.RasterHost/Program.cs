@@ -38,7 +38,7 @@ catch (Exception ex) { DiagLog.Write("RasterHost", "pipe connect FAILED: " + ex)
 
 using var channelLifetime = channel;
 using var producer = new CompositionProducer();
-using var idleTrimmer = new IdleTrimmer(producer);
+var idleTrimmer = new IdleTrimmer(producer);
 var pdfSessions = new ConcurrentDictionary<string, PdfPreviewSession>();
 var pdfPageRenderCts = new ConcurrentDictionary<(string RequestId, int PageIndex, long PageGeneration), CancellationTokenSource>();
 var openCts = new Dictionary<string, CancellationTokenSource>();
@@ -312,6 +312,7 @@ while (true)
 }
 
 Shutdown:
+await idleTrimmer.DisposeAsync();
 CancellationTokenSource[] remainingOpenCts;
 lock (openCtsLock)
 {
