@@ -111,7 +111,7 @@ the release-only `release:` prefix while this queue is in progress.
         version parsing into `preview/elf.rs` with checked hostile offsets.
       - [x] `R26-P1-07c-3d` Move minidump streams and ELF-core composition into
         `preview/dump.rs` behind narrow sibling-module APIs.
-      - [ ] `R26-P1-07c-3e` Split SQLite/database rendering into bounded
+      - [x] `R26-P1-07c-3e` Split SQLite/database rendering into bounded
         `preview/database/` composition, WAL, and SQLite parser modules while
         preserving HANDLE, companion-file, cancellation, and size contracts.
     - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
@@ -199,6 +199,24 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-3e` Split the SQLite/database family out of `preview.rs` into
+  a 242-line composition module, a bounded 281-line WAL/SHM snapshot module,
+  and a 1,019-line SQLite schema/table/record parser. The parent keeps only the
+  path/HANDLE readers, companion-file validation, cancellation and size limits,
+  and JSON composition. WAL reads remain capped at 64 MiB, validate header and
+  frame salts/checksums, apply only committed prefix pages, and drain bounded
+  tails; SHM is diagnostic-only and capped at 4 MiB. SQLite schema traversal,
+  row observation, table sampling, sheet count, cell length, and retained text
+  all keep explicit budgets. The 679-line focused test file covers malformed
+  offsets, page-size/count boundaries, checksum/tail recovery, cancellation,
+  companion limits, UTF-16 records, and hostile missing pages.
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (265 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commits: `1fde6e1`, `2c7c8fc`, `f7824d1`
 
 - [x] `R26-P1-07c-3d` Move the Rust minidump stream summaries and ELF-core
   composition out of `preview.rs` into a focused `preview/dump.rs` module with
