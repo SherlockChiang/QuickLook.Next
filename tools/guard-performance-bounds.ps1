@@ -45,6 +45,8 @@ $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview
 $nativeDatabase = Join-Path $Root "native/quicklook_next_native/src/preview/database/mod.rs"
 $nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/database/wal.rs"
 $nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
+$nativeOfficeDocument = Join-Path $Root "native/quicklook_next_native/src/preview/office/document.rs"
+$nativeOfficeDocumentTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/document/tests.rs"
 $nativeOfficePresentation = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation.rs"
 $nativeOfficePresentationTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
@@ -53,6 +55,7 @@ $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseWal -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
 $nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeOfficeDocument -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficePresentation -Raw))
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
@@ -561,6 +564,14 @@ Require-TextPattern $nativeOfficeText 'fn cache_ppt_slide_layout_placeholders<R:
     "PPT layout placeholders must remain cached to avoid repeated decompression."
 Require-Pattern $nativeOfficePresentationTests 'ppt_layout_inherits_title_type_and_geometry_from_master_once[\s\S]*shared layout/master parts must only consume the decompression budget once' `
     "PPT tests must retain the shared layout/master decompression-budget regression."
+Require-TextPattern $nativeOfficeText 'fn build_docx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*paragraph\.chars\(\)\.take\(420\)[\s\S]*pages\.len\(\)\s*>=\s*8[\s\S]*MAX_OFFICE_LAYOUT_IMAGES\.min\(6\)[\s\S]*media_entries\.iter\(\)\.take\(6\)' `
+    "DOCX layout must retain bounded paragraph, page, and embedded-image retention."
+Require-TextPattern $nativeOfficeText 'fn docx_header_footer_entries<R:\s*Read\s*\+\s*Seek>[\s\S]*zip\.len\(\)\.min\(MAX_OFFICE_ZIP_ENTRIES\)[\s\S]*entry\.size\(\)\s*>\s*1024\s*\*\s*1024[\s\S]*entries\.truncate\(8\)' `
+    "DOCX header/footer discovery must retain ZIP, part-size, and entry-count bounds."
+Require-TextPattern $nativeOfficeText 'fn extract_wordprocessing_text\([\s\S]*event_count\s*\+=\s*1[\s\S]*context\.check_xml_event\(event_count\)' `
+    "Wordprocessing XML traversal must remain cancellation/event-budget aware."
+Require-Pattern $nativeOfficeDocumentTests 'office_xml_parser_honors_cancellation[\s\S]*OfficeContext::new\(Some\(always_cancel\)\)[\s\S]*OfficeReadError::Cancelled' `
+    "DOCX tests must retain cancellation coverage for fragmented XML."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `

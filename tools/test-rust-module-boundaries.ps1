@@ -30,6 +30,8 @@ $databaseWalPath = Join-Path $Root "native\quicklook_next_native\src\preview\dat
 $databaseSqlitePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\sqlite.rs"
 $databaseTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\tests.rs"
 $officePath = Join-Path $Root "native\quicklook_next_native\src\preview\office\mod.rs"
+$officeDocumentPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document.rs"
+$officeDocumentTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document\tests.rs"
 $officePresentationPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation.rs"
 $officePresentationTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
@@ -59,6 +61,8 @@ foreach ($path in @(
         $databaseSqlitePath,
         $databaseTestsPath,
         $officePath,
+        $officeDocumentPath,
+        $officeDocumentTestsPath,
         $officePresentationPath,
         $officePresentationTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -91,6 +95,8 @@ if ($failures.Count -eq 0) {
     $databaseSqliteText = Get-Content -LiteralPath $databaseSqlitePath -Raw
     $databaseTestsText = Get-Content -LiteralPath $databaseTestsPath -Raw
     $officeText = Get-Content -LiteralPath $officePath -Raw
+    $officeDocumentText = Get-Content -LiteralPath $officeDocumentPath -Raw
+    $officeDocumentTestsText = Get-Content -LiteralPath $officeDocumentTestsPath -Raw
     $officePresentationText = Get-Content -LiteralPath $officePresentationPath -Raw
     $officePresentationTestsText = Get-Content -LiteralPath $officePresentationTestsPath -Raw
 
@@ -501,19 +507,29 @@ if ($failures.Count -eq 0) {
     }
 
     if ($previewText -notmatch '(?m)^mod office;\s*$' -or
+        $officeText -notmatch '(?m)^mod document;\s*$' -or
         $officeText -notmatch '(?m)^mod presentation;\s*$' -or
+        $officeText -notmatch '(?m)^pub\(super\) use document::\{render_docx, render_odf\};\s*$' -or
         $officeText -notmatch '(?m)^pub\(super\) use presentation::render_pptx;\s*$' -or
         $officeText -match '(?m)^pub\(super\) use presentation::\{') {
         $failures.Add(
-            "Office composition must expose only the narrow presentation renderer to preview.rs.")
+            "Office composition must expose only narrow document and presentation renderers to preview.rs.")
     }
 
-    if ($previewText -notmatch '(?m)^use office::render_pptx;\s*$' -or
+    if ($previewText -notmatch '(?m)^use office::\{render_docx, render_odf, render_pptx\};\s*$' -or
+        [regex]::Matches(
+            $previewText,
+            '"docx"\s*\|\s*"docm"\s*=>\s*render_docx\('
+        ).Count -ne 1 -or
+        [regex]::Matches(
+            $previewText,
+            '"odt"\s*\|\s*"ods"\s*\|\s*"odp"\s*=>\s*render_odf\('
+        ).Count -ne 1 -or
         [regex]::Matches(
             $previewText,
             '"pptx"\s*\|\s*"pptm"\s*=>\s*render_pptx\('
         ).Count -ne 1) {
-        $failures.Add("preview.rs must route PPTX/PPTM exactly once through preview::office.")
+        $failures.Add("preview.rs must route document and presentation formats exactly once through preview::office.")
     }
 
     foreach ($forbiddenOfficeParent in @(
@@ -524,10 +540,47 @@ if ($failures.Count -eq 0) {
             'struct\s+PptPlaceholder',
             'struct\s+PptSlideInput',
             'MAX_OFFICE_SLIDES',
-            'MAX_PPT_SLIDE_TITLE_CHARS')) {
+            'MAX_PPT_SLIDE_TITLE_CHARS',
+            'fn\s+render_docx\s*\(',
+            'fn\s+render_odf\s*\(',
+            'fn\s+build_docx_layout\s*\(',
+            'fn\s+docx_',
+            'fn\s+extract_docx_',
+            'fn\s+extract_wordprocessing_text\s*\(')) {
         if ($previewText -match $forbiddenOfficeParent) {
             $failures.Add(
                 "preview.rs must not regain presentation implementation detail: $forbiddenOfficeParent")
+        }
+    }
+
+    foreach ($requiredDocument in @(
+            'pub\(in crate::preview\) fn render_docx(?:<[^>]+>)?\(',
+            'pub\(in crate::preview\) fn render_odf(?:<[^>]+>)?\(',
+            'fn build_docx_layout(?:<[^>]+>)?\(',
+            'fn push_docx_page\(',
+            'fn docx_header_footer_entries(?:<[^>]+>)?\(',
+            'fn extract_docx_header_footer_text(?:<[^>]+>)?\(',
+            'fn extract_wordprocessing_text\(',
+            'fn append_docx_block_marker\(',
+            'fn docx_paragraph_prefix\(',
+            'fn docx_numbered_paragraph_prefix\(',
+            'context\.check_xml_event\(event_count\)',
+            'entries\.truncate\(8\)',
+            'MAX_OFFICE_LAYOUT_IMAGES\.min\(6\)')) {
+        if ($officeDocumentText -notmatch $requiredDocument) {
+            $failures.Add("Document module lost a bounded parser/routing invariant: $requiredDocument")
+        }
+    }
+
+    foreach ($requiredDocumentTest in @(
+            'fn office_xml_parser_honors_cancellation\(',
+            'fn docx_text_extraction_marks_headings\(',
+            'fn docx_text_extraction_formats_table_rows\(',
+            'fn docx_text_extraction_marks_page_and_section_breaks\(',
+            'fn docx_text_extraction_marks_numbered_paragraphs_as_list_items\(',
+            'fn docx_header_footer_entries_extract_text\(')) {
+        if ($officeDocumentTestsText -notmatch $requiredDocumentTest) {
+            $failures.Add("Document tests lost text/layout/cancellation coverage: $requiredDocumentTest")
         }
     }
 
@@ -567,13 +620,27 @@ if ($failures.Count -eq 0) {
         }
     }
 
-    foreach ($officeModule in @($officeText, $officePresentationText, $officePresentationTestsText)) {
+    foreach ($officeModule in @(
+            $officeText,
+            $officeDocumentText,
+            $officeDocumentTestsText,
+            $officePresentationText,
+            $officePresentationTestsText)) {
         if ($officeModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
             $officeModule -match '#\[no_mangle\]' -or
             $officeModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
             $failures.Add(
                 "Office modules must use explicit imports and must not own a C ABI surface.")
         }
+    }
+
+    $officeDocumentExports = [regex]::Matches(
+        $officeDocumentText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($officeDocumentExports.Count -ne 2 -or
+        $officeDocumentText -notmatch '(?m)^pub\(in crate::preview\) fn render_docx(?:<[^>]+>)?\(' -or
+        $officeDocumentText -notmatch '(?m)^pub\(in crate::preview\) fn render_odf(?:<[^>]+>)?\(') {
+        $failures.Add("The document module must expose only its two narrow renderers to office/mod.rs.")
     }
 
     $officePresentationExports = [regex]::Matches(
@@ -587,6 +654,16 @@ if ($failures.Count -eq 0) {
     $officeLineCount = @(Get-Content -LiteralPath $officePath).Count
     if ($officeLineCount -gt 100) {
         $failures.Add("The Office composition module grew beyond 100 lines: $officeLineCount")
+    }
+    $officeDocumentLineCount = @(Get-Content -LiteralPath $officeDocumentPath).Count
+    if ($officeDocumentLineCount -gt 550) {
+        $failures.Add(
+            "The bounded Office document module grew beyond 550 lines: $officeDocumentLineCount")
+    }
+    $officeDocumentTestsLineCount = @(Get-Content -LiteralPath $officeDocumentTestsPath).Count
+    if ($officeDocumentTestsLineCount -gt 220) {
+        $failures.Add(
+            "The focused Office document tests grew beyond 220 lines: $officeDocumentTestsLineCount")
     }
     $officePresentationLineCount = @(Get-Content -LiteralPath $officePresentationPath).Count
     if ($officePresentationLineCount -gt 1300) {
