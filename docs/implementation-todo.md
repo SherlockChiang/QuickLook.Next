@@ -120,7 +120,7 @@ the release-only `release:` prefix while this queue is in progress.
         inheritance, bounded text extraction, title/summary selection, and
         focused regression tests into `preview/office/presentation.rs` behind
         one narrow renderer route and the shared Office decompression budget.
-      - [ ] `R26-P1-07c-4b` Move DOCX/ODF document text, headers/footers, and
+      - [x] `R26-P1-07c-4b` Move DOCX/ODF document text, headers/footers, and
         bounded document layout into `preview/office/document.rs`.
       - [ ] `R26-P1-07c-4c` Move XLSX workbook cells, styles, metrics, and
         drawing anchors into `preview/office/workbook.rs`.
@@ -212,6 +212,24 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-4b` Move DOCX/ODF text extraction, DOCX header/footer
+  discovery, and bounded document page/image composition into the 466-line
+  `preview/office/document.rs` module with 137 lines of focused tests. The
+  parent retains the shared ZIP reader, aggregate decompression/cancellation
+  context, relationship/image-reference primitives, and JSON envelope; the
+  Office composition layer exposes only the DOCX and ODF renderer routes.
+  Header/footer scanning remains capped by the Office ZIP-entry budget, 1 MiB
+  parts, and eight retained entries. Document layout retains eight pages, six
+  images, 420 characters per paragraph, and XML event cancellation checks.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native --lib document::tests` (6 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (265 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke` (all preceding guards passed; restricted-host launch smoke is environment-blocked with exit 23)
+  - Commits: `0aa038c`, `3bf5cf3`
 
 - [x] `R26-P1-07c-4a` Move the PPTX/PPTM presentation parser and layout
   composer out of `preview.rs` into a bounded `preview/office/presentation.rs`
