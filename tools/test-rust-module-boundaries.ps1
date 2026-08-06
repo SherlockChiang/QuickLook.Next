@@ -34,6 +34,8 @@ $officeDocumentPath = Join-Path $Root "native\quicklook_next_native\src\preview\
 $officeDocumentTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document\tests.rs"
 $officePresentationPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation.rs"
 $officePresentationTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation\tests.rs"
+$officeWorkbookPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\workbook.rs"
+$officeWorkbookTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\workbook\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -64,7 +66,9 @@ foreach ($path in @(
         $officeDocumentPath,
         $officeDocumentTestsPath,
         $officePresentationPath,
-        $officePresentationTestsPath)) {
+        $officePresentationTestsPath,
+        $officeWorkbookPath,
+        $officeWorkbookTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -99,6 +103,8 @@ if ($failures.Count -eq 0) {
     $officeDocumentTestsText = Get-Content -LiteralPath $officeDocumentTestsPath -Raw
     $officePresentationText = Get-Content -LiteralPath $officePresentationPath -Raw
     $officePresentationTestsText = Get-Content -LiteralPath $officePresentationTestsPath -Raw
+    $officeWorkbookText = Get-Content -LiteralPath $officeWorkbookPath -Raw
+    $officeWorkbookTestsText = Get-Content -LiteralPath $officeWorkbookTestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -509,14 +515,16 @@ if ($failures.Count -eq 0) {
     if ($previewText -notmatch '(?m)^mod office;\s*$' -or
         $officeText -notmatch '(?m)^mod document;\s*$' -or
         $officeText -notmatch '(?m)^mod presentation;\s*$' -or
+        $officeText -notmatch '(?m)^mod workbook;\s*$' -or
         $officeText -notmatch '(?m)^pub\(super\) use document::\{render_docx, render_odf\};\s*$' -or
         $officeText -notmatch '(?m)^pub\(super\) use presentation::render_pptx;\s*$' -or
+        $officeText -notmatch '(?m)^pub\(super\) use workbook::render_xlsx;\s*$' -or
         $officeText -match '(?m)^pub\(super\) use presentation::\{') {
         $failures.Add(
-            "Office composition must expose only narrow document and presentation renderers to preview.rs.")
+            "Office composition must expose only narrow document, presentation, and workbook renderers to preview.rs.")
     }
 
-    if ($previewText -notmatch '(?m)^use office::\{render_docx, render_odf, render_pptx\};\s*$' -or
+    if ($previewText -notmatch '(?m)^use office::\{render_docx, render_odf, render_pptx, render_xlsx\};\s*$' -or
         [regex]::Matches(
             $previewText,
             '"docx"\s*\|\s*"docm"\s*=>\s*render_docx\('
@@ -528,8 +536,12 @@ if ($failures.Count -eq 0) {
         [regex]::Matches(
             $previewText,
             '"pptx"\s*\|\s*"pptm"\s*=>\s*render_pptx\('
+        ).Count -ne 1 -or
+        [regex]::Matches(
+            $previewText,
+            '"xlsx"\s*\|\s*"xlsm"\s*=>\s*render_xlsx\('
         ).Count -ne 1) {
-        $failures.Add("preview.rs must route document and presentation formats exactly once through preview::office.")
+        $failures.Add("preview.rs must route document, presentation, and workbook formats exactly once through preview::office.")
     }
 
     foreach ($forbiddenOfficeParent in @(
@@ -546,10 +558,24 @@ if ($failures.Count -eq 0) {
             'fn\s+build_docx_layout\s*\(',
             'fn\s+docx_',
             'fn\s+extract_docx_',
-            'fn\s+extract_wordprocessing_text\s*\(')) {
+            'fn\s+extract_wordprocessing_text\s*\(',
+            'fn\s+render_xlsx\s*\(',
+            'fn\s+build_xlsx_layout\s*\(',
+            'fn\s+parse_xlsx_',
+            'fn\s+xlsx_',
+            'fn\s+parse_shared_strings\s*\(',
+            'fn\s+parse_worksheet_rows\s*\(',
+            'XlsxStyle',
+            'XlsxSheetMetrics',
+            'XlsxMergeRegion',
+            'MAX_OFFICE_ROWS',
+            'MAX_OFFICE_SHEETS',
+            'MAX_OFFICE_TABLE_CELL_WIDTH',
+            'XLSX_CELL_WIDTH',
+            'XLSX_ROW_HEIGHT')) {
         if ($previewText -match $forbiddenOfficeParent) {
             $failures.Add(
-                "preview.rs must not regain presentation implementation detail: $forbiddenOfficeParent")
+                "preview.rs must not regain Office format implementation detail: $forbiddenOfficeParent")
         }
     }
 
@@ -620,12 +646,50 @@ if ($failures.Count -eq 0) {
         }
     }
 
+    foreach ($requiredWorkbook in @(
+            'pub\(in crate::preview\) fn render_xlsx(?:<[^>]+>)?\(',
+            'fn build_xlsx_layout(?:<[^>]+>)?\(',
+            'fn parse_worksheet_layout_cells\(',
+            'struct XlsxStyle',
+            'struct XlsxSheetMetrics',
+            'struct XlsxMergeRegion',
+            'fn parse_xlsx_drawing_items(?:<[^>]+>)?\(',
+            'fn parse_xlsx_sheet_metrics\(',
+            'fn parse_xlsx_freeze_pane\(',
+            'fn parse_xlsx_merge_regions\(',
+            'fn parse_shared_strings\(',
+            'fn parse_worksheet_rows\(',
+            'const MAX_OFFICE_ROWS: usize = 48;',
+            'const MAX_OFFICE_SHEETS: usize = 6;',
+            'const MAX_OFFICE_TABLE_CELL_WIDTH: usize = 36;',
+            'const XLSX_CELL_WIDTH: f64 = 96\.0;',
+            'const XLSX_ROW_HEIGHT: f64 = 28\.0;',
+            'context\.check_xml_event\(event_count\)')) {
+        if ($officeWorkbookText -notmatch $requiredWorkbook) {
+            $failures.Add("Workbook module lost a bounded parser/layout invariant: $requiredWorkbook")
+        }
+    }
+
+    foreach ($requiredWorkbookTest in @(
+            'fn xlsx_merge_regions_preserve_spans\(',
+            'fn xlsx_freeze_pane_reads_split_counts\(',
+            'fn xlsx_style_number_formats_include_custom_and_builtin_formats\(',
+            'fn xlsx_styles_include_fill_colors\(',
+            'fn xlsx_shared_strings_and_worksheet_rows_resolve_cells\(',
+            'fn xlsx_drawing_anchor_resolves_image_reference_and_geometry\(')) {
+        if ($officeWorkbookTestsText -notmatch $requiredWorkbookTest) {
+            $failures.Add("Workbook tests lost XLSX layout/parser coverage: $requiredWorkbookTest")
+        }
+    }
+
     foreach ($officeModule in @(
             $officeText,
             $officeDocumentText,
             $officeDocumentTestsText,
             $officePresentationText,
-            $officePresentationTestsText)) {
+            $officePresentationTestsText,
+            $officeWorkbookText,
+            $officeWorkbookTestsText)) {
         if ($officeModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
             $officeModule -match '#\[no_mangle\]' -or
             $officeModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
@@ -651,6 +715,14 @@ if ($failures.Count -eq 0) {
         $failures.Add("The presentation module must expose only its narrow renderer to office/mod.rs.")
     }
 
+    $officeWorkbookExports = [regex]::Matches(
+        $officeWorkbookText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($officeWorkbookExports.Count -ne 1 -or
+        $officeWorkbookText -notmatch '(?m)^pub\(in crate::preview\) fn render_xlsx(?:<[^>]+>)?\(') {
+        $failures.Add("The workbook module must expose only its narrow renderer to office/mod.rs.")
+    }
+
     $officeLineCount = @(Get-Content -LiteralPath $officePath).Count
     if ($officeLineCount -gt 100) {
         $failures.Add("The Office composition module grew beyond 100 lines: $officeLineCount")
@@ -674,6 +746,16 @@ if ($failures.Count -eq 0) {
     if ($officePresentationTestsLineCount -gt 400) {
         $failures.Add(
             "The focused Office presentation tests grew beyond 400 lines: $officePresentationTestsLineCount")
+    }
+    $officeWorkbookLineCount = @(Get-Content -LiteralPath $officeWorkbookPath).Count
+    if ($officeWorkbookLineCount -gt 1350) {
+        $failures.Add(
+            "The bounded Office workbook module grew beyond 1350 lines: $officeWorkbookLineCount")
+    }
+    $officeWorkbookTestsLineCount = @(Get-Content -LiteralPath $officeWorkbookTestsPath).Count
+    if ($officeWorkbookTestsLineCount -gt 260) {
+        $failures.Add(
+            "The focused Office workbook tests grew beyond 260 lines: $officeWorkbookTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or

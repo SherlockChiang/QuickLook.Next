@@ -49,6 +49,8 @@ $nativeOfficeDocument = Join-Path $Root "native/quicklook_next_native/src/previe
 $nativeOfficeDocumentTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/document/tests.rs"
 $nativeOfficePresentation = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation.rs"
 $nativeOfficePresentationTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation/tests.rs"
+$nativeOfficeWorkbook = Join-Path $Root "native/quicklook_next_native/src/preview/office/workbook.rs"
+$nativeOfficeWorkbookTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/workbook/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
 $nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
 $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
@@ -56,7 +58,8 @@ $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
 $nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeDocument -Raw) + "`n" +
-    (Get-Content -LiteralPath $nativeOfficePresentation -Raw))
+    (Get-Content -LiteralPath $nativeOfficePresentation -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeOfficeWorkbook -Raw))
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
 Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
@@ -554,6 +557,10 @@ Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*
     "Ebook HANDLE inputs must remain capped at 256 MiB."
 Require-Pattern $nativePreview 'MAX_OFFICE_INPUT_BYTES:\s*u64\s*=\s*128\s*\*\s*1024\s*\*\s*1024' `
     "Office HANDLE inputs must remain capped at 128 MiB."
+Require-TextPattern $nativeOfficeText 'MAX_OFFICE_DECOMPRESSED_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_OFFICE_ZIP_ENTRIES:\s*usize\s*=\s*8_192' `
+    "Office parts must retain their shared 64 MiB decompression and 8192-entry ZIP budgets."
+Require-TextPattern $nativeOfficeText 'MAX_OFFICE_TEXT_CHARS:\s*usize\s*=\s*96\s*\*\s*1024[\s\S]*MAX_OFFICE_MEDIA_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_OFFICE_LAYOUT_IMAGES:\s*usize\s*=\s*18' `
+    "Office output must retain its 96 KiB text, 16 MiB media, and 18-image budgets."
 Require-TextPattern $nativeOfficeText 'const MAX_OFFICE_SLIDES:\s*usize\s*=\s*30[\s\S]*const MAX_PPT_SLIDE_TITLE_CHARS:\s*usize\s*=\s*160' `
     "Office presentation parsing must retain a 30-slide and 160-character title budget."
 Require-TextPattern $nativeOfficeText 'fn build_pptx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+mut\s+image_budget\s*=\s*MAX_OFFICE_LAYOUT_IMAGES' `
@@ -572,6 +579,18 @@ Require-TextPattern $nativeOfficeText 'fn extract_wordprocessing_text\([\s\S]*ev
     "Wordprocessing XML traversal must remain cancellation/event-budget aware."
 Require-Pattern $nativeOfficeDocumentTests 'office_xml_parser_honors_cancellation[\s\S]*OfficeContext::new\(Some\(always_cancel\)\)[\s\S]*OfficeReadError::Cancelled' `
     "DOCX tests must retain cancellation coverage for fragmented XML."
+Require-Pattern $nativeOfficeWorkbook 'const MAX_OFFICE_ROWS:\s*usize\s*=\s*48[\s\S]*const MAX_OFFICE_SHEETS:\s*usize\s*=\s*6[\s\S]*const MAX_OFFICE_TABLE_CELL_WIDTH:\s*usize\s*=\s*36[\s\S]*const XLSX_CELL_WIDTH:\s*f64\s*=\s*96\.0[\s\S]*const XLSX_ROW_HEIGHT:\s*f64\s*=\s*28\.0' `
+    "XLSX rendering must retain bounded rows, sheets, cell text, and default geometry."
+Require-Pattern $nativeOfficeWorkbook 'fn build_xlsx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+mut\s+image_budget\s*=\s*MAX_OFFICE_LAYOUT_IMAGES[\s\S]*for\s+sheet_idx\s+in\s+1\.\.=MAX_OFFICE_SHEETS' `
+    "XLSX layout generation must share the 18-image budget and cap represented sheets."
+Require-Pattern $nativeOfficeWorkbook 'fn parse_worksheet_rows\([\s\S]*event_count\s*\+=\s*1[\s\S]*context\.check_xml_event\(event_count\)[\s\S]*rows\.len\(\)\s*>=\s*MAX_OFFICE_ROWS' `
+    "XLSX worksheet row traversal must remain cancellation-aware and capped at 48 rows."
+Require-Pattern $nativeOfficeWorkbook 'fn parse_xlsx_drawing_items<R:\s*Read\s*\+\s*Seek>[\s\S]*context\.check_xml_event\(event_count\)[\s\S]*image_item_from_relationship\([\s\S]*image_budget' `
+    "XLSX drawing traversal must remain cancellation-aware and consume the shared image budget."
+Require-Pattern $nativeOfficeWorkbookTests 'xlsx_shared_strings_and_worksheet_rows_resolve_cells[\s\S]*parse_shared_strings\([\s\S]*parse_worksheet_rows\(' `
+    "XLSX tests must directly cover shared-string and sparse worksheet-row resolution."
+Require-Pattern $nativeOfficeWorkbookTests 'xlsx_drawing_anchor_resolves_image_reference_and_geometry[\s\S]*parse_xlsx_drawing_items\([\s\S]*image_budget' `
+    "XLSX tests must directly cover bounded drawing anchors and image references."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
