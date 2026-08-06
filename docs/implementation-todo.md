@@ -122,7 +122,7 @@ the release-only `release:` prefix while this queue is in progress.
         one narrow renderer route and the shared Office decompression budget.
       - [x] `R26-P1-07c-4b` Move DOCX/ODF document text, headers/footers, and
         bounded document layout into `preview/office/document.rs`.
-      - [ ] `R26-P1-07c-4c` Move XLSX workbook cells, styles, metrics, and
+      - [x] `R26-P1-07c-4c` Move XLSX workbook cells, styles, metrics, and
         drawing anchors into `preview/office/workbook.rs`.
       - [ ] `R26-P1-07c-4d` Move shared Office relationship/layout primitives
         into a bounded `preview/office/layout.rs` module.
@@ -230,6 +230,23 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
   - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke` (all preceding guards passed; restricted-host launch smoke is environment-blocked with exit 23)
   - Commits: `0aa038c`, `3bf5cf3`
+
+- [x] `R26-P1-07c-4c` Move XLSX workbook text/layout parsing into the 1,298-line
+  `preview/office/workbook.rs` module with 200 lines of focused tests. The
+  module owns shared-string resolution, sparse worksheet rows, styles and
+  number formats, sheet metrics/freeze panes/merge spans, bounded drawing
+  anchors, and lazy image references. `office/mod.rs` exposes only
+  `render_xlsx`; the parent retains the shared Office budget, relationship,
+  image-reference, and JSON primitives. The workbook path keeps the six-sheet,
+  48-row, 36-character-cell, 18-image, and cancellation/event budgets.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::office::workbook` (6 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native office::` (21 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (267 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commits: `8a9e101`, `6bdc4b4`
 
 - [x] `R26-P1-07c-4a` Move the PPTX/PPTM presentation parser and layout
   composer out of `preview.rs` into a bounded `preview/office/presentation.rs`
