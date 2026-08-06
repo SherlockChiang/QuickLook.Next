@@ -9,13 +9,15 @@ use zip::ZipArchive;
 mod tests;
 
 use super::super::{
-    append_office_media_summary, attr_bool, attr_f64, attr_value, file_name,
-    image_item_from_relationship, local_xml_name, normalize_hex_color, normalize_zip_target,
-    office_media_entries, office_preview_json_with_layout, parse_relationships, part_base_dir,
-    read_office_zip_text, rels_path_for_part, truncate_preview_text, xml_general_ref,
-    xml_unescape_bytes, OfficeCellDto, OfficeContext, OfficeImagePlacement, OfficeLayoutDto,
-    OfficeLayoutItemDto, OfficePageDto, OfficeResult, MAX_OFFICE_LAYOUT_IMAGES,
-    OFFICE_EMUS_PER_DIP,
+    append_office_media_summary, attr_bool, attr_f64, attr_value, file_name, local_xml_name,
+    normalize_hex_color, normalize_zip_target, office_media_entries,
+    office_preview_json_with_layout, read_office_zip_text, truncate_preview_text, xml_general_ref,
+    xml_unescape_bytes, OfficeCellDto, OfficeContext, OfficeLayoutDto, OfficeLayoutItemDto,
+    OfficePageDto, OfficeResult, MAX_OFFICE_LAYOUT_IMAGES, OFFICE_EMUS_PER_DIP,
+};
+use super::layout::{
+    image_item_from_relationship, parse_relationships, part_base_dir, rels_path_for_part,
+    OfficeImagePlacement,
 };
 
 const MAX_OFFICE_ROWS: usize = 48;
