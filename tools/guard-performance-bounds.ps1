@@ -47,6 +47,8 @@ $nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/d
 $nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
 $nativeOfficeDocument = Join-Path $Root "native/quicklook_next_native/src/preview/office/document.rs"
 $nativeOfficeDocumentTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/document/tests.rs"
+$nativeOfficeImage = Join-Path $Root "native/quicklook_next_native/src/preview/office/image.rs"
+$nativeOfficeImageTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/image/tests.rs"
 $nativeOfficeLayout = Join-Path $Root "native/quicklook_next_native/src/preview/office/layout.rs"
 $nativeOfficeLayoutTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/layout/tests.rs"
 $nativeOfficePresentation = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation.rs"
@@ -60,6 +62,7 @@ $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
 $nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeDocument -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeOfficeImage -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeLayout -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficePresentation -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeWorkbook -Raw))
@@ -600,6 +603,14 @@ Require-Pattern $nativeOfficeLayout 'pub\(super\) fn image_item_from_relationshi
     "Office layout image anchors must resolve normalized references through the bounded image-reference reader."
 Require-Pattern $nativeOfficeLayoutTests 'office_relationships_parse_ids_and_targets[\s\S]*parse_relationships\([\s\S]*office_part_paths_follow_ooxml_relationship_layout' `
     "Office layout tests must directly cover relationship IDs and part path derivation."
+Require-Pattern $nativeOfficeImage 'office_media_entries(?:<[^>]+>)?[\s\S]*MAX_OFFICE_ZIP_ENTRIES[\s\S]*MAX_OFFICE_MEDIA_BYTES[\s\S]*canonical_office_media_ref' `
+    "Office media discovery must remain root-scoped, bounded, and canonicalized."
+Require-Pattern $nativeOfficeImage 'read_office_layout_image_reference(?:<[^>]+>)?[\s\S]*folded_ambiguous[\s\S]*MAX_OFFICE_INLINE_IMAGE_BYTES' `
+    "Office layout image references must fail closed on case-fold ambiguity and source-size overflow."
+Require-Pattern $nativeOfficeImage 'office_layout_image_to_bgra[\s\S]*checked_mul[\s\S]*preview_cancelled\(cancel_cb\)' `
+    "Office lazy BGRA extraction must retain checked output sizing and cancellation checks."
+Require-Pattern $nativeOfficeImageTests 'office_media_entries_are_unique_canonical_and_root_scoped[\s\S]*office_layout_image_refs_require_canonical_matching_roots[\s\S]*office_layout_image_decode_enforces_source_and_dimension_bounds[\s\S]*office_image_scans_and_decode_honor_cancellation' `
+    "Office image tests must retain root, reference, source/dimension, and cancellation coverage."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
@@ -673,7 +684,7 @@ Require-Pattern $nativeEbookPreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[
     "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativePreview 'render_office_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
     "Office path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
-Require-Pattern $nativePreview 'extract_office_image_bgra_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
+Require-Pattern $nativeOfficeImage 'extract_office_image_bgra_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
     "Office hero extraction must share the bounded, cancellable HANDLE ZIP pipeline."
 Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
     "Archive entry HANDLE extraction must validate the source and enforce cancellation, deadline, and output bounds."

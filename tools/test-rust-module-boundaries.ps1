@@ -30,6 +30,8 @@ $databaseWalPath = Join-Path $Root "native\quicklook_next_native\src\preview\dat
 $databaseSqlitePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\sqlite.rs"
 $databaseTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\tests.rs"
 $officePath = Join-Path $Root "native\quicklook_next_native\src\preview\office\mod.rs"
+$officeImagePath = Join-Path $Root "native\quicklook_next_native\src\preview\office\image.rs"
+$officeImageTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\image\tests.rs"
 $officeLayoutPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\layout.rs"
 $officeLayoutTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\layout\tests.rs"
 $officeDocumentPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document.rs"
@@ -65,6 +67,8 @@ foreach ($path in @(
         $databaseSqlitePath,
         $databaseTestsPath,
         $officePath,
+        $officeImagePath,
+        $officeImageTestsPath,
         $officeLayoutPath,
         $officeLayoutTestsPath,
         $officeDocumentPath,
@@ -103,6 +107,8 @@ if ($failures.Count -eq 0) {
     $databaseSqliteText = Get-Content -LiteralPath $databaseSqlitePath -Raw
     $databaseTestsText = Get-Content -LiteralPath $databaseTestsPath -Raw
     $officeText = Get-Content -LiteralPath $officePath -Raw
+    $officeImageText = Get-Content -LiteralPath $officeImagePath -Raw
+    $officeImageTestsText = Get-Content -LiteralPath $officeImageTestsPath -Raw
     $officeLayoutText = Get-Content -LiteralPath $officeLayoutPath -Raw
     $officeLayoutTestsText = Get-Content -LiteralPath $officeLayoutTestsPath -Raw
     $officeDocumentText = Get-Content -LiteralPath $officeDocumentPath -Raw
@@ -520,6 +526,7 @@ if ($failures.Count -eq 0) {
 
     if ($previewText -notmatch '(?m)^mod office;\s*$' -or
         $officeText -notmatch '(?m)^mod document;\s*$' -or
+        $officeText -notmatch '(?m)^mod image;\s*$' -or
         $officeText -notmatch '(?m)^mod layout;\s*$' -or
         $officeText -notmatch '(?m)^mod presentation;\s*$' -or
         $officeText -notmatch '(?m)^mod workbook;\s*$' -or
@@ -528,7 +535,7 @@ if ($failures.Count -eq 0) {
         $officeText -notmatch '(?m)^pub\(super\) use workbook::render_xlsx;\s*$' -or
         $officeText -match '(?m)^pub\(super\) use presentation::\{') {
         $failures.Add(
-            "Office composition must expose only narrow document, presentation, and workbook renderers to preview.rs.")
+            "Office composition must expose only narrow document, image, layout, presentation, and workbook module boundaries.")
     }
 
     if ($previewText -notmatch '(?m)^use office::\{render_docx, render_odf, render_pptx, render_xlsx\};\s*$' -or
@@ -577,6 +584,17 @@ if ($failures.Count -eq 0) {
             'fn\s+parse_relationships\s*\(',
             'fn\s+rels_path_for_part\s*\(',
             'fn\s+part_base_dir\s*\(',
+            'fn\s+office_media_entries\s*\(',
+            'fn\s+append_office_media_summary\s*\(',
+            'fn\s+office_media_root_for_part\s*\(',
+            'fn\s+office_media_root_for_path\s*\(',
+            'fn\s+canonical_office_media_ref\s*\(',
+            'fn\s+image_mime_type\s*\(',
+            'fn\s+read_office_layout_image_reference\s*\(',
+            'fn\s+office_image_format\s*\(',
+            'fn\s+office_layout_image_to_bgra\s*\(',
+            'fn\s+office_media_roots_for_path\s*\(',
+            'fn\s+office_image_candidate_score\s*\(',
             'XlsxStyle',
             'XlsxSheetMetrics',
             'XlsxMergeRegion',
@@ -715,8 +733,40 @@ if ($failures.Count -eq 0) {
         }
     }
 
+    foreach ($requiredImage in @(
+            'pub\(super\) fn office_media_entries(?:<[^>]+>)?\(',
+            'pub\(super\) fn append_office_media_summary\(',
+            'pub\(super\) fn office_media_root_for_part\(',
+            'fn canonical_office_media_ref\(',
+            'pub\(super\) fn image_mime_type\(',
+            'pub\(super\) fn read_office_layout_image_reference(?:<[^>]+>)?\(',
+            'pub\(in crate::preview\) fn extract_office_image_bgra(?:<[^>]+>)?\(',
+            'pub\(in crate::preview\) fn extract_office_image_bgra_reader<R: Read \+ Seek>\(',
+            'pub\(in crate::preview\) fn office_layout_image_ref_is_valid\(',
+            'pub\(in crate::preview\) fn extract_office_layout_image_bgra_reader<R: Read \+ Seek>\(',
+            'open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES',
+            'read_office_limited_to_end\([\s\S]*MAX_OFFICE_INLINE_IMAGE_BYTES',
+            'MAX_EMBEDDED_IMAGE_DIMENSION[\s\S]*MAX_EMBEDDED_IMAGE_PIXELS')) {
+        if ($officeImageText -notmatch $requiredImage) {
+            $failures.Add("Office image module lost a bounded discovery/reference/extraction invariant: $requiredImage")
+        }
+    }
+
+    foreach ($requiredImageTest in @(
+            'fn office_media_entries_are_unique_canonical_and_root_scoped\(',
+            'fn office_layout_image_refs_require_canonical_matching_roots\(',
+            'fn office_layout_image_reference_rejects_ambiguous_entries\(',
+            'fn office_layout_image_decode_enforces_source_and_dimension_bounds\(',
+            'fn office_image_scans_and_decode_honor_cancellation\(')) {
+        if ($officeImageTestsText -notmatch $requiredImageTest) {
+            $failures.Add("Office image tests lost bounded path/size/dimension/cancellation coverage: $requiredImageTest")
+        }
+    }
+
     foreach ($officeModule in @(
             $officeText,
+            $officeImageText,
+            $officeImageTestsText,
             $officeLayoutText,
             $officeLayoutTestsText,
             $officeDocumentText,
@@ -767,6 +817,16 @@ if ($failures.Count -eq 0) {
         $failures.Add("The Office layout module must expose only its five shared relationship/anchor helpers to sibling format modules.")
     }
 
+    $officeImageExports = [regex]::Matches(
+        $officeImageText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($officeImageExports.Count -ne 9 -or
+        $officeImageText -match '(?m)^pub\s+fn\s+' -or
+        $officeImageText -notmatch '(?m)^pub\(super\) fn office_media_entries' -or
+        $officeImageText -notmatch '(?m)^pub\(in crate::preview\) fn extract_office_layout_image_bgra_reader') {
+        $failures.Add("The Office image module must expose only its nine narrow discovery/reference/extraction helpers.")
+    }
+
     $officeLineCount = @(Get-Content -LiteralPath $officePath).Count
     if ($officeLineCount -gt 100) {
         $failures.Add("The Office composition module grew beyond 100 lines: $officeLineCount")
@@ -810,6 +870,14 @@ if ($failures.Count -eq 0) {
     if ($officeLayoutTestsLineCount -gt 120) {
         $failures.Add(
             "The focused Office layout tests grew beyond 120 lines: $officeLayoutTestsLineCount")
+    }
+    $officeImageLineCount = @(Get-Content -LiteralPath $officeImagePath).Count
+    if ($officeImageLineCount -gt 560) {
+        $failures.Add("The bounded Office image module grew beyond 560 lines: $officeImageLineCount")
+    }
+    $officeImageTestsLineCount = @(Get-Content -LiteralPath $officeImageTestsPath).Count
+    if ($officeImageTestsLineCount -gt 240) {
+        $failures.Add("The focused Office image tests grew beyond 240 lines: $officeImageTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
