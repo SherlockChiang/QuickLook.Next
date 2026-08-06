@@ -8,12 +8,14 @@ use zip::ZipArchive;
 mod tests;
 
 use super::super::{
-    append_office_media_summary, attr_value, file_name, image_mime_type, local_xml_name,
-    normalize_preview_lines, office_error_json, office_media_entries,
-    office_preview_json_with_layout, office_text_json, read_office_layout_image_reference,
-    read_office_zip_text, truncate_preview_text, xml_general_ref, xml_unescape_bytes,
-    OfficeContext, OfficeLayoutDto, OfficeLayoutItemDto, OfficePageDto, OfficeResult,
-    MAX_OFFICE_LAYOUT_IMAGES, MAX_OFFICE_ZIP_ENTRIES,
+    attr_value, file_name, local_xml_name, normalize_preview_lines, office_error_json,
+    office_preview_json_with_layout, office_text_json, read_office_zip_text, truncate_preview_text,
+    xml_general_ref, xml_unescape_bytes, OfficeContext, OfficeLayoutDto, OfficeLayoutItemDto,
+    OfficePageDto, OfficeResult, MAX_OFFICE_LAYOUT_IMAGES, MAX_OFFICE_ZIP_ENTRIES,
+};
+use super::image::{
+    append_office_media_summary, image_mime_type, office_media_entries,
+    read_office_layout_image_reference,
 };
 
 pub(in crate::preview) fn render_docx<R: Read + Seek>(

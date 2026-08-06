@@ -9,8 +9,11 @@ use zip::ZipArchive;
 mod tests;
 
 use super::super::{
-    attr_value, image_mime_type, local_xml_name, normalize_zip_target, office_media_root_for_part,
-    read_office_layout_image_reference, OfficeContext, OfficeLayoutItemDto, OfficeResult,
+    attr_value, local_xml_name, normalize_zip_target, OfficeContext, OfficeLayoutItemDto,
+    OfficeResult,
+};
+use super::image::{
+    image_mime_type, office_media_root_for_part, read_office_layout_image_reference,
 };
 
 pub(super) struct OfficeImagePlacement<'a> {
