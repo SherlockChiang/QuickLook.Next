@@ -116,6 +116,19 @@ the release-only `release:` prefix while this queue is in progress.
         preserving HANDLE, companion-file, cancellation, and size contracts.
     - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
       and embedded-image parsing into focused Office modules.
+      - [x] `R26-P1-07c-4a` Move PPTX/PPTM presentation layout, placeholder
+        inheritance, bounded text extraction, title/summary selection, and
+        focused regression tests into `preview/office/presentation.rs` behind
+        one narrow renderer route and the shared Office decompression budget.
+      - [ ] `R26-P1-07c-4b` Move DOCX/ODF document text, headers/footers, and
+        bounded document layout into `preview/office/document.rs`.
+      - [ ] `R26-P1-07c-4c` Move XLSX workbook cells, styles, metrics, and
+        drawing anchors into `preview/office/workbook.rs`.
+      - [ ] `R26-P1-07c-4d` Move shared Office relationship/layout primitives
+        into a bounded `preview/office/layout.rs` module.
+      - [ ] `R26-P1-07c-4e` Move Office embedded-image discovery, references,
+        and lazy BGRA extraction into a focused image module while preserving
+        the HANDLE and source-pixel budgets.
     - [ ] `R26-P1-07c-5` Move archive and application-package listing/parsing
       into focused modules while preserving bounded extraction contracts.
     - [ ] `R26-P1-07c-6` Move reusable bounded-reader and parser primitives into
@@ -199,6 +212,23 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-4a` Move the PPTX/PPTM presentation parser and layout
+  composer out of `preview.rs` into a bounded `preview/office/presentation.rs`
+  module. The module owns slide-size/background parsing, shape/image placement,
+  layout/master placeholder inheritance, bounded title selection, and slide text
+  extraction while consuming the existing shared Office decompression/cancellation
+  context. `office/mod.rs` and `preview.rs` expose only the narrow renderer route;
+  the nine PPT regressions now live beside the implementation and retain the
+  one-time layout/master budget assertion.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native --lib presentation::tests` (9 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (265 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke` (all preceding guards passed; restricted-host launch smoke is environment-blocked with exit 23)
+  - Commits: `289fdf3`, `d67144d`
 
 - [x] `R26-P1-07c-3e` Split the SQLite/database family out of `preview.rs` into
   a 242-line composition module, a bounded 281-line WAL/SHM snapshot module,
