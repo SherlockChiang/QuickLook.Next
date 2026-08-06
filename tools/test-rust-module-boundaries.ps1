@@ -30,6 +30,8 @@ $databaseWalPath = Join-Path $Root "native\quicklook_next_native\src\preview\dat
 $databaseSqlitePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\sqlite.rs"
 $databaseTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\tests.rs"
 $officePath = Join-Path $Root "native\quicklook_next_native\src\preview\office\mod.rs"
+$officeLayoutPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\layout.rs"
+$officeLayoutTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\layout\tests.rs"
 $officeDocumentPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document.rs"
 $officeDocumentTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\document\tests.rs"
 $officePresentationPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation.rs"
@@ -63,6 +65,8 @@ foreach ($path in @(
         $databaseSqlitePath,
         $databaseTestsPath,
         $officePath,
+        $officeLayoutPath,
+        $officeLayoutTestsPath,
         $officeDocumentPath,
         $officeDocumentTestsPath,
         $officePresentationPath,
@@ -99,6 +103,8 @@ if ($failures.Count -eq 0) {
     $databaseSqliteText = Get-Content -LiteralPath $databaseSqlitePath -Raw
     $databaseTestsText = Get-Content -LiteralPath $databaseTestsPath -Raw
     $officeText = Get-Content -LiteralPath $officePath -Raw
+    $officeLayoutText = Get-Content -LiteralPath $officeLayoutPath -Raw
+    $officeLayoutTestsText = Get-Content -LiteralPath $officeLayoutTestsPath -Raw
     $officeDocumentText = Get-Content -LiteralPath $officeDocumentPath -Raw
     $officeDocumentTestsText = Get-Content -LiteralPath $officeDocumentTestsPath -Raw
     $officePresentationText = Get-Content -LiteralPath $officePresentationPath -Raw
@@ -514,6 +520,7 @@ if ($failures.Count -eq 0) {
 
     if ($previewText -notmatch '(?m)^mod office;\s*$' -or
         $officeText -notmatch '(?m)^mod document;\s*$' -or
+        $officeText -notmatch '(?m)^mod layout;\s*$' -or
         $officeText -notmatch '(?m)^mod presentation;\s*$' -or
         $officeText -notmatch '(?m)^mod workbook;\s*$' -or
         $officeText -notmatch '(?m)^pub\(super\) use document::\{render_docx, render_odf\};\s*$' -or
@@ -565,6 +572,11 @@ if ($failures.Count -eq 0) {
             'fn\s+xlsx_',
             'fn\s+parse_shared_strings\s*\(',
             'fn\s+parse_worksheet_rows\s*\(',
+            'struct\s+OfficeImagePlacement',
+            'fn\s+image_item_from_relationship\s*\(',
+            'fn\s+parse_relationships\s*\(',
+            'fn\s+rels_path_for_part\s*\(',
+            'fn\s+part_base_dir\s*\(',
             'XlsxStyle',
             'XlsxSheetMetrics',
             'XlsxMergeRegion',
@@ -682,8 +694,31 @@ if ($failures.Count -eq 0) {
         }
     }
 
+    foreach ($requiredLayout in @(
+            'pub\(super\) struct OfficeImagePlacement',
+            'pub\(super\) fn image_item_from_relationship(?:<[^>]+>)?\(',
+            'pub\(super\) fn parse_relationships\(',
+            'pub\(super\) fn rels_path_for_part\(',
+            'pub\(super\) fn part_base_dir\(',
+            'context\.check_xml_event\(event_count\)',
+            'read_office_layout_image_reference\(')) {
+        if ($officeLayoutText -notmatch $requiredLayout) {
+            $failures.Add("Office layout module lost a shared relationship/anchor invariant: $requiredLayout")
+        }
+    }
+
+    foreach ($requiredLayoutTest in @(
+            'fn office_relationships_parse_ids_and_targets\(',
+            'fn office_part_paths_follow_ooxml_relationship_layout\(')) {
+        if ($officeLayoutTestsText -notmatch $requiredLayoutTest) {
+            $failures.Add("Office layout tests lost relationship/path coverage: $requiredLayoutTest")
+        }
+    }
+
     foreach ($officeModule in @(
             $officeText,
+            $officeLayoutText,
+            $officeLayoutTestsText,
             $officeDocumentText,
             $officeDocumentTestsText,
             $officePresentationText,
@@ -723,6 +758,15 @@ if ($failures.Count -eq 0) {
         $failures.Add("The workbook module must expose only its narrow renderer to office/mod.rs.")
     }
 
+    $officeLayoutExports = [regex]::Matches(
+        $officeLayoutText,
+        '(?m)^pub\(super\)\s+')
+    if ($officeLayoutExports.Count -ne 5 -or
+        $officeLayoutText -notmatch '(?m)^pub\(super\) struct OfficeImagePlacement' -or
+        $officeLayoutText -notmatch '(?m)^pub\(super\) fn image_item_from_relationship') {
+        $failures.Add("The Office layout module must expose only its five shared relationship/anchor helpers to sibling format modules.")
+    }
+
     $officeLineCount = @(Get-Content -LiteralPath $officePath).Count
     if ($officeLineCount -gt 100) {
         $failures.Add("The Office composition module grew beyond 100 lines: $officeLineCount")
@@ -756,6 +800,16 @@ if ($failures.Count -eq 0) {
     if ($officeWorkbookTestsLineCount -gt 260) {
         $failures.Add(
             "The focused Office workbook tests grew beyond 260 lines: $officeWorkbookTestsLineCount")
+    }
+    $officeLayoutLineCount = @(Get-Content -LiteralPath $officeLayoutPath).Count
+    if ($officeLayoutLineCount -gt 260) {
+        $failures.Add(
+            "The bounded Office layout module grew beyond 260 lines: $officeLayoutLineCount")
+    }
+    $officeLayoutTestsLineCount = @(Get-Content -LiteralPath $officeLayoutTestsPath).Count
+    if ($officeLayoutTestsLineCount -gt 120) {
+        $failures.Add(
+            "The focused Office layout tests grew beyond 120 lines: $officeLayoutTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or

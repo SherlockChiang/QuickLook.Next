@@ -47,6 +47,8 @@ $nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/d
 $nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
 $nativeOfficeDocument = Join-Path $Root "native/quicklook_next_native/src/preview/office/document.rs"
 $nativeOfficeDocumentTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/document/tests.rs"
+$nativeOfficeLayout = Join-Path $Root "native/quicklook_next_native/src/preview/office/layout.rs"
+$nativeOfficeLayoutTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/layout/tests.rs"
 $nativeOfficePresentation = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation.rs"
 $nativeOfficePresentationTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation/tests.rs"
 $nativeOfficeWorkbook = Join-Path $Root "native/quicklook_next_native/src/preview/office/workbook.rs"
@@ -58,6 +60,7 @@ $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
 $nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeDocument -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeOfficeLayout -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficePresentation -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeWorkbook -Raw))
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
@@ -591,6 +594,12 @@ Require-Pattern $nativeOfficeWorkbookTests 'xlsx_shared_strings_and_worksheet_ro
     "XLSX tests must directly cover shared-string and sparse worksheet-row resolution."
 Require-Pattern $nativeOfficeWorkbookTests 'xlsx_drawing_anchor_resolves_image_reference_and_geometry[\s\S]*parse_xlsx_drawing_items\([\s\S]*image_budget' `
     "XLSX tests must directly cover bounded drawing anchors and image references."
+Require-Pattern $nativeOfficeLayout 'pub\(super\) fn parse_relationships\([\s\S]*context\.check_xml_event\(event_count\)[\s\S]*pub\(super\) fn rels_path_for_part' `
+    "Office relationship parsing must remain event-budget aware and use a canonical part-relative .rels path."
+Require-Pattern $nativeOfficeLayout 'pub\(super\) fn image_item_from_relationship<R:\s*Read\s*\+\s*Seek>[\s\S]*normalize_zip_target\([\s\S]*read_office_layout_image_reference\([\s\S]*image_budget' `
+    "Office layout image anchors must resolve normalized references through the bounded image-reference reader."
+Require-Pattern $nativeOfficeLayoutTests 'office_relationships_parse_ids_and_targets[\s\S]*parse_relationships\([\s\S]*office_part_paths_follow_ooxml_relationship_layout' `
+    "Office layout tests must directly cover relationship IDs and part path derivation."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
