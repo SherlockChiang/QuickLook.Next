@@ -114,7 +114,7 @@ the release-only `release:` prefix while this queue is in progress.
       - [x] `R26-P1-07c-3e` Split SQLite/database rendering into bounded
         `preview/database/` composition, WAL, and SQLite parser modules while
         preserving HANDLE, companion-file, cancellation, and size contracts.
-    - [ ] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
+    - [x] `R26-P1-07c-4` Move Office document, workbook, presentation, layout,
       and embedded-image parsing into focused Office modules.
       - [x] `R26-P1-07c-4a` Move PPTX/PPTM presentation layout, placeholder
         inheritance, bounded text extraction, title/summary selection, and
@@ -126,7 +126,7 @@ the release-only `release:` prefix while this queue is in progress.
         drawing anchors into `preview/office/workbook.rs`.
       - [x] `R26-P1-07c-4d` Move shared Office relationship/layout primitives
         into a bounded `preview/office/layout.rs` module.
-      - [ ] `R26-P1-07c-4e` Move Office embedded-image discovery, references,
+      - [x] `R26-P1-07c-4e` Move Office embedded-image discovery, references,
         and lazy BGRA extraction into a focused image module while preserving
         the HANDLE and source-pixel budgets.
     - [ ] `R26-P1-07c-5` Move archive and application-package listing/parsing
@@ -261,6 +261,25 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
   - Commits: `4784533`, `1d908a1`
+
+- [x] `R26-P1-07c-4e` Move Office media discovery, canonical image references,
+  case-fold ambiguity checks, and lazy BGRA extraction into the 527-line
+  `preview/office/image.rs` module with 200 lines of focused tests. The parent
+  keeps only stable extraction wrappers; generic ZIP validation, shared
+  decompression accounting, and bounded embedded-image decoding remain reusable
+  native helpers. Media discovery stays scoped to the OOXML root, layout image
+  sources remain capped at 768 KiB, source dimensions at 8192 pixels/16 million
+  pixels, output targets at 1024 pixels, and every scan/decode path remains
+  cancellation-aware.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::office::image` (5 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native office::` (38 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (273 passed, 1 ignored)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist -SkipSystemImageSmoke` (all architecture, FFI, image-corpus, and restricted-host checks passed)
+  - Commits: `dada5f9`, `d1b6a53`
 
 - [x] `R26-P1-07c-4a` Move the PPTX/PPTM presentation parser and layout
   composer out of `preview.rs` into a bounded `preview/office/presentation.rs`
