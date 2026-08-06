@@ -45,11 +45,15 @@ $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview
 $nativeDatabase = Join-Path $Root "native/quicklook_next_native/src/preview/database/mod.rs"
 $nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/database/wal.rs"
 $nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
+$nativeOfficePresentation = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation.rs"
+$nativeOfficePresentationTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/presentation/tests.rs"
 $nativeTextPreview = Join-Path $Root "native/quicklook_next_native/src/preview/text.rs"
 $nativeTorrentPreview = Join-Path $Root "native/quicklook_next_native/src/preview/torrent.rs"
 $nativeDatabaseText = ((Get-Content -LiteralPath $nativeDatabase -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseWal -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeDatabaseSqlite -Raw))
+$nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeOfficePresentation -Raw))
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
 Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
@@ -547,6 +551,16 @@ Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*
     "Ebook HANDLE inputs must remain capped at 256 MiB."
 Require-Pattern $nativePreview 'MAX_OFFICE_INPUT_BYTES:\s*u64\s*=\s*128\s*\*\s*1024\s*\*\s*1024' `
     "Office HANDLE inputs must remain capped at 128 MiB."
+Require-TextPattern $nativeOfficeText 'const MAX_OFFICE_SLIDES:\s*usize\s*=\s*30[\s\S]*const MAX_PPT_SLIDE_TITLE_CHARS:\s*usize\s*=\s*160' `
+    "Office presentation parsing must retain a 30-slide and 160-character title budget."
+Require-TextPattern $nativeOfficeText 'fn build_pptx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+mut\s+image_budget\s*=\s*MAX_OFFICE_LAYOUT_IMAGES' `
+    "PPT layout parsing must retain the shared 18-image budget."
+Require-TextPattern $nativeOfficeText 'fn parse_ppt_slide_items<R:\s*Read\s*\+\s*Seek>[\s\S]*event_count\s*\+=\s*1[\s\S]*context\.check_xml_event\(event_count\)' `
+    "PPT XML shape traversal must remain cancellation/event-budget aware."
+Require-TextPattern $nativeOfficeText 'fn cache_ppt_slide_layout_placeholders<R:\s*Read\s*\+\s*Seek>[\s\S]*cache\.layouts\.contains_key' `
+    "PPT layout placeholders must remain cached to avoid repeated decompression."
+Require-Pattern $nativeOfficePresentationTests 'ppt_layout_inherits_title_type_and_geometry_from_master_once[\s\S]*shared layout/master parts must only consume the decompression budget once' `
+    "PPT tests must retain the shared layout/master decompression-budget regression."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `

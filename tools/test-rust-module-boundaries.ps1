@@ -29,6 +29,9 @@ $databasePath = Join-Path $Root "native\quicklook_next_native\src\preview\databa
 $databaseWalPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\wal.rs"
 $databaseSqlitePath = Join-Path $Root "native\quicklook_next_native\src\preview\database\sqlite.rs"
 $databaseTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\database\tests.rs"
+$officePath = Join-Path $Root "native\quicklook_next_native\src\preview\office\mod.rs"
+$officePresentationPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation.rs"
+$officePresentationTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -54,7 +57,10 @@ foreach ($path in @(
         $databasePath,
         $databaseWalPath,
         $databaseSqlitePath,
-        $databaseTestsPath)) {
+        $databaseTestsPath,
+        $officePath,
+        $officePresentationPath,
+        $officePresentationTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -84,6 +90,9 @@ if ($failures.Count -eq 0) {
     $databaseWalText = Get-Content -LiteralPath $databaseWalPath -Raw
     $databaseSqliteText = Get-Content -LiteralPath $databaseSqlitePath -Raw
     $databaseTestsText = Get-Content -LiteralPath $databaseTestsPath -Raw
+    $officeText = Get-Content -LiteralPath $officePath -Raw
+    $officePresentationText = Get-Content -LiteralPath $officePresentationPath -Raw
+    $officePresentationTestsText = Get-Content -LiteralPath $officePresentationTestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -489,6 +498,105 @@ if ($failures.Count -eq 0) {
     $databaseTestsLineCount = @(Get-Content -LiteralPath $databaseTestsPath).Count
     if ($databaseTestsLineCount -gt 750) {
         $failures.Add("The focused database tests grew beyond 750 lines: $databaseTestsLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod office;\s*$' -or
+        $officeText -notmatch '(?m)^mod presentation;\s*$' -or
+        $officeText -notmatch '(?m)^pub\(super\) use presentation::render_pptx;\s*$' -or
+        $officeText -match '(?m)^pub\(super\) use presentation::\{') {
+        $failures.Add(
+            "Office composition must expose only the narrow presentation renderer to preview.rs.")
+    }
+
+    if ($previewText -notmatch '(?m)^use office::render_pptx;\s*$' -or
+        [regex]::Matches(
+            $previewText,
+            '"pptx"\s*\|\s*"pptm"\s*=>\s*render_pptx\('
+        ).Count -ne 1) {
+        $failures.Add("preview.rs must route PPTX/PPTM exactly once through preview::office.")
+    }
+
+    foreach ($forbiddenOfficeParent in @(
+            'fn\s+render_pptx\s*\(',
+            'fn\s+build_pptx_layout\s*\(',
+            'fn\s+parse_ppt_',
+            'fn\s+ppt_',
+            'struct\s+PptPlaceholder',
+            'struct\s+PptSlideInput',
+            'MAX_OFFICE_SLIDES',
+            'MAX_PPT_SLIDE_TITLE_CHARS')) {
+        if ($previewText -match $forbiddenOfficeParent) {
+            $failures.Add(
+                "preview.rs must not regain presentation implementation detail: $forbiddenOfficeParent")
+        }
+    }
+
+    foreach ($requiredPresentation in @(
+            'pub\(in crate::preview\) fn render_pptx(?:<[^>]+>)?\(',
+            'fn build_pptx_layout(?:<[^>]+>)?\(',
+            'fn parse_ppt_slide_size\(',
+            'fn parse_ppt_slide_background\(',
+            'fn parse_ppt_slide_items(?:<[^>]+>)?\(',
+            'struct PptPlaceholderInfo',
+            'struct PptPlaceholderCache',
+            'struct PptSlideInput',
+            'fn cache_ppt_slide_layout_placeholders(?:<[^>]+>)?\(',
+            'fn cache_ppt_slide_master_placeholders(?:<[^>]+>)?\(',
+            'fn extract_ppt_text\(',
+            'const MAX_OFFICE_SLIDES: usize = 30;',
+            'const MAX_PPT_SLIDE_TITLE_CHARS: usize = 160;',
+            'context\.check_xml_event\(event_count\)')) {
+        if ($officePresentationText -notmatch $requiredPresentation) {
+            $failures.Add(
+                "Presentation module lost a bounded parser/routing invariant: $requiredPresentation")
+        }
+    }
+
+    foreach ($requiredPresentationTest in @(
+            'fn ppt_text_extraction_preserves_paragraphs_tabs_and_breaks\(',
+            'fn ppt_layout_text_items_preserve_paragraph_boundaries\(',
+            'fn ppt_layout_text_items_preserve_bullets_and_alignment_hints\(',
+            'fn ppt_layout_inherits_title_placeholder_type_from_slide_layout\(',
+            'fn ppt_layout_inherits_title_type_and_geometry_from_master_once\(',
+            'fn ppt_vertical_title_is_retained_without_explicit_geometry\(',
+            'fn ppt_fallback_prefers_large_top_text_over_header_subtitle_and_footer\(',
+            'fn ppt_slide_summary_removes_one_multiline_title_occurrence\(',
+            'fn ppt_slide_title_uses_top_text_box_when_no_title_placeholder_exists\(')) {
+        if ($officePresentationTestsText -notmatch $requiredPresentationTest) {
+            $failures.Add("Presentation tests lost layout/title/cancellation coverage: $requiredPresentationTest")
+        }
+    }
+
+    foreach ($officeModule in @($officeText, $officePresentationText, $officePresentationTestsText)) {
+        if ($officeModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+            $officeModule -match '#\[no_mangle\]' -or
+            $officeModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Office modules must use explicit imports and must not own a C ABI surface.")
+        }
+    }
+
+    $officePresentationExports = [regex]::Matches(
+        $officePresentationText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($officePresentationExports.Count -ne 1 -or
+        $officePresentationText -notmatch '(?m)^pub\(in crate::preview\) fn render_pptx(?:<[^>]+>)?\(') {
+        $failures.Add("The presentation module must expose only its narrow renderer to office/mod.rs.")
+    }
+
+    $officeLineCount = @(Get-Content -LiteralPath $officePath).Count
+    if ($officeLineCount -gt 100) {
+        $failures.Add("The Office composition module grew beyond 100 lines: $officeLineCount")
+    }
+    $officePresentationLineCount = @(Get-Content -LiteralPath $officePresentationPath).Count
+    if ($officePresentationLineCount -gt 1300) {
+        $failures.Add(
+            "The bounded Office presentation module grew beyond 1300 lines: $officePresentationLineCount")
+    }
+    $officePresentationTestsLineCount = @(Get-Content -LiteralPath $officePresentationTestsPath).Count
+    if ($officePresentationTestsLineCount -gt 400) {
+        $failures.Add(
+            "The focused Office presentation tests grew beyond 400 lines: $officePresentationTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
