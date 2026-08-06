@@ -124,7 +124,7 @@ the release-only `release:` prefix while this queue is in progress.
         bounded document layout into `preview/office/document.rs`.
       - [x] `R26-P1-07c-4c` Move XLSX workbook cells, styles, metrics, and
         drawing anchors into `preview/office/workbook.rs`.
-      - [ ] `R26-P1-07c-4d` Move shared Office relationship/layout primitives
+      - [x] `R26-P1-07c-4d` Move shared Office relationship/layout primitives
         into a bounded `preview/office/layout.rs` module.
       - [ ] `R26-P1-07c-4e` Move Office embedded-image discovery, references,
         and lazy BGRA extraction into a focused image module while preserving
@@ -247,6 +247,20 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
   - Commits: `8a9e101`, `6bdc4b4`
+
+- [x] `R26-P1-07c-4d` Move the shared Office relationship parser, part-relative
+  `.rels` path helpers, image placement contract, and bounded layout image-item
+  builder into the 130-line `preview/office/layout.rs` module with focused
+  relationship/path tests. PPTX and XLSX now import the shared layout API
+  explicitly; the parent retains only the generic ZIP target normalizer needed
+  by both Office and EPUB.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native preview::office::layout` (2 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native office::` (21 passed)
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commits: `4784533`, `1d908a1`
 
 - [x] `R26-P1-07c-4a` Move the PPTX/PPTM presentation parser and layout
   composer out of `preview.rs` into a bounded `preview/office/presentation.rs`
