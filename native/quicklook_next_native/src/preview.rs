@@ -4,7 +4,7 @@
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -15,6 +15,7 @@ use zip::ZipArchive;
 
 mod animation_probe;
 mod archive;
+mod bounded;
 mod chm;
 mod common;
 mod database;
@@ -37,13 +38,17 @@ pub(crate) use animation_probe::probe_image_animation_reader;
 #[cfg(test)]
 use animation_probe::ImageAnimationProbe;
 use archive::render_zip_archive_from_zip;
-#[cfg(test)]
-use archive::MAX_ARCHIVE_ZIP_ENTRIES;
 pub(crate) use archive::{
     add_parent_folders, discard_archive_extract_path, extract_archive_entry_to_temp,
     extract_archive_entry_to_temp_reader, extract_archive_entry_to_writer_reader, is_archive,
     parent_of, render_archive, render_archive_reader, ArchiveListingEntry, MAX_ARCHIVE_ENTRIES,
     MAX_ARCHIVE_EXTRACT_BYTES, MAX_ARCHIVE_SCAN_ENTRIES,
+};
+use bounded::{
+    drain_exact_cancelable, open_validated_zip, prepare_seekable_reader, preview_cancelled,
+    read_exact_cancelable, read_file_prefix, read_limited_to_end,
+    read_reader_exact_bounded_cancelable, read_reader_prefix, read_reader_prefix_cancelable,
+    CancelableSeekReader,
 };
 use common::{
     format_bytes, format_number, format_timestamp, read_c_string, read_i32_endian, read_u16,
@@ -88,10 +93,6 @@ use types::{
     PreviewListingItemDto, PreviewReadyDto,
 };
 
-fn preview_cancelled(cancel_cb: Option<extern "C" fn() -> bool>) -> bool {
-    cancel_cb.map(|callback| callback()).unwrap_or(false)
-}
-
 const MAX_EXECUTABLE_HEADER_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EMBEDDED_IMAGE_DIMENSION: u32 = 8192;
 const MAX_EMBEDDED_IMAGE_PIXELS: u64 = 16_000_000;
@@ -115,113 +116,6 @@ fn file_size_modified(path: &str) -> (i64, i64) {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     (size, modified_unix)
-}
-
-fn read_file_prefix(path: &str, max_bytes: usize) -> Option<Vec<u8>> {
-    let mut file = fs::File::open(path).ok()?;
-    read_reader_prefix(&mut file, max_bytes)
-}
-
-fn read_reader_prefix<R: Read>(reader: &mut R, max_bytes: usize) -> Option<Vec<u8>> {
-    let mut reader = reader.take(max_bytes as u64);
-    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
-    reader.read_to_end(&mut bytes).ok()?;
-    Some(bytes)
-}
-
-fn read_reader_prefix_cancelable<R: Read>(
-    reader: &mut R,
-    max_bytes: usize,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<Vec<u8>, ReaderPreviewError> {
-    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
-    let mut chunk = [0u8; 64 * 1024];
-    while bytes.len() < max_bytes {
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        let remaining = (max_bytes - bytes.len()).min(chunk.len());
-        match reader.read(&mut chunk[..remaining]) {
-            Ok(0) => break,
-            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(ReaderPreviewError::Io),
-        }
-    }
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    Ok(bytes)
-}
-
-fn read_reader_exact_bounded_cancelable<R: Read>(
-    reader: &mut R,
-    expected_bytes: u64,
-    max_bytes: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<Vec<u8>, ReaderPreviewError> {
-    let mut bytes = Vec::with_capacity(expected_bytes.min(64 * 1024) as usize);
-    let mut chunk = [0u8; 64 * 1024];
-    let read_limit = expected_bytes
-        .saturating_add(1)
-        .min(max_bytes.saturating_add(1));
-    while (bytes.len() as u64) < read_limit {
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        let remaining = (read_limit - bytes.len() as u64).min(chunk.len() as u64) as usize;
-        match reader.read(&mut chunk[..remaining]) {
-            Ok(0) => break,
-            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(ReaderPreviewError::Io),
-        }
-    }
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    if bytes.len() as u64 != expected_bytes {
-        return Err(ReaderPreviewError::LengthMismatch);
-    }
-    Ok(bytes)
-}
-
-fn read_exact_cancelable<R: Read + ?Sized>(
-    reader: &mut R,
-    bytes: &mut [u8],
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<(), ReaderPreviewError> {
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        if preview_cancelled(cancel_cb) {
-            return Err(ReaderPreviewError::Cancelled);
-        }
-        let end = offset.saturating_add(64 * 1024).min(bytes.len());
-        match reader.read(&mut bytes[offset..end]) {
-            Ok(0) => return Err(ReaderPreviewError::LengthMismatch),
-            Ok(read) => offset += read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(ReaderPreviewError::Io),
-        }
-    }
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    Ok(())
-}
-
-fn drain_exact_cancelable<R: Read + ?Sized>(
-    reader: &mut R,
-    mut length: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<(), ReaderPreviewError> {
-    let mut buffer = [0u8; 64 * 1024];
-    while length > 0 {
-        let read_len = length.min(buffer.len() as u64) as usize;
-        read_exact_cancelable(reader, &mut buffer[..read_len], cancel_cb)?;
-        length -= read_len as u64;
-    }
-    Ok(())
 }
 
 // ── Office preview (OOXML / ODF lightweight extraction) ─────────────────────
@@ -395,17 +289,6 @@ fn read_zip_text<R: Read + Seek>(
     }
 
     None
-}
-
-fn read_limited_to_end<R: Read>(reader: &mut R, max_size: u64) -> Option<Vec<u8>> {
-    let cap = max_size.min(64 * 1024) as usize;
-    let mut limited = reader.take(max_size.saturating_add(1));
-    let mut bytes = Vec::with_capacity(cap);
-    limited.read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > max_size {
-        return None;
-    }
-    Some(bytes)
 }
 
 fn attr_value(e: &BytesStart<'_>, name: &str) -> Option<String> {
@@ -680,210 +563,6 @@ fn base_info_text(filename: &str, kind: &str, size: i64, modified_unix: i64) -> 
     )
 }
 
-// ── Archive preview ──────────────────────────────────────────────────────────
-
-const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 32 * 1024 * 1024;
-const ZIP_EOCD_MIN_BYTES: u64 = 22;
-const ZIP_EOCD_MAX_TAIL_BYTES: u64 = ZIP_EOCD_MIN_BYTES + u16::MAX as u64;
-
-fn prepare_seekable_reader<R: Seek>(
-    reader: &mut R,
-    expected_length: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<(), ReaderPreviewError> {
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    let actual_length = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|_| ReaderPreviewError::Io)?;
-    if actual_length != expected_length {
-        return Err(ReaderPreviewError::LengthMismatch);
-    }
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| ReaderPreviewError::Io)?;
-    if preview_cancelled(cancel_cb) {
-        return Err(ReaderPreviewError::Cancelled);
-    }
-    Ok(())
-}
-
-fn validate_zip_container<R: Read + Seek>(
-    reader: &mut R,
-    source_len: u64,
-    max_entries: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<(), ReaderPreviewError> {
-    if source_len < ZIP_EOCD_MIN_BYTES {
-        return Err(ReaderPreviewError::Malformed);
-    }
-    prepare_seekable_reader(reader, source_len, cancel_cb)?;
-    let tail_len = source_len.min(ZIP_EOCD_MAX_TAIL_BYTES);
-    reader
-        .seek(SeekFrom::Start(source_len - tail_len))
-        .map_err(|_| ReaderPreviewError::Io)?;
-    let mut tail = vec![0u8; tail_len as usize];
-    read_exact_cancelable(reader, &mut tail, cancel_cb)?;
-
-    let eocd_index = (0..=tail.len().saturating_sub(ZIP_EOCD_MIN_BYTES as usize))
-        .rev()
-        .find(|index| {
-            tail.get(*index..index + 4) == Some(b"PK\x05\x06")
-                && read_u16(&tail, index + 20)
-                    .is_some_and(|comment_len| index + 22 + comment_len as usize == tail.len())
-        })
-        .ok_or(ReaderPreviewError::Malformed)?;
-    let eocd_offset = source_len - tail_len + eocd_index as u64;
-    let disk = read_u16(&tail, eocd_index + 4).ok_or(ReaderPreviewError::Malformed)?;
-    let central_disk = read_u16(&tail, eocd_index + 6).ok_or(ReaderPreviewError::Malformed)?;
-    let entries_on_disk = read_u16(&tail, eocd_index + 8).ok_or(ReaderPreviewError::Malformed)?;
-    let entries = read_u16(&tail, eocd_index + 10).ok_or(ReaderPreviewError::Malformed)?;
-    let central_size = read_u32(&tail, eocd_index + 12).ok_or(ReaderPreviewError::Malformed)?;
-    let central_offset = read_u32(&tail, eocd_index + 16).ok_or(ReaderPreviewError::Malformed)?;
-    if disk != 0 || central_disk != 0 || entries_on_disk != entries {
-        return Err(ReaderPreviewError::Malformed);
-    }
-
-    let is_zip64 = entries == u16::MAX || central_size == u32::MAX || central_offset == u32::MAX;
-    let (entries, central_size, central_offset, central_end_limit) = if is_zip64 {
-        let locator_offset = eocd_offset
-            .checked_sub(20)
-            .ok_or(ReaderPreviewError::Malformed)?;
-        reader
-            .seek(SeekFrom::Start(locator_offset))
-            .map_err(|_| ReaderPreviewError::Io)?;
-        let mut locator = [0u8; 20];
-        read_exact_cancelable(reader, &mut locator, cancel_cb)?;
-        if locator.get(..4) != Some(b"PK\x06\x07")
-            || read_u32(&locator, 4) != Some(0)
-            || read_u32(&locator, 16) != Some(1)
-        {
-            return Err(ReaderPreviewError::Malformed);
-        }
-        let zip64_offset = read_u64(&locator, 8).ok_or(ReaderPreviewError::Malformed)?;
-        if zip64_offset >= locator_offset {
-            return Err(ReaderPreviewError::Malformed);
-        }
-        reader
-            .seek(SeekFrom::Start(zip64_offset))
-            .map_err(|_| ReaderPreviewError::Io)?;
-        let mut zip64 = [0u8; 56];
-        read_exact_cancelable(reader, &mut zip64, cancel_cb)?;
-        if zip64.get(..4) != Some(b"PK\x06\x06")
-            || read_u64(&zip64, 4).is_none_or(|size| size < 44)
-            || read_u32(&zip64, 16) != Some(0)
-            || read_u32(&zip64, 20) != Some(0)
-        {
-            return Err(ReaderPreviewError::Malformed);
-        }
-        let entries_on_disk = read_u64(&zip64, 24).ok_or(ReaderPreviewError::Malformed)?;
-        let entries = read_u64(&zip64, 32).ok_or(ReaderPreviewError::Malformed)?;
-        if entries_on_disk != entries {
-            return Err(ReaderPreviewError::Malformed);
-        }
-        (
-            entries,
-            read_u64(&zip64, 40).ok_or(ReaderPreviewError::Malformed)?,
-            read_u64(&zip64, 48).ok_or(ReaderPreviewError::Malformed)?,
-            zip64_offset,
-        )
-    } else {
-        (
-            entries as u64,
-            central_size as u64,
-            central_offset as u64,
-            eocd_offset,
-        )
-    };
-
-    if entries > max_entries || central_size > MAX_ZIP_CENTRAL_DIRECTORY_BYTES {
-        return Err(ReaderPreviewError::LimitExceeded);
-    }
-    let central_end = central_offset
-        .checked_add(central_size)
-        .ok_or(ReaderPreviewError::Malformed)?;
-    if central_end > central_end_limit || central_end > source_len {
-        return Err(ReaderPreviewError::Malformed);
-    }
-    reader
-        .seek(SeekFrom::Start(0))
-        .map_err(|_| ReaderPreviewError::Io)?;
-    Ok(())
-}
-
-struct CancelableSeekReader<R> {
-    reader: R,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-}
-
-impl<R> CancelableSeekReader<R> {
-    fn new(reader: R, cancel_cb: Option<extern "C" fn() -> bool>) -> Self {
-        Self { reader, cancel_cb }
-    }
-
-    fn cancelled_error() -> io::Error {
-        io::Error::other("preview cancelled")
-    }
-}
-
-impl<R: Read> Read for CancelableSeekReader<R> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if preview_cancelled(self.cancel_cb) {
-            return Err(Self::cancelled_error());
-        }
-        let read = self.reader.read(buffer)?;
-        if preview_cancelled(self.cancel_cb) {
-            return Err(Self::cancelled_error());
-        }
-        Ok(read)
-    }
-}
-
-impl<R: Seek> Seek for CancelableSeekReader<R> {
-    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        if preview_cancelled(self.cancel_cb) {
-            return Err(Self::cancelled_error());
-        }
-        let offset = self.reader.seek(position)?;
-        if preview_cancelled(self.cancel_cb) {
-            return Err(Self::cancelled_error());
-        }
-        Ok(offset)
-    }
-}
-
-fn open_validated_zip<R: Read + Seek>(
-    mut reader: R,
-    source_len: u64,
-    max_entries: u64,
-    cancel_cb: Option<extern "C" fn() -> bool>,
-) -> Result<ZipArchive<CancelableSeekReader<R>>, ReaderPreviewError> {
-    validate_zip_container(&mut reader, source_len, max_entries, cancel_cb)?;
-    let zip = ZipArchive::new(CancelableSeekReader::new(reader, cancel_cb)).map_err(|_| {
-        if preview_cancelled(cancel_cb) {
-            ReaderPreviewError::Cancelled
-        } else {
-            ReaderPreviewError::Malformed
-        }
-    })?;
-    // The ZIP crate can reject one EOCD candidate and fall back to an earlier one. Recheck its
-    // authoritative result so that fallback selection cannot escape the declared-entry budget.
-    if zip.len() as u64 > max_entries {
-        return Err(ReaderPreviewError::LimitExceeded);
-    }
-    // Validate the directory selected by the ZIP crate, including fallback to an earlier EOCD.
-    const MAX_ZIP_DIRECTORY_TAIL_BYTES: u64 =
-        MAX_ZIP_CENTRAL_DIRECTORY_BYTES + ZIP_EOCD_MAX_TAIL_BYTES + 76;
-    let authoritative_tail = source_len
-        .checked_sub(zip.central_directory_start())
-        .ok_or(ReaderPreviewError::Malformed)?;
-    if authoritative_tail > MAX_ZIP_DIRECTORY_TAIL_BYTES {
-        return Err(ReaderPreviewError::LimitExceeded);
-    }
-    Ok(zip)
-}
-
 fn read_office_zip_text<R: Read + Seek>(
     context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
@@ -1070,7 +749,7 @@ fn image_to_bgra(image: image::DynamicImage, max_dimension: u32) -> Option<(u32,
 mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
 
     fn animation_probe_gif(frame_count: usize) -> Vec<u8> {
         let mut encoded = Vec::new();
@@ -1147,33 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn bounded_exact_reader_reports_length_mismatch_and_cancellation() {
-        let mut exact = Cursor::new(b"data".to_vec());
-        assert_eq!(
-            read_reader_exact_bounded_cancelable(&mut exact, 4, 8, None),
-            Ok(b"data".to_vec())
-        );
-
-        let mut short = Cursor::new(b"abc".to_vec());
-        assert_eq!(
-            read_reader_exact_bounded_cancelable(&mut short, 4, 8, None),
-            Err(ReaderPreviewError::LengthMismatch)
-        );
-
-        let mut long = Cursor::new(b"abcde".to_vec());
-        assert_eq!(
-            read_reader_exact_bounded_cancelable(&mut long, 4, 8, None),
-            Err(ReaderPreviewError::LengthMismatch)
-        );
-
-        let mut cancelled = Cursor::new(b"data".to_vec());
-        assert_eq!(
-            read_reader_exact_bounded_cancelable(&mut cancelled, 4, 8, Some(always_cancel)),
-            Err(ReaderPreviewError::Cancelled)
-        );
-    }
-
-    #[test]
     fn bencode_parser_rejects_excessive_node_counts() {
         let mut bytes = Vec::with_capacity(MAX_BENCODE_NODES * 2 + 2);
         bytes.push(b'l');
@@ -1181,130 +833,6 @@ mod tests {
         bytes.push(b'e');
 
         assert!(parse_bencode(&bytes, None).is_none());
-    }
-
-    fn test_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, bytes) in entries {
-            writer
-                .start_file(*name, zip::write::SimpleFileOptions::default())
-                .expect("start ZIP entry");
-            writer.write_all(bytes).expect("write ZIP entry");
-        }
-        writer.finish().expect("finish ZIP").into_inner()
-    }
-
-    fn synthetic_zip64_end(entries: u64, central_size: u64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"PK\x06\x06");
-        bytes.extend_from_slice(&44u64.to_le_bytes());
-        bytes.extend_from_slice(&45u16.to_le_bytes());
-        bytes.extend_from_slice(&45u16.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&entries.to_le_bytes());
-        bytes.extend_from_slice(&entries.to_le_bytes());
-        bytes.extend_from_slice(&central_size.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(b"PK\x06\x07");
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(b"PK\x05\x06");
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
-        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes
-    }
-
-    #[test]
-    fn zip_preflight_rejects_hard_entry_and_central_directory_caps() {
-        let too_many = synthetic_zip64_end(MAX_ARCHIVE_ZIP_ENTRIES + 1, 0);
-        assert_eq!(
-            validate_zip_container(
-                &mut Cursor::new(too_many.clone()),
-                too_many.len() as u64,
-                MAX_ARCHIVE_ZIP_ENTRIES,
-                None,
-            )
-            .err(),
-            Some(ReaderPreviewError::LimitExceeded)
-        );
-
-        let central_too_large = synthetic_zip64_end(0, MAX_ZIP_CENTRAL_DIRECTORY_BYTES + 1);
-        assert_eq!(
-            validate_zip_container(
-                &mut Cursor::new(central_too_large.clone()),
-                central_too_large.len() as u64,
-                MAX_ARCHIVE_ZIP_ENTRIES,
-                None,
-            )
-            .err(),
-            Some(ReaderPreviewError::LimitExceeded)
-        );
-    }
-
-    #[test]
-    fn zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback() {
-        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        writer
-            .start_file("entry.txt", zip::write::SimpleFileOptions::default())
-            .expect("start ZIP entry");
-        writer.write_all(b"bounded").expect("write ZIP entry");
-        let mut bytes = writer.finish().expect("finish ZIP").into_inner();
-        bytes.resize(
-            bytes.len()
-                + MAX_ZIP_CENTRAL_DIRECTORY_BYTES as usize
-                + ZIP_EOCD_MAX_TAIL_BYTES as usize
-                + 1024,
-            0,
-        );
-        // The EOCD fields are structurally valid, but its one-byte central directory cannot contain
-        // the declared entry. The ZIP reader must reject it and may fall back to the real EOCD.
-        let fake_central_offset = bytes.len() as u32;
-        bytes.push(0);
-        bytes.extend_from_slice(b"PK\x05\x06");
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&fake_central_offset.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-
-        let result = open_validated_zip(
-            Cursor::new(bytes.clone()),
-            bytes.len() as u64,
-            MAX_ARCHIVE_ZIP_ENTRIES,
-            None,
-        );
-        assert!(matches!(result, Err(ReaderPreviewError::LimitExceeded)));
-    }
-
-    static ZIP_OPEN_CANCEL_CHECKS: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
-
-    extern "C" fn cancel_during_zip_open() -> bool {
-        ZIP_OPEN_CANCEL_CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 4
-    }
-
-    #[test]
-    fn zip_archive_open_honors_cancellation_after_preflight() {
-        let bytes = test_zip_bytes(&[("entry.txt", b"content")]);
-        ZIP_OPEN_CANCEL_CHECKS.store(0, std::sync::atomic::Ordering::SeqCst);
-        assert!(matches!(
-            open_validated_zip(
-                Cursor::new(bytes.clone()),
-                bytes.len() as u64,
-                MAX_ARCHIVE_ZIP_ENTRIES,
-                Some(cancel_during_zip_open),
-            ),
-            Err(ReaderPreviewError::Cancelled)
-        ));
     }
 
     #[test]
@@ -1373,13 +901,6 @@ mod tests {
             xml_unescape_str("A&#65;&#x41;&lt;&gt;&amp;&quot;&apos;&unknown;"),
             "AAA<>&\"'&unknown;"
         );
-    }
-
-    #[test]
-    fn limited_reader_rejects_payloads_over_cap() {
-        let mut reader = Cursor::new(vec![1, 2, 3, 4, 5]);
-
-        assert!(read_limited_to_end(&mut reader, 4).is_none());
     }
 
     #[test]
