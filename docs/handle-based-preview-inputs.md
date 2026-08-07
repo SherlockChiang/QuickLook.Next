@@ -253,10 +253,11 @@ bit 17 HANDLE_IMAGE_WAVEFORM (static raster packet with Rust-generated RGB densi
 bit 18 HANDLE_ARCHIVE_ENTRY_OUTPUT (caller-owned bounded archive-entry output object)
 bit 19 HANDLE_IMAGE_METADATA (optional parent-bound Rust metadata sidecar)
 bit 20 DIRECT_GIF_ANIMATION_OUTPUT (optional exact-size callback output; stable GIF exports remain fallback)
+bit 21 HANDLE_MAIL (bounded RFC 5322/EML and seek-based Outlook MSG metadata)
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
-`ql_preview_executable_handle`, `ql_preview_torrent_handle`, `ql_preview_sqlite_handles`,
+`ql_preview_executable_handle`, `ql_preview_torrent_handle`, `ql_preview_mail_handle`, `ql_preview_sqlite_handles`,
 `ql_preview_archive_handle`, `ql_preview_office_handle`, `ql_extract_office_image_handle`,
 `ql_extract_office_layout_image_handle`, `ql_preview_ebook_handle`,
 `ql_extract_archive_entry_to_output_handle`, `ql_decode_image_handle` for capability-gated raster
@@ -273,8 +274,9 @@ Package parsing and retained Hero extraction use `ql_preview_package_handle` and
 `ql_probe_file_handle` against the same pinned object later handed to the Host.
 Plain text, Markdown, CSV, and TSV share one Reader parser; executable parsing reads at most a
 cancellable 4 MiB prefix; torrent parsing performs an exact, cancellable read capped at 16 MiB before
-the existing bounded bencode parser runs. Archive and ebook routes use bounded, cancellable
-`Read + Seek` pipelines.
+the existing bounded bencode parser runs. Mail, archive, and ebook routes use bounded, cancellable
+`Read + Seek` pipelines. ParserHost requires bit 21 before advertising local mail support, so an
+older ABI 3 DLL cannot reach a missing mail entry point.
 
 IPC ownership transfer and Rust FFI borrowing are two separate boundaries:
 
@@ -388,6 +390,23 @@ to publish a bounded archive listing with an empty `RootPath`. It never calls th
 ParserHost retains that parent source for entry clicks exactly as it does for a direct archive
 preview. FB2 and binary ebook metadata use the same reopened file object and the size/modified
 metadata obtained from that object.
+
+## Mail HANDLE contract
+
+`ql_preview_mail_handle` accepts the exact local mail object, a basename hint, its authoritative
+length, and cancellation callback. Local mail inputs use the shared 256 MiB ParserHost envelope.
+RFC 5322, EML, EMLX, and MBOX inspection remains a cancellable 256 KiB prefix operation with the
+existing header, MIME recursion, attachment-name, decoded-body, and retained-text limits.
+
+An Outlook MSG signature selects the seek-based Compound File Binary reader instead of treating
+that prefix as the complete document. The reader validates the 512-byte CFB header, v3/v4 sector
+geometry, byte order, and every checked sector range against the authoritative HANDLE length. It
+retains at most 16 FAT sectors, eight DIFAT sectors, 16 directory sectors/256 entries, 16 mini-FAT
+sectors, a 256 KiB mini-stream, and the existing bounded regular/mini property chains. Physical
+source reads are cached by sector and share a 1 MiB cumulative budget; cancellation is checked
+before and after source reads. A legal MAPI property sector may therefore live beyond 256 KiB
+without causing the whole MSG or a large attachment payload to be buffered. The logical name is
+never opened, and a HANDLE error never falls back to the path renderer.
 
 ## SQLite snapshot contract
 

@@ -6,15 +6,15 @@ left visible instead of hidden behind vague TODOs.
 
 ## Fixed And Hardened
 
-- Rust-first preview path: text, folders, archives, packages, certificates,
+- Rust-first preview path: text, folders, archives, packages, mail, certificates,
   executables, torrents, and lightweight Office previews are handled by the
   native layer rather than the legacy .NET plugin pipeline.
 - The native preview implementation is being split by bounded format family: shared DTO/common
   helpers, folder listing, Text/Markdown/CSV/TSV, JPEG/PNG/GIF/WebP/TIFF image metadata,
-  GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode, and
-  EPUB/FB2 ebook parsing and the media format family now live in focused submodules with their own
-  tests. Archive, Office, package, database, and the remaining binary-info families stay in the
-  parent module and are the next extraction boundaries.
+  GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode,
+  MIME/mail plus seek-based Outlook CFB, EPUB/FB2 ebook parsing, media, archive, Office, package,
+  and database families now live in focused submodules with their own tests. The remaining
+  binary-info families continue through narrow explicit routes.
 - RasterHost is lazy-started and scoped to surface-producing work: images, PDF
   page rasterization, shell thumbnails, and fallback media/image surfaces.
 - Supervised RasterHost, ParserHost, and ShellBroker processes apply a shared
@@ -38,14 +38,19 @@ left visible instead of hidden behind vague TODOs.
   - ParserHost connects/authenticates its pipe before native ABI initialization. Supervisors use a
     15-second cold-start/ready budget and require the generation's ready task to complete before
     reuse, preventing idle prewarm from starting a real JSON request's five-second timer early.
-  - ABI 2 text, executable, torrent, SQLite snapshot, archive, ebook, and archive-entry previews
+  - ABI 2/3 text, executable, torrent, mail, SQLite snapshot, archive, ebook, and archive-entry previews
     accept authenticated ParserHost disk-file handles directly, validate exact lengths, and reopen
     them with independent file positions before Rust reads them.
-  - Plain text, Markdown, CSV, TSV, executable metadata, torrent listings, database previews,
-    archive listings, and ebook previews no longer create ParserHost input anchors or reopen the
+  - Plain text, Markdown, CSV, TSV, executable metadata, torrent listings, mail metadata,
+    database previews, archive listings, and ebook previews no longer create ParserHost input anchors or reopen the
     logical source path.
   - Executable reads remain capped at a cancellable 4 MiB prefix. Torrent reads are exact and
     cancellable with a 16 MiB cap before the existing depth-64/node-100000 bencode limits.
+  - Mail uses `ql_preview_mail_handle` and capability bit 21. EML/MIME retains its cancellable
+    256 KiB prefix, while Outlook MSG uses checked, on-demand CFB sector seeks against the exact
+    source length. FAT/DIFAT/directory/mini-stream/property limits remain explicit and all physical
+    CFB reads share a 1 MiB cumulative budget, so valid properties beyond 256 KiB remain visible
+    without buffering the complete message.
   - SQLite uses the dedicated `PreviewOpenSqliteHandles` IPC envelope and
     `ql_preview_sqlite_handles` ABI entry point. The host adopts the main/WAL/SHM slots before
     validation and never creates an input anchor. Only the App derives `-wal`/`-shm` sibling names.
@@ -84,7 +89,8 @@ left visible instead of hidden behind vague TODOs.
      GIF static/animation (10), package preview (11), package icon extraction (12), and final local
      HANDLE probe (13), general raster image input (14), general GIF/WebP/APNG animation (15),
      Office layout image decode (16), Rust image waveform packets (17), caller-owned archive
-     entry output (18), and optional retained-HANDLE image metadata (19).
+     entry output (18), optional retained-HANDLE image metadata (19), optional direct GIF output
+     (20), and ParserHost mail input (21).
      Bit 8 remains the published ICO-only static-image capability; bit 14 gates
      PNG/JPEG/BMP/TIFF/WebP native HANDLE fallback. Bit 15 is additive and optional for ABI 3
      consumers; the stable GIF export and bit 10 remain available as a compatibility fallback.
@@ -93,6 +99,8 @@ left visible instead of hidden behind vague TODOs.
      zero-length output object.
      Bit 19 is optional for RasterHost and gates a parent-bound metadata sidecar without making an
      older ABI 3 raster DLL unusable.
+     Bit 20 is optional for RasterHost; bit 21 is required by ParserHost before it calls the mail
+     HANDLE entry point.
      Implemented HANDLE
      exports retain status codes through
     `LIMIT_EXCEEDED == -9`, exact output-size negotiation, panic containment, capability detection,

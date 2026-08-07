@@ -162,6 +162,19 @@ the release-only `release:` prefix while this queue is in progress.
         - Verification: bounded-reader and preview-focused Rust tests, Clippy,
           module-boundary guard, and performance-bounds guard pass.
         - Commit: `cd50e39`, `b60696e`
+      - [x] `R26-P1-07c-6b` Apply the shared seek-length and cancellation
+        primitives to Outlook mail input. Replace the fixed 256 KiB MSG prefix
+        with a bounded, on-demand CFB sector reader, split CFB parsing into
+        `preview/mail/cfb.rs`, and route local mail through the exact HANDLE
+        ParserHost ABI (capability bit 21). Keep EML/MIME at a 256 KiB prefix,
+        cap CFB source reads at 1 MiB, and preserve FAT/DIFAT, directory,
+        mini-stream, property, source-length, and cancellation limits.
+        - Verification: 277 Rust tests passed (1 ignored), 280 Core tests,
+          45 ParserHost integration tests, 29 RasterHost integration tests,
+          13 ShellBroker integration tests, release build with zero warnings,
+          module-boundary/performance/format guards, and architecture checks
+          through the environment-blocked restricted-host smoke (exit 23).
+        - Commits: `2189aa5`, `de8f2e8`
   - [ ] `R26-P1-07d` Move exported entry points and raw-pointer validation into
     focused FFI modules, leaving `lib.rs` as a small composition root.
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
@@ -241,6 +254,30 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-07c-6b` Replace the fixed-prefix Outlook MSG path with a
+  Rust-first, seekable reader and exact ParserHost HANDLE route. `mail.rs`
+  remains a 739-line MIME/route composition module; the 773-line
+  `preview/mail/cfb.rs` module reads only required CFB sectors through checked
+  `u64` offsets and an authoritative source length. It caches bounded sectors,
+  caps cumulative CFB reads at 1 MiB, polls cancellation around every source
+  read, and retains the existing FAT (16), DIFAT (8), directory (16 sectors /
+  256 entries), mini-FAT (16), 256 KiB mini-stream, tree, chain, and MAPI
+  property limits. EML/MIME continues to use only the 256 KiB prefix. A
+  regular MSG property sector placed beyond 256 KiB is covered by a v4 fixture
+  and remains visible. `ql_preview_mail_handle` uses the shared HANDLE adapter;
+  logical names are basename hints only, and path compatibility explicitly uses
+  `ql_preview_info` instead of the archive renderer.
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (277 passed, 1 ignored)
+  - Verification: `dotnet build QuickLook.Next.slnx -c Release --no-restore` (0 warnings, 0 errors)
+  - Verification: `dotnet test QuickLook.Next.slnx -c Release --no-build --no-restore --disable-build-servers --maxcpucount:1` (367 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-rust-module-boundaries.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-format-registry.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-architecture.ps1 -SkipDist` (all preceding checks passed; restricted-host launch smoke is environment-blocked with exit 23)
+  - Commits: `2189aa5`, `de8f2e8`
 
 - [x] `R26-P1-07c-4b` Move DOCX/ODF text extraction, DOCX header/footer
   discovery, and bounded document page/image composition into the 466-line
