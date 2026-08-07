@@ -635,9 +635,9 @@ Require-Pattern $nativeArchive 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s
     "Seek-only archive HANDLE inputs must remain capped at 16 TiB in the archive boundary module."
 Require-Pattern $nativeArchive 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
     "Archive ZIP preflight must reject more than 100000 declared entries."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5_?000' `
     "Archive listings must remain capped at 5000 represented entries."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_SCAN_ENTRIES:\s*usize\s*=\s*10_000' `
     "Archive metadata scans must remain capped at 10000 records."
 $rarListing = Join-Path $Root "native/quicklook_next_native/src/rar_listing.rs"
 Require-Pattern $rarListing 'MAX_HEADER_SIZE:\s*u64\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `

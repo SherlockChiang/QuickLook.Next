@@ -1036,7 +1036,7 @@ if ($failures.Count -eq 0) {
     $archiveExports = [regex]::Matches($archiveText, '(?m)^pub(?:\([^)]+\))?\s+')
     $archiveListingExports = [regex]::Matches($archiveListingText, '(?m)^pub(?:\([^)]+\))?\s+')
     $archiveExtractExports = [regex]::Matches($archiveExtractText, '(?m)^pub(?:\([^)]+\))?\s+')
-    if ($archiveExports.Count -ne 6 -or
+    if ($archiveExports.Count -ne 11 -or
         $archiveListingExports.Count -ne 5 -or
         $archiveExtractExports.Count -ne 4) {
         $failures.Add("Archive module exports changed: mod=$($archiveExports.Count), listing=$($archiveListingExports.Count), extract=$($archiveExtractExports.Count).")
