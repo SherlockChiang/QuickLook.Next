@@ -136,7 +136,7 @@ the release-only `release:` prefix while this queue is in progress.
         entry-count, path-retention, and cancellation budgets.
         - Verification: archive-focused Rust tests, module-boundary guard, and
           performance-bounds guard pass.
-        - Commit: `91b53ec`
+        - Commit: `91b53ec`, `9455240`, `cf660b3`
       - [x] `R26-P1-07c-5b` Move bounded ZIP entry streaming, temporary-output
         lifecycle, and cleanup validation into `preview/archive/extract.rs`.
         - Verification: archive extraction budget/encryption/cleanup tests and
