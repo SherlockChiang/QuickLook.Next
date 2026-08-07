@@ -30,6 +30,11 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
 
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$nativeArchive = Join-Path $Root "native/quicklook_next_native/src/preview/archive/mod.rs"
+$nativeArchiveListing = Join-Path $Root "native/quicklook_next_native/src/preview/archive/listing.rs"
+$nativeArchiveListingTests = Join-Path $Root "native/quicklook_next_native/src/preview/archive/listing/tests.rs"
+$nativeArchiveExtract = Join-Path $Root "native/quicklook_next_native/src/preview/archive/extract.rs"
+$nativeArchiveExtractTests = Join-Path $Root "native/quicklook_next_native/src/preview/archive/extract/tests.rs"
 $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
 $nativeChmPreview = Join-Path $Root "native/quicklook_next_native/src/preview/chm.rs"
 $nativeChmTests = Join-Path $Root "native/quicklook_next_native/src/preview/chm/tests.rs"
@@ -66,6 +71,11 @@ $nativeOfficeText = ((Get-Content -LiteralPath $nativePreview -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeLayout -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficePresentation -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeOfficeWorkbook -Raw))
+$nativeArchiveText = Get-Content -LiteralPath $nativeArchive -Raw
+$nativeArchiveListingText = Get-Content -LiteralPath $nativeArchiveListing -Raw
+$nativeArchiveListingTestsText = Get-Content -LiteralPath $nativeArchiveListingTests -Raw
+$nativeArchiveExtractText = Get-Content -LiteralPath $nativeArchiveExtract -Raw
+$nativeArchiveExtractTestsText = Get-Content -LiteralPath $nativeArchiveExtractTests -Raw
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
 Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
@@ -557,7 +567,7 @@ Require-Pattern $nativeTorrentPreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
     "Torrent bencode parsing must retain its depth limit of 64."
 Require-Pattern $nativeTorrentPreview 'MAX_BENCODE_NODES:\s*usize\s*=\s*100_000' `
     "Torrent bencode parsing must retain its 100000-node budget."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
     "Seek-only archive HANDLE inputs must remain capped at 16 TiB."
 Require-Pattern $nativePreview 'MAX_EBOOK_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Ebook HANDLE inputs must remain capped at 256 MiB."
@@ -613,7 +623,9 @@ Require-Pattern $nativeOfficeImageTests 'office_media_entries_are_unique_canonic
     "Office image tests must retain root, reference, source/dimension, and cancellation coverage."
 Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
+    "Seek-only archive HANDLE inputs must remain capped at 16 TiB in the archive boundary module."
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
     "Archive ZIP preflight must reject more than 100000 declared entries."
 Require-Pattern $nativePreview 'MAX_ARCHIVE_ENTRIES:\s*usize\s*=\s*5000' `
     "Archive listings must remain capped at 5000 represented entries."
@@ -634,26 +646,36 @@ Require-Pattern $rarListing 'MAX_SCAN_TIME:\s*Duration\s*=\s*Duration::from_secs
     "RAR scans must retain the four-second deadline."
 Require-Pattern $rarListing 'pub fn scan_rar<R:\s*Read\s*\+\s*Seek>[\s\S]*header_size\s*>\s*MAX_HEADER_SIZE[\s\S]*SeekFrom::Start\(block\.next_offset\)' `
     "RAR listing must remain a bounded header-only Read+Seek scan."
-Require-Pattern $nativePreview 'fn\s+render_rar_entries<R:\s*Read\s*\+\s*Seek>[\s\S]*rar_listing::scan_rar[\s\S]*archive_listing_json\([\s\S]*false,' `
+Require-Pattern $nativeArchiveListing 'fn\s+render_rar_entries<R:\s*Read\s*\+\s*Seek>[\s\S]*rar_listing::scan_rar[\s\S]*archive_listing_json\([\s\S]*false,' `
     "RAR previews must remain listing-only and disable entry extraction."
-Require-Pattern $nativePreview 'MAX_RAR_RETAINED_PATH_BYTES:\s*usize\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeArchive 'MAX_RAR_RETAINED_PATH_BYTES:\s*usize\s*=\s*2\s*\*\s*1024\s*\*\s*1024' `
     "RAR listing JSON must retain its 2 MiB aggregate path-string budget."
-Require-Pattern $nativePreview 'fn\s+add_rar_parent_folders\([\s\S]*MAX_RAR_RETAINED_PATH_BYTES' `
+Require-Pattern $nativeArchiveListing 'fn\s+add_rar_parent_folders\([\s\S]*MAX_RAR_RETAINED_PATH_BYTES' `
     "RAR parent synthesis must charge every retained path string to the aggregate budget."
-Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*reader_starts_with_rar_magic[\s\S]*if\s+is_rar' `
+Require-Pattern $nativeArchiveExtract 'extract_archive_entry_to_writer_reader<R:\s*Read\s*\+\s*Seek,\s*W:\s*Write>[\s\S]*reader_starts_with_rar_magic[\s\S]*if\s+is_rar' `
     "RAR entry extraction must fail closed before the ZIP extractor."
-Require-Pattern $nativePreview 'MAX_TAR_SCAN_BYTES:\s*u64\s*=\s*512\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeArchive 'MAX_TAR_SCAN_BYTES:\s*u64\s*=\s*512\s*\*\s*1024\s*\*\s*1024' `
     "TAR and compressed TAR scans must retain their 512 MiB decompressed-read budget."
-Require-Pattern $nativePreview 'TAR_SCAN_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
+Require-Pattern $nativeArchive 'TAR_SCAN_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
     "TAR scans must retain their four-second deadline."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_EXTRACT_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
     "Archive entry extraction must remain capped at 64 MiB uncompressed."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES:\s*u64\s*=\s*64\s*\*\s*1024\s*\*\s*1024' `
     "Archive entry extraction must remain capped at 64 MiB compressed."
-Require-Pattern $nativePreview 'MAX_ARCHIVE_EXTRACT_RATIO:\s*u64\s*=\s*1000' `
+Require-Pattern $nativeArchive 'MAX_ARCHIVE_EXTRACT_RATIO:\s*u64\s*=\s*1_000' `
     "Archive entry extraction must retain its 1000-to-1 expansion-ratio limit."
-Require-Pattern $nativePreview 'ARCHIVE_EXTRACT_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
+Require-Pattern $nativeArchive 'ARCHIVE_EXTRACT_DEADLINE:\s*Duration\s*=\s*Duration::from_secs\(4\)' `
     "Archive entry extraction must retain its four-second deadline."
+Require-Pattern $nativeArchiveListingTests 'archive_reader_supports_tar_tgz_and_gzip_without_a_path[\s\S]*archive_zip_reader_retains_partial_listing_below_hard_entry_cap[\s\S]*tar_scan_reader_stops_at_decompressed_byte_budget[\s\S]*tar_scan_reader_honors_cancellation[\s\S]*tar_scan_reader_honors_deadline' `
+    "Archive listing tests must retain TAR/TGZ/GZIP, partial ZIP, byte, cancellation, and deadline coverage."
+Require-Pattern $nativeArchiveListingTests 'archive_type_summary_counts_common_types[\s\S]*archive_project_summary_detects_project_markers[\s\S]*archive_largest_file_summary_is_bounded_and_sorted' `
+    "Archive listing tests must retain type, project-marker, and largest-file summary coverage."
+Require-Pattern $nativeArchiveExtractTests 'archive_extract_budget_rejects_oversized_or_extreme_entries[\s\S]*encrypted_zip_entries_are_reported_and_not_extracted[\s\S]*archive_extract_output_name_is_lossless_and_keeps_safe_extension[\s\S]*archive_extract_discard_only_removes_generated_roots' `
+    "Archive extraction tests must retain budget, encrypted-entry, lossless-name, and safe-cleanup coverage."
+Require-Pattern $nativeArchiveListing 'render_archive_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES' `
+    "Archive path and HANDLE listing routes must share the bounded, cancellable Read+Seek ZIP pipeline."
+Require-Pattern $nativeArchiveExtract 'extract_archive_entry_to_writer_reader<R:\s*Read\s*\+\s*Seek,\s*W:\s*Write>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
+    "Archive entry extraction must validate source length and enforce cancellation, deadline, ratio, and output bounds."
 Require-Pattern $nativePreview 'MAX_EBOOK_ZIP_ENTRIES:\s*usize\s*=\s*8_192' `
     "EPUB ZIP preflight must remain capped at 8192 entries."
 Require-Pattern $nativePreview 'MAX_EBOOK_DECOMPRESSED_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
@@ -678,21 +700,22 @@ Require-Pattern $nativePreview 'struct\s+CancelableSeekReader<R>[\s\S]*impl<R:\s
     "ZIP archive construction and seeks must remain cancellation-aware."
 Require-Pattern $nativePreview 'fn\s+open_validated_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*validate_zip_container\([\s\S]*ZipArchive::new\(\s*CancelableSeekReader::new\(' `
     "Archive and ebook readers must share cancellable ZIP validation before parsing the central directory."
-Require-Pattern $nativePreview 'render_archive_reader_with_root<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES' `
-    "Archive path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativeEbookPreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
     "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativePreview 'render_office_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
     "Office path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativeOfficeImage 'extract_office_image_bgra_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `
     "Office hero extraction must share the bounded, cancellable HANDLE ZIP pipeline."
-Require-Pattern $nativePreview 'extract_archive_entry_to_temp_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_ARCHIVE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_ARCHIVE_ZIP_ENTRIES[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*started\.elapsed\(\)\s*>\s*ARCHIVE_EXTRACT_DEADLINE[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES' `
-    "Archive entry HANDLE extraction must validate the source and enforce cancellation, deadline, and output bounds."
 Require-Pattern $nativeEbookPreview 'struct\s+EbookContext[\s\S]*remaining_decompressed_bytes[\s\S]*MAX_EBOOK_DECOMPRESSED_BYTES[\s\S]*fn\s+read_ebook_limited_to_end<R:\s*Read>[\s\S]*context\.check_cancelled\(\)[\s\S]*context\.consume\(' `
     "EPUB parts must share a cumulative decompression budget with per-chunk cancellation."
 $nativePreviewText = Get-Content -LiteralPath $nativePreview -Raw
 $nativeEbookPreviewText = Get-Content -LiteralPath $nativeEbookPreview -Raw
-$nativePreviewAndEbookText = $nativePreviewText + "`n" + $nativeEbookPreviewText
+$nativeArchiveListingText = Get-Content -LiteralPath $nativeArchiveListing -Raw
+$nativeArchiveExtractText = Get-Content -LiteralPath $nativeArchiveExtract -Raw
+$nativeArchiveTestsText = (Get-Content -LiteralPath $nativeArchiveListingTests -Raw) + "`n" +
+    (Get-Content -LiteralPath $nativeArchiveExtractTests -Raw)
+$nativePreviewAndEbookText = $nativePreviewText + "`n" + $nativeEbookPreviewText + "`n" +
+    $nativeArchiveListingText + "`n" + $nativeArchiveExtractText
 if ($nativePreviewAndEbookText -match 'fs::File::open\(\s*&?\s*logical_name\b' -or
     $nativePreviewAndEbookText -match 'render_archive\(\s*&?\s*logical_name\b') {
     $failures.Add("Logical HANDLE names must never be reopened as paths or sent to the EPUB archive fallback.")

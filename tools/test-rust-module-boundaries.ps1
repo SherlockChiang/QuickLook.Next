@@ -40,6 +40,11 @@ $officePresentationPath = Join-Path $Root "native\quicklook_next_native\src\prev
 $officePresentationTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\presentation\tests.rs"
 $officeWorkbookPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\workbook.rs"
 $officeWorkbookTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\office\workbook\tests.rs"
+$archivePath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\mod.rs"
+$archiveListingPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\listing.rs"
+$archiveListingTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\listing\tests.rs"
+$archiveExtractPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract.rs"
+$archiveExtractTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -76,7 +81,12 @@ foreach ($path in @(
         $officePresentationPath,
         $officePresentationTestsPath,
         $officeWorkbookPath,
-        $officeWorkbookTestsPath)) {
+        $officeWorkbookTestsPath,
+        $archivePath,
+        $archiveListingPath,
+        $archiveListingTestsPath,
+        $archiveExtractPath,
+        $archiveExtractTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -117,6 +127,11 @@ if ($failures.Count -eq 0) {
     $officePresentationTestsText = Get-Content -LiteralPath $officePresentationTestsPath -Raw
     $officeWorkbookText = Get-Content -LiteralPath $officeWorkbookPath -Raw
     $officeWorkbookTestsText = Get-Content -LiteralPath $officeWorkbookTestsPath -Raw
+    $archiveText = Get-Content -LiteralPath $archivePath -Raw
+    $archiveListingText = Get-Content -LiteralPath $archiveListingPath -Raw
+    $archiveListingTestsText = Get-Content -LiteralPath $archiveListingTestsPath -Raw
+    $archiveExtractText = Get-Content -LiteralPath $archiveExtractPath -Raw
+    $archiveExtractTestsText = Get-Content -LiteralPath $archiveExtractTestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -878,6 +893,162 @@ if ($failures.Count -eq 0) {
     $officeImageTestsLineCount = @(Get-Content -LiteralPath $officeImageTestsPath).Count
     if ($officeImageTestsLineCount -gt 240) {
         $failures.Add("The focused Office image tests grew beyond 240 lines: $officeImageTestsLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod archive;\s*$' -or
+        $archiveText -notmatch '(?m)^mod listing;\s*$' -or
+        $archiveText -notmatch '(?m)^mod extract;\s*$' -or
+        $archiveText -notmatch '(?m)^pub\(crate\) use extract::\{' -or
+        $archiveText -notmatch '(?m)^pub\(crate\) use listing::\{is_archive, render_archive, render_archive_reader\};' -or
+        $archiveText -notmatch '(?m)^pub\(super\) use listing::render_zip_archive_from_zip;') {
+        $failures.Add(
+            "Archive composition must expose explicit listing/extraction modules and narrow re-exports.")
+    }
+
+    foreach ($forbiddenArchiveParent in @(
+            'fn\s+is_archive\s*\(',
+            'fn\s+reader_starts_with_rar_magic\s*\(',
+            'fn\s+render_archive\s*\(',
+            'fn\s+render_archive_reader\s*\(',
+            'fn\s+render_archive_reader_with_root\s*\(',
+            'fn\s+render_rar_entries\s*\(',
+            'fn\s+render_zip_archive_from_zip\s*\(',
+            'fn\s+render_tar_entries\s*\(',
+            'struct\s+TarScanReader',
+            'fn\s+archive_listing_json\s*\(',
+            'fn\s+archive_largest_file_summary\s*\(',
+            'fn\s+archive_type_summary\s*\(',
+            'fn\s+archive_project_summary\s*\(',
+            'fn\s+add_rar_parent_folders\s*\(',
+            'fn\s+ensure_trailing_slash\s*\(',
+            'fn\s+extract_archive_entry_to_temp\s*\(',
+            'fn\s+extract_archive_entry_to_temp_reader\s*\(',
+            'fn\s+extract_archive_entry_to_writer_reader\s*\(',
+            'fn\s+discard_archive_extract_path\s*\(',
+            'fn\s+archive_entry_within_extract_budget\s*\(',
+            'fn\s+normalize_archive_entry_path\s*\(',
+            'fn\s+archive_extract_output_name\s*\(',
+            'fn\s+archive_extract_base_path\s*\(',
+            'fn\s+create_archive_extract_root\s*\(',
+            'fn\s+cleanup_archive_extract_roots\s*\(',
+            'MAX_RAR_RETAINED_PATH_BYTES',
+            'MAX_ARCHIVE_HANDLE_INPUT_BYTES',
+            'const\s+MAX_ARCHIVE_ZIP_ENTRIES',
+            'MAX_TAR_SCAN_BYTES',
+            'TAR_SCAN_DEADLINE',
+            'MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES',
+            'MAX_ARCHIVE_EXTRACT_RATIO',
+            'ARCHIVE_EXTRACT_DEADLINE',
+            'MAX_ARCHIVE_EXTRACT_ROOTS',
+            'ARCHIVE_EXTRACT_RETENTION',
+            'const\s+(?:ZIP_EXTS|TAR_EXTS|TAR_GZ_EXTS|GZ_EXTS|RAR_EXTS)')) {
+        if ($previewText -match $forbiddenArchiveParent) {
+            $failures.Add(
+                "preview.rs must not regain archive listing/extraction implementation detail: $forbiddenArchiveParent")
+        }
+    }
+
+    foreach ($archiveModule in @(
+            $archiveText,
+            $archiveListingText,
+            $archiveListingTestsText,
+            $archiveExtractText,
+            $archiveExtractTestsText)) {
+        if ($archiveModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+            $archiveModule -match '#\[no_mangle\]' -or
+            $archiveModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Archive modules must use explicit imports and must not own a public C ABI surface.")
+        }
+    }
+
+    foreach ($requiredArchive in @(
+            'pub\(crate\) fn is_archive\(',
+            'pub\(super\) fn reader_starts_with_rar_magic',
+            'pub\(crate\) fn render_archive\(',
+            'pub\(crate\) fn render_archive_reader(?:<[^>]+>)?\(',
+            'pub\(in crate::preview\) fn render_zip_archive_from_zip',
+            'struct\s+TarScanReader',
+            'fn\s+render_tar_entries(?:<[^>]+>)?\(',
+            'open_validated_zip\(',
+            'MAX_ARCHIVE_SCAN_ENTRIES')) {
+        if ($archiveListingText -notmatch $requiredArchive) {
+            $failures.Add("Archive listing module lost a bounded listing invariant: $requiredArchive")
+        }
+    }
+
+    foreach ($requiredArchiveExtract in @(
+            'pub\(crate\) fn extract_archive_entry_to_temp\(',
+            'pub\(crate\) fn extract_archive_entry_to_temp_reader',
+            'pub\(crate\) fn extract_archive_entry_to_writer_reader',
+            'pub\(crate\) fn discard_archive_extract_path\(',
+            'normalize_archive_entry_path\(',
+            'MAX_ARCHIVE_EXTRACT_BYTES',
+            'MAX_ARCHIVE_EXTRACT_COMPRESSED_BYTES',
+            'MAX_ARCHIVE_EXTRACT_RATIO',
+            'ARCHIVE_EXTRACT_DEADLINE',
+            'preview_cancelled\(cancel_cb\)',
+            'reader_starts_with_rar_magic')) {
+        if ($archiveExtractText -notmatch $requiredArchiveExtract) {
+            $failures.Add("Archive extraction module lost a bounded extraction invariant: $requiredArchiveExtract")
+        }
+    }
+
+    foreach ($requiredArchiveTest in @(
+            'fn\s+archive_reader_supports_tar_tgz_and_gzip_without_a_path\(',
+            'fn\s+archive_zip_reader_retains_partial_listing_below_hard_entry_cap\(',
+            'fn\s+tar_scan_reader_stops_at_decompressed_byte_budget\(',
+            'fn\s+tar_scan_reader_honors_cancellation\(',
+            'fn\s+tar_scan_reader_honors_deadline\(',
+            'fn\s+archive_type_summary_counts_common_types\(',
+            'fn\s+archive_project_summary_detects_project_markers\(',
+            'fn\s+archive_largest_file_summary_is_bounded_and_sorted\(')) {
+        if ($archiveListingTestsText -notmatch $requiredArchiveTest) {
+            $failures.Add("Archive listing tests lost bounded TAR/ZIP/summary coverage: $requiredArchiveTest")
+        }
+    }
+    foreach ($requiredArchiveExtractTest in @(
+            'fn\s+archive_extract_budget_rejects_oversized_or_extreme_entries\(',
+            'fn\s+encrypted_zip_entries_are_reported_and_not_extracted\(',
+            'fn\s+archive_extract_output_name_is_lossless_and_keeps_safe_extension\(',
+            'fn\s+archive_extract_discard_only_removes_generated_roots\(')) {
+        if ($archiveExtractTestsText -notmatch $requiredArchiveExtractTest) {
+            $failures.Add("Archive extraction tests lost budget/security coverage: $requiredArchiveExtractTest")
+        }
+    }
+
+    if ($previewText -match 'archive_reader_supports_tar_tgz_and_gzip_without_a_path|archive_zip_reader_retains_partial_listing_below_hard_entry_cap|tar_scan_reader_stops_at_decompressed_byte_budget|archive_extract_budget_rejects_oversized_or_extreme_entries') {
+        $failures.Add("Archive implementation tests must not drift back into preview.rs.")
+    }
+
+    $archiveExports = [regex]::Matches($archiveText, '(?m)^pub(?:\([^)]+\))?\s+')
+    $archiveListingExports = [regex]::Matches($archiveListingText, '(?m)^pub(?:\([^)]+\))?\s+')
+    $archiveExtractExports = [regex]::Matches($archiveExtractText, '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($archiveExports.Count -ne 6 -or
+        $archiveListingExports.Count -ne 5 -or
+        $archiveExtractExports.Count -ne 4) {
+        $failures.Add("Archive module exports changed: mod=$($archiveExports.Count), listing=$($archiveListingExports.Count), extract=$($archiveExtractExports.Count).")
+    }
+
+    $archiveLineCount = @(Get-Content -LiteralPath $archivePath).Count
+    if ($archiveLineCount -gt 80) {
+        $failures.Add("The archive composition module grew beyond 80 lines: $archiveLineCount")
+    }
+    $archiveListingLineCount = @(Get-Content -LiteralPath $archiveListingPath).Count
+    if ($archiveListingLineCount -gt 1050) {
+        $failures.Add("The bounded archive listing module grew beyond 1050 lines: $archiveListingLineCount")
+    }
+    $archiveListingTestsLineCount = @(Get-Content -LiteralPath $archiveListingTestsPath).Count
+    if ($archiveListingTestsLineCount -gt 400) {
+        $failures.Add("The focused archive listing tests grew beyond 400 lines: $archiveListingTestsLineCount")
+    }
+    $archiveExtractLineCount = @(Get-Content -LiteralPath $archiveExtractPath).Count
+    if ($archiveExtractLineCount -gt 380) {
+        $failures.Add("The bounded archive extraction module grew beyond 380 lines: $archiveExtractLineCount")
+    }
+    $archiveExtractTestsLineCount = @(Get-Content -LiteralPath $archiveExtractTestsPath).Count
+    if ($archiveExtractTestsLineCount -gt 220) {
+        $failures.Add("The focused archive extraction tests grew beyond 220 lines: $archiveExtractTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
