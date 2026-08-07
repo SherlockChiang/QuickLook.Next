@@ -155,6 +155,13 @@ the release-only `release:` prefix while this queue is in progress.
         - Commit: `0a4eb6c`, `7fd759b`
     - [ ] `R26-P1-07c-6` Move reusable bounded-reader and parser primitives into
       shared core modules, leaving `preview.rs` as a small explicit router.
+      - [x] `R26-P1-07c-6a` Move cancellation-aware prefix/exact readers,
+        seek-length validation, limited reads, and ZIP/ZIP64 preflight into
+        `preview/bounded.rs` with focused length, cap, fallback, and cancellation
+        tests.
+        - Verification: bounded-reader and preview-focused Rust tests, Clippy,
+          module-boundary guard, and performance-bounds guard pass.
+        - Commit: `cd50e39`, `b60696e`
   - [ ] `R26-P1-07d` Move exported entry points and raw-pointer validation into
     focused FFI modules, leaving `lib.rs` as a small composition root.
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
