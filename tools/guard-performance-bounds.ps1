@@ -30,6 +30,8 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
 
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$nativeBounded = Join-Path $Root "native/quicklook_next_native/src/preview/bounded.rs"
+$nativeBoundedTests = Join-Path $Root "native/quicklook_next_native/src/preview/bounded/tests.rs"
 $nativeArchive = Join-Path $Root "native/quicklook_next_native/src/preview/archive/mod.rs"
 $nativeArchiveListing = Join-Path $Root "native/quicklook_next_native/src/preview/archive/listing.rs"
 $nativeArchiveListingTests = Join-Path $Root "native/quicklook_next_native/src/preview/archive/listing/tests.rs"
@@ -122,8 +124,14 @@ Require-Pattern $nativeMediaMp4Tests 'fn\s+large_stsc_mapping_remains_linear\([\
     "MP4 chunk mapping must retain its near-1-MiB 65000-entry linearity regression."
 Require-Pattern $nativeMedia 'pub\(super\) fn render_media_info\([\s\S]*read_file_prefix\(path, MAX_INFO_HEADER_BYTES\)\.unwrap_or_default\(\)' `
     "Media previews must retain their bounded 1 MiB prefix read and fail-soft fallback."
-Require-Pattern $nativePreview 'fn read_reader_prefix<R:\s*Read>\([\s\S]{0,300}reader\.take\(max_bytes as u64\)[\s\S]{0,300}read_to_end\(&mut bytes\)' `
+Require-Pattern $nativeBounded 'fn read_reader_prefix<R:\s*Read>\([\s\S]{0,300}reader\.take\(max_bytes as u64\)[\s\S]{0,300}read_to_end\(&mut bytes\)' `
     "Shared native prefix reads must apply the byte limit before reading to the end."
+Require-Pattern $nativeBounded 'fn read_reader_exact_bounded_cancelable<R:\s*Read>[\s\S]*expected_bytes[\s\S]*max_bytes[\s\S]*\.saturating_add\(1\)[\s\S]*\.min\(max_bytes\.saturating_add\(1\)\)[\s\S]*bytes\.len\(\) as u64 != expected_bytes' `
+    "Shared exact readers must probe one bounded byte and reject both short and overlong inputs."
+Require-Pattern $nativeBounded 'fn read_limited_to_end<R:\s*Read>[\s\S]*reader\.take\(max_size\.saturating_add\(1\)\)[\s\S]*bytes\.len\(\) as u64 > max_size' `
+    "Shared limited readers must probe one byte past the cap before accepting an input."
+Require-Pattern $nativeBounded 'fn prepare_seekable_reader<R:\s*Seek>[\s\S]*SeekFrom::End\(0\)[\s\S]*actual_length != expected_length[\s\S]*SeekFrom::Start\(0\)' `
+    "Shared seekable readers must validate the authoritative length and rewind to offset zero."
 $handleHandoffBenchmark = Join-Path $Root "tools/benchmark-handle-handoff.ps1"
 Require-Pattern $handleHandoffBenchmark '\[ValidateRange\(1,\s*1024\)\][\s\S]*\[int\]\$SizeMiB\s*=\s*32[\s\S]*\[ValidateRange\(1,\s*25\)\][\s\S]*\[int\]\$Iterations\s*=\s*5' `
     "The HANDLE handoff microbenchmark must retain bounded 32 MiB/five-iteration defaults."
@@ -559,7 +567,7 @@ Require-Pattern $nativeTextPreview 'MAX_TEXT_BYTES:\s*usize\s*=\s*512\s*\*\s*102
     "Native text inputs must remain capped at 512 KiB."
 Require-Pattern $nativeTextPreview 'fn read_text_preview_bytes<R:\s*Read>[\s\S]*read_reader_prefix_cancelable\(reader,\s*MAX_TEXT_BYTES\s*\+\s*1,\s*cancel_cb\)' `
     "Path and HANDLE text previews must share the bounded, cancellable Reader pipeline."
-Require-Pattern $nativePreview 'fn read_reader_prefix_cancelable<R:\s*Read>[\s\S]*Vec::with_capacity\(max_bytes\.min\(64\s*\*\s*1024\)\)' `
+Require-Pattern $nativeBounded 'fn read_reader_prefix_cancelable<R:\s*Read>[\s\S]*Vec::with_capacity\(max_bytes\.min\(64\s*\*\s*1024\)\)' `
     "Small Reader previews must not preallocate their complete input budget."
 Require-Pattern $nativePreview 'MAX_EXECUTABLE_HEADER_BYTES:\s*usize\s*=\s*4\s*\*\s*1024\s*\*\s*1024' `
     "Executable HANDLE previews must retain their 4 MiB header-read cap."
@@ -569,7 +577,7 @@ Require-Pattern $nativeTorrentPreview 'MAX_TORRENT_BYTES:\s*u64\s*=\s*16\s*\*\s*
     "Torrent HANDLE previews must retain their 16 MiB input cap."
 Require-Pattern $nativeTorrentPreview 'render_torrent_reader<R:\s*Read>[\s\S]*read_reader_exact_bounded_cancelable\(reader,\s*size\s+as\s+u64,\s*MAX_TORRENT_BYTES,\s*cancel_cb\)' `
     "Path and HANDLE torrent previews must enforce bounded exact-length reads."
-Require-Pattern $nativePreview 'let read_limit\s*=\s*expected_bytes[\s\S]*?\.saturating_add\(1\)[\s\S]*?\.min\(max_bytes\.saturating_add\(1\)\)' `
+Require-Pattern $nativeBounded 'let read_limit\s*=\s*expected_bytes[\s\S]*?\.saturating_add\(1\)[\s\S]*?\.min\(max_bytes\.saturating_add\(1\)\)' `
     "Exact-length Reader previews must stop after the expected length plus one byte."
 Require-Pattern $nativeTorrentPreview 'MAX_BENCODE_DEPTH:\s*usize\s*=\s*64' `
     "Torrent bencode parsing must retain its depth limit of 64."
@@ -629,7 +637,7 @@ Require-Pattern $nativeOfficeImage 'office_layout_image_to_bgra[\s\S]*checked_mu
     "Office lazy BGRA extraction must retain checked output sizing and cancellation checks."
 Require-Pattern $nativeOfficeImageTests 'office_media_entries_are_unique_canonical_and_root_scoped[\s\S]*office_layout_image_refs_require_canonical_matching_roots[\s\S]*office_layout_image_decode_enforces_source_and_dimension_bounds[\s\S]*office_image_scans_and_decode_honor_cancellation' `
     "Office image tests must retain root, reference, source/dimension, and cancellation coverage."
-Require-Pattern $nativePreview 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeBounded 'MAX_ZIP_CENTRAL_DIRECTORY_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
     "Archive and ebook ZIP central directories must remain capped at 32 MiB."
 Require-Pattern $nativeArchive 'MAX_ARCHIVE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024\s*\*\s*1024' `
     "Seek-only archive HANDLE inputs must remain capped at 16 TiB in the archive boundary module."
@@ -702,12 +710,14 @@ Require-Pattern $nativeEbookPreview 'for\s+idref\s+in\s+opf\.spine\.iter\(\)\.ta
     "EPUB contents lists must remain capped at 40 spine items."
 Require-Pattern $nativeEbookPreview 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(512\)' `
     "EPUB fallback OPF discovery must remain capped at 512 entries."
-Require-Pattern $nativePreview 'fn\s+validate_zip_container<R:\s*Read\s*\+\s*Seek>[\s\S]*read_exact_cancelable\([\s\S]*entries\s*>\s*max_entries\s*\|\|\s*central_size\s*>\s*MAX_ZIP_CENTRAL_DIRECTORY_BYTES' `
+Require-Pattern $nativeBounded 'fn\s+validate_zip_container<R:\s*Read\s*\+\s*Seek>[\s\S]*read_exact_cancelable\([\s\S]*entries\s*>\s*max_entries\s*\|\|\s*central_size\s*>\s*MAX_ZIP_CENTRAL_DIRECTORY_BYTES' `
     "ZIP preflight must read cancellably and reject entry-count or central-directory budget overflow."
-Require-Pattern $nativePreview 'struct\s+CancelableSeekReader<R>[\s\S]*impl<R:\s*Read>\s+Read\s+for\s+CancelableSeekReader<R>[\s\S]*preview_cancelled\(self\.cancel_cb\)[\s\S]*impl<R:\s*Seek>\s+Seek\s+for\s+CancelableSeekReader<R>' `
+Require-Pattern $nativeBounded 'struct\s+CancelableSeekReader<R>[\s\S]*impl<R:\s*Read>\s+Read\s+for\s+CancelableSeekReader<R>[\s\S]*preview_cancelled\(self\.cancel_cb\)[\s\S]*impl<R:\s*Seek>\s+Seek\s+for\s+CancelableSeekReader<R>' `
     "ZIP archive construction and seeks must remain cancellation-aware."
-Require-Pattern $nativePreview 'fn\s+open_validated_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*validate_zip_container\([\s\S]*ZipArchive::new\(\s*CancelableSeekReader::new\(' `
+Require-Pattern $nativeBounded 'fn\s+open_validated_zip<R:\s*Read\s*\+\s*Seek>[\s\S]*validate_zip_container\([\s\S]*ZipArchive::new\(\s*CancelableSeekReader::new\(' `
     "Archive and ebook readers must share cancellable ZIP validation before parsing the central directory."
+Require-Pattern $nativeBoundedTests 'fn\s+bounded_exact_reader_reports_length_mismatch_and_cancellation\([\s\S]*fn\s+zip_preflight_rejects_hard_entry_and_central_directory_caps\([\s\S]*fn\s+zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback\([\s\S]*fn\s+zip_archive_open_honors_cancellation_after_preflight\([\s\S]*fn\s+limited_reader_rejects_payloads_over_cap\(' `
+    "Bounded reader tests must retain exact-length, ZIP cap/fallback, cancellation, and one-byte-over-limit coverage."
 Require-Pattern $nativeEbookPreview 'render_ebook_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_EBOOK_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_EBOOK_ZIP_ENTRIES' `
     "Ebook path and HANDLE routes must share the bounded, cancellable Read+Seek pipeline."
 Require-Pattern $nativePreview 'render_office_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_OFFICE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_OFFICE_ZIP_ENTRIES' `

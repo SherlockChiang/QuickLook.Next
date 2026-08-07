@@ -10,6 +10,8 @@ $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\common.rs"
+$previewBoundedPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded.rs"
+$previewBoundedTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded\tests.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mailPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail.rs"
 $mailTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\tests.rs"
@@ -57,6 +59,8 @@ foreach ($path in @(
         $shellThumbnailPath,
         $previewPath,
         $previewCommonPath,
+        $previewBoundedPath,
+        $previewBoundedTestsPath,
         $fontPath,
         $mailPath,
         $mailTestsPath,
@@ -106,6 +110,8 @@ if ($failures.Count -eq 0) {
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
     $previewCommonText = Get-Content -LiteralPath $previewCommonPath -Raw
+    $previewBoundedText = Get-Content -LiteralPath $previewBoundedPath -Raw
+    $previewBoundedTestsText = Get-Content -LiteralPath $previewBoundedTestsPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mailText = Get-Content -LiteralPath $mailPath -Raw
     $mailTestsText = Get-Content -LiteralPath $mailTestsPath -Raw
@@ -204,6 +210,121 @@ if ($failures.Count -eq 0) {
     if ($shellLineCount -gt 400) {
         $failures.Add(
             "The bounded Shell thumbnail module grew beyond 400 lines: $shellLineCount")
+    }
+
+    $boundedImportMatch = [regex]::Match(
+        $previewText,
+        '(?ms)^use bounded::\{.*?^\};')
+    if ($previewText -notmatch '(?m)^mod bounded;\s*$' -or -not $boundedImportMatch.Success) {
+        $failures.Add(
+            "preview.rs must compose preview::bounded and expose only its narrow internal helper imports.")
+    }
+    else {
+        foreach ($requiredBoundedImport in @(
+                'drain_exact_cancelable',
+                'open_validated_zip',
+                'prepare_seekable_reader',
+                'preview_cancelled',
+                'read_exact_cancelable',
+                'read_file_prefix',
+                'read_limited_to_end',
+                'read_reader_exact_bounded_cancelable',
+                'read_reader_prefix',
+                'read_reader_prefix_cancelable',
+                'CancelableSeekReader')) {
+            if ($boundedImportMatch.Value -notmatch "\b$requiredBoundedImport\b") {
+                $failures.Add(
+                    "preview.rs lost bounded helper import: $requiredBoundedImport")
+            }
+        }
+    }
+
+    foreach ($forbiddenBoundedParent in @(
+            'fn\s+preview_cancelled\s*\(',
+            'fn\s+read_file_prefix\s*\(',
+            'fn\s+read_reader_prefix(?:_cancelable)?\s*(?:<[^>]+>)?\s*\(',
+            'fn\s+read_reader_exact_bounded_cancelable\s*(?:<[^>]+>)?\s*\(',
+            'fn\s+read_exact_cancelable\s*(?:<[^>]+>)?\s*\(',
+            'fn\s+drain_exact_cancelable\s*(?:<[^>]+>)?\s*\(',
+            'fn\s+read_limited_to_end\s*(?:<[^>]+>)?\s*\(',
+            'fn\s+prepare_seekable_reader\s*(?:<[^>]+>)?\s*\(',
+            'const\s+MAX_ZIP_CENTRAL_DIRECTORY_BYTES\b',
+            'const\s+ZIP_EOCD_MIN_BYTES\b',
+            'const\s+ZIP_EOCD_MAX_TAIL_BYTES\b',
+            'fn\s+validate_zip_container\s*(?:<[^>]+>)?\s*\(',
+            'struct\s+CancelableSeekReader\b',
+            'fn\s+open_validated_zip\s*(?:<[^>]+>)?\s*\(')) {
+        if ($previewText -match $forbiddenBoundedParent) {
+            $failures.Add(
+                "preview.rs must not regain bounded-reader/ZIP implementation detail: $forbiddenBoundedParent")
+        }
+    }
+
+    foreach ($boundedModule in @($previewBoundedText, $previewBoundedTestsText)) {
+        if ($boundedModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+            $boundedModule -match '#\[no_mangle\]' -or
+            $boundedModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Bounded reader modules must use explicit imports and must not own a public C ABI surface.")
+        }
+    }
+
+    foreach ($requiredBounded in @(
+            'pub\(super\) fn preview_cancelled\(',
+            'pub\(super\) fn read_file_prefix\(',
+            'pub\(super\) fn read_reader_prefix<R:\s*Read>',
+            'pub\(super\) fn read_reader_prefix_cancelable<R:\s*Read>',
+            'pub\(super\) fn read_reader_exact_bounded_cancelable<R:\s*Read>',
+            'pub\(super\) fn read_exact_cancelable<R:\s*Read\s*\+\s*\?Sized>',
+            'pub\(super\) fn drain_exact_cancelable<R:\s*Read\s*\+\s*\?Sized>',
+            'pub\(super\) fn read_limited_to_end<R:\s*Read>',
+            'pub\(super\) fn prepare_seekable_reader<R:\s*Seek>',
+            'pub\(super\) const MAX_ZIP_CENTRAL_DIRECTORY_BYTES:',
+            'pub\(super\) const ZIP_EOCD_MIN_BYTES:',
+            'pub\(super\) const ZIP_EOCD_MAX_TAIL_BYTES:',
+            'pub\(super\) fn validate_zip_container<R:\s*Read\s*\+\s*Seek>',
+            'pub\(super\) struct CancelableSeekReader<R>',
+            'pub\(super\) fn open_validated_zip<R:\s*Read\s*\+\s*Seek>',
+            '(?m)^#\[cfg\(test\)\]\s*\r?\nmod tests;\s*$')) {
+        if ($previewBoundedText -notmatch $requiredBounded) {
+            $failures.Add(
+                "Bounded reader module lost required internal API: $requiredBounded")
+        }
+    }
+
+    foreach ($requiredBoundedTest in @(
+            'fn\s+bounded_exact_reader_reports_length_mismatch_and_cancellation\(',
+            'fn\s+zip_preflight_rejects_hard_entry_and_central_directory_caps\(',
+            'fn\s+zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback\(',
+            'fn\s+zip_archive_open_honors_cancellation_after_preflight\(',
+            'fn\s+limited_reader_rejects_payloads_over_cap\(')) {
+        if ($previewBoundedTestsText -notmatch $requiredBoundedTest) {
+            $failures.Add(
+                "Bounded reader tests lost length/ZIP/cancellation coverage: $requiredBoundedTest")
+        }
+        if ($previewText -match $requiredBoundedTest) {
+            $failures.Add(
+                "Bounded reader tests must not drift back into preview.rs: $requiredBoundedTest")
+        }
+    }
+
+    $boundedExports = [regex]::Matches(
+        $previewBoundedText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($boundedExports.Count -ne 15 -or $previewBoundedText -match '(?m)^pub\s+') {
+        $failures.Add(
+            "Bounded reader module exports changed or escaped crate-private scope: $($boundedExports.Count).")
+    }
+
+    $boundedLineCount = @(Get-Content -LiteralPath $previewBoundedPath).Count
+    if ($boundedLineCount -gt 380) {
+        $failures.Add(
+            "The shared bounded reader module grew beyond 380 lines: $boundedLineCount")
+    }
+    $boundedTestsLineCount = @(Get-Content -LiteralPath $previewBoundedTestsPath).Count
+    if ($boundedTestsLineCount -gt 220) {
+        $failures.Add(
+            "The focused bounded reader tests grew beyond 220 lines: $boundedTestsLineCount")
     }
 
     if ($previewText -notmatch '(?m)^mod font;\s*$' -or
