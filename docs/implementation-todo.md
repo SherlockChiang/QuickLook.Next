@@ -131,11 +131,17 @@ the release-only `release:` prefix while this queue is in progress.
         the HANDLE and source-pixel budgets.
     - [ ] `R26-P1-07c-5` Move archive and application-package listing/parsing
       into focused modules while preserving bounded extraction contracts.
-      - [ ] `R26-P1-07c-5a` Move ZIP, TAR/TGZ, standalone GZip, and RAR listing
+      - [x] `R26-P1-07c-5a` Move ZIP, TAR/TGZ, standalone GZip, and RAR listing
         composition into `preview/archive/listing.rs`, retaining scan, time,
         entry-count, path-retention, and cancellation budgets.
-      - [ ] `R26-P1-07c-5b` Move bounded ZIP entry streaming, temporary-output
+        - Verification: archive-focused Rust tests, module-boundary guard, and
+          performance-bounds guard pass.
+        - Commit: `91b53ec`
+      - [x] `R26-P1-07c-5b` Move bounded ZIP entry streaming, temporary-output
         lifecycle, and cleanup validation into `preview/archive/extract.rs`.
+        - Verification: archive extraction budget/encryption/cleanup tests and
+          both Rust guards pass.
+        - Commit: `91b53ec`, `60e26fa`
       - [ ] `R26-P1-07c-5c` Move Windows/Android package metadata, AppX manifest
         parsing, and bounded icon discovery into `preview/package/mod.rs`.
       - [ ] `R26-P1-07c-5d` Move Android binary XML/resource-table resolution,
