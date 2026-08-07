@@ -542,7 +542,6 @@ fn cfb_read_fat<R: Read + Seek>(
     Some(fat)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn cfb_read_regular_chain<R: Read + Seek>(
     source: &mut CfbSource<'_, R>,
     header: &CfbHeader,

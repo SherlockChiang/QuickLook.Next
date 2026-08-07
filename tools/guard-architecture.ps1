@@ -857,6 +857,7 @@ if (Test-Path $parserHostProgram) {
         text = "ql_preview_text_handle"
         executable = "ql_preview_executable_handle"
         torrent = "ql_preview_torrent_handle"
+        mail = "ql_preview_mail_handle"
         archive = "ql_preview_archive_handle"
         office = "ql_preview_office_handle"
         ebook = "ql_preview_ebook_handle"
@@ -872,10 +873,21 @@ if (Test-Path $parserHostProgram) {
     $usesHandleInput = [regex]::Match(
         $parserNativePreviewText,
         'UsesHandleInput\s*\(string kind\)[\s\S]*?(?=\r?\n\s*public\s+static|\r?\n\s*private\s+static)').Value
-    foreach ($kind in @("text", "executable", "torrent", "archive", "office", "ebook", "package")) {
+    foreach ($kind in @("text", "executable", "torrent", "mail", "archive", "office", "ebook", "package")) {
         if ($usesHandleInput -notmatch ('"' + [Regex]::Escape($kind) + '"')) {
             Add-Failure "ParserHost direct HANDLE routing must include '$kind'"
         }
+    }
+    if ($parserNativePreviewText -notmatch '\[DllImport\(Dll,\s*CallingConvention\s*=\s*CallingConvention\.Cdecl\)\]\s*private\s+static\s+extern\s+int\s+ql_preview_mail_handle\(\s*nint\s+sourceHandle,\s*ulong\s+expectedLength,\s*byte\[\]\s+logicalNameUtf8,\s*nuint\s+logicalNameLen,\s*byte\[\]\s+outBuf,\s*nuint\s+outCap,\s*out\s+nuint\s+outRequired,\s*NativeCancelCallback\?\s+cancelCb\s*\);') {
+        Add-Failure "ParserHost Outlook mail HANDLE routing must retain the exact native P/Invoke contract"
+    }
+    $pathPreviewMethod = [regex]::Match(
+        $parserNativePreviewText,
+        'public\s+static\s+string\?\s+TryPreview\([\s\S]*?(?=\r?\n\s*public\s+static\s+\(int Status,\s*string\? Json\)\s+TryPreviewHandle)').Value
+    if ($pathPreviewMethod -notmatch 'bool\s+isMail\s*=\s*kind\.Equals\("mail",\s*StringComparison\.OrdinalIgnoreCase\)' -or
+        $pathPreviewMethod -notmatch 'byte\[\]\?\s+infoKindBytes\s*=\s*isDatabase\s*\|\|\s*isMail' -or
+        $pathPreviewMethod -notmatch ':\s*isMail\s*\?\s*ql_preview_info\(') {
+        Add-Failure "ParserHost path compatibility must route mail through ql_preview_info instead of the archive fallback"
     }
     if ($parserNativePreviewText -notmatch 'EnsureCapabilities\(ql_capabilities\(\),\s*NativeAbi\.ParserHandleInputs\)') {
         Add-Failure "ParserHost must require every advertised Parser HANDLE capability"
@@ -971,6 +983,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleArchiveEntryOutput\s*=\s*1UL\s*<<\s*18' -or
         $nativeAbiText -notmatch 'HandleImageMetadata\s*=\s*1UL\s*<<\s*19' -or
         $nativeAbiText -notmatch 'DirectGifAnimationOutput\s*=\s*1UL\s*<<\s*20' -or
+        $nativeAbiText -notmatch 'HandleMail\s*=\s*1UL\s*<<\s*21' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -983,14 +996,29 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandlePackage\b' -or
         $parserHandleInputs -notmatch '\bHandlePackageIcon\b' -or
         $parserHandleInputs -notmatch '\bHandleOfficeLayoutImage\b' -or
+        $parserHandleInputs -notmatch '\bHandleMail\b' -or
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
         $rasterHandleInputs -notmatch '\bHandleRasterImage\b' -or
         $rasterHandleInputs -match '\bHandleAnimation\b' -or
         $rasterHandleInputs -match '\bHandleImageMetadata\b' -or
+        $rasterHandleInputs -match '\bHandleMail\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-20 and LIMIT_EXCEEDED status must remain stable; animation, metadata, and direct GIF output remain optional"
+        Add-Failure "Native ABI HANDLE capability bits 0-21 and LIMIT_EXCEEDED status must remain stable; mail belongs to ParserHost while animation, metadata, and direct GIF output remain optional"
+    }
+
+    $previewFormatPolicyPath = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
+    $previewFormatPolicyText = Get-Content -LiteralPath $previewFormatPolicyPath -Raw
+    $parserHostKinds = [regex]::Match(
+        $previewFormatPolicyText,
+        'ParserHostKinds\s*=\s*new\([^)]*\)\s*\{[\s\S]*?\};').Value
+    $cloudParserHostKinds = [regex]::Match(
+        $previewFormatPolicyText,
+        'CloudParserHostKinds\s*=\s*new\([^)]*\)\s*\{[\s\S]*?\};').Value
+    if ($parserHostKinds -notmatch '"mail"' -or
+        $cloudParserHostKinds -match '"mail"') {
+        Add-Failure "Outlook mail must use the local ParserHost exact-HANDLE route and remain excluded from cloud path parsing"
     }
 
     $nativeInputPath = Join-Path $Root "native/quicklook_next_native/src/native_input.rs"
@@ -1021,7 +1049,7 @@ if (Test-Path $parserHostProgram) {
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
     $panicBoundaryExemptions = @{
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
-        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\s*\}'
+        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL\s*\}'
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
         "ql_set_preview_visible" = '\{\s*PREVIEW_VISIBLE\.store\(visible\s*!=\s*0,\s*Ordering::SeqCst\);\s*\}'
     }
@@ -1070,6 +1098,7 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
         "ql_preview_torrent_handle",
+        "ql_preview_mail_handle",
         "ql_preview_sqlite_handles",
         "ql_preview_archive_handle",
         "ql_preview_office_handle",
@@ -1092,6 +1121,10 @@ if (Test-Path $parserHostProgram) {
         if ($entryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
             $entryBody -notmatch 'preview_handle_v2\(') {
             Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
+        }
+        if ($entryPoint -eq "ql_preview_mail_handle" -and
+            $entryBody -notmatch 'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
+            Add-Failure "ql_preview_mail_handle must pass the exact reopened HANDLE reader, length, metadata, and cancellation callback into Rust mail parsing"
         }
     }
     foreach ($entryPoint in @(
@@ -1190,6 +1223,13 @@ if (Test-Path $parserHostProgram) {
     } else {
         ""
     }
+    $nativeMailCfbPreviewPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/mail/cfb.rs"
+    $nativeMailCfbPreviewText = if (Test-Path -LiteralPath $nativeMailCfbPreviewPath) {
+        Get-Content -LiteralPath $nativeMailCfbPreviewPath -Raw
+    } else {
+        ""
+    }
     if ($nativePreviewText -notmatch 'mod\s+chm\s*;' -or
         $nativePreviewText -notmatch '"chm"\s*=>\s*return\s+chm::render_chm_info' -or
         $nativePreviewText -match '(?:struct\s+ChmItsfHeader|fn\s+chm_directory_entries|fn\s+chm_system_summary)' -or
@@ -1206,14 +1246,23 @@ if (Test-Path $parserHostProgram) {
     if ($nativePreviewText -notmatch 'mod\s+mail\s*;' -or
         $nativeMailRouteCount -ne 1 -or
         $nativePreviewText -notmatch '"mail"\s*=>\s*return\s+mail::render_mail_info' -or
+        $nativePreviewText -notmatch 'pub\(crate\)\s+use\s+mail::render_mail_reader\s*;' -or
         $nativePreviewText -match '(?:fn\s+parse_mail_headers|fn\s+mail_mime_part_summaries|struct\s+CfbHeader|fn\s+cfb_read_fat)' -or
+        $nativeMailPreviewText -notmatch 'mod\s+cfb\s*;' -or
+        $nativeMailPreviewText -notmatch 'pub\(crate\)\s+fn\s+render_mail_reader<R:\s*Read\s*\+\s*Seek>' -or
+        $nativeMailPreviewText -notmatch 'source_len\s*>\s*MAX_MAIL_HANDLE_INPUT_BYTES' -or
+        $nativeMailPreviewText -notmatch 'prepare_seekable_reader\(&mut reader,\s*source_len,\s*cancel_cb\)' -or
+        $nativeMailPreviewText -notmatch 'cfb::append_msg_compound_summary\(&mut text,\s*&mut reader,\s*source_len,\s*cancel_cb\)' -or
+        $nativeMailPreviewText -match '(?:struct\s+CfbHeader|fn\s+cfb_read_fat|fn\s+cfb_read_regular_chain|fn\s+cfb_read_mini_chain)' -or
         $nativeMailPreviewText -notmatch 'fn\s+mail_mime_boundary_is_valid\([\s\S]*fn\s+mail_mime_delimiter\(' -or
         $nativeMailPreviewText -notmatch 'fn\s+decode_base64_into\([\s\S]*checked_add\(output_count\)' -or
-        $nativeMailPreviewText -notmatch 'match\s+major_version\s*\{[\s\S]*3\s*=>\s*9[\s\S]*4\s*=>\s*12' -or
-        $nativeMailPreviewText -notmatch 'read_u16\(bytes,\s*28\)\?\s*!=\s*0xFFFE' -or
-        $nativeMailPreviewText -notmatch 'fn\s+cfb_read_fat\([\s\S]*fn\s+cfb_read_regular_chain\([\s\S]*fn\s+cfb_read_mini_chain\(' -or
-        $nativeMailPreviewText -notmatch '"__properties_version1\.0"') {
-        Add-Failure "Mail routing, bounded MIME parsing, and real Outlook CFB FAT/mini-FAT parsing must remain in the focused Rust module"
+        $nativeMailCfbPreviewText -notmatch 'match\s+major_version\s*\{[\s\S]*3\s*=>\s*9[\s\S]*4\s*=>\s*12' -or
+        $nativeMailCfbPreviewText -notmatch 'read_u16\(bytes,\s*28\)\?\s*!=\s*0xFFFE' -or
+        $nativeMailCfbPreviewText -notmatch 'MAX_CFB_TOTAL_READ_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024' -or
+        $nativeMailCfbPreviewText -notmatch 'fn\s+read_at\([\s\S]*end\s*>\s*self\.source_len[\s\S]*next_total\s*>\s*MAX_CFB_TOTAL_READ_BYTES[\s\S]*SeekFrom::Start\(offset\)[\s\S]*read_exact_cancelable\(' -or
+        $nativeMailCfbPreviewText -notmatch 'fn\s+cfb_read_fat(?:<[^>]+>)?\s*\([\s\S]*fn\s+cfb_read_regular_chain(?:<[^>]+>)?\s*\([\s\S]*fn\s+cfb_read_mini_chain\(' -or
+        $nativeMailCfbPreviewText -notmatch '"__properties_version1\.0"') {
+        Add-Failure "Mail routing and bounded MIME parsing must remain in mail.rs while seek-bounded Outlook CFB FAT/mini-FAT parsing remains in mail/cfb.rs"
     }
     if ($nativePreviewText -notmatch 'mod\s+animation_probe\s*;' -or
         $nativePreviewText -notmatch 'mod\s+torrent\s*;' -or
@@ -1244,12 +1293,19 @@ if (Test-Path $parserHostProgram) {
         $nativeEbookPreviewText -notmatch 'fn\s+render_epub_from_zip<R:\s*Read\s*\+\s*Seek>') {
         Add-Failure "Executable/PE/CLR and Ebook parsing must remain in focused bounded Rust child modules"
     }
-    $archiveWriterSignature = 'pub fn extract_archive_entry_to_writer_reader'
-    $archiveWriterStart = $nativePreviewText.IndexOf(
+    $nativeArchiveExtractPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/archive/extract.rs"
+    $nativeArchiveExtractText = if (Test-Path -LiteralPath $nativeArchiveExtractPath) {
+        Get-Content -LiteralPath $nativeArchiveExtractPath -Raw
+    } else {
+        ""
+    }
+    $archiveWriterSignature = 'pub(crate) fn extract_archive_entry_to_writer_reader'
+    $archiveWriterStart = $nativeArchiveExtractText.IndexOf(
         $archiveWriterSignature,
         [StringComparison]::Ordinal)
     $archiveWriterEnd = if ($archiveWriterStart -ge 0) {
-        $nativePreviewText.IndexOf(
+        $nativeArchiveExtractText.IndexOf(
             "pub(crate) fn discard_archive_extract_path",
             $archiveWriterStart,
             [StringComparison]::Ordinal)
@@ -1257,7 +1313,7 @@ if (Test-Path $parserHostProgram) {
         -1
     }
     $archiveWriterBody = if ($archiveWriterStart -ge 0 -and $archiveWriterEnd -gt $archiveWriterStart) {
-        $nativePreviewText.Substring($archiveWriterStart, $archiveWriterEnd - $archiveWriterStart)
+        $nativeArchiveExtractText.Substring($archiveWriterStart, $archiveWriterEnd - $archiveWriterStart)
     } else {
         ""
     }
@@ -1292,6 +1348,7 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT:\s*u64\s*=\s*1\s*<<\s*18' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_METADATA:\s*u64\s*=\s*1\s*<<\s*19' -or
         $nativeLibText -notmatch 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_MAIL:\s*u64\s*=\s*1\s*<<\s*21' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -1308,8 +1365,9 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_IMAGE_METADATA\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_MAIL\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-20 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-21 and retain LIMIT_EXCEEDED"
     }
     $nativeOfficeTypesPath = Join-Path $Root "native/quicklook_next_native/src/preview/types.rs"
     $nativeOfficeTypesText = Get-Content -LiteralPath $nativeOfficeTypesPath -Raw

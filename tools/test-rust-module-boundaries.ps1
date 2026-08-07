@@ -14,7 +14,9 @@ $previewBoundedPath = Join-Path $Root "native\quicklook_next_native\src\preview\
 $previewBoundedTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded\tests.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
 $mailPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail.rs"
+$mailCfbPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\cfb.rs"
 $mailTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\tests.rs"
+$mailCfbTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\mail\cfb\tests.rs"
 $elfPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf.rs"
 $elfTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\elf\tests.rs"
 $dumpPath = Join-Path $Root "native\quicklook_next_native\src\preview\dump.rs"
@@ -63,7 +65,9 @@ foreach ($path in @(
         $previewBoundedTestsPath,
         $fontPath,
         $mailPath,
+        $mailCfbPath,
         $mailTestsPath,
+        $mailCfbTestsPath,
         $elfPath,
         $elfTestsPath,
         $dumpPath,
@@ -114,7 +118,9 @@ if ($failures.Count -eq 0) {
     $previewBoundedTestsText = Get-Content -LiteralPath $previewBoundedTestsPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
     $mailText = Get-Content -LiteralPath $mailPath -Raw
+    $mailCfbText = Get-Content -LiteralPath $mailCfbPath -Raw
     $mailTestsText = Get-Content -LiteralPath $mailTestsPath -Raw
+    $mailCfbTestsText = Get-Content -LiteralPath $mailCfbTestsPath -Raw
     $elfText = Get-Content -LiteralPath $elfPath -Raw
     $elfTestsText = Get-Content -LiteralPath $elfTestsPath -Raw
     $dumpText = Get-Content -LiteralPath $dumpPath -Raw
@@ -397,22 +403,52 @@ if ($failures.Count -eq 0) {
     }
 
     foreach ($required in @(
+            '(?m)^mod cfb;\s*$',
             'pub\(super\) fn render_mail_info\(',
-            'read_file_prefix\(path, MAX_MAIL_HEADER_BYTES\)',
+            'fs::File::open\(path\)[\s\S]*render_mail_reader\(file, path, source_len, modified_unix, None\)',
+            'pub\(crate\) fn render_mail_reader<R: Read \+ Seek>\(',
+            'source_len > MAX_MAIL_HANDLE_INPUT_BYTES',
+            'prepare_seekable_reader\(&mut reader, source_len, cancel_cb\)\?',
+            'read_reader_prefix_cancelable\(&mut reader, cfb::CFB_SIGNATURE\.len\(\), cancel_cb\)\?',
+            'if signature\.starts_with\(&cfb::CFB_SIGNATURE\)[\s\S]*cfb::append_msg_compound_summary\(&mut text, &mut reader, source_len, cancel_cb\)\?',
+            'SeekFrom::Start\(0\)[\s\S]*read_reader_prefix_cancelable\(&mut reader, MAX_MAIL_HEADER_BYTES, cancel_cb\)\?',
             'fn parse_mail_headers\(',
             'fn decode_mail_header_value\(',
             'fn mail_mime_part_summaries\(',
             'fn mail_mime_boundary_is_valid\(',
-            'fn mail_mime_delimiter\(',
-            'struct CfbHeader',
-            'struct CfbDocument<''a>',
-            'fn cfb_read_fat\(',
-            'fn cfb_read_regular_chain\(',
-            'fn cfb_read_mini_chain\(',
-            'fn cfb_parse_directory_entries\(',
-            '"__properties_version1\.0"')) {
+            'fn mail_mime_delimiter\(')) {
         if ($mailText -notmatch $required) {
             $failures.Add("Mail preview module lost required boundary: $required")
+        }
+    }
+
+    foreach ($forbidden in @(
+            'struct CfbHeader',
+            'struct CfbDocument',
+            'fn cfb_read_fat',
+            'fn cfb_read_regular_chain',
+            'fn cfb_read_mini_chain',
+            'fn cfb_parse_directory_entries')) {
+        if ($mailText -match $forbidden) {
+            $failures.Add("mail.rs must keep CFB implementation detail in preview::mail::cfb: $forbidden")
+        }
+    }
+
+    foreach ($required in @(
+            'struct CfbHeader',
+            'fn parse\(bytes: &\[u8\], source_len: u64\)',
+            'struct CfbSource<''a, R>[\s\S]*source_len: u64[\s\S]*bytes_read: usize',
+            'fn read_at\(&mut self, offset: u64, length: usize\)[\s\S]*preview_cancelled\(self\.cancel_cb\)[\s\S]*end > self\.source_len[\s\S]*next_total > MAX_CFB_TOTAL_READ_BYTES[\s\S]*seek\(SeekFrom::Start\(offset\)\)[\s\S]*read_exact_cancelable\(self\.reader, &mut bytes, self\.cancel_cb\)',
+            'fn sector_bytes\([\s\S]*u64::from\(sector\)\.checked_add\(1\)[\s\S]*checked_mul\(header\.sector_size as u64\)[\s\S]*self\.read_at\(offset, header\.sector_size\)',
+            'struct CfbDocument<''a, R>',
+            'fn cfb_read_fat<R: Read \+ Seek>\(',
+            'fn cfb_read_regular_chain<R: Read \+ Seek>\(',
+            'fn cfb_read_mini_chain\(',
+            'fn cfb_parse_directory_entries\(',
+            'pub\(super\) fn append_msg_compound_summary<R: Read \+ Seek>\(',
+            '"__properties_version1\.0"')) {
+        if ($mailCfbText -notmatch $required) {
+            $failures.Add("Outlook CFB module lost required boundary: $required")
         }
     }
 
@@ -431,14 +467,26 @@ if ($failures.Count -eq 0) {
         }
     }
 
-    $mailParentVisibleItemCount = [regex]::Matches(
-        $mailText,
-        '(?m)^pub(?:\([^)]+\))?\s+').Count
-    if ($mailParentVisibleItemCount -ne 1) {
-        $failures.Add("The mail module must expose only render_mail_info to its parent.")
+    foreach ($requiredTest in @(
+            'fn msg_reader_reads_regular_property_beyond_legacy_prefix\([\s\S]*property_offset > MAX_MAIL_HEADER_BYTES as u64[\s\S]*max_start_seek >= property_offset[\s\S]*bytes_read <= MAX_CFB_TOTAL_READ_BYTES \+ 8[\s\S]*bytes_read < source_len as usize',
+            'fn cfb_source_enforces_cumulative_read_budget\([\s\S]*read_at\(0, MAX_CFB_TOTAL_READ_BYTES \+ 1\)\.is_none\(\)[\s\S]*ReaderPreviewError::LimitExceeded',
+            'fn mail_reader_reports_length_mismatch_and_cancellation\([\s\S]*bytes\.len\(\) as u64 \+ 1[\s\S]*ReaderPreviewError::LengthMismatch[\s\S]*Some\(always_cancel\)[\s\S]*ReaderPreviewError::Cancelled')) {
+        if ($mailCfbTestsText -notmatch $requiredTest) {
+            $failures.Add("Outlook CFB tests lost seek, budget, length, or cancellation coverage: $requiredTest")
+        }
     }
 
-    foreach ($module in @($mailText, $mailTestsText)) {
+    $mailVisibleItemCount = [regex]::Matches(
+        $mailText,
+        '(?m)^pub(?:\([^)]+\))?\s+').Count
+    if ($mailVisibleItemCount -ne 2 -or
+        [regex]::Matches($mailText, '(?m)^pub\(super\)\s+fn\s+render_mail_info\b').Count -ne 1 -or
+        [regex]::Matches($mailText, '(?m)^pub\(crate\)\s+fn\s+render_mail_reader\b').Count -ne 1) {
+        $failures.Add(
+            "The mail module must expose only its path renderer to preview.rs and its seekable reader to the crate HANDLE route.")
+    }
+
+    foreach ($module in @($mailText, $mailCfbText, $mailTestsText, $mailCfbTestsText)) {
         if ($module -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
             $module -match '#\[no_mangle\]' -or
             $module -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
@@ -448,12 +496,20 @@ if ($failures.Count -eq 0) {
     }
 
     $mailLineCount = @(Get-Content -LiteralPath $mailPath).Count
-    if ($mailLineCount -gt 1300) {
-        $failures.Add("The bounded mail module grew beyond 1300 lines: $mailLineCount")
+    if ($mailLineCount -gt 800) {
+        $failures.Add("The bounded mail routing and MIME module grew beyond 800 lines: $mailLineCount")
+    }
+    $mailCfbLineCount = @(Get-Content -LiteralPath $mailCfbPath).Count
+    if ($mailCfbLineCount -gt 850) {
+        $failures.Add("The bounded Outlook CFB module grew beyond 850 lines: $mailCfbLineCount")
     }
     $mailTestsLineCount = @(Get-Content -LiteralPath $mailTestsPath).Count
     if ($mailTestsLineCount -gt 550) {
         $failures.Add("The focused mail tests grew beyond 550 lines: $mailTestsLineCount")
+    }
+    $mailCfbTestsLineCount = @(Get-Content -LiteralPath $mailCfbTestsPath).Count
+    if ($mailCfbTestsLineCount -gt 250) {
+        $failures.Add("The focused Outlook CFB tests grew beyond 250 lines: $mailCfbTestsLineCount")
     }
 
     if ($previewText -notmatch '(?m)^mod elf;\s*$' -or

@@ -38,7 +38,7 @@ foreach ($kind in @("disk-image", "font", "database", "mail", "chm", "dump", "el
     }
 }
 
-$nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+$nativeArchive = Join-Path $Root "native/quicklook_next_native/src/preview/archive/mod.rs"
 $unsupportedArchives = @($registry.unsupportedArchives)
 foreach ($extension in @($registry.listingOnlyArchives)) {
     if ($extension -in $unsupportedArchives) {
@@ -46,7 +46,7 @@ foreach ($extension in @($registry.listingOnlyArchives)) {
     }
     Require-Pattern $fallbackPath ([regex]::Escape('"' + $extension + '"')) `
         "Managed fallback probe omits listing-only archive $extension."
-    Require-Pattern $nativePreview ([regex]::Escape('"' + $extension + '"')) `
+    Require-Pattern $nativeArchive ([regex]::Escape('"' + $extension + '"')) `
         "Native archive routing omits listing-only archive $extension."
 }
 Require-Pattern (Join-Path $Root "native/quicklook_next_native/src/rar_listing.rs") `
