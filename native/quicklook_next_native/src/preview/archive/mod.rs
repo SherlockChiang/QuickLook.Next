@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 mod extract;
@@ -9,6 +10,41 @@ pub(crate) use extract::{
 };
 pub(super) use listing::render_zip_archive_from_zip;
 pub(crate) use listing::{is_archive, render_archive, render_archive_reader};
+
+pub(crate) const MAX_ARCHIVE_ENTRIES: usize = 5000;
+pub(crate) const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
+pub(crate) type ArchiveListingEntry = (String, String, bool, i64, i64, i64, bool);
+
+pub(crate) fn add_parent_folders(path: &str, entries: &mut BTreeMap<String, ArchiveListingEntry>) {
+    let mut start = 0;
+    while let Some(idx) = path[start..].find('/') {
+        let full_idx = start + idx;
+        if entries.len() >= MAX_ARCHIVE_ENTRIES {
+            return;
+        }
+        let folder_path = format!("{}/", &path[..full_idx]);
+        if !entries.contains_key(&folder_path) {
+            let name = path[..full_idx]
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            entries.insert(
+                folder_path.clone(),
+                (name, parent_of(&folder_path), true, 0, 0, 0, false),
+            );
+        }
+        start = full_idx + 1;
+    }
+}
+
+pub(crate) fn parent_of(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(idx) => trimmed[..idx + 1].to_string(),
+        None => String::new(),
+    }
+}
 
 const MAX_RAR_RETAINED_PATH_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_ARCHIVE_HANDLE_INPUT_BYTES: u64 = 16 * 1024 * 1024 * 1024 * 1024;

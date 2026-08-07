@@ -1,5 +1,7 @@
 //! EPUB, FictionBook, and binary ebook preview parsing.
 
+use std::collections::BTreeMap;
+
 use super::*;
 
 // ── Ebook preview ───────────────────────────────────────────────────────────

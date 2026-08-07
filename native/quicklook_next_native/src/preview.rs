@@ -3,7 +3,6 @@
 //! These replace the equivalent .NET plugins with pure-Rust implementations callable directly
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -41,9 +40,10 @@ use archive::render_zip_archive_from_zip;
 #[cfg(test)]
 use archive::MAX_ARCHIVE_ZIP_ENTRIES;
 pub(crate) use archive::{
-    discard_archive_extract_path, extract_archive_entry_to_temp,
+    add_parent_folders, discard_archive_extract_path, extract_archive_entry_to_temp,
     extract_archive_entry_to_temp_reader, extract_archive_entry_to_writer_reader, is_archive,
-    render_archive, render_archive_reader, MAX_ARCHIVE_EXTRACT_BYTES,
+    parent_of, render_archive, render_archive_reader, ArchiveListingEntry, MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_EXTRACT_BYTES, MAX_ARCHIVE_SCAN_ENTRIES,
 };
 use common::{
     format_bytes, format_number, format_timestamp, read_c_string, read_i32_endian, read_u16,
@@ -682,43 +682,9 @@ fn base_info_text(filename: &str, kind: &str, size: i64, modified_unix: i64) -> 
 
 // ── Archive preview ──────────────────────────────────────────────────────────
 
-const MAX_ARCHIVE_ENTRIES: usize = 5000;
-const MAX_ARCHIVE_SCAN_ENTRIES: usize = 10_000;
 const MAX_ZIP_CENTRAL_DIRECTORY_BYTES: u64 = 32 * 1024 * 1024;
 const ZIP_EOCD_MIN_BYTES: u64 = 22;
 const ZIP_EOCD_MAX_TAIL_BYTES: u64 = ZIP_EOCD_MIN_BYTES + u16::MAX as u64;
-type ArchiveListingEntry = (String, String, bool, i64, i64, i64, bool);
-
-fn add_parent_folders(path: &str, entries: &mut BTreeMap<String, ArchiveListingEntry>) {
-    let mut start = 0;
-    while let Some(idx) = path[start..].find('/') {
-        let full_idx = start + idx;
-        if entries.len() >= MAX_ARCHIVE_ENTRIES {
-            return;
-        }
-        let folder_path = format!("{}/", &path[..full_idx]);
-        if !entries.contains_key(&folder_path) {
-            let name = path[..full_idx]
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            entries.insert(
-                folder_path.clone(),
-                (name, parent_of(&folder_path), true, 0, 0, 0, false),
-            );
-        }
-        start = full_idx + 1;
-    }
-}
-
-fn parent_of(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
-    match trimmed.rfind('/') {
-        Some(idx) => trimmed[..idx + 1].to_string(),
-        None => String::new(),
-    }
-}
 
 fn prepare_seekable_reader<R: Seek>(
     reader: &mut R,
