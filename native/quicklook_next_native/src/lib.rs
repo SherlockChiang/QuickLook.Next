@@ -106,6 +106,7 @@ const QL_FEATURE_HANDLE_IMAGE_WAVEFORM: u64 = 1 << 17;
 const QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT: u64 = 1 << 18;
 const QL_FEATURE_HANDLE_IMAGE_METADATA: u64 = 1 << 19;
 const QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT: u64 = 1 << 20;
+const QL_FEATURE_HANDLE_MAIL: u64 = 1 << 21;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -146,6 +147,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT
         | QL_FEATURE_HANDLE_IMAGE_METADATA
         | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT
+        | QL_FEATURE_HANDLE_MAIL
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -4858,6 +4860,46 @@ pub unsafe extern "C" fn ql_preview_torrent_handle(
     })
 }
 
+/// Render bounded RFC 5322 or Outlook MSG metadata from a borrowed Windows file handle.
+///
+/// # Safety
+/// The pointer, buffer, lifetime, and ownership requirements are identical to
+/// `ql_preview_text_handle`.
+#[no_mangle]
+pub unsafe extern "C" fn ql_preview_mail_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, logical_name, _, modified_unix| {
+                preview::render_mail_reader(
+                    file,
+                    logical_name,
+                    expected_length,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
 /// Render an archive listing from a borrowed Windows file handle.
 ///
 /// Package formats intentionally remain on the legacy path pipeline. The returned archive listing
@@ -5790,6 +5832,7 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT;
     let required = required | QL_FEATURE_HANDLE_IMAGE_METADATA;
     let required = required | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT;
+    let required = required | QL_FEATURE_HANDLE_MAIL;
     assert_eq!(ql_capabilities() & required, required);
 }
 
@@ -5946,6 +5989,31 @@ mod handle_v2_tests {
     ) -> i32 {
         unsafe {
             ql_preview_torrent_handle(
+                source_handle,
+                expected_length,
+                logical_name_utf8,
+                logical_name_len,
+                out_buf,
+                out_cap,
+                out_required,
+                cancel_cb,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn call_mail_handle(
+        source_handle: isize,
+        expected_length: u64,
+        logical_name_utf8: *const u8,
+        logical_name_len: usize,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_required: *mut usize,
+        cancel_cb: Option<CancelCallback>,
+    ) -> i32 {
+        unsafe {
+            ql_preview_mail_handle(
                 source_handle,
                 expected_length,
                 logical_name_utf8,
@@ -7204,6 +7272,58 @@ mod handle_v2_tests {
         assert_eq!(required, 0);
         drop(malformed_file);
         let _ = fs::remove_file(malformed_path);
+    }
+
+    #[test]
+    fn mail_handle_preview_uses_pinned_bytes_without_moving_caller_position() {
+        let mail = b"From: sender@example.test\r\nSubject: Pinned Outlook message\r\n\r\nbody";
+        let (path, mut file) = create_input("bin", mail);
+        file.seek(SeekFrom::Start(9)).expect("position mail handle");
+        let position = file.stream_position().unwrap();
+        let logical_path = r"C:\missing\logical.eml";
+
+        let json = preview_json_with(call_mail_handle, &file, logical_path);
+
+        assert_eq!(json["kind"], "mail");
+        assert!(json["text"]
+            .as_str()
+            .unwrap()
+            .contains("Subject: Pinned Outlook message"));
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let logical_name = b"logical.eml";
+        let mut required = usize::MAX;
+        assert_eq!(
+            call_mail_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len() + 1,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_LENGTH_MISMATCH
+        );
+        assert_eq!(required, 0);
+        assert_eq!(
+            call_mail_handle(
+                file.as_raw_handle() as isize,
+                file.metadata().unwrap().len(),
+                logical_name.as_ptr(),
+                logical_name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                Some(always_cancel),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+
+        drop(file);
+        let _ = fs::remove_file(path);
     }
 
     #[test]

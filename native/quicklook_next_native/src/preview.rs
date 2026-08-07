@@ -77,6 +77,7 @@ use image_metadata::{
 use image_metadata::{
     parse_jpeg_exif_metadata, parse_jpeg_exif_metadata_from_bytes, parse_tiff_exif_metadata,
 };
+pub(crate) use mail::render_mail_reader;
 use office::{render_docx, render_odf, render_pptx, render_xlsx};
 pub(crate) use package::{
     extract_package_icon_bgra, extract_package_icon_bgra_reader, render_package_reader,

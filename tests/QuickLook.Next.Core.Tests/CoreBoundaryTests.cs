@@ -112,6 +112,7 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("torrent")]
     [InlineData("certificate")]
     [InlineData("database")]
+    [InlineData("mail")]
     public void Parser_host_policy_accepts_registered_kinds(string kind)
         => Assert.True(PreviewFormatPolicy.UsesParserHost(kind));
 
@@ -137,11 +138,13 @@ public sealed class CoreBoundaryTests : IDisposable
     [InlineData("office")]
     [InlineData("package")]
     [InlineData("image")]
+    [InlineData("mail")]
     public void Cloud_parser_host_policy_rejects_unbounded_or_raster_kinds(string kind)
         => Assert.False(PreviewFormatPolicy.UsesCloudParserHost(kind));
 
     [Theory]
     [InlineData("archive", false, false, PreviewRoute.ParserHost)]
+    [InlineData("mail", false, false, PreviewRoute.ParserHost)]
     [InlineData("text", true, false, PreviewRoute.ParserHost)]
     [InlineData("archive", true, false, PreviewRoute.CloudMetadata)]
     [InlineData("unknown", true, false, PreviewRoute.CloudMetadata)]
@@ -221,6 +224,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1UL << 18, NativeAbi.HandleArchiveEntryOutput);
         Assert.Equal(1UL << 19, NativeAbi.HandleImageMetadata);
         Assert.Equal(1UL << 20, NativeAbi.DirectGifAnimationOutput);
+        Assert.Equal(1UL << 21, NativeAbi.HandleMail);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
@@ -233,7 +237,8 @@ public sealed class CoreBoundaryTests : IDisposable
                 | NativeAbi.HandleArchiveEntryOutput
                 | NativeAbi.HandlePackage
                 | NativeAbi.HandlePackageIcon
-                | NativeAbi.HandleOfficeLayoutImage,
+                | NativeAbi.HandleOfficeLayoutImage
+                | NativeAbi.HandleMail,
             NativeAbi.ParserHandleInputs);
         Assert.Equal(
             NativeAbi.HandleStaticImage | NativeAbi.HandleSvg | NativeAbi.HandleGif | NativeAbi.HandleRasterImage,

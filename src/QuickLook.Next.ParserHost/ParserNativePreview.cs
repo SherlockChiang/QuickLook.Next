@@ -123,6 +123,16 @@ internal static class ParserNativePreview
         nuint outCap,
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_preview_mail_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_sqlite_handles(
@@ -263,7 +273,9 @@ internal static class ParserNativePreview
             ? ql_preview_office
             : ql_preview_archive;
         byte[] pathBytes = Encoding.UTF8.GetBytes(path);
-        byte[]? infoKindBytes = kind.Equals("database", StringComparison.OrdinalIgnoreCase)
+        bool isDatabase = kind.Equals("database", StringComparison.OrdinalIgnoreCase);
+        bool isMail = kind.Equals("mail", StringComparison.OrdinalIgnoreCase);
+        byte[]? infoKindBytes = isDatabase || isMail
             ? Encoding.UTF8.GetBytes(kind)
             : null;
         NativeCancelCallback cancel = () => cancellationToken.IsCancellationRequested;
@@ -276,7 +288,7 @@ internal static class ParserNativePreview
                 byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
                 try
                 {
-                    int length = infoKindBytes is not null
+                    int length = isDatabase
                         ? ql_preview_database_cancelable(
                             pathBytes,
                             (nuint)pathBytes.Length,
@@ -285,6 +297,16 @@ internal static class ParserNativePreview
                             buffer,
                             (nuint)capacity,
                             cancel)
+                        : isMail
+                            ? ql_preview_info(
+                                pathBytes,
+                                (nuint)pathBytes.Length,
+                                infoKindBytes!,
+                                (nuint)infoKindBytes!.Length,
+                                probe.Size,
+                                probe.ModifiedUnix,
+                                buffer,
+                                (nuint)capacity)
                         : simpleCall is not null
                             ? simpleCall(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel)
                             : call(pathBytes, (nuint)pathBytes.Length, buffer, (nuint)capacity, cancel);
@@ -329,6 +351,7 @@ internal static class ParserNativePreview
             "office" => ql_preview_office_handle,
             "package" => ql_preview_package_handle,
             "ebook" => ql_preview_ebook_handle,
+            "mail" => ql_preview_mail_handle,
             _ => null,
         };
         long maxSourceLength = kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
@@ -499,7 +522,8 @@ internal static class ParserNativePreview
             || kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("office", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("package", StringComparison.OrdinalIgnoreCase)
-            || kind.Equals("ebook", StringComparison.OrdinalIgnoreCase);
+            || kind.Equals("ebook", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("mail", StringComparison.OrdinalIgnoreCase);
 
     public static string DescribeHandleFailure(int status)
         => status switch

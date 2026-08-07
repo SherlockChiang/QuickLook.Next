@@ -24,6 +24,7 @@ public static class NativeAbi
     public const ulong HandleArchiveEntryOutput = 1UL << 18;
     public const ulong HandleImageMetadata = 1UL << 19;
     public const ulong DirectGifAnimationOutput = 1UL << 20;
+    public const ulong HandleMail = 1UL << 21;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable
@@ -36,7 +37,8 @@ public static class NativeAbi
         | HandleArchiveEntryOutput
         | HandlePackage
         | HandlePackageIcon
-        | HandleOfficeLayoutImage;
+        | HandleOfficeLayoutImage
+        | HandleMail;
     public const ulong RasterHandleInputs = HandleStaticImage | HandleSvg | HandleGif | HandleRasterImage;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
     public const int MaxOfficeImageRefUtf8Bytes = 2048;

@@ -768,6 +768,7 @@ public sealed class ParserHostIntegrationTests
     [InlineData("executable", "logical-demo.exe", false)]
     [InlineData("torrent", "logical-demo.torrent", false)]
     [InlineData("torrent", "broken.torrent", true)]
+    [InlineData("mail", "logical-demo.eml", false)]
     public async Task Handle_open_previews_binary_formats_without_an_anchor(
         string kind,
         string logicalName,
@@ -781,6 +782,8 @@ public sealed class ParserHostIntegrationTests
             ? "not-bencode"u8.ToArray()
             : kind == "executable"
             ? CreateMinimalPe()
+            : kind == "mail"
+            ? "From: sender@example.test\r\nSubject: Pinned Outlook integration\r\n\r\nbody"u8.ToArray()
             : "d8:announce16:https://tracker/4:infod6:lengthi123e4:name10:sample.binee"u8.ToArray();
         await File.WriteAllBytesAsync(sourcePath, content);
 
@@ -827,6 +830,11 @@ public sealed class ParserHostIntegrationTests
                 {
                     Assert.Equal("logical-demo.exe - x64", ready.Title);
                     Assert.Contains("Machine: x64", ready.TextContent);
+                }
+                else if (kind == "mail")
+                {
+                    Assert.Contains("Subject: Pinned Outlook integration", ready.TextContent);
+                    Assert.Contains("From: sender@example.test", ready.TextContent);
                 }
                 else
                 {
