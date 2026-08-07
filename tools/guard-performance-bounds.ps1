@@ -35,6 +35,10 @@ $nativeArchiveListing = Join-Path $Root "native/quicklook_next_native/src/previe
 $nativeArchiveListingTests = Join-Path $Root "native/quicklook_next_native/src/preview/archive/listing/tests.rs"
 $nativeArchiveExtract = Join-Path $Root "native/quicklook_next_native/src/preview/archive/extract.rs"
 $nativeArchiveExtractTests = Join-Path $Root "native/quicklook_next_native/src/preview/archive/extract/tests.rs"
+$nativePackage = Join-Path $Root "native/quicklook_next_native/src/preview/package/mod.rs"
+$nativePackageAndroid = Join-Path $Root "native/quicklook_next_native/src/preview/package/android.rs"
+$nativePackageTests = Join-Path $Root "native/quicklook_next_native/src/preview/package/tests.rs"
+$nativePackageAndroidTests = Join-Path $Root "native/quicklook_next_native/src/preview/package/android/tests.rs"
 $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
 $nativeChmPreview = Join-Path $Root "native/quicklook_next_native/src/preview/chm.rs"
 $nativeChmTests = Join-Path $Root "native/quicklook_next_native/src/preview/chm/tests.rs"
@@ -76,6 +80,10 @@ $nativeArchiveListingText = Get-Content -LiteralPath $nativeArchiveListing -Raw
 $nativeArchiveListingTestsText = Get-Content -LiteralPath $nativeArchiveListingTests -Raw
 $nativeArchiveExtractText = Get-Content -LiteralPath $nativeArchiveExtract -Raw
 $nativeArchiveExtractTestsText = Get-Content -LiteralPath $nativeArchiveExtractTests -Raw
+$nativePackageText = Get-Content -LiteralPath $nativePackage -Raw
+$nativePackageAndroidText = Get-Content -LiteralPath $nativePackageAndroid -Raw
+$nativePackageTestsText = Get-Content -LiteralPath $nativePackageTests -Raw
+$nativePackageAndroidTestsText = Get-Content -LiteralPath $nativePackageAndroidTests -Raw
 Require-Pattern $nativeChmPreview 'MAX_CHM_HEADER_BYTES:\s*usize\s*=\s*8\s*\*\s*1024[\s\S]*MAX_CHM_DIRECTORY_ENTRIES:\s*usize\s*=\s*12[\s\S]*MAX_CHM_ENTRY_NAME_BYTES:\s*usize\s*=\s*260[\s\S]*MAX_CHM_COMPRESSED_STREAM_SCAN:\s*usize\s*=\s*32[\s\S]*MAX_CHM_COMPRESSED_STREAMS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_SYSTEM_STREAM_BYTES:\s*usize\s*=\s*4\s*\*\s*1024[\s\S]*MAX_CHM_SYSTEM_FIELDS:\s*usize\s*=\s*8[\s\S]*MAX_CHM_ENCINT_BYTES:\s*usize\s*=\s*8' `
     "CHM prefixes, directory entries, names, compressed streams, system metadata, and ENCINTs must keep explicit budgets."
 Require-Pattern $nativeChmPreview 'read_file_prefix\(path,\s*MAX_CHM_HEADER_BYTES\)[\s\S]*entries\.len\(\)\s*<\s*MAX_CHM_DIRECTORY_ENTRIES[\s\S]*name_len\s*>\s*MAX_CHM_ENTRY_NAME_BYTES[\s\S]*entries\.iter\(\)\.take\(MAX_CHM_COMPRESSED_STREAM_SCAN\)[\s\S]*summary\.len\(\)\s*>=\s*MAX_CHM_COMPRESSED_STREAMS' `
@@ -715,7 +723,8 @@ $nativeArchiveExtractText = Get-Content -LiteralPath $nativeArchiveExtract -Raw
 $nativeArchiveTestsText = (Get-Content -LiteralPath $nativeArchiveListingTests -Raw) + "`n" +
     (Get-Content -LiteralPath $nativeArchiveExtractTests -Raw)
 $nativePreviewAndEbookText = $nativePreviewText + "`n" + $nativeEbookPreviewText + "`n" +
-    $nativeArchiveListingText + "`n" + $nativeArchiveExtractText
+    $nativeArchiveListingText + "`n" + $nativeArchiveExtractText + "`n" +
+    $nativePackageText + "`n" + $nativePackageAndroidText
 if ($nativePreviewAndEbookText -match 'fs::File::open\(\s*&?\s*logical_name\b' -or
     $nativePreviewAndEbookText -match 'render_archive\(\s*&?\s*logical_name\b') {
     $failures.Add("Logical HANDLE names must never be reopened as paths or sent to the EPUB archive fallback.")
@@ -759,42 +768,40 @@ Require-TextPattern $nativeDatabaseText 'text_encoding\s*=\s*read_u32_be\(bytes,
     "SQLite schema text must honor the database header encoding."
 Require-TextPattern $nativeDatabaseText 'count_sqlite_table_rows\([\s\S]*while let Some\(page_no\)[\s\S]*preview_cancelled\(cancel_cb\)' `
     "SQLite row traversal must remain cancelable between pages."
-Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024' `
-    "Android resource table decoding must retain its 32 MiB input cap."
+Require-Pattern $nativePackage 'MAX_APPX_MANIFEST_BYTES:\s*u64\s*=\s*2\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_PACKAGE_ICON_BYTES:\s*u64\s*=\s*8\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_PACKAGE_HANDLE_INPUT_BYTES:\s*u64\s*=\s*256\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_PACKAGE_ZIP_ENTRIES:\s*u64\s*=\s*100_000' `
+    "Package metadata, icon, HANDLE input, and ZIP entry budgets must remain explicit."
+Require-Pattern $nativePackage 'MAX_ANDROID_RESOURCE_TABLE_BYTES:\s*u64\s*=\s*32\s*\*\s*1024\s*\*\s*1024[\s\S]*MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS:\s*usize\s*=\s*64' `
+    "Android resource table and aggregate drawable-decode budgets must remain explicit."
 Require-Pattern $nativePreview 'MAX_EMBEDDED_IMAGE_DIMENSION:\s*u32\s*=\s*8192' `
     "Embedded Office/package images must retain an 8192-pixel dimension cap."
 Require-Pattern $nativePreview 'MAX_EMBEDDED_IMAGE_PIXELS:\s*u64\s*=\s*16_000_000' `
     "Embedded Office/package images must remain capped at 16 million source pixels."
 Require-Pattern $nativePreview 'fn\s+load_bounded_embedded_image[\s\S]*into_dimensions\(\)[\s\S]*MAX_EMBEDDED_IMAGE_PIXELS[\s\S]*image::load_from_memory' `
     "Embedded Office/package images must validate dimensions before full pixel decode."
-Require-Pattern $nativePreview 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
+Require-Pattern $nativePackage 'extract_android_package_icon\(&mut zip, cancel_cb\)' `
     "APK icon extraction must resolve manifest-directed Android resources before heuristic images."
-Require-Pattern $nativePreview '0x04\s*=>\s*Some\(f32::from_bits\(data\)\.to_string\(\)\)' `
+Require-Pattern $nativePackageAndroid '0x04\s*=>\s*Some\(f32::from_bits\(data\)\.to_string\(\)\)' `
     "Binary Android vector dimensions and transforms must decode TYPE_FLOAT values."
-Require-Pattern $nativePreview 'android_svg_group_start\(&e\)' `
+Require-Pattern $nativePackageAndroid 'android_svg_group_start\(&e\)' `
     "Android vector foreground rendering must preserve nested group transforms."
-Require-Pattern $nativePreview 'mask_android_adaptive_icon\(canvas\)' `
+Require-Pattern $nativePackageAndroid 'mask_android_adaptive_icon\(canvas\)' `
     "Adaptive Android icons must crop their motion-safe perimeter and mask the background."
-Require-Pattern $nativePreview 'depth\s*>\s*6' `
+Require-Pattern $nativePackageAndroid 'depth\s*>\s*6' `
     "Recursive Android drawable resolution must retain its depth bound."
-Require-Pattern $nativePreview 'MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS:\s*usize\s*=\s*64' `
+Require-Pattern $nativePackageAndroid 'MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS' `
     "Android drawable resolution must retain its aggregate decode-attempt budget."
-Require-Pattern $nativePreview 'candidates\.len\(\)\s*>=\s*256' `
+Require-Pattern $nativePackage 'candidates\.len\(\)\s*>=\s*256' `
     "Package icon fallback collection must remain bounded."
-$packagePreviewStart = $nativePreviewText.IndexOf("pub fn render_package_reader<", [StringComparison]::Ordinal)
-$packagePreviewEnd = $nativePreviewText.IndexOf("pub fn extract_package_icon_bgra(", [StringComparison]::Ordinal)
-$packagePreviewReader = if ($packagePreviewStart -ge 0 -and $packagePreviewEnd -gt $packagePreviewStart) {
-    $nativePreviewText.Substring($packagePreviewStart, $packagePreviewEnd - $packagePreviewStart)
-} else { "" }
-Require-TextPattern $packagePreviewReader 'MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\(' `
+Require-Pattern $nativePackage 'render_package_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_PACKAGE_ZIP_ENTRIES' `
     "Package HANDLE previews must retain source and validated ZIP bounds."
-$packageIconStart = $nativePreviewText.IndexOf("pub fn extract_package_icon_bgra_reader<", [StringComparison]::Ordinal)
-$packageIconEnd = $nativePreviewText.IndexOf("fn package_zip_read_error(", [StringComparison]::Ordinal)
-$packageIconReader = if ($packageIconStart -ge 0 -and $packageIconEnd -gt $packageIconStart) {
-    $nativePreviewText.Substring($packageIconStart, $packageIconEnd - $packageIconStart)
-} else { "" }
-Require-TextPattern $packageIconReader 'MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\(' `
+Require-Pattern $nativePackage 'extract_package_icon_bgra_reader<R:\s*Read\s*\+\s*Seek>[\s\S]*source_len\s*>\s*MAX_PACKAGE_HANDLE_INPUT_BYTES[\s\S]*open_validated_zip\([\s\S]*MAX_PACKAGE_ZIP_ENTRIES' `
     "Package icon HANDLE extraction must retain source and validated ZIP bounds."
+Require-Pattern $nativePackage 'for\s+i\s+in\s+0\.\.zip\.len\(\)\.min\(MAX_ARCHIVE_SCAN_ENTRIES\)[\s\S]*preview_cancelled\(cancel_cb\)[\s\S]*candidates\.len\(\)\s*>=\s*256' `
+    "Package icon candidate scans must remain bounded and cancellable."
+Require-Pattern $nativePackageTests 'fn\s+package_icon_candidates_accept_arbitrary_android_mipmap_names\([\s\S]*fn\s+package_icon_resolves_manifest_adaptive_icon_layers\(' `
+    "Package icon tests must retain arbitrary Android candidate and manifest-directed adaptive-icon coverage."
+Require-Pattern $nativePackageAndroidTests 'fn\s+android_resource_table_resolves_obfuscated_icon_path\([\s\S]*fn\s+android_vector_groups_render_transformed_foreground\([\s\S]*fn\s+android_adaptive_icon_crops_safe_zone_and_masks_background\(' `
+    "Android package tests must retain resource-table, vector-transform, and adaptive-mask coverage."
 
 $textPresenter = Join-Path $Root "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 $markdownViewportPolicy = Join-Path $Root "src/QuickLook.Next.Core/MarkdownViewportPolicy.cs"

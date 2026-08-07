@@ -45,6 +45,10 @@ $archiveListingPath = Join-Path $Root "native\quicklook_next_native\src\preview\
 $archiveListingTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\listing\tests.rs"
 $archiveExtractPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract.rs"
 $archiveExtractTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract\tests.rs"
+$packagePath = Join-Path $Root "native\quicklook_next_native\src\preview\package\mod.rs"
+$packageAndroidPath = Join-Path $Root "native\quicklook_next_native\src\preview\package\android.rs"
+$packageTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\package\tests.rs"
+$packageAndroidTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\package\android\tests.rs"
 $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
@@ -86,7 +90,11 @@ foreach ($path in @(
         $archiveListingPath,
         $archiveListingTestsPath,
         $archiveExtractPath,
-        $archiveExtractTestsPath)) {
+        $archiveExtractTestsPath,
+        $packagePath,
+        $packageAndroidPath,
+        $packageTestsPath,
+        $packageAndroidTestsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $failures.Add("Missing Rust module boundary source: $path")
     }
@@ -132,6 +140,10 @@ if ($failures.Count -eq 0) {
     $archiveListingTestsText = Get-Content -LiteralPath $archiveListingTestsPath -Raw
     $archiveExtractText = Get-Content -LiteralPath $archiveExtractPath -Raw
     $archiveExtractTestsText = Get-Content -LiteralPath $archiveExtractTestsPath -Raw
+    $packageText = Get-Content -LiteralPath $packagePath -Raw
+    $packageAndroidText = Get-Content -LiteralPath $packageAndroidPath -Raw
+    $packageTestsText = Get-Content -LiteralPath $packageTestsPath -Raw
+    $packageAndroidTestsText = Get-Content -LiteralPath $packageAndroidTestsPath -Raw
 
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
@@ -1049,6 +1061,135 @@ if ($failures.Count -eq 0) {
     $archiveExtractTestsLineCount = @(Get-Content -LiteralPath $archiveExtractTestsPath).Count
     if ($archiveExtractTestsLineCount -gt 220) {
         $failures.Add("The focused archive extraction tests grew beyond 220 lines: $archiveExtractTestsLineCount")
+    }
+
+    if ($previewText -notmatch '(?m)^mod package;\s*$' -or
+        $previewText -notmatch '(?m)^use package::\{is_package_path, render_package\};\s*$' -or
+        $previewText -notmatch '(?m)^pub\(crate\) use package::\{[\s\S]*render_package_reader') {
+        $failures.Add(
+            "Package composition must expose an explicit package/android module and thin parent routing.")
+    }
+
+    foreach ($forbiddenPackageParent in @(
+            'fn\s+is_package_path\s*\(',
+            'fn\s+render_package\s*\(',
+            'fn\s+render_package_reader\s*\(',
+            'struct\s+AppxManifestSummary',
+            'fn\s+parse_appx_manifest_summary\s*\(',
+            'fn\s+extract_package_icon_bgra\s*\(',
+            'fn\s+extract_package_icon_bgra_reader\s*\(',
+            'fn\s+extract_android_package_icon\s*\(',
+            'fn\s+read_zip_bytes\s*\(',
+            'fn\s+read_package_zip_bytes\s*\(',
+            'fn\s+package_zip_read_error\s*\(',
+            'fn\s+decode_android_xml\s*\(',
+            'fn\s+decode_android_binary_xml\s*\(',
+            'fn\s+android_\w+\s*\(',
+            'fn\s+parse_android_\w+\s*\(',
+            'fn\s+resolve_android_\w+\s*\(',
+            'fn\s+collect_android_\w+\s*\(',
+            'enum\s+AndroidResourceValue',
+            'struct\s+AndroidTypeChunk',
+            'fn\s+render_android_\w+\s*\(',
+            'fn\s+mask_android_\w+\s*\(',
+            'MAX_APPX_MANIFEST_BYTES',
+            'MAX_PACKAGE_ICON_BYTES',
+            'MAX_PACKAGE_HANDLE_INPUT_BYTES',
+            'MAX_PACKAGE_ZIP_ENTRIES',
+            'MAX_ANDROID_RESOURCE_TABLE_BYTES',
+            'MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS')) {
+        if ($previewText -match $forbiddenPackageParent) {
+            $failures.Add(
+                "preview.rs must not regain package/Android implementation detail: $forbiddenPackageParent")
+        }
+    }
+
+    foreach ($packageModule in @(
+            $packageText,
+            $packageAndroidText,
+            $packageTestsText,
+            $packageAndroidTestsText)) {
+        if ($packageModule -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+            $packageModule -match '#\[no_mangle\]' -or
+            $packageModule -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
+            $failures.Add(
+                "Package and Android modules must use explicit imports and must not own a public C ABI surface.")
+        }
+    }
+
+    foreach ($requiredPackage in @(
+            '(?m)^mod android;\s*$',
+            'pub\(super\) fn is_package_path\(',
+            'pub\(super\) fn render_package\(',
+            'pub\(crate\) fn render_package_reader(?:<[^>]+>)?\(',
+            'pub\(crate\) fn extract_package_icon_bgra\(',
+            'pub\(crate\) fn extract_package_icon_bgra_reader(?:<[^>]+>)?\(',
+            'parse_appx_manifest_summary\(',
+            'read_package_zip_bytes\(',
+            'package_icon_candidate_score\(',
+            'open_validated_zip\(',
+            'MAX_PACKAGE_HANDLE_INPUT_BYTES',
+            'MAX_PACKAGE_ZIP_ENTRIES')) {
+        if ($packageText -notmatch $requiredPackage) {
+            $failures.Add("Package module lost a bounded metadata/icon invariant: $requiredPackage")
+        }
+    }
+
+    foreach ($requiredAndroid in @(
+            'pub\(super\) fn extract_android_package_icon(?:<[^>]+>)?\(',
+            'fn\s+decode_android_binary_xml\(',
+            'fn\s+resolve_android_resource_values\(',
+            'fn\s+render_android_vector\(',
+            'fn\s+mask_android_adaptive_icon\(',
+            'MAX_ANDROID_RESOURCE_TABLE_BYTES',
+            'MAX_ANDROID_RESOURCE_DECODE_ATTEMPTS',
+            'MAX_ARCHIVE_SCAN_ENTRIES',
+            'preview_cancelled\(cancel_cb\)')) {
+        if ($packageAndroidText -notmatch $requiredAndroid) {
+            $failures.Add("Android package module lost a bounded resource/icon invariant: $requiredAndroid")
+        }
+    }
+
+    foreach ($requiredPackageTest in @(
+            'fn\s+package_icon_candidates_accept_arbitrary_android_mipmap_names\(',
+            'fn\s+package_icon_resolves_manifest_adaptive_icon_layers\(')) {
+        if ($packageTestsText -notmatch $requiredPackageTest) {
+            $failures.Add("Package tests lost metadata/icon candidate coverage: $requiredPackageTest")
+        }
+    }
+    foreach ($requiredAndroidTest in @(
+            'fn\s+android_resource_table_resolves_obfuscated_icon_path\(',
+            'fn\s+android_vector_groups_render_transformed_foreground\(',
+            'fn\s+android_adaptive_icon_crops_safe_zone_and_masks_background\(')) {
+        if ($packageAndroidTestsText -notmatch $requiredAndroidTest) {
+            $failures.Add("Android tests lost resource-table/vector/adaptive-icon coverage: $requiredAndroidTest")
+        }
+    }
+    if ($previewText -match 'package_icon_candidates_accept_arbitrary_android_mipmap_names|package_icon_resolves_manifest_adaptive_icon_layers|android_resource_table_resolves_obfuscated_icon_path|android_vector_groups_render_transformed_foreground|android_adaptive_icon_crops_safe_zone_and_masks_background') {
+        $failures.Add("Package and Android implementation tests must not drift back into preview.rs.")
+    }
+
+    $packageExports = [regex]::Matches($packageText, '(?m)^pub(?:\([^)]+\))?\s+')
+    $packageAndroidExports = [regex]::Matches($packageAndroidText, '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($packageExports.Count -ne 8 -or $packageAndroidExports.Count -ne 1) {
+        $failures.Add("Package module exports changed: package=$($packageExports.Count), android=$($packageAndroidExports.Count).")
+    }
+
+    $packageLineCount = @(Get-Content -LiteralPath $packagePath).Count
+    if ($packageLineCount -gt 650) {
+        $failures.Add("The bounded package module grew beyond 650 lines: $packageLineCount")
+    }
+    $packageAndroidLineCount = @(Get-Content -LiteralPath $packageAndroidPath).Count
+    if ($packageAndroidLineCount -gt 920) {
+        $failures.Add("The bounded Android package module grew beyond 920 lines: $packageAndroidLineCount")
+    }
+    $packageTestsLineCount = @(Get-Content -LiteralPath $packageTestsPath).Count
+    if ($packageTestsLineCount -gt 180) {
+        $failures.Add("The focused package tests grew beyond 180 lines: $packageTestsLineCount")
+    }
+    $packageAndroidTestsLineCount = @(Get-Content -LiteralPath $packageAndroidTestsPath).Count
+    if ($packageAndroidTestsLineCount -gt 180) {
+        $failures.Add("The focused Android package tests grew beyond 180 lines: $packageAndroidTestsLineCount")
     }
 
     if ($previewText -match 'fn\s+(?:format_timestamp|days_to_date)\s*\(' -or
