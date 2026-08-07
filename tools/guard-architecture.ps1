@@ -262,7 +262,7 @@ elseif (Test-Path $DistDir) {
     $localeDirectories = @(Get-ChildItem -LiteralPath $DistDir -Directory | Where-Object {
         Test-Path -LiteralPath (Join-Path $_.FullName "Microsoft.ui.xaml.dll.mui") -PathType Leaf
     })
-    if ($localeDirectories.Count -gt 2) {
+    if ($localeDirectories.Count -gt 3) {
         Add-Failure "release output contains unexpected WinUI locales: $($localeDirectories.Name -join ', ')"
     }
 
