@@ -99,7 +99,10 @@ public sealed class RasterHostPdfTests
                 return host.HandleCount <= baselineHandles + handleRecoveryBudget
                     && host.PrivateMemorySize64 <= baselinePrivateBytes + privateByteRecoveryBudget;
             }, timeout.Token);
-            await Task.Delay(TimeSpan.FromSeconds(5), timeout.Token);
+            // Hosted Windows runners can spend several seconds inside the blocking LOH compaction
+            // triggered by idle trim. Keep the observation window separate from the one-second trigger
+            // so pipe shutdown cannot overlap the timer callback and native graphics cleanup.
+            await Task.Delay(TimeSpan.FromSeconds(15), timeout.Token);
             Assert.False(host.HasExited, "RasterHost exited while the PDF idle-trim pipe remained connected.");
             Assert.True(peakHandles >= baselineHandles);
             Assert.False(File.Exists(logicalPath));

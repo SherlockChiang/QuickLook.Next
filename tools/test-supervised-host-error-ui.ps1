@@ -289,7 +289,7 @@ else {
 
     $rasterHostPdfTestsText = Get-Content -LiteralPath $rasterHostPdfTestsPath -Raw
     if ($rasterHostPdfTestsText -notmatch
-            'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*Task\.Delay\(TimeSpan\.FromSeconds\(5\)[\s\S]*Assert\.False\(host\.HasExited,[\s\S]*RasterHostProcessTestHelper\.AssertCleanExit') {
+            'Repeated_pdf_sessions_return_page_cache_and_projection_resources_after_idle_trim[\s\S]*Task\.Delay\(TimeSpan\.FromSeconds\(15\)[\s\S]*Assert\.False\(host\.HasExited,[\s\S]*RasterHostProcessTestHelper\.AssertCleanExit') {
         Add-Failure "The PDF idle regression must prove both connected-host survival and a clean terminal exit."
     }
 
