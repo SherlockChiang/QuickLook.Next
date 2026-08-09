@@ -148,22 +148,26 @@ public sealed class RasterHostAnimationTests
             string packetDirectory = Path.Combine(
                 Path.GetTempPath(), "QuickLookNext", "raster-animation", "frames-" + animationRequestId);
             Assert.False(Directory.Exists(packetDirectory));
-            using var closeTimeout =
-                new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await channel.SendAsync(
-                new PreviewAnimationFramesClose(animationRequestId),
-                closeTimeout.Token);
-            await WaitUntilAsync(
-                () => !CanDuplicateSection(host, frames.SectionHandle, checked((int)frames.PacketLength)),
-                closeTimeout.Token);
+            using (var animationCloseTimeout = new CancellationTokenSource(Timeout))
+            {
+                await channel.SendAsync(
+                    new PreviewAnimationFramesClose(animationRequestId),
+                    animationCloseTimeout.Token);
+                await WaitUntilAsync(
+                    () => !CanDuplicateSection(host, frames.SectionHandle, checked((int)frames.PacketLength)),
+                    animationCloseTimeout.Token);
+            }
             Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(frameView.Bytes[..4]));
             Assert.False(Directory.Exists(packetDirectory));
-            await channel.SendAsync(
-                new PreviewClose(previewRequestId),
-                closeTimeout.Token);
-            await WaitUntilAsync(
-                () => TryOverwriteFile(physicalPath),
-                closeTimeout.Token);
+            using (var previewCloseTimeout = new CancellationTokenSource(Timeout))
+            {
+                await channel.SendAsync(
+                    new PreviewClose(previewRequestId),
+                    previewCloseTimeout.Token);
+                await WaitUntilAsync(
+                    () => TryOverwriteFile(physicalPath),
+                    previewCloseTimeout.Token);
+            }
         }
         finally
         {

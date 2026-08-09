@@ -239,12 +239,16 @@ $rasterHostIdleTrimmerPath = Join-Path $Root "src/QuickLook.Next.RasterHost/Idle
 $rasterHostProcessHelperPath = Join-Path $Root (
     "tests/QuickLook.Next.RasterHost.IntegrationTests/" +
     "RasterHostProcessTestHelper.cs")
+$rasterHostAnimationTestsPath = Join-Path $Root (
+    "tests/QuickLook.Next.RasterHost.IntegrationTests/" +
+    "RasterHostAnimationTests.cs")
 $rasterHostPdfTestsPath = Join-Path $Root (
     "tests/QuickLook.Next.RasterHost.IntegrationTests/" +
     "RasterHostPdfTests.cs")
 if (-not (Test-Path -LiteralPath $rasterHostProgramPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $rasterHostIdleTrimmerPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $rasterHostProcessHelperPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $rasterHostAnimationTestsPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $rasterHostPdfTestsPath -PathType Leaf)) {
     Add-Failure "RasterHost terminal-exit source and integration coverage must remain tracked."
 }
@@ -268,13 +272,19 @@ else {
 
     $rasterHostProcessHelperText = Get-Content -LiteralPath $rasterHostProcessHelperPath -Raw
     foreach ($helperRequirement in @(
-            'ExitTimeout\s*=\s*TimeSpan\.FromSeconds\(5\)',
+            'ExitTimeout\s*=\s*TimeSpan\.FromSeconds\(20\)',
             'pipe\.Dispose\(\)[\s\S]*host\.WaitForExitAsync\(\)\.WaitAsync\(ExitTimeout\)',
             'TryKill\(host\)[\s\S]*host\.WaitForExitAsync\(\)\.WaitAsync\(KillTimeout\)',
             'Assert\.True\(\s*exited[\s\S]*Assert\.Equal\(0,\s*host\.ExitCode\)')) {
         if ($rasterHostProcessHelperText -notmatch $helperRequirement) {
             Add-Failure "RasterHost real-process cleanup lost required clean-exit coverage: $helperRequirement"
         }
+    }
+
+    $rasterHostAnimationTestsText = Get-Content -LiteralPath $rasterHostAnimationTestsPath -Raw
+    if ($rasterHostAnimationTestsText -notmatch
+            'Animated_frames_are_section_backed_and_released_on_close[\s\S]*animationCloseTimeout\s*=\s*new CancellationTokenSource\(Timeout\)[\s\S]*PreviewAnimationFramesClose[\s\S]*animationCloseTimeout\.Token[\s\S]*previewCloseTimeout\s*=\s*new CancellationTokenSource\(Timeout\)[\s\S]*PreviewClose[\s\S]*previewCloseTimeout\.Token') {
+        Add-Failure "RasterHost animation and preview cleanup must keep independent bounded test budgets."
     }
 
     $rasterHostPdfTestsText = Get-Content -LiteralPath $rasterHostPdfTestsPath -Raw

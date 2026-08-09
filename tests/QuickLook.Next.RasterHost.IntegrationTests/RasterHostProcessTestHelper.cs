@@ -7,7 +7,9 @@ namespace QuickLook.Next.RasterHost.IntegrationTests;
 
 internal static class RasterHostProcessTestHelper
 {
-    private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(5);
+    // Outlive the host's 5-second terminal-worker drain plus its 12-second PDF render drain.
+    // The exit-code assertion below still rejects either fail-stop path instead of masking it.
+    private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(2);
     private static readonly ConditionalWeakTable<Process, CompletionState> CompletionStates = new();
 
