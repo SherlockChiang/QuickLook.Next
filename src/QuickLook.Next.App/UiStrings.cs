@@ -42,6 +42,7 @@ internal static class UiStrings
     public static string DownloadingCloudFileFormat => Get(nameof(DownloadingCloudFileFormat));
     public static string DownloadingCloudFileProgressFormat => Get(nameof(DownloadingCloudFileProgressFormat));
     public static string DownloadingCloudFileBytesFormat => Get(nameof(DownloadingCloudFileBytesFormat));
+    public static string CloudProgressAccessibleName => Get(nameof(CloudProgressAccessibleName));
     public static string CloudDownloadConsentTitle => Get(nameof(CloudDownloadConsentTitle));
     public static string CloudDownloadConsentMessageFormat => Get(nameof(CloudDownloadConsentMessageFormat));
     public static string DownloadForPreview => Get(nameof(DownloadForPreview));

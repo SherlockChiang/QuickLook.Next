@@ -1977,6 +1977,10 @@ $textSearchContractTest = Join-Path $PSScriptRoot "test-text-search-contract.ps1
 Invoke-CheckedScript -Path $textSearchContractTest -Arguments @{ Root = $Root } `
     -FailureMessage "Text-search contract guard failed"
 
+$cloudProgressUiTest = Join-Path $PSScriptRoot "test-cloud-progress-ui.ps1"
+Invoke-CheckedScript -Path $cloudProgressUiTest -Arguments @{ Root = $Root } `
+    -FailureMessage "CloudProgress UI guard failed"
+
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
 Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "MSIX version tests failed"

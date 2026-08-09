@@ -588,6 +588,9 @@
   <data name="DownloadingCloudFileBytesFormat" xml:space="preserve">
     <value>正在下載 {0}：{1}</value>
   </data>
+  <data name="CloudProgressAccessibleName" xml:space="preserve">
+    <value>雲端下載進度</value>
+  </data>
   <data name="CloudDownloadConsentTitle" xml:space="preserve">
     <value>要下載雲端檔案以進行預覽嗎？</value>
   </data>

@@ -228,6 +228,8 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         TextSearchBox.PlaceholderText = UiStrings.TextSearchPlaceholder;
+        AutomationProperties.SetName(CloudProgressPanel, UiStrings.CloudProgressAccessibleName);
+        AutomationProperties.SetName(CloudProgressBar, UiStrings.CloudProgressAccessibleName);
         AutomationProperties.SetName(TextSearchBox, UiStrings.TextSearchAccessibleName);
         AutomationProperties.SetName(TextSearchPreviousButton, UiStrings.TextSearchPreviousMatch);
         AutomationProperties.SetName(TextSearchNextButton, UiStrings.TextSearchNextMatch);
@@ -795,7 +797,7 @@ public sealed partial class MainWindow : Window
                     return;
                 }
                 if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
-                StatusText.Text = UiStrings.Format(UiStrings.DownloadingCloudFileFormat, System.IO.Path.GetFileName(path));
+                ShowCloudProgress(path);
                 RevealPreviewWindow(activate: false, finalContent: false);
                 DiagLog.Write("App", $"cloud placeholder detected gen={generation}; path={path}");
                 CloudHydrationResult hydration = await HydrateCloudFileAsync(
@@ -1666,17 +1668,7 @@ public sealed partial class MainWindow : Window
             if (Volatile.Read(ref progressActive) == 0
                 || !IsPreviewGenerationCurrent(generation, cancellationToken))
                 return;
-            StatusText.Text = value.Length > 0
-                ? UiStrings.Format(
-                    UiStrings.DownloadingCloudFileProgressFormat,
-                    Path.GetFileName(path),
-                    CloudHydrationPolicy.ProgressPercent(value.Downloaded, value.Length),
-                    FormatBytes(value.Downloaded),
-                    FormatBytes(value.Length))
-                : UiStrings.Format(
-                    UiStrings.DownloadingCloudFileBytesFormat,
-                    Path.GetFileName(path),
-                    FormatBytes(value.Downloaded));
+            UpdateCloudProgress(path, value.Downloaded, value.Length);
         });
         try
         {
@@ -1730,7 +1722,57 @@ public sealed partial class MainWindow : Window
         finally
         {
             Interlocked.Exchange(ref progressActive, 0);
+            if (IsPreviewGenerationCurrent(generation, cancellationToken))
+                ResetCloudProgressUi();
         }
+    }
+
+    private void ShowCloudProgress(string path)
+    {
+        string message = UiStrings.Format(
+            UiStrings.DownloadingCloudFileFormat,
+            Path.GetFileName(path));
+        StatusText.Text = message;
+        CloudProgressText.Text = message;
+        CloudProgressBar.Value = 0;
+        CloudProgressBar.IsIndeterminate = true;
+        CloudProgressPanel.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateCloudProgress(string path, long downloaded, long length)
+    {
+        string message;
+        if (length > 0)
+        {
+            int percent = CloudHydrationPolicy.ProgressPercent(downloaded, length);
+            message = UiStrings.Format(
+                UiStrings.DownloadingCloudFileProgressFormat,
+                Path.GetFileName(path),
+                percent,
+                FormatBytes(downloaded),
+                FormatBytes(length));
+            CloudProgressBar.IsIndeterminate = false;
+            CloudProgressBar.Value = percent;
+        }
+        else
+        {
+            message = UiStrings.Format(
+                UiStrings.DownloadingCloudFileBytesFormat,
+                Path.GetFileName(path),
+                FormatBytes(downloaded));
+            CloudProgressBar.IsIndeterminate = true;
+        }
+
+        StatusText.Text = message;
+        CloudProgressText.Text = message;
+    }
+
+    private void ResetCloudProgressUi()
+    {
+        CloudProgressPanel.Visibility = Visibility.Collapsed;
+        CloudProgressBar.IsIndeterminate = false;
+        CloudProgressBar.Value = 0;
+        CloudProgressText.Text = "";
     }
 
     private static bool ProbeMatchesPath(FileProbe? probe, string? path)
@@ -2297,6 +2339,7 @@ public sealed partial class MainWindow : Window
     private void ResetPreview()
     {
         DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
+        ResetCloudProgressUi();
         ResetTextSearchUi();
         _rasterPresenter?.Clear();
         _animatedImagePresenter?.Clear();

@@ -308,6 +308,7 @@
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>Downloading {0} from cloud storage...</value></data>
   <data name="DownloadingCloudFileProgressFormat" xml:space="preserve"><value>Downloading {0}: {1}% ({2} of {3})</value></data>
   <data name="DownloadingCloudFileBytesFormat" xml:space="preserve"><value>Downloading {0}: {1}</value></data>
+  <data name="CloudProgressAccessibleName" xml:space="preserve"><value>Cloud download progress</value></data>
   <data name="CloudDownloadConsentTitle" xml:space="preserve"><value>Download cloud file for preview?</value></data>
   <data name="CloudDownloadConsentMessageFormat" xml:space="preserve"><value>{0} is stored in cloud storage and is {1}. Download it now to preview? The preview download limit is {2}; larger files are deferred.</value></data>
   <data name="DownloadForPreview" xml:space="preserve"><value>Download for preview</value></data>

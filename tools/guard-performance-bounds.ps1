@@ -539,7 +539,7 @@ Require-Pattern $mainWindow 'Task\.Run\(async\s*\(\)\s*=>[\s\S]*GetFileFromPathA
     "Cloud hydration WinRT open and reads must remain off the UI thread, cancellable, and free of sequential read-ahead."
 Require-Pattern $mainWindow 'Stopwatch\.GetElapsedTime\(lastProgress,\s*now\)\s*>=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*progress\.Report\(\(downloaded,\s*declaredLength\)\)' `
     "Cloud hydration progress reports must remain throttled to at most four updates per second."
-Require-Pattern $mainWindow 'new Progress<\(long Downloaded,\s*long Length\)>\(value\s*=>[\s\S]*Volatile\.Read\(ref progressActive\)[\s\S]*IsPreviewGenerationCurrent\(generation,\s*cancellationToken\)[\s\S]*StatusText\.Text[\s\S]*Interlocked\.Exchange\(ref progressActive,\s*0\)' `
+Require-Pattern $mainWindow 'new Progress<\(long Downloaded,\s*long Length\)>\(value\s*=>[\s\S]*Volatile\.Read\(ref progressActive\)[\s\S]*IsPreviewGenerationCurrent\(generation,\s*cancellationToken\)[\s\S]*UpdateCloudProgress\(path,\s*value\.Downloaded,\s*value\.Length\)[\s\S]*Interlocked\.Exchange\(ref progressActive,\s*0\)' `
     "Cloud hydration progress presentation must reject stale preview generations."
 $cloudHydrationPolicy = Join-Path $Root "src/QuickLook.Next.Core/CloudHydrationPolicy.cs"
 Require-Pattern $cloudHydrationPolicy 'MaxDownloadBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024[\s\S]*MaxDownloadBytes\s*-\s*downloadedBytes\s*\+\s*1' `

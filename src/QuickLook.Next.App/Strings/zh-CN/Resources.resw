@@ -196,6 +196,7 @@
   <data name="DownloadingCloudFileFormat" xml:space="preserve"><value>正在从云存储下载 {0}...</value></data>
   <data name="DownloadingCloudFileProgressFormat" xml:space="preserve"><value>正在下载 {0}：{1}%（{2}/{3}）</value></data>
   <data name="DownloadingCloudFileBytesFormat" xml:space="preserve"><value>正在下载 {0}：{1}</value></data>
+  <data name="CloudProgressAccessibleName" xml:space="preserve"><value>云下载进度</value></data>
   <data name="CloudDownloadConsentTitle" xml:space="preserve"><value>下载云端文件以进行预览？</value></data>
   <data name="CloudDownloadConsentMessageFormat" xml:space="preserve"><value>{0} 存储在云端，大小为 {1}。是否立即下载以进行预览？预览下载上限为 {2}，更大的文件将推迟处理。</value></data>
   <data name="DownloadForPreview" xml:space="preserve"><value>下载并预览</value></data>
