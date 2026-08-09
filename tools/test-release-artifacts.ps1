@@ -40,33 +40,74 @@ try {
 
         $expectedCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
             (Resolve-Path -LiteralPath $ExpectedCertificatePath).Path)
-        # The release certificate is self-signed. TrustedPeople identifies the signer but
-        # does not establish its certificate chain, so Authenticode still reports it as
-        # untrusted. Trust it only in the current user's Root store for this validation.
-        $rootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
-            [Security.Cryptography.X509Certificates.StoreName]::Root,
-            [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-        $addedRootTrust = $false
-        try {
-            $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            if (-not @($rootStore.Certificates.Find(
-                [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                $expectedCertificate.Thumbprint,
-                $false)).Count) {
-                $rootStore.Add($expectedCertificate)
-                $addedRootTrust = $true
-            }
-            $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
-            if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
+        if ($null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Thumbprint -ne $expectedCertificate.Thumbprint) {
+            throw "MSIX signer does not match the expected release certificate."
+        }
+
+        if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
+            if ($signature.Status -notin @(
+                    [Management.Automation.SignatureStatus]::NotTrusted,
+                    [Management.Automation.SignatureStatus]::UnknownError)) {
                 throw "MSIX signature is not valid: $($signature.StatusMessage)"
             }
-            if ($signature.SignerCertificate.Thumbprint -ne $expectedCertificate.Thumbprint) {
-                throw "MSIX signer does not match the trusted release certificate."
+
+            # A clean runner does not yet trust the self-signed release certificate. Only
+            # bridge that exact chain error; hash, signer, expiry, and other failures stay fatal.
+            $chain = [Security.Cryptography.X509Certificates.X509Chain]::new()
+            try {
+                $chain.ChainPolicy.RevocationMode =
+                    [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+                $chainIsTrusted = $chain.Build($signature.SignerCertificate)
+                $chainStatuses = @($chain.ChainStatus)
+                $onlyUntrustedRoot = -not $chainIsTrusted -and
+                    $chainStatuses.Count -gt 0 -and
+                    @($chainStatuses | Where-Object {
+                        $_.Status -ne [Security.Cryptography.X509Certificates.X509ChainStatusFlags]::UntrustedRoot
+                    }).Count -eq 0
+                if (-not $onlyUntrustedRoot) {
+                    throw "MSIX signature failed for a reason other than an untrusted release root: $($signature.StatusMessage)"
+                }
             }
-        }
-        finally {
-            if ($addedRootTrust) { $rootStore.Remove($expectedCertificate) }
-            $rootStore.Dispose()
+            finally { $chain.Dispose() }
+
+            $rootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+                [Security.Cryptography.X509Certificates.StoreName]::Root,
+                [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            $addedRootTrust = $false
+            try {
+                $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                if (-not @($rootStore.Certificates.Find(
+                    [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                    $expectedCertificate.Thumbprint,
+                    $false)).Count) {
+                    $rootStore.Add($expectedCertificate)
+                    $addedRootTrust = $true
+                }
+
+                $signature = Get-AuthenticodeSignature -LiteralPath $msixPath
+                if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid) {
+                    throw "MSIX signature is not valid: $($signature.StatusMessage)"
+                }
+                if ($signature.SignerCertificate.Thumbprint -ne $expectedCertificate.Thumbprint) {
+                    throw "MSIX signer does not match the temporarily trusted release certificate."
+                }
+            }
+            finally {
+                try {
+                    if ($addedRootTrust) {
+                        $rootStore.Remove($expectedCertificate)
+                        if (@($rootStore.Certificates.Find(
+                            [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                            $expectedCertificate.Thumbprint,
+                            $false)).Count) {
+                            throw "Temporary release root trust could not be removed."
+                        }
+                    }
+                }
+                finally { $rootStore.Dispose() }
+            }
         }
 
         $msix = [IO.Compression.ZipFile]::OpenRead($msixPath)

@@ -78,6 +78,8 @@ if ($packageAction -notmatch 'checked-invocation\.ps1' -or
 }
 $releaseScript = Get-Content -LiteralPath (
     Join-Path $Root "tools\release.ps1") -Raw
+$artifactValidator = Get-Content -LiteralPath (
+    Join-Path $Root "tools\test-release-artifacts.ps1") -Raw
 if ($releaseScript -notmatch 'checked-invocation\.ps1' -or
     $releaseScript -notmatch 'Invoke-CheckedScript[\s\S]{0,300}pack-msix\.ps1' -or
     $releaseScript -notmatch 'Invoke-CheckedScript[\s\S]{0,300}guard-architecture\.ps1') {
@@ -86,6 +88,13 @@ if ($releaseScript -notmatch 'checked-invocation\.ps1' -or
 if ($releaseScript -notmatch
         'dotnet\s+test[\s\S]{0,260}--maxcpucount:1') {
     throw "Formal release integration test projects must run serially."
+}
+$initialSignatureCheck = $artifactValidator.IndexOf('$signature = Get-AuthenticodeSignature')
+$rootStoreWrite = $artifactValidator.IndexOf('$rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)')
+if ($initialSignatureCheck -lt 0 -or $rootStoreWrite -lt 0 -or $initialSignatureCheck -gt $rootStoreWrite -or
+    $artifactValidator -notmatch 'SignerCertificate\.Thumbprint[\s\S]{0,500}SignatureStatus\]::Valid[\s\S]*X509ChainStatusFlags\]::UntrustedRoot[\s\S]*StoreName\]::Root' -or
+    $artifactValidator -notmatch 'if\s*\(\$addedRootTrust\)[\s\S]{0,500}\$rootStore\.Remove\(\$expectedCertificate\)[\s\S]{0,500}Temporary release root trust could not be removed') {
+    throw "Release artifact validation must verify the signer first and limit temporary Root trust to a recoverable untrusted-chain fallback."
 }
 if ($ci -notmatch 'components:\s*rustfmt,\s*clippy' -or
     $releaseScript -notmatch
