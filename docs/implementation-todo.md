@@ -49,6 +49,9 @@ the release-only `release:` prefix while this queue is in progress.
   old wheel-intercepting flyout.
 - [ ] `R26-P1-03` Add explicit CloudProgress, PDF per-page failure, empty, and
   partial-result states, including Office represented/total/limit metadata.
+  - [x] `R26-P1-03a` Surface bounded cloud hydration as an explicit visible
+    determinate/indeterminate progress state with generation-safe cleanup and
+    three-locale accessibility text. PDF and Office states remain open.
 - [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
   phase, correlation ID, version, format, and size bucket but no local path.
 
@@ -181,6 +184,9 @@ the release-only `release:` prefix while this queue is in progress.
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
   output sizing, and measurable cancellation latency for RasterHost image work.
+  - [x] `R26-P1-08a` Reject static native image decodes whose checked peak model
+    exceeds 896 MiB before allocating the full `DynamicImage`. Target-size codec
+    decode, single-decode output sizing, and cancellation measurement remain open.
 - [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
   thumbnail worker's unbounded, non-cancellable queue with a bounded supervised
   broker or deadline-aware worker.
@@ -257,6 +263,36 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-08a` Add a checked 896 MiB static-image decoded-byte peak budget
+  before `DynamicImage::from_decoder`. The model uses decoder-reported color
+  depth and covers EXIF transform copies, resize-native storage, RGBA/BGRA,
+  waveform workspace, ABI packet copies, and arithmetic overflow while keeping
+  the existing 48 MP limit and ABI unchanged.
+  - Verification: `cargo fmt --all --manifest-path native/Cargo.toml -- --check`
+  - Verification: `cargo clippy --workspace --all-targets --all-features --locked --manifest-path native/Cargo.toml -- -D warnings`
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml native_image_decode_peak_budget` (3 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commit: `5848544`
+
+- [x] `R26-P1-03a` Replace hidden-only cloud hydration text with an explicit
+  themed progress panel. Known lengths use bounded percentages, unknown lengths
+  remain indeterminate with downloaded bytes, callbacks retain the 250 ms and
+  preview-generation gates, and reset/completion clears stale visible state.
+  - Verification: `pwsh -NoProfile -File tools/test-cloud-progress-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 451 keys)
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~CloudHydrationPolicyTests"` (16 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Commit: `b2f9be9`
+
+- [x] Execute the packaged installer parent control flow without UAC, AppX, or
+  certificate-store writes. The temporary harness covers first trust, direct
+  trusted upgrade, registration failure rollback, and registered-state
+  verification failure with retained trust in both PowerShell 7 and Windows
+  PowerShell 5.1; the existing AST guard still owns the elevated helper exits.
+  - Verification: `pwsh -NoProfile -File tools/test-installer-control-flow.ps1`
+  - Verification: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/test-installer-script.ps1`
+  - Commit: `e164db8`
 
 - [x] `R26-P1-02` Restore the existing bounded text-search presenter contract
   through an inline, non-overlay search row with Ctrl+F, Enter/F3 navigation,
