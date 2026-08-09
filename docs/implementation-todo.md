@@ -52,6 +52,10 @@ the release-only `release:` prefix while this queue is in progress.
   - [x] `R26-P1-03a` Surface bounded cloud hydration as an explicit visible
     determinate/indeterminate progress state with generation-safe cleanup and
     three-locale accessibility text. PDF and Office states remain open.
+  - [x] `R26-P1-03b` Show current-generation PDF page render failures and
+    timeouts inside the affected page, reject late surfaces, and clear visual
+    and accessible state on success, release, and reopen. PDF empty/partial and
+    Office represented/total/limit states remain open.
 - [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
   phase, correlation ID, version, format, and size bucket but no local path.
 
@@ -187,6 +191,10 @@ the release-only `release:` prefix while this queue is in progress.
   - [x] `R26-P1-08a` Reject static native image decodes whose checked peak model
     exceeds 896 MiB before allocating the full `DynamicImage`. Target-size codec
     decode, single-decode output sizing, and cancellation measurement remain open.
+  - [x] `R26-P1-08b` Preflight exact non-SVG static-raster HANDLE packet sizes
+    before full pixel decode, including JPEG orientation and waveform bytes, so
+    an undersized managed buffer does not cause a repeated full decode. Codec
+    target-size decode and measured cancellation p95 remain open.
 - [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
   thumbnail worker's unbounded, non-cancellable queue with a bounded supervised
   broker or deadline-aware worker.
@@ -263,6 +271,34 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-08b` Compute the exact checked plain/waveform packet length from
+  bounded header dimensions, target geometry, and JPEG orientation before full
+  static-raster HANDLE decode. Cancellation wins after preflight and before
+  required bytes are published; the caller HANDLE position and ABI are unchanged.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml native_image_packet` (2 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml raster_image_handle_sizes_output_before_full_pixel_decode` (1 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commit: `035bcc5`
+
+- [x] `R26-P1-03b` Render localized PDF page failure and timeout text inside the
+  exact current request/page generation. Rendered, failed, or released pages
+  reject late surfaces; success, release, and reopen clear both Composition and
+  accessible failure state.
+  - Verification: `pwsh -NoProfile -File tools/test-pdf-page-failure-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 451 keys)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Commit: `0691d49`
+
+- [x] Preflight the current user's installed MSIX identity and version before
+  certificate trust, UAC, application shutdown, or registration. Older packages
+  fail with a clear downgrade error, identical versions return already-current
+  success without side effects, ambiguous identities fail closed, and only a
+  higher target version enters the existing upgrade/rollback flow.
+  - Verification: `pwsh -NoProfile -File tools/test-installer-script.ps1`
+  - Verification: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/test-installer-script.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-local-msix-update.ps1` (WhatIf resolved `0.3.6.4`)
+  - Commit: `8e9f9e5`
 
 - [x] `R26-P1-08a` Add a checked 896 MiB static-image decoded-byte peak budget
   before `DynamicImage::from_decoder`. The model uses decoder-reported color
