@@ -42,6 +42,7 @@ $nativePackageAndroid = Join-Path $Root "native/quicklook_next_native/src/previe
 $nativePackageTests = Join-Path $Root "native/quicklook_next_native/src/preview/package/tests.rs"
 $nativePackageAndroidTests = Join-Path $Root "native/quicklook_next_native/src/preview/package/android/tests.rs"
 $nativeAnimationProbe = Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
+$nativeShellThumbnail = Join-Path $Root "native/quicklook_next_native/src/win32/shell_thumbnail.rs"
 $nativeChmPreview = Join-Path $Root "native/quicklook_next_native/src/preview/chm.rs"
 $nativeChmTests = Join-Path $Root "native/quicklook_next_native/src/preview/chm/tests.rs"
 $nativeMailPreview = Join-Path $Root "native/quicklook_next_native/src/preview/mail.rs"
@@ -157,6 +158,12 @@ Require-Pattern $nativeLibrary 'MAX_IMAGE_RASTER_DIMENSION:\s*u32\s*=\s*2048' `
     "Static HANDLE image rasters must remain capped at 2048 pixels."
 Require-Pattern $nativeLibrary 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Static HANDLE image inputs must remain capped at 256 MiB."
+Require-Pattern $nativeShellThumbnail 'sender:\s*mpsc::SyncSender<ThumbnailRequest>[\s\S]*self\.sender\.try_send\(request\)[\s\S]*mpsc::sync_channel::<ThumbnailRequest>\(1\)' `
+    "Shell thumbnail STA dispatch must retain a capacity-one non-blocking request queue."
+Require-Pattern $nativeShellThumbnail 'fn thumbnail_sta_queue_rejects_when_one_request_is_pending\(\)[\s\S]*TrySendError::Full\(request\)[\s\S]*request\.path\s*==\s*"second"' `
+    "Shell thumbnail STA queue saturation must retain focused regression coverage."
+Require-Pattern $nativeShellThumbnail 'fn request\([\s\S]*if cancel_requested\(cancel_cb\)[\s\S]*return Err\(ThumbnailError::Cancelled\)[\s\S]*shell_thumbnail_on_sta[\s\S]*fn pre_cancelled_thumbnail_request_is_not_dispatched\(\)' `
+    "Pre-cancelled Shell thumbnail requests must never enter the STA queue."
 Require-Pattern $nativeLibrary 'MAX_SVG_INPUT_BYTES:\s*u64\s*=\s*16\s*\*\s*1024\s*\*\s*1024' `
     "SVG HANDLE inputs must remain capped at 16 MiB."
 Require-Pattern $nativeLibrary 'MAX_SVG_MARKUP_TOKENS:\s*usize\s*=\s*100_000' `

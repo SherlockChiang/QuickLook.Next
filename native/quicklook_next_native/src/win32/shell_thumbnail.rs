@@ -41,7 +41,16 @@ struct ThumbnailRequest {
 }
 
 struct ThumbnailStaWorker {
-    sender: mpsc::Sender<ThumbnailRequest>,
+    sender: mpsc::SyncSender<ThumbnailRequest>,
+}
+
+impl ThumbnailStaWorker {
+    fn try_enqueue(
+        &self,
+        request: ThumbnailRequest,
+    ) -> Result<(), mpsc::TrySendError<ThumbnailRequest>> {
+        self.sender.try_send(request)
+    }
 }
 
 static THUMBNAIL_STA: OnceLock<ThumbnailStaWorker> = OnceLock::new();
@@ -58,6 +67,9 @@ pub(crate) fn request(
     let Some(size) = checked_request_size(size) else {
         return Err(ThumbnailError::LimitExceeded);
     };
+    if cancel_requested(cancel_cb) {
+        return Err(ThumbnailError::Cancelled);
+    }
 
     let result = shell_thumbnail_on_sta(path, size, flags, cancel_cb);
     if cancel_requested(cancel_cb) {
@@ -105,9 +117,16 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
     cancel_cb.is_some_and(|callback| callback())
 }
 
+fn thumbnail_request_channel() -> (
+    mpsc::SyncSender<ThumbnailRequest>,
+    mpsc::Receiver<ThumbnailRequest>,
+) {
+    mpsc::sync_channel::<ThumbnailRequest>(1)
+}
+
 fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
     THUMBNAIL_STA.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<ThumbnailRequest>();
+        let (sender, receiver) = thumbnail_request_channel();
         std::thread::spawn(move || unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             while let Ok(request) = receiver.recv() {
@@ -133,7 +152,7 @@ fn shell_thumbnail_on_sta(
         flags,
         reply,
     };
-    if thumbnail_sta_worker().sender.send(request).is_err() {
+    if thumbnail_sta_worker().try_enqueue(request).is_err() {
         return None;
     }
     let deadline = Instant::now() + Duration::from_secs(4);
@@ -293,5 +312,40 @@ mod tests {
         assert_eq!(checked_bitmap_layout(1, 513), None);
         assert_eq!(checked_bitmap_layout(65_536, 16_384), None);
         assert_eq!(checked_bitmap_layout(i32::MAX, i32::MAX), None);
+    }
+
+    #[test]
+    fn thumbnail_sta_queue_rejects_when_one_request_is_pending() {
+        fn request(path: &str) -> ThumbnailRequest {
+            let (reply, _result) = mpsc::channel();
+            ThumbnailRequest {
+                path: path.to_owned(),
+                size: MIN_EDGE,
+                flags: 0,
+                reply,
+            }
+        }
+
+        let (sender, receiver) = thumbnail_request_channel();
+        let worker = ThumbnailStaWorker { sender };
+
+        assert!(worker.try_enqueue(request("first")).is_ok());
+        assert!(matches!(
+            worker.try_enqueue(request("second")),
+            Err(mpsc::TrySendError::Full(request)) if request.path == "second"
+        ));
+        assert_eq!(receiver.try_recv().unwrap().path, "first");
+    }
+
+    #[test]
+    fn pre_cancelled_thumbnail_request_is_not_dispatched() {
+        extern "C" fn cancelled() -> bool {
+            true
+        }
+
+        assert_eq!(
+            request("not-dispatched".to_owned(), MIN_EDGE, 0, Some(cancelled)),
+            Err(ThumbnailError::Cancelled)
+        );
     }
 }
