@@ -26,7 +26,8 @@ internal sealed class IdleTrimmer : IAsyncDisposable
     private long _lastTicks;
     private bool _trimmed;
     private bool _previewActive;
-    private bool _disposed;
+    private bool _trimInProgress;
+    private int _disposed;
 
     public IdleTrimmer(CompositionProducer producer)
     {
@@ -40,7 +41,7 @@ internal sealed class IdleTrimmer : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed) return;
+            if (Volatile.Read(ref _disposed) != 0) return;
             TouchCore();
         }
     }
@@ -49,7 +50,7 @@ internal sealed class IdleTrimmer : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed) return;
+            if (Volatile.Read(ref _disposed) != 0) return;
             _previewActive = active;
             TouchCore();
         }
@@ -59,22 +60,44 @@ internal sealed class IdleTrimmer : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_disposed || _previewActive) return;
+            if (Volatile.Read(ref _disposed) != 0 || _previewActive || _trimInProgress) return;
             var idle = DateTime.UtcNow - new DateTime(_lastTicks, DateTimeKind.Utc);
             if (idle < IdleThreshold || _trimmed) return;
             _trimmed = true;
+            _trimInProgress = true;
 
             try
             {
                 PdfPreviewSession.ClearCache();
                 _producer.ReleaseRetired();
-                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-                DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
             }
-            catch (Exception ex) { DiagLog.Write("Host", "idle trim failed: " + ex.Message); }
+            catch (Exception ex)
+            {
+                _trimInProgress = false;
+                DiagLog.Write("Host", "idle trim failed: " + ex.Message);
+                return;
+            }
+        }
+
+        // Keep the lock free while the runtime performs a potentially long blocking collection. Preview
+        // control messages can update activity immediately; shutdown marks disposed and exits atomically
+        // instead of waiting forever for an uncancellable finalizer callback on a hosted runner.
+        try
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("Host", "idle trim failed: " + ex.Message);
+        }
+        finally
+        {
+            lock (_sync)
+                _trimInProgress = false;
         }
     }
 
@@ -84,14 +107,15 @@ internal sealed class IdleTrimmer : IAsyncDisposable
         _trimmed = false;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        lock (_sync)
-        {
-            if (_disposed) return;
-            _disposed = true;
-        }
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return ValueTask.CompletedTask;
 
-        await _timer.DisposeAsync().ConfigureAwait(false);
+        // Timer.DisposeAsync waits for an already-running callback. A callback may be inside an
+        // uncancellable GC.WaitForPendingFinalizers call, so shutdown must stop future ticks without
+        // waiting; Program.cs uses Environment.Exit after its logical cleanup boundary.
+        _timer.Dispose();
+        return ValueTask.CompletedTask;
     }
 }

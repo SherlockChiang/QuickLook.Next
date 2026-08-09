@@ -266,8 +266,8 @@ else {
 
     $rasterHostIdleTrimmerText = Get-Content -LiteralPath $rasterHostIdleTrimmerPath -Raw
     if ($rasterHostIdleTrimmerText -notmatch
-            'class IdleTrimmer\s*:\s*IAsyncDisposable[\s\S]*private readonly object _sync[\s\S]*void Touch\(\)[\s\S]*lock \(_sync\)[\s\S]*SetPreviewActive\(bool active\)[\s\S]*lock \(_sync\)[\s\S]*void Tick\(\)[\s\S]*lock \(_sync\)[\s\S]*_disposed \|\| _previewActive[\s\S]*GC\.Collect\([\s\S]*ValueTask DisposeAsync\(\)[\s\S]*_timer\.DisposeAsync\(\)') {
-        Add-Failure "RasterHost idle trim must exclude preview activation and await in-flight timer callbacks."
+            'class IdleTrimmer\s*:\s*IAsyncDisposable[\s\S]*private readonly object _sync[\s\S]*void Touch\(\)[\s\S]*lock \(_sync\)[\s\S]*SetPreviewActive\(bool active\)[\s\S]*lock \(_sync\)[\s\S]*void Tick\(\)[\s\S]*lock \(_sync\)[\s\S]*Volatile\.Read\(ref _disposed\)\s*!=\s*0\s*\|\|\s*_previewActive\s*\|\|\s*_trimInProgress[\s\S]*// Keep the lock free[\s\S]*GC\.Collect\([\s\S]*ValueTask DisposeAsync\(\)[\s\S]*Interlocked\.Exchange\(ref _disposed, 1\)[\s\S]*_timer\.Dispose\(\)[\s\S]*ValueTask\.CompletedTask') {
+        Add-Failure "RasterHost idle trim must keep activation serialized, run GC outside its state lock, and stop timer callbacks without waiting on an uncancellable finalizer drain."
     }
 
     $rasterHostProcessHelperText = Get-Content -LiteralPath $rasterHostProcessHelperPath -Raw
