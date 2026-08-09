@@ -3,6 +3,7 @@ using Microsoft.UI.Composition;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
@@ -29,6 +30,7 @@ internal sealed class PdfPreviewPresenter
     private const int PageHostOverscan = 4;
 
     private static readonly SolidColorBrush PageBackground = new(Microsoft.UI.Colors.White);
+    private static readonly SolidColorBrush PageFailureForeground = new(Microsoft.UI.Colors.Black);
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
@@ -153,7 +155,8 @@ internal sealed class PdfPreviewPresenter
             CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
             return true;
         }
-        if (_pageStates.TryGetValue(surface.PageIndex, out PdfPageState state) && state == PdfPageState.Released)
+        if (!_pageStates.TryGetValue(surface.PageIndex, out PdfPageState state)
+            || state is not (PdfPageState.Requested or PdfPageState.Rendering))
         {
             CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
             return true;
@@ -163,12 +166,14 @@ internal sealed class PdfPreviewPresenter
         if (hr < 0 || compSurface is null)
         {
             error = $"pdf page failed 0x{hr:X8}";
+            SetPageState(surface.PageIndex, PdfPageState.Failed);
+            ShowPageFailure(pageHost, surface.PageIndex, timedOut: false);
             return false;
         }
 
         TouchPage(surface.PageIndex);
         SetPageState(surface.PageIndex, PdfPageState.Rendered);
-        DisposePageVisual(pageHost);
+        ClearPageVisualState(pageHost);
 
         var brush = compositor.CreateSurfaceBrush(compSurface);
         brush.Stretch = CompositionStretch.Fill;
@@ -184,10 +189,14 @@ internal sealed class PdfPreviewPresenter
     {
         if (!string.Equals(_requestId, error.RequestId, StringComparison.Ordinal)
             || !_pageGenerations.TryGetValue(error.PageIndex, out long currentGeneration)
-            || currentGeneration != error.PageGeneration)
+            || currentGeneration != error.PageGeneration
+            || !_pageStates.TryGetValue(error.PageIndex, out PdfPageState state)
+            || state is not (PdfPageState.Requested or PdfPageState.Rendering)
+            || !_pageHosts.TryGetValue(error.PageIndex, out Border? pageHost))
             return false;
 
         SetPageState(error.PageIndex, PdfPageState.Failed);
+        ShowPageFailure(pageHost, error.PageIndex, error.TimedOut);
         return true;
     }
 
@@ -252,7 +261,7 @@ internal sealed class PdfPreviewPresenter
                 _ = supervisor?.ClosePageAsync(requestId!, pageIndex, pageGeneration);
 
         foreach (var host in _pageHosts.Values)
-            DisposePageVisual(host);
+            ClearPageVisualState(host);
         _pagesPanel.Children.Clear();
         _pageHosts.Clear();
         _requestedPages.Clear();
@@ -454,7 +463,7 @@ internal sealed class PdfPreviewPresenter
         _requestedPages.Remove(pageIndex);
         _pageLastTouched.Remove(pageIndex);
         if (_pageHosts.TryGetValue(pageIndex, out var host))
-            DisposePageVisual(host);
+            ClearPageVisualState(host);
 
         if (_requestId is not null && _pageGenerations.TryGetValue(pageIndex, out long pageGeneration))
             _ = _supervisorProvider()?.ClosePageAsync(_requestId, pageIndex, pageGeneration);
@@ -494,6 +503,37 @@ internal sealed class PdfPreviewPresenter
     private void SetPageState(int pageIndex, PdfPageState state)
     {
         _pageStates[pageIndex] = state;
+    }
+
+    private static void ShowPageFailure(Border host, int pageIndex, bool timedOut)
+    {
+        ClearPageVisualState(host);
+        string message = timedOut
+            ? UiStrings.Format(UiStrings.PdfPageTimedOutStatusFormat, pageIndex + 1)
+            : UiStrings.Format(UiStrings.PdfPageFailedStatusFormat, pageIndex + 1);
+        var label = new TextBlock
+        {
+            Text = message,
+            Margin = new Thickness(32),
+            MaxWidth = 420,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 14,
+            Foreground = PageFailureForeground,
+        };
+        AutomationProperties.SetName(label, message);
+        AutomationProperties.SetLiveSetting(label, AutomationLiveSetting.Polite);
+        AutomationProperties.SetHelpText(host, message);
+        host.Child = label;
+    }
+
+    private static void ClearPageVisualState(Border host)
+    {
+        DisposePageVisual(host);
+        host.Child = null;
+        AutomationProperties.SetHelpText(host, "");
     }
 
     private static void DisposePageVisual(Border host)
