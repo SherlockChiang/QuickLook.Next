@@ -323,10 +323,10 @@ Require-Pattern $shellBrokerProtocolTests 'Rejects_malformed_control_messages[\s
 $idleTrimmer = Join-Path $Root "src/QuickLook.Next.RasterHost/IdleTrimmer.cs"
 Require-Pattern $idleTrimmer 'QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*ms\s+is\s+>=\s+50\s+and\s+<=\s+15_000' `
     "RasterHost idle-trim test cadence must remain bounded without changing the production default."
-Require-Pattern $idleTrimmer 'GC\.Collect\([\s\S]*GC\.WaitForPendingFinalizers\(\)[\s\S]*GC\.Collect\(' `
-    "RasterHost idle trim must complete finalizers before its post-finalization collection."
+Require-Pattern $idleTrimmer 'GC\.Collect\(GC\.MaxGeneration,\s*GCCollectionMode\.Forced,\s*blocking:\s*false,\s*compacting:\s*true\)' `
+    "RasterHost idle trim must schedule a non-blocking full GC after cache and surface release."
 Require-Pattern $idleTrimmer 'private readonly object _sync[\s\S]*Touch\(\)[\s\S]*lock \(_sync\)[\s\S]*SetPreviewActive\(bool active\)[\s\S]*lock \(_sync\)[\s\S]*Tick\(\)[\s\S]*lock \(_sync\)[\s\S]*Volatile\.Read\(ref _disposed\)\s*!=\s*0\s*\|\|\s*_previewActive\s*\|\|\s*_trimInProgress[\s\S]*\}\s*\r?\n\s*\r?\n\s*// Keep the lock free[\s\S]*GC\.Collect\(' `
-    "RasterHost idle compaction must serialize cache/surface trim while keeping its blocking GC phase outside the activation lock."
+    "RasterHost idle compaction must serialize cache/surface trim while scheduling GC outside the activation lock."
 Require-Pattern $idleTrimmer 'ValueTask DisposeAsync\(\)[\s\S]*Interlocked\.Exchange\(ref _disposed, 1\)[\s\S]*_timer\.Dispose\(\)[\s\S]*ValueTask\.CompletedTask' `
     "RasterHost shutdown must stop future idle ticks without waiting on an uncancellable finalizer drain."
 Require-Pattern $rasterHostIntegration 'Repeated_system_codec_previews_return_resources_after_idle_trim[\s\S]*privateByteRecoveryBudget\s*=\s*32L\s*\*\s*1024\s*\*\s*1024[\s\S]*QL_IDLE_TRIM_SECONDS[\s\S]*QL_IDLE_TRIM_CHECK_MILLISECONDS[\s\S]*peakHandles\s*>\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.HandleCount\s*<=\s*baselineHandles\s*\+\s*handleRecoveryBudget[\s\S]*host\.PrivateMemorySize64\s*<=\s*baselinePrivateBytes\s*\+\s*privateByteRecoveryBudget' `

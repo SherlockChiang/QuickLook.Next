@@ -79,16 +79,14 @@ internal sealed class IdleTrimmer : IAsyncDisposable
             }
         }
 
-        // Keep the lock free while the runtime performs a potentially long blocking collection. Preview
-        // control messages can update activity immediately; shutdown marks disposed and exits atomically
-        // instead of waiting forever for an uncancellable finalizer callback on a hosted runner.
+        // Keep the lock free while the runtime schedules compaction. A non-blocking collection preserves
+        // the memory trim without making preview control or process shutdown wait on an uncancellable
+        // finalizer drain on a hosted runner.
         try
         {
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            DiagLog.Write("Host", "idle: trimmed caches + compacted GC");
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false, compacting: true);
+            DiagLog.Write("Host", "idle: trimmed caches + scheduled non-blocking GC compaction");
         }
         catch (Exception ex)
         {
