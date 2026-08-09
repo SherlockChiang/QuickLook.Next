@@ -150,6 +150,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_MAIL
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
+const MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES: u64 = 896 * 1024 * 1024;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
@@ -2071,6 +2072,117 @@ fn decode_image_bgra_reader_with_waveform<R: Read + Seek>(
     Some((decoded, waveform?))
 }
 
+fn native_image_target_dimensions(
+    width: u32,
+    height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> (u32, u32) {
+    let target_width = if target_width > 0 {
+        target_width
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
+    let target_height = if target_height > 0 {
+        target_height
+    } else {
+        MAX_IMAGE_RASTER_DIMENSION
+    };
+    let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
+    let scale = if width > target_width || height > target_height {
+        (target_width as f64 / width as f64).min(target_height as f64 / height as f64)
+    } else {
+        1.0
+    };
+    (
+        ((width as f64 * scale).round() as u32).max(1),
+        ((height as f64 * scale).round() as u32).max(1),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct NativeImageDecodeBudgetInput {
+    source_width: u32,
+    source_height: u32,
+    decoded_bytes: u64,
+    decoded_bytes_per_pixel: u64,
+    target_width: u32,
+    target_height: u32,
+    orientation: Option<u16>,
+    include_waveform: bool,
+}
+
+fn checked_native_image_decode_peak_bytes(input: NativeImageDecodeBudgetInput) -> Option<u64> {
+    let NativeImageDecodeBudgetInput {
+        source_width,
+        source_height,
+        decoded_bytes,
+        decoded_bytes_per_pixel,
+        target_width,
+        target_height,
+        orientation,
+        include_waveform,
+    } = input;
+    if source_width == 0 || source_height == 0 || decoded_bytes_per_pixel == 0 {
+        return None;
+    }
+
+    let source_pixels = u64::from(source_width).checked_mul(u64::from(source_height))?;
+    let color_type_bytes = source_pixels.checked_mul(decoded_bytes_per_pixel)?;
+    let source_bytes = decoded_bytes.max(color_type_bytes);
+    let (oriented_width, oriented_height) = match orientation {
+        Some(5..=8) => (source_height, source_width),
+        _ => (source_width, source_height),
+    };
+    let (width, height) = native_image_target_dimensions(
+        oriented_width,
+        oriented_height,
+        target_width,
+        target_height,
+    );
+    let target_pixels = u64::from(width).checked_mul(u64::from(height))?;
+    let target_native_bytes = target_pixels.checked_mul(decoded_bytes_per_pixel)?;
+    let target_rgba_bytes = target_pixels.checked_mul(4)?;
+
+    // EXIF orientations 5 and 7 currently compose a flip and a rotation. During that transform
+    // the source, flipped image, and rotated image can coexist; the other transforms need at most
+    // one additional source-sized image.
+    let orientation_source_copies = match orientation {
+        Some(5 | 7) => 3,
+        Some(2 | 3 | 4 | 6 | 8) => 2,
+        _ => 1,
+    };
+    let orientation_peak = source_bytes.checked_mul(orientation_source_copies)?;
+
+    let resize_native_bytes = if (width, height) == (oriented_width, oriented_height) {
+        0
+    } else {
+        target_native_bytes
+    };
+    let waveform_bytes = if include_waveform {
+        u64::try_from(IMAGE_WAVEFORM_DENSITY_BYTES)
+            .ok()?
+            .checked_mul(u64::try_from(size_of::<u32>()).ok()?)?
+            .checked_add(u64::try_from(IMAGE_WAVEFORM_DENSITY_BYTES).ok()?)?
+    } else {
+        0
+    };
+    let conversion_peak = source_bytes
+        .checked_add(resize_native_bytes)?
+        .checked_add(target_rgba_bytes)?
+        .checked_add(target_rgba_bytes)?
+        .checked_add(waveform_bytes)?;
+    let packet_peak = target_rgba_bytes.checked_mul(2)?.checked_add(28)?;
+
+    Some(orientation_peak.max(conversion_peak).max(packet_peak))
+}
+
+fn native_image_decode_fits_peak_budget(input: NativeImageDecodeBudgetInput) -> bool {
+    checked_native_image_decode_peak_bytes(input)
+        .is_some_and(|peak_bytes| peak_bytes <= MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES)
+}
+
 fn decode_image_bgra_reader_internal<R: Read + Seek>(
     mut reader: R,
     logical_name: &str,
@@ -2114,11 +2226,27 @@ fn decode_image_bgra_reader_internal<R: Read + Seek>(
 
     let decode_start = Instant::now();
     reader.seek(SeekFrom::Start(0)).ok()?;
-    let mut image = ImageReader::new(BufReader::new(reader))
+    let decoder = ImageReader::new(BufReader::new(reader))
         .with_guessed_format()
         .ok()?
-        .decode()
+        .into_decoder()
         .ok()?;
+    let (decoded_width, decoded_height) = decoder.dimensions();
+    if should_skip_native_image_decode(decoded_width, decoded_height)
+        || !native_image_decode_fits_peak_budget(NativeImageDecodeBudgetInput {
+            source_width: decoded_width,
+            source_height: decoded_height,
+            decoded_bytes: decoder.total_bytes(),
+            decoded_bytes_per_pixel: u64::from(decoder.color_type().bytes_per_pixel()),
+            target_width,
+            target_height,
+            orientation: jpeg_metadata.orientation,
+            include_waveform,
+        })
+    {
+        return None;
+    }
+    let mut image = image::DynamicImage::from_decoder(decoder).ok()?;
     let decode_ms = elapsed_ms_u32(decode_start);
     if cancel_requested(cancel_cb) {
         return None;
@@ -2133,26 +2261,12 @@ fn decode_image_bgra_reader_internal<R: Read + Seek>(
         return None;
     }
 
-    let target_width = if target_width > 0 {
-        target_width
-    } else {
-        MAX_IMAGE_RASTER_DIMENSION
-    };
-    let target_height = if target_height > 0 {
-        target_height
-    } else {
-        MAX_IMAGE_RASTER_DIMENSION
-    };
-    let target_width = target_width.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
-    let target_height = target_height.clamp(1, MAX_IMAGE_RASTER_DIMENSION);
-    let scale = if oriented_width > target_width || oriented_height > target_height {
-        (target_width as f64 / oriented_width as f64)
-            .min(target_height as f64 / oriented_height as f64)
-    } else {
-        1.0
-    };
-    let width = ((oriented_width as f64 * scale).round() as u32).max(1);
-    let height = ((oriented_height as f64 * scale).round() as u32).max(1);
+    let (width, height) = native_image_target_dimensions(
+        oriented_width,
+        oriented_height,
+        target_width,
+        target_height,
+    );
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -3442,6 +3556,61 @@ mod tests {
         assert!(!should_skip_native_image_decode(8_000, 6_000));
         assert!(should_skip_native_image_decode(8_001, 6_000));
         assert!(should_skip_native_image_decode(0, 6_000));
+    }
+
+    #[test]
+    fn native_image_decode_peak_budget_accepts_48mp_rgba32f_without_orientation() {
+        let input = NativeImageDecodeBudgetInput {
+            source_width: 8_000,
+            source_height: 6_000,
+            decoded_bytes: 48_000_000 * 16,
+            decoded_bytes_per_pixel: 16,
+            target_width: MAX_IMAGE_RASTER_DIMENSION,
+            target_height: MAX_IMAGE_RASTER_DIMENSION,
+            orientation: None,
+            include_waveform: false,
+        };
+        let peak = checked_native_image_decode_peak_bytes(input).expect("checked 48 MP peak");
+
+        assert_eq!(peak, 843_497_472);
+        assert!(peak <= MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES);
+        assert!(native_image_decode_fits_peak_budget(input));
+    }
+
+    #[test]
+    fn native_image_decode_peak_budget_rejects_three_source_orientation_peak() {
+        let input = NativeImageDecodeBudgetInput {
+            source_width: 8_000,
+            source_height: 6_000,
+            decoded_bytes: 48_000_000 * 16,
+            decoded_bytes_per_pixel: 16,
+            target_width: MAX_IMAGE_RASTER_DIMENSION,
+            target_height: MAX_IMAGE_RASTER_DIMENSION,
+            orientation: Some(5),
+            include_waveform: false,
+        };
+        let peak = checked_native_image_decode_peak_bytes(input).expect("checked orientation peak");
+
+        assert_eq!(peak, 2_304_000_000);
+        assert!(peak > MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES);
+        assert!(!native_image_decode_fits_peak_budget(input));
+    }
+
+    #[test]
+    fn native_image_decode_peak_budget_rejects_checked_arithmetic_overflow() {
+        assert!(
+            checked_native_image_decode_peak_bytes(NativeImageDecodeBudgetInput {
+                source_width: u32::MAX,
+                source_height: u32::MAX,
+                decoded_bytes: u64::MAX,
+                decoded_bytes_per_pixel: 16,
+                target_width: MAX_IMAGE_RASTER_DIMENSION,
+                target_height: MAX_IMAGE_RASTER_DIMENSION,
+                orientation: None,
+                include_waveform: true,
+            })
+            .is_none()
+        );
     }
 
     #[test]

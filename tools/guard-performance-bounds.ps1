@@ -156,6 +156,12 @@ Require-Pattern $nativeLibrary 'PngDecoder::new[\s\S]*is_apng\(\)[\s\S]*\.apng\(
     "APNG playback must use the bounded native animation pipeline."
 Require-Pattern $nativeLibrary 'MAX_IMAGE_RASTER_DIMENSION:\s*u32\s*=\s*2048' `
     "Static HANDLE image rasters must remain capped at 2048 pixels."
+Require-Pattern $nativeLibrary 'MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES:\s*u64\s*=\s*896\s*\*\s*1024\s*\*\s*1024' `
+    "Static native image decode must retain its 896 MiB peak decoded-byte budget."
+Require-Pattern $nativeLibrary 'fn checked_native_image_decode_peak_bytes\([\s\S]*source_pixels\.checked_mul\(decoded_bytes_per_pixel\)[\s\S]*Some\(5 \| 7\) => 3[\s\S]*resize_native_bytes[\s\S]*target_rgba_bytes[\s\S]*checked_add\(target_rgba_bytes\)[\s\S]*DynamicImage::from_decoder\(decoder\)' `
+    "Static native image decode must check source color depth, EXIF copies, resize, RGBA, and BGRA bytes before full decode."
+Require-Pattern $nativeLibrary 'fn native_image_decode_peak_budget_accepts_48mp_rgba32f_without_orientation\(\)[\s\S]*fn native_image_decode_peak_budget_rejects_three_source_orientation_peak\(\)[\s\S]*fn native_image_decode_peak_budget_rejects_checked_arithmetic_overflow\(\)' `
+    "Static native image decoded-byte budget must retain boundary, over-budget, and overflow regressions."
 Require-Pattern $nativeLibrary 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Static HANDLE image inputs must remain capped at 256 MiB."
 Require-Pattern $nativeShellThumbnail 'sender:\s*mpsc::SyncSender<ThumbnailRequest>[\s\S]*self\.sender\.try_send\(request\)[\s\S]*mpsc::sync_channel::<ThumbnailRequest>\(1\)' `
