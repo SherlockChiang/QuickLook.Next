@@ -1642,7 +1642,7 @@ if (Test-Path $rasterHostRoot) {
         $systemMetadataReaderText -notmatch 'SystemMetadataTimeoutExitCode\s*=\s*33' -or
         $systemMetadataReaderText -notmatch 'DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)' -or
         $systemMetadataReaderText -notmatch 'DrainsWithinGraceAsync\(worker,\s*DrainGrace\)' -or
-        $systemMetadataReaderText -notmatch 'Environment\.Exit\(SystemMetadataTimeoutExitCode\)' -or
+        $systemMetadataReaderText -notmatch 'SupervisedHostProcessPolicy\.ExitImmediately\(SystemMetadataTimeoutExitCode\)' -or
         $propertyMetadataReaderText -notmatch 'Task\.Run\([\s\S]*ReadHandle\(' -or
         $propertyMetadataReaderText -notmatch 'ReadHandle\([\s\S]*PropertyHandlerResolver\.TryResolve\(logicalName\)' -or
         $propertyMetadataReaderText -notmatch 'WindowsHandleTransfer\.ReopenReadOnlyFile\(sourceHandle,\s*sourceLength\)' -or
@@ -1685,7 +1685,7 @@ if (Test-Path $rasterHostRoot) {
         $pdfSessionText -notmatch 'PdfDocument\.LoadFromStreamAsync\(randomAccessStream\)' -or
         $pdfSessionText -notmatch 'ReopenReadOnlyFile\(sourceHandle, sourceLength\)' -or
         $pdfSessionText -notmatch 'GetFileIdentity\(sourceHandle, sourceLength\)' -or
-        $rasterHostText -notmatch 'DisposePdfSessionAsync\([\s\S]*catch\s*\(TimeoutException\)[\s\S]{0,300}PDF render drain timed out; exiting host[\s\S]{0,100}Environment\.Exit\(31\)' -or
+        $rasterHostText -notmatch 'DisposePdfSessionAsync\([\s\S]*catch\s*\(TimeoutException\)[\s\S]{0,300}PDF render drain timed out; exiting host[\s\S]{0,180}SupervisedHostProcessPolicy\.ExitImmediately\(31\)' -or
         $pdfSessionText -notmatch '_inputRandomAccessStream\?\.Dispose\(\)' -or
         $pdfSessionText -notmatch '_inputFileStream\?\.Dispose\(\)') {
         Add-Failure "RasterHost local PDFs must load and retain the exact HANDLE stream without creating an input anchor"

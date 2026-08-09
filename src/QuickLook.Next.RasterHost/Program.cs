@@ -362,7 +362,7 @@ catch (Exception ex)
 // let injected graphics layers raise a non-continuable bare FACILITY_DXGI exception after all managed
 // work has drained.
 DiagLog.Write("RasterHost", $"pipe cleanup complete; exiting process code={terminalExitCode}");
-Environment.Exit(terminalExitCode);
+SupervisedHostProcessPolicy.ExitImmediately(terminalExitCode);
 
 void TrackTerminalWorker(Task worker)
 {
@@ -394,7 +394,7 @@ async Task DrainTerminalWorkersAsync()
         if (remaining <= TimeSpan.Zero)
         {
             DiagLog.Write("RasterHost", $"terminal worker drain timed out; exiting host: workers={workers.Length}");
-            Environment.Exit(31);
+            SupervisedHostProcessPolicy.ExitImmediately(31);
         }
 
         try
@@ -404,7 +404,7 @@ async Task DrainTerminalWorkersAsync()
         catch (TimeoutException)
         {
             DiagLog.Write("RasterHost", $"terminal worker drain timed out; exiting host: workers={workers.Length}");
-            Environment.Exit(31);
+            SupervisedHostProcessPolicy.ExitImmediately(31);
         }
         catch (Exception ex)
         {
@@ -1297,7 +1297,7 @@ static async Task DisposePdfSessionAsync(PdfPreviewSession session, string reque
     catch (TimeoutException)
     {
         DiagLog.Write("RasterHost", $"PDF render drain timed out; exiting host: request={requestId}");
-        Environment.Exit(31);
+        SupervisedHostProcessPolicy.ExitImmediately(31);
     }
 }
 

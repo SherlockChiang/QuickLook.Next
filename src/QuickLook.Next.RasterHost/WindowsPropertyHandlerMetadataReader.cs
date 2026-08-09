@@ -218,7 +218,7 @@ internal static class WindowsPropertyHandlerMetadataReader
             DiagLog.Write(
                 "RasterHost",
                 "Property Handler metadata did not drain after cancellation; exiting host.");
-            Environment.Exit(PropertyHandlerTimeoutExitCode);
+            SupervisedHostProcessPolicy.ExitImmediately(PropertyHandlerTimeoutExitCode);
         }
         catch
         {

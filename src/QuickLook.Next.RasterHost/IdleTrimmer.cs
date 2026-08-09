@@ -112,7 +112,7 @@ internal sealed class IdleTrimmer : IAsyncDisposable
 
         // Timer.DisposeAsync waits for an already-running callback. A callback may be inside an
         // uncancellable GC.WaitForPendingFinalizers call, so shutdown must stop future ticks without
-        // waiting; Program.cs uses Environment.Exit after its logical cleanup boundary.
+        // waiting; Program.cs uses the supervised atomic exit after its logical cleanup boundary.
         _timer.Dispose();
         return ValueTask.CompletedTask;
     }

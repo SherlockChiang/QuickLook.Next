@@ -261,11 +261,14 @@ else {
     foreach ($shutdownRequirement in @(
             @{ Pattern = 'terminalWorkers[\s\S]*TrackTerminalWorker\(HandlePageOpenAsync\(page\)\)[\s\S]*remainingPageCts[\s\S]*await DrainTerminalWorkersAsync\(\)'; Message = "RasterHost must track, cancel, and drain terminal workers before process cleanup." },
             @{ Pattern = 'StartPreparedAnimationHandoff[\s\S]*TrackTerminalWorker\(Task\.Run[\s\S]*StartAnimationDecode[\s\S]*TrackTerminalWorker\(Task\.Run[\s\S]*DeletePreparedGifDecode[\s\S]*TrackTerminalWorker\(state\.CancelAndDisposeAsync\(\)\)'; Message = "RasterHost must include animation and prepared-GIF work in its terminal drain." },
-            @{ Pattern = 'DrainTerminalWorkersAsync\(\)[\s\S]*TimeSpan\.FromSeconds\(5\)[\s\S]*while \(true\)[\s\S]*Task\.WhenAll\(workers\)\.WaitAsync\(remaining\)[\s\S]*terminal worker drain timed out[\s\S]*Environment\.Exit\(31\)'; Message = "RasterHost terminal-worker drain must keep its bounded fail-stop timeout." },
-            @{ Pattern = 'Shutdown:\s*int terminalExitCode\s*=\s*0;\s*try[\s\S]*await idleTrimmer\.DisposeAsync\(\);[\s\S]*await DrainTerminalWorkersAsync\(\)[\s\S]*Task\.WhenAll\(remainingMetadataRequests[\s\S]*DisposePdfSessionAsync\(session,[\s\S]*packet\.Dispose\(\)[\s\S]*catch \(Exception ex\)[\s\S]*terminalExitCode\s*=\s*31[\s\S]*Environment\.Exit\(terminalExitCode\)'; Message = "RasterHost pipe termination must quiesce and drain owned work, then atomically fail-stop on cleanup errors." })) {
+            @{ Pattern = 'DrainTerminalWorkersAsync\(\)[\s\S]*TimeSpan\.FromSeconds\(5\)[\s\S]*while \(true\)[\s\S]*Task\.WhenAll\(workers\)\.WaitAsync\(remaining\)[\s\S]*terminal worker drain timed out[\s\S]*SupervisedHostProcessPolicy\.ExitImmediately\(31\)'; Message = "RasterHost terminal-worker drain must keep its bounded fail-stop timeout." },
+            @{ Pattern = 'Shutdown:\s*int terminalExitCode\s*=\s*0;\s*try[\s\S]*await idleTrimmer\.DisposeAsync\(\);[\s\S]*await DrainTerminalWorkersAsync\(\)[\s\S]*Task\.WhenAll\(remainingMetadataRequests[\s\S]*DisposePdfSessionAsync\(session,[\s\S]*packet\.Dispose\(\)[\s\S]*catch \(Exception ex\)[\s\S]*terminalExitCode\s*=\s*31[\s\S]*SupervisedHostProcessPolicy\.ExitImmediately\(terminalExitCode\)'; Message = "RasterHost pipe termination must quiesce and drain owned work, then atomically fail-stop on cleanup errors." })) {
         if ($rasterHostProgramText -notmatch $shutdownRequirement.Pattern) {
             Add-Failure $shutdownRequirement.Message
         }
+    }
+    if ($rasterHostProgramText -match 'Environment\.Exit\(') {
+        Add-Failure "RasterHost terminal paths must use the shared immediate exit instead of CLR finalizer shutdown."
     }
 
     $rasterHostIdleTrimmerText = Get-Content -LiteralPath $rasterHostIdleTrimmerPath -Raw

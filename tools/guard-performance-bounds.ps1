@@ -247,7 +247,7 @@ Require-Pattern $nativeImageMetadataReader 'while\s*\(capacity\s*<=\s*MaxMetadat
     "RasterHost image metadata must validate exact native output sizing and reject oversized responses."
 Require-Pattern $systemImageMetadataReader 'MaxInputImageBytes\s*=\s*512L\s*\*\s*1024\s*\*\s*1024[\s\S]*MetadataGate\s*=\s*new\(1,\s*1\)[\s\S]*CancelAfter\(timeout\)[\s\S]*ReopenReadOnlyFile\(sourceHandle,\s*sourceLength\)[\s\S]*AsRandomAccessStream\(\)[\s\S]*BitmapDecoder[\s\S]*CreateAsync\(stream\)' `
     "RasterHost Windows-codec metadata must remain single-worker, timeout-bounded, size-bounded, and bound to a reopened HANDLE stream."
-Require-Pattern $systemImageMetadataReader 'SystemMetadataTimeoutExitCode\s*=\s*33[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*Task\.Run\([\s\S]*worker\.WaitAsync\(timeoutCts\.Token\)[\s\S]*DrainsWithinGraceAsync\(worker,\s*DrainGrace\)[\s\S]*Environment\.Exit\(SystemMetadataTimeoutExitCode\)' `
+Require-Pattern $systemImageMetadataReader 'SystemMetadataTimeoutExitCode\s*=\s*33[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*Task\.Run\([\s\S]*worker\.WaitAsync\(timeoutCts\.Token\)[\s\S]*DrainsWithinGraceAsync\(worker,\s*DrainGrace\)[\s\S]*SupervisedHostProcessPolicy\.ExitImmediately\(SystemMetadataTimeoutExitCode\)' `
     "A Windows-codec metadata call that cannot drain within 250 ms must fail-stop the isolated RasterHost."
 Require-Pattern $propertyHandlerMetadataReader 'MaxInputImageBytes\s*=\s*256L\s*\*\s*1024\s*\*\s*1024[\s\S]*MaxProperties\s*=\s*128[\s\S]*MaxAcceptedProperties\s*=\s*48[\s\S]*MaxStringChars\s*=\s*512[\s\S]*MaxAggregateStringChars\s*=\s*4\s*\*\s*1024[\s\S]*MetadataGate\s*=\s*new\(1,\s*1\)' `
     "RasterHost Property Handler metadata must retain its input, property, string, and single-worker budgets."
@@ -257,7 +257,7 @@ Require-Pattern $propertyHandlerMetadataReader '\[Guid\("0000000C-0000-0000-C000
     "The Property Handler must expose the native IID_IStream ABI without marshalled byte arrays."
 Require-Pattern $propertyHandlerMetadataReader 'public\s+unsafe\s+int\s+Read\(nint\s+buffer,\s*uint\s+count,\s*nint\s+bytesRead\)[\s\S]*count\s*>\s*MaxSingleReadBytes[\s\S]*new\s+Span<byte>\(\(void\*\)buffer,\s*allowed\)' `
     "The Property Handler IStream must validate native read sizes before exposing the caller buffer to managed code."
-Require-Pattern $propertyHandlerMetadataReader 'PropertyHandlerTimeoutExitCode\s*=\s*32[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*worker\.WaitAsync\(DrainGrace\)[\s\S]*Environment\.Exit\(PropertyHandlerTimeoutExitCode\)' `
+Require-Pattern $propertyHandlerMetadataReader 'PropertyHandlerTimeoutExitCode\s*=\s*32[\s\S]*DrainGrace\s*=\s*TimeSpan\.FromMilliseconds\(250\)[\s\S]*worker\.WaitAsync\(DrainGrace\)[\s\S]*SupervisedHostProcessPolicy\.ExitImmediately\(PropertyHandlerTimeoutExitCode\)' `
     "A Property Handler call that cannot drain within 250 ms must fail-stop the isolated RasterHost."
 Require-Pattern $rasterHostProgram 'imageMetadataTimeout\s*=\s*TimeSpan\.FromMilliseconds\(1500\)[\s\S]*TryAcquire\(\s*RetainedRasterOperations\.Metadata[\s\S]*NativeImageMetadataReader\.TryReadHandleAsync\([\s\S]*PreviewImageMetadataReady\(' `
     "Image metadata must remain an optional 1.5-second child operation over an independent retained HANDLE lease."

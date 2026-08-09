@@ -166,7 +166,7 @@ internal static class SystemImageMetadataReader
         DiagLog.Write(
             "RasterHost",
             "system HANDLE image metadata did not drain after cancellation; exiting host.");
-        Environment.Exit(SystemMetadataTimeoutExitCode);
+        SupervisedHostProcessPolicy.ExitImmediately(SystemMetadataTimeoutExitCode);
     }
 
     internal static async Task<bool> DrainsWithinGraceAsync(
