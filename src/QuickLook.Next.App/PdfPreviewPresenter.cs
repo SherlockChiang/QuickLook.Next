@@ -252,10 +252,7 @@ internal sealed class PdfPreviewPresenter
                 _ = supervisor?.ClosePageAsync(requestId!, pageIndex, pageGeneration);
 
         foreach (var host in _pageHosts.Values)
-        {
-            ElementCompositionPreview.SetElementChildVisual(host, null);
             DisposePageVisual(host);
-        }
         _pagesPanel.Children.Clear();
         _pageHosts.Clear();
         _requestedPages.Clear();
@@ -457,10 +454,7 @@ internal sealed class PdfPreviewPresenter
         _requestedPages.Remove(pageIndex);
         _pageLastTouched.Remove(pageIndex);
         if (_pageHosts.TryGetValue(pageIndex, out var host))
-        {
-            ElementCompositionPreview.SetElementChildVisual(host, null);
             DisposePageVisual(host);
-        }
 
         if (_requestId is not null && _pageGenerations.TryGetValue(pageIndex, out long pageGeneration))
             _ = _supervisorProvider()?.ClosePageAsync(_requestId, pageIndex, pageGeneration);
@@ -505,6 +499,7 @@ internal sealed class PdfPreviewPresenter
     private static void DisposePageVisual(Border host)
     {
         var oldChild = ElementCompositionPreview.GetElementChildVisual(host);
+        ElementCompositionPreview.SetElementChildVisual(host, null);
         if (oldChild is not SpriteVisual oldSprite)
             return;
 
