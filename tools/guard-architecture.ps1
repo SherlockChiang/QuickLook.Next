@@ -1973,6 +1973,10 @@ $performanceBoundsGuard = Join-Path $PSScriptRoot "guard-performance-bounds.ps1"
 Invoke-CheckedScript -Path $performanceBoundsGuard -Arguments @{ Root = $Root } `
     -FailureMessage "Performance bounds guard failed"
 
+$textSearchContractTest = Join-Path $PSScriptRoot "test-text-search-contract.ps1"
+Invoke-CheckedScript -Path $textSearchContractTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Text-search contract guard failed"
+
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
 Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "MSIX version tests failed"

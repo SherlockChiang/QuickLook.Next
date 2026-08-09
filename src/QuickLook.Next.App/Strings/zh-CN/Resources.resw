@@ -113,6 +113,12 @@
   <data name="DeleteFileMessage" xml:space="preserve"><value>{0} 将被移至回收站。</value></data>
   <data name="MoveToRecycleBin" xml:space="preserve"><value>移至回收站</value></data>
   <data name="Cancel" xml:space="preserve"><value>取消</value></data>
+  <data name="TextSearchPlaceholder" xml:space="preserve"><value>查找</value></data>
+  <data name="TextSearchAccessibleName" xml:space="preserve"><value>在文本预览中查找</value></data>
+  <data name="TextSearchPreviousMatch" xml:space="preserve"><value>上一个匹配项</value></data>
+  <data name="TextSearchNextMatch" xml:space="preserve"><value>下一个匹配项</value></data>
+  <data name="TextSearchClose" xml:space="preserve"><value>关闭搜索</value></data>
+  <data name="TextSearchCountFormat" xml:space="preserve"><value>第 {0} 个，共 {1} 个</value></data>
   <data name="TextPreviewTruncated" xml:space="preserve"><value>[预览已截断]</value></data>
   <data name="CopyAction" xml:space="preserve"><value>复制</value></data>
   <data name="CopiedAction" xml:space="preserve"><value>已复制</value></data>

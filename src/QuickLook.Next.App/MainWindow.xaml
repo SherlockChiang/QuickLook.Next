@@ -319,6 +319,7 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <Grid x:Name="TextHeroPanel"
@@ -355,9 +356,58 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                     </Grid>
+                    <Border x:Name="TextSearchBar"
+                            Grid.Row="1"
+                            Visibility="Collapsed"
+                            Margin="24,12,24,10"
+                            Padding="8"
+                            Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                            BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <Grid ColumnSpacing="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TextSearchBox"
+                                     MinWidth="120"
+                                     MinHeight="40"
+                                     HorizontalAlignment="Stretch"
+                                     TextChanged="OnTextSearchTextChanged"
+                                     KeyDown="OnTextSearchBoxKeyDown" />
+                            <TextBlock x:Name="TextSearchCountText"
+                                       Grid.Column="1"
+                                       MinWidth="54"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Center"
+                                       AutomationProperties.LiveSetting="Polite" />
+                            <Button x:Name="TextSearchPreviousButton"
+                                    Grid.Column="2"
+                                    Click="OnTextSearchPreviousClick"
+                                    Style="{StaticResource PreviewIconButtonStyle}">
+                                <FontIcon Glyph="&#xE70E;" FontSize="14" />
+                            </Button>
+                            <Button x:Name="TextSearchNextButton"
+                                    Grid.Column="3"
+                                    Click="OnTextSearchNextClick"
+                                    Style="{StaticResource PreviewIconButtonStyle}">
+                                <FontIcon Glyph="&#xE70D;" FontSize="14" />
+                            </Button>
+                            <Button x:Name="TextSearchCloseButton"
+                                    Grid.Column="4"
+                                    Click="OnTextSearchCloseClick"
+                                    Style="{StaticResource PreviewIconButtonStyle}">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                            </Button>
+                        </Grid>
+                    </Border>
                     <ScrollViewer x:Name="TextScrollViewer"
                                   x:Uid="TextScrollViewer"
-                                  Grid.Row="1"
+                                  Grid.Row="2"
                                   Visibility="Visible"
                                   Padding="24"
                                   HorizontalScrollBarVisibility="Auto"
@@ -376,7 +426,7 @@
                     </ScrollViewer>
                     <ListView x:Name="TextListView"
                               x:Uid="TextListView"
-                              Grid.Row="1"
+                              Grid.Row="2"
                               Visibility="Collapsed"
                               Padding="24"
                                SelectionMode="Extended"
@@ -412,7 +462,7 @@
                     </ListView>
                     <ListView x:Name="MarkdownListView"
                               x:Uid="MarkdownListView"
-                              Grid.Row="1"
+                              Grid.Row="2"
                               Visibility="Collapsed"
                               Padding="24"
                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"

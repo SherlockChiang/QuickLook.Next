@@ -94,6 +94,7 @@ public sealed partial class MainWindow : Window
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
     private bool _imageFilmstripSuppressClick;
+    private bool _suppressTextSearchTextChanged;
     private Windows.Foundation.Point _imageFilmstripDragStart;
     private double _imageFilmstripDragStartOffset;
     private readonly UISettings _uiSettings = new();
@@ -226,6 +227,15 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        TextSearchBox.PlaceholderText = UiStrings.TextSearchPlaceholder;
+        AutomationProperties.SetName(TextSearchBox, UiStrings.TextSearchAccessibleName);
+        AutomationProperties.SetName(TextSearchPreviousButton, UiStrings.TextSearchPreviousMatch);
+        AutomationProperties.SetName(TextSearchNextButton, UiStrings.TextSearchNextMatch);
+        AutomationProperties.SetName(TextSearchCloseButton, UiStrings.TextSearchClose);
+        ToolTipService.SetToolTip(TextSearchPreviousButton, UiStrings.TextSearchPreviousMatch);
+        ToolTipService.SetToolTip(TextSearchNextButton, UiStrings.TextSearchNextMatch);
+        ToolTipService.SetToolTip(TextSearchCloseButton, UiStrings.TextSearchClose);
+        ApplyTextSearchState(default);
         ListingFilterBox.PlaceholderText = UiStrings.ListingFilterPlaceholder;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ListingFilterBox, UiStrings.ListingFilterAccessibleName);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
@@ -2287,6 +2297,7 @@ public sealed partial class MainWindow : Window
     private void ResetPreview()
     {
         DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
+        ResetTextSearchUi();
         _rasterPresenter?.Clear();
         _animatedImagePresenter?.Clear();
         _imageWaveformPresenter?.Clear();
@@ -3204,6 +3215,31 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        bool textPreviewVisible = TextPreviewContainer.Visibility == Visibility.Visible;
+        if (textPreviewVisible && controlDown && e.Key == Windows.System.VirtualKey.F)
+        {
+            OpenTextSearch();
+            e.Handled = true;
+            return;
+        }
+        if (textPreviewVisible
+            && TextSearchBar.Visibility == Visibility.Visible
+            && e.Key == Windows.System.VirtualKey.F3
+            && _textPresenter is { } textPresenter)
+        {
+            ApplyTextSearchState(textPresenter.MoveSearch(shiftDown ? -1 : 1));
+            e.Handled = true;
+            return;
+        }
+        if (textPreviewVisible
+            && TextSearchBar.Visibility == Visibility.Visible
+            && e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CloseTextSearch();
+            e.Handled = true;
+            return;
+        }
+
         if (ListingPanel.Visibility == Visibility.Visible && controlDown && e.Key == Windows.System.VirtualKey.F)
         {
             _listingPresenter?.FocusFilter();
@@ -3266,6 +3302,107 @@ public sealed partial class MainWindow : Window
             _ = NavigateImageSiblingAsync(1);
             e.Handled = true;
         }
+    }
+
+    private void OpenTextSearch()
+    {
+        if (TextPreviewContainer.Visibility != Visibility.Visible || _textPresenter is not { } textPresenter)
+            return;
+
+        TextSearchBar.Visibility = Visibility.Visible;
+        TextSearchBox.Focus(FocusState.Programmatic);
+        TextSearchBox.SelectAll();
+        ApplyTextSearchState(textPresenter.SetSearchQuery(TextSearchBox.Text));
+    }
+
+    private void OnTextSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressTextSearchTextChanged || _textPresenter is not { } textPresenter)
+            return;
+
+        ApplyTextSearchState(textPresenter.SetSearchQuery(TextSearchBox.Text));
+    }
+
+    private void OnTextSearchPreviousClick(object sender, RoutedEventArgs e)
+        => MoveTextSearch(-1);
+
+    private void OnTextSearchNextClick(object sender, RoutedEventArgs e)
+        => MoveTextSearch(1);
+
+    private void MoveTextSearch(int delta)
+    {
+        if (_textPresenter is { } textPresenter)
+            ApplyTextSearchState(textPresenter.MoveSearch(delta));
+    }
+
+    private void OnTextSearchCloseClick(object sender, RoutedEventArgs e)
+        => CloseTextSearch();
+
+    private void OnTextSearchBoxKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        bool shiftDown = (Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            MoveTextSearch(shiftDown ? -1 : 1);
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CloseTextSearch();
+            e.Handled = true;
+        }
+    }
+
+    private void CloseTextSearch()
+    {
+        TextSearchBar.Visibility = Visibility.Collapsed;
+        _suppressTextSearchTextChanged = true;
+        try
+        {
+            TextSearchBox.Text = "";
+        }
+        finally
+        {
+            _suppressTextSearchTextChanged = false;
+        }
+
+        ApplyTextSearchState(_textPresenter?.ClearSearch() ?? default);
+        FocusTextPreviewContent();
+    }
+
+    private void ResetTextSearchUi()
+    {
+        TextSearchBar.Visibility = Visibility.Collapsed;
+        _suppressTextSearchTextChanged = true;
+        try
+        {
+            TextSearchBox.Text = "";
+        }
+        finally
+        {
+            _suppressTextSearchTextChanged = false;
+        }
+        ApplyTextSearchState(default);
+    }
+
+    private void ApplyTextSearchState(TextSearchState state)
+    {
+        TextSearchCountText.Text = UiStrings.Format(UiStrings.TextSearchCountFormat, state.Current, state.Count);
+        bool hasMatches = state.Count > 0;
+        TextSearchPreviousButton.IsEnabled = hasMatches;
+        TextSearchNextButton.IsEnabled = hasMatches;
+    }
+
+    private void FocusTextPreviewContent()
+    {
+        FrameworkElement focusTarget = MarkdownListView.Visibility == Visibility.Visible
+            ? MarkdownListView
+            : TextListView.Visibility == Visibility.Visible
+                ? TextListView
+                : TextPreviewBlock;
+        focusTarget.Focus(FocusState.Programmatic);
     }
 
     private void ClosePreviewFromKeyboard()

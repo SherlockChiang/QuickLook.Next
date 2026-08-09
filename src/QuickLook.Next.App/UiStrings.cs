@@ -152,6 +152,12 @@ internal static class UiStrings
     public static string DeleteFileMessage => Get(nameof(DeleteFileMessage));
     public static string MoveToRecycleBin => Get(nameof(MoveToRecycleBin));
     public static string Cancel => Get(nameof(Cancel));
+    public static string TextSearchPlaceholder => Get(nameof(TextSearchPlaceholder));
+    public static string TextSearchAccessibleName => Get(nameof(TextSearchAccessibleName));
+    public static string TextSearchPreviousMatch => Get(nameof(TextSearchPreviousMatch));
+    public static string TextSearchNextMatch => Get(nameof(TextSearchNextMatch));
+    public static string TextSearchClose => Get(nameof(TextSearchClose));
+    public static string TextSearchCountFormat => Get(nameof(TextSearchCountFormat));
     public static string TextPreviewTruncated => Get(nameof(TextPreviewTruncated));
     public static string TextPreviewTruncatedAtCharacterCountFormat => Get(nameof(TextPreviewTruncatedAtCharacterCountFormat));
     public static string SyntaxHighlightingCharacterLimitFormat => Get(nameof(SyntaxHighlightingCharacterLimitFormat));

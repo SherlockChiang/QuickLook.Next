@@ -234,6 +234,12 @@
   <data name="ListingError" xml:space="preserve"><value>Could not read this folder</value></data>
   <data name="StartupFailedMessage" xml:space="preserve"><value>QuickLook Next could not start correctly.</value></data>
   <data name="MovedToRecycleBin" xml:space="preserve"><value>Moved to Recycle Bin</value></data>
+  <data name="TextSearchPlaceholder" xml:space="preserve"><value>Find</value></data>
+  <data name="TextSearchAccessibleName" xml:space="preserve"><value>Find in text preview</value></data>
+  <data name="TextSearchPreviousMatch" xml:space="preserve"><value>Previous match</value></data>
+  <data name="TextSearchNextMatch" xml:space="preserve"><value>Next match</value></data>
+  <data name="TextSearchClose" xml:space="preserve"><value>Close search</value></data>
+  <data name="TextSearchCountFormat" xml:space="preserve"><value>{0} of {1}</value></data>
   <data name="TextPreviewTruncated" xml:space="preserve"><value>[Preview truncated]</value></data>
   <data name="CopyAction" xml:space="preserve"><value>Copy</value></data>
   <data name="CopiedAction" xml:space="preserve"><value>Copied!</value></data>

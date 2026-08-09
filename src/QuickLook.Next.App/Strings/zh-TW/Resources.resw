@@ -339,6 +339,24 @@
   <data name="Cancel" xml:space="preserve">
     <value>取消</value>
   </data>
+  <data name="TextSearchPlaceholder" xml:space="preserve">
+    <value>尋找</value>
+  </data>
+  <data name="TextSearchAccessibleName" xml:space="preserve">
+    <value>在文字預覽中尋找</value>
+  </data>
+  <data name="TextSearchPreviousMatch" xml:space="preserve">
+    <value>上一個相符項目</value>
+  </data>
+  <data name="TextSearchNextMatch" xml:space="preserve">
+    <value>下一個相符項目</value>
+  </data>
+  <data name="TextSearchClose" xml:space="preserve">
+    <value>關閉搜尋</value>
+  </data>
+  <data name="TextSearchCountFormat" xml:space="preserve">
+    <value>第 {0} 個，共 {1} 個</value>
+  </data>
   <data name="TextPreviewTruncated" xml:space="preserve">
     <value>[預覽已截斷]</value>
   </data>
