@@ -1,6 +1,7 @@
 param([string]$Path = (Join-Path (Split-Path $PSScriptRoot -Parent) "packaging\Install.ps1"))
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "checked-invocation.ps1")
 $bytes = [System.IO.File]::ReadAllBytes($Path)
 if (@($bytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
     throw "Install.ps1 must remain ASCII for Windows PowerShell 5.1 compatibility."
@@ -179,5 +180,13 @@ foreach ($rule in $requiredPatterns) {
 if ($text -match 'exit\s+\$elevated\.ExitCode|Remove-AppxPackage|ForceUpdateFromAnyVersion|Get-AppxPackage\s+[^\r\n]*-(AllUsers|User)') {
     throw "The installer must not uninstall, downgrade, or query another user's package."
 }
+
+Invoke-CheckedScript `
+    -Path (Join-Path $PSScriptRoot "test-installer-control-flow.ps1") `
+    -Arguments @{
+        Path = $Path
+        Root = (Split-Path $PSScriptRoot -Parent)
+    } `
+    -FailureMessage "Installer executable control-flow test failed"
 
 Write-Host "installer script guard passed" -ForegroundColor Green
