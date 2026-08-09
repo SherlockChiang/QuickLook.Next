@@ -27,9 +27,11 @@ else {
         @{ Pattern = 'WER_FAULT_REPORTING_NO_UI\s*=\s*0x0*20'; Message = "WER_FAULT_REPORTING_NO_UI must remain enabled." },
         @{ Pattern = 'GetErrorMode\(\)[\s\S]*SetErrorMode\([\s\S]*currentErrorMode[\s\S]*SEM_FAILCRITICALERRORS[\s\S]*SEM_NOGPFAULTERRORBOX[\s\S]*SEM_NOOPENFILEERRORBOX'; Message = "The policy must preserve the current error mode while suppressing critical, unhandled-exception, and open-file dialogs." },
         @{ Pattern = 'WerGetFlags\(\s*GetCurrentProcess\(\)[\s\S]*WerSetFlags\([\s\S]*currentWerFlags\s*&\s*~WER_FAULT_REPORTING_ALWAYS_SHOW_UI[\s\S]*\|\s*WER_FAULT_REPORTING_NO_UI'; Message = "The policy must clear WER always-show-UI while preserving other flags and requesting no UI." },
+        @{ Pattern = 'DoesNotReturn[\s\S]*ExitImmediately\(int exitCode\)[\s\S]*TerminateProcess\(GetCurrentProcess\(\),\s*unchecked\(\(uint\)exitCode\)\)[\s\S]*Environment\.Exit\(exitCode\)'; Message = "Supervised leaf hosts must retain an immediate Windows exit with a managed fallback." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+GetErrorMode\(\)'; Message = "GetErrorMode must retain its System32 kernel32 uint signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+uint\s+SetErrorMode\(uint\s+mode\)'; Message = "SetErrorMode must retain its System32 kernel32 uint signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+nint\s+GetCurrentProcess\(\)'; Message = "GetCurrentProcess must retain its System32 kernel32 HANDLE signature." },
+        @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true,\s*SetLastError\s*=\s*true\)[\s\S]{0,250}MarshalAs\(UnmanagedType\.Bool\)[\s\S]{0,120}extern\s+bool\s+TerminateProcess\(nint\s+process,\s*uint\s+exitCode\)'; Message = "TerminateProcess must retain its System32 BOOL/HANDLE/DWORD signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+int\s+WerGetFlags\(nint\s+process,\s*out\s+uint\s+flags\)'; Message = "WerGetFlags must retain its System32 kernel32 HRESULT/HANDLE/DWORD signature." },
         @{ Pattern = 'DllImport\("kernel32\.dll",\s*ExactSpelling\s*=\s*true\)[\s\S]{0,200}extern\s+int\s+WerSetFlags\(uint\s+flags\)'; Message = "WerSetFlags must retain its System32 kernel32 HRESULT/DWORD signature." }
     )
@@ -97,6 +99,7 @@ else {
             '\A(?:using\s+[^;]+;\s*)+SupervisedHostProcessPolicy\.SuppressInteractiveErrorUi\(\);\s*return\s+await',
             'READY \{token\}[\s\S]*ARM \{token\}[\s\S]*ARMED \{token\}[\s\S]*FIRE \{token\}',
             'DxgiFacilityException\s*=\s*0x0*87A',
+            'ImmediateExitMode\s*=\s*"exit"[\s\S]*SupervisedHostProcessPolicy\.ExitImmediately\(ImmediateExitCode\)',
             'RaiseFailFastException\(ref\s+exceptionRecord,\s*nint\.Zero,\s*0\)',
             'StructLayout\(LayoutKind\.Explicit,\s*Size\s*=\s*152\)',
             'Environment\.FailFast\("QuickLook Next supervised-host no-dialog probe\."\)',
@@ -117,7 +120,7 @@ else {
     $crashProbeTestText = Get-Content -LiteralPath $crashProbeTestPath -Raw
     foreach ($testRequirement in @(
             'DisableParallelization\s*=\s*true',
-            'InlineData\(DxgiMode\)[\s\S]*InlineData\(FailFastMode\)',
+            'InlineData\(DxgiMode\)[\s\S]*InlineData\(ImmediateExitMode\)[\s\S]*InlineData\(FailFastMode\)',
             'CreateNoWindow\s*=\s*true',
             'NamedPipeServerStream\([\s\S]*PipeOptions\.CurrentUserOnly',
             'READY \{token\}[\s\S]*ARM \{token\}[\s\S]*ARMED \{token\}[\s\S]*FIRE \{token\}',
@@ -126,6 +129,7 @@ else {
             'OpenInputDesktop\([\s\S]*DesktopReadObjects\s*\|\s*DesktopEnumerate[\s\S]*EnumDesktopWindows\(desktop,\s*callback,\s*nint\.Zero\)[\s\S]*CloseDesktop\(desktop\)',
             'Application Error[\s\S]*应用程序错误',
             'Assert\.Equal\(DxgiFacilityException,\s*outcome\.ExitCode\)',
+            'Assert\.Equal\(ImmediateExitCode,\s*outcome\.ExitCode\)',
             'Kill\(entireProcessTree:\s*true\)[\s\S]*WaitForExitAsync\(\)\.WaitAsync\(ProcessStopTimeout\)')) {
         if ($crashProbeTestText -notmatch $testRequirement) {
             Add-Failure "The supervised-host real crash test lost required coverage: $testRequirement"

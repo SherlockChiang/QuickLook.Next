@@ -18,7 +18,9 @@ public sealed class SupervisedHostCrashProbeCollection
 public sealed class SupervisedHostCrashProbeTests
 {
     private const uint DxgiFacilityException = 0x0000087A;
+    private const uint ImmediateExitCode = 37;
     private const string DxgiMode = "dxgi";
+    private const string ImmediateExitMode = "exit";
     private const string FailFastMode = "failfast";
     private const uint DesktopReadObjects = 0x0001;
     private const uint DesktopEnumerate = 0x0040;
@@ -30,8 +32,9 @@ public sealed class SupervisedHostCrashProbeTests
 
     [Theory]
     [InlineData(DxgiMode)]
+    [InlineData(ImmediateExitMode)]
     [InlineData(FailFastMode)]
-    public async Task Real_crash_exits_without_an_Application_Error_window(string mode)
+    public async Task Real_terminal_exit_avoids_an_Application_Error_window(string mode)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -40,7 +43,14 @@ public sealed class SupervisedHostCrashProbeTests
 
         Assert.False(outcome.TimedOut, "Crash probe did not terminate within the fixed timeout.");
         Assert.Empty(outcome.ErrorWindows);
-        Assert.NotEqual(0u, outcome.ExitCode);
+        if (string.Equals(mode, ImmediateExitMode, StringComparison.Ordinal))
+        {
+            Assert.Equal(ImmediateExitCode, outcome.ExitCode);
+        }
+        else
+        {
+            Assert.NotEqual(0u, outcome.ExitCode);
+        }
         if (string.Equals(mode, DxgiMode, StringComparison.Ordinal))
             Assert.Equal(DxgiFacilityException, outcome.ExitCode);
     }

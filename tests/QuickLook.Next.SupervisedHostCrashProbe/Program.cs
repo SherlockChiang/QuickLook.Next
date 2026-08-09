@@ -11,7 +11,9 @@ internal static class SupervisedHostCrashProbe
 {
     private const uint DxgiFacilityException = 0x0000087A;
     private const uint ExceptionNoncontinuable = 0x00000001;
+    private const int ImmediateExitCode = 37;
     private const string DxgiMode = "dxgi";
+    private const string ImmediateExitMode = "exit";
     private const string FailFastMode = "failfast";
 
     public static async Task<int> RunAsync(string[] args)
@@ -72,6 +74,9 @@ internal static class SupervisedHostCrashProbe
     [DoesNotReturn]
     private static void Crash(string mode)
     {
+        if (string.Equals(mode, ImmediateExitMode, StringComparison.Ordinal))
+            SupervisedHostProcessPolicy.ExitImmediately(ImmediateExitCode);
+
         if (string.Equals(mode, DxgiMode, StringComparison.Ordinal))
         {
             var exceptionRecord = new NativeExceptionRecord
@@ -103,6 +108,7 @@ internal static class SupervisedHostCrashProbe
 
     private static bool IsValidMode(string mode) =>
         string.Equals(mode, DxgiMode, StringComparison.Ordinal)
+        || string.Equals(mode, ImmediateExitMode, StringComparison.Ordinal)
         || string.Equals(mode, FailFastMode, StringComparison.Ordinal);
 
     private static bool IsValidToken(string token)

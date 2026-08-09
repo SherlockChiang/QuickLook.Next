@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace QuickLook.Next.Core;
@@ -54,6 +55,21 @@ public static class SupervisedHostProcessPolicy
         }
     }
 
+    /// <summary>
+    /// Ends a supervised leaf process after its logical cleanup boundary without running another CLR
+    /// shutdown/finalizer pass. Windows reclaims all remaining process-scoped native state atomically.
+    /// </summary>
+    [DoesNotReturn]
+    public static void ExitImmediately(int exitCode)
+    {
+        if (OperatingSystem.IsWindows())
+            _ = TerminateProcess(GetCurrentProcess(), unchecked((uint)exitCode));
+
+        // TerminateProcess does not return on success for the current process. Preserve a portable
+        // fallback for tests or an unexpected native failure.
+        Environment.Exit(exitCode);
+    }
+
     [DllImport("kernel32.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern uint GetErrorMode();
@@ -65,6 +81,11 @@ public static class SupervisedHostProcessPolicy
     [DllImport("kernel32.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static extern nint GetCurrentProcess();
+
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(nint process, uint exitCode);
 
     [DllImport("kernel32.dll", ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
