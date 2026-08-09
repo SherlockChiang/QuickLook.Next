@@ -1990,6 +1990,10 @@ $releaseWorkflowTest = Join-Path $PSScriptRoot "test-release-workflows.ps1"
 Invoke-CheckedScript -Path $releaseWorkflowTest -Arguments @{ Root = $Root } `
     -FailureMessage "Release workflow tests failed"
 
+$installerScriptTest = Join-Path $PSScriptRoot "test-installer-script.ps1"
+Invoke-CheckedScript -Path $installerScriptTest `
+    -FailureMessage "Installer script guard failed"
+
 $setVersionWorkflowTest = Join-Path $PSScriptRoot "test-set-version.ps1"
 Invoke-CheckedScript -Path $setVersionWorkflowTest -Arguments @{ Root = $Root } `
     -FailureMessage "Set-version workflow tests failed"
