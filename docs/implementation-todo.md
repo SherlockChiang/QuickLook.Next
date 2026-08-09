@@ -44,7 +44,7 @@ the release-only `release:` prefix while this queue is in progress.
 - [x] `R26-P1-01` Bind preview errors to the failing path and generation so Retry,
   Open, and Reveal can never act on the previous file; cover first-open and A-to-B
   early-failure transitions.
-- [ ] `R26-P1-02` Resolve the text-search contract drift between the presenter,
+- [x] `R26-P1-02` Resolve the text-search contract drift between the presenter,
   keyboard routing, documentation, and performance guard without restoring the
   old wheel-intercepting flyout.
 - [ ] `R26-P1-03` Add explicit CloudProgress, PDF per-page failure, empty, and
@@ -184,6 +184,9 @@ the release-only `release:` prefix while this queue is in progress.
 - [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
   thumbnail worker's unbounded, non-cancellable queue with a bounded supervised
   broker or deadline-aware worker.
+  - [x] `R26-P1-09a` Replace the unbounded native Shell thumbnail STA channel
+    with a capacity-one non-blocking queue and reject pre-cancelled work before
+    dispatch. Moving COM ownership off the hook pump remains open.
 - [ ] `R26-P1-10` Add fuzz/property targets and sanitizer coverage for archive,
   Office, TIFF/EXIF, SQLite, executable, media, and FFI packet boundaries.
 
@@ -254,6 +257,26 @@ the release-only `release:` prefix while this queue is in progress.
 ## Completed
 
 Completed entries move here with the verification commands and commit hash.
+
+- [x] `R26-P1-02` Restore the existing bounded text-search presenter contract
+  through an inline, non-overlay search row with Ctrl+F, Enter/F3 navigation,
+  reverse navigation, Escape close, focus restoration, polite match counts,
+  40-DIP controls, and English/Simplified Chinese/Traditional Chinese strings.
+  The old wheel-intercepting flyout controls remain forbidden, and the focused
+  contract test now runs from the architecture guard.
+  - Verification: `pwsh -NoProfile -File tools/test-text-search-contract.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 450 keys)
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-build --no-restore --filter "FullyQualifiedName~Text_search"` (2 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Commit: `1fb6a0c`
+
+- [x] `R26-P1-09a` Bound native Shell thumbnail dispatch to one queued request
+  behind the active STA call, fail fast when saturated, and reject a request
+  whose cancellation callback is already set. The Shell COM call remains
+  serial and deadline-bounded; moving it off the hook pump remains queued.
+  - Verification: `cargo test --manifest-path native/quicklook_next_native/Cargo.toml shell_thumbnail` (5 passed)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commit: `1a61fde`
 
 - [x] `R26-P1-07c-6b` Replace the fixed-prefix Outlook MSG path with a
   Rust-first, seekable reader and exact ParserHost HANDLE route. `mail.rs`
