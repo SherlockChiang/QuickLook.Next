@@ -169,7 +169,26 @@ function Get-AppxPackage {
     if ($Name -ne $packageName) {
         throw "Installer queried an unexpected package name."
     }
-    $global:QuickLookInstallerHarnessEvents.Add("GetAppx")
+    if (-not $global:QuickLookInstallerHarnessRegistered) {
+        $global:QuickLookInstallerHarnessEvents.Add("GetAppxPreflight")
+        if ([string]::IsNullOrEmpty(
+                $global:QuickLookInstallerHarnessInstalledVersion)) {
+            return
+        }
+        $installedPackage = [pscustomobject]@{
+            Name = $packageName
+            Publisher = $releaseCertificate.Subject
+            Version = [version](
+                $global:QuickLookInstallerHarnessInstalledVersion)
+        }
+        if ($global:QuickLookInstallerHarnessScenario -eq
+            "AmbiguousInstalledFailFast") {
+            return @($installedPackage, $installedPackage)
+        }
+        return $installedPackage
+    }
+
+    $global:QuickLookInstallerHarnessEvents.Add("GetAppxPostcondition")
     if ($global:QuickLookInstallerHarnessScenario -eq
         "PostconditionFailure") {
         return
@@ -187,6 +206,10 @@ function Write-Host {
         [object[]]$Object,
         [ConsoleColor]$ForegroundColor
     )
+
+    foreach ($item in @($Object)) {
+        $global:QuickLookInstallerHarnessHostMessages.Add([string]$item)
+    }
 }
 
 function Assert-Scenario {
@@ -195,7 +218,11 @@ function Assert-Scenario {
         [Parameter(Mandatory = $true)][bool]$InitialTrust,
         [Parameter(Mandatory = $true)][string[]]$ExpectedEvents,
         [Parameter(Mandatory = $true)][bool]$ExpectedTrust,
+        [Parameter(Mandatory = $true)][bool]$ExpectedRegistered,
         [Parameter(Mandatory = $true)][bool]$ExpectFailure,
+        [string]$InitialInstalledVersion = "",
+        [string[]]$ExpectedMessages = @(),
+        [switch]$Chinese,
         [string]$ExpectedError = ""
     )
 
@@ -203,11 +230,20 @@ function Assert-Scenario {
     $global:QuickLookInstallerHarnessTrustPresent = $InitialTrust
     $global:QuickLookInstallerHarnessIsAdministrator = $false
     $global:QuickLookInstallerHarnessRegistered = $false
+    $global:QuickLookInstallerHarnessInstalledVersion =
+        $InitialInstalledVersion
     $global:QuickLookInstallerHarnessEvents =
+        [Collections.Generic.List[string]]::new()
+    $global:QuickLookInstallerHarnessHostMessages =
         [Collections.Generic.List[string]]::new()
     $failure = $null
     try {
-        & $instrumentedPath
+        if ($Chinese) {
+            & $instrumentedPath -Chinese
+        }
+        else {
+            & $instrumentedPath
+        }
     }
     catch {
         $failure = $_
@@ -228,6 +264,15 @@ function Assert-Scenario {
     if ([bool]$global:QuickLookInstallerHarnessTrustPresent -ne
         $ExpectedTrust) {
         throw "$Name ended with an unexpected trust state."
+    }
+    if ([bool]$global:QuickLookInstallerHarnessRegistered -ne
+        $ExpectedRegistered) {
+        throw "$Name ended with an unexpected registration state."
+    }
+    $actualMessages = @($global:QuickLookInstallerHarnessHostMessages)
+    if (($actualMessages -join "|") -ne ($ExpectedMessages -join "|")) {
+        throw ("$Name messages were '$($actualMessages -join '|')', expected " +
+            "'$($ExpectedMessages -join '|')'.")
     }
 }
 
@@ -277,22 +322,31 @@ try {
         $archive.Dispose()
     }
 
+    $sameVersionChineseMessage = "QuickLook Next " +
+        (-join (@(0x5DF2, 0x662F, 0x5F53, 0x524D, 0x7248, 0x672C, 0x3002) |
+            ForEach-Object { [char]$_ }))
+
     Assert-Scenario `
-        -Name "FirstTrustSuccess" `
+        -Name "NoPackageFirstTrustSuccess" `
         -InitialTrust $false `
         -ExpectedEvents @(
-            "Signature", "TrustProbe", "ElevateAddTrust", "TrustProbe",
-            "Signature", "AddAppx", "GetAppx") `
+            "Signature", "GetAppxPreflight", "TrustProbe",
+            "ElevateAddTrust", "TrustProbe", "Signature", "AddAppx",
+            "GetAppxPostcondition") `
         -ExpectedTrust $true `
-        -ExpectFailure $false
+        -ExpectedRegistered $true `
+        -ExpectFailure $false `
+        -ExpectedMessages @("QuickLook Next was installed successfully.")
 
     Assert-Scenario `
         -Name "RegistrationFailure" `
         -InitialTrust $false `
         -ExpectedEvents @(
-            "Signature", "TrustProbe", "ElevateAddTrust", "TrustProbe",
-            "Signature", "AddAppx", "ElevateRemoveTrust") `
+            "Signature", "GetAppxPreflight", "TrustProbe",
+            "ElevateAddTrust", "TrustProbe", "Signature", "AddAppx",
+            "ElevateRemoveTrust") `
         -ExpectedTrust $false `
+        -ExpectedRegistered $false `
         -ExpectFailure $true `
         -ExpectedError "mock registration failed"
 
@@ -300,19 +354,66 @@ try {
         -Name "PostconditionFailure" `
         -InitialTrust $false `
         -ExpectedEvents @(
-            "Signature", "TrustProbe", "ElevateAddTrust", "TrustProbe",
-            "Signature", "AddAppx", "GetAppx") `
+            "Signature", "GetAppxPreflight", "TrustProbe",
+            "ElevateAddTrust", "TrustProbe", "Signature", "AddAppx",
+            "GetAppxPostcondition") `
         -ExpectedTrust $true `
+        -ExpectedRegistered $true `
         -ExpectFailure $true `
         -ExpectedError "Certificate trust was retained"
 
     Assert-Scenario `
-        -Name "ExistingTrustSuccess" `
+        -Name "NormalUpgrade" `
         -InitialTrust $true `
+        -InitialInstalledVersion "1.2.3.3" `
         -ExpectedEvents @(
-            "Signature", "TrustProbe", "Signature", "AddAppx", "GetAppx") `
+            "Signature", "GetAppxPreflight", "TrustProbe", "Signature",
+            "AddAppx", "GetAppxPostcondition") `
         -ExpectedTrust $true `
-        -ExpectFailure $false
+        -ExpectedRegistered $true `
+        -ExpectFailure $false `
+        -ExpectedMessages @("QuickLook Next was installed successfully.")
+
+    Assert-Scenario `
+        -Name "SameVersionAlreadyCurrent" `
+        -InitialTrust $false `
+        -InitialInstalledVersion $packageVersion `
+        -ExpectedEvents @("Signature", "GetAppxPreflight") `
+        -ExpectedTrust $false `
+        -ExpectedRegistered $false `
+        -ExpectFailure $false `
+        -ExpectedMessages @("QuickLook Next is already installed at this version.")
+
+    Assert-Scenario `
+        -Name "SameVersionAlreadyCurrentChinese" `
+        -InitialTrust $false `
+        -InitialInstalledVersion $packageVersion `
+        -ExpectedEvents @("Signature", "GetAppxPreflight") `
+        -ExpectedTrust $false `
+        -ExpectedRegistered $false `
+        -ExpectFailure $false `
+        -Chinese `
+        -ExpectedMessages @($sameVersionChineseMessage)
+
+    Assert-Scenario `
+        -Name "NewerInstalledFailFast" `
+        -InitialTrust $false `
+        -InitialInstalledVersion "1.2.3.5" `
+        -ExpectedEvents @("Signature", "GetAppxPreflight") `
+        -ExpectedTrust $false `
+        -ExpectedRegistered $false `
+        -ExpectFailure $true `
+        -ExpectedError "newer version of QuickLook Next"
+
+    Assert-Scenario `
+        -Name "AmbiguousInstalledFailFast" `
+        -InitialTrust $false `
+        -InitialInstalledVersion "1.2.3.3" `
+        -ExpectedEvents @("Signature", "GetAppxPreflight") `
+        -ExpectedTrust $false `
+        -ExpectedRegistered $false `
+        -ExpectFailure $true `
+        -ExpectedError "installed QuickLook Next package identity is invalid"
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot -PathType Container) {
@@ -333,6 +434,8 @@ finally {
     }
     foreach ($name in @(
             "QuickLookInstallerHarnessEvents",
+            "QuickLookInstallerHarnessHostMessages",
+            "QuickLookInstallerHarnessInstalledVersion",
             "QuickLookInstallerHarnessIsAdministrator",
             "QuickLookInstallerHarnessRegistered",
             "QuickLookInstallerHarnessScenario",

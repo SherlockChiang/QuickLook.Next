@@ -131,9 +131,17 @@ if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprin
 
 $expectedPackageName = "SherlockChiang.QuickLookNext"
 $packageIdentity = Get-MsixIdentity -Path $package.FullName
+$targetVersion = $null
 if (-not $packageIdentity -or
     $packageIdentity.Name -ne $expectedPackageName -or
-    $packageIdentity.Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') {
+    $packageIdentity.Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' -or
+    -not [version]::TryParse(
+        [string]$packageIdentity.Version,
+        [ref]$targetVersion) -or
+    $targetVersion.Major -gt 65535 -or
+    $targetVersion.Minor -gt 65535 -or
+    $targetVersion.Build -gt 65535 -or
+    $targetVersion.Revision -gt 65535) {
     throw (Localized "The MSIX package identity is invalid." @(0x004D,0x0053,0x0049,0x0058,0x0020,0x5305,0x6807,0x8BC6,0x65E0,0x6548,0x3002))
 }
 if (-not [string]::Equals(
@@ -143,7 +151,6 @@ if (-not [string]::Equals(
     throw (Localized "The MSIX publisher does not match the included certificate." @(0x004D,0x0053,0x0049,0x0058,0x0020,0x53D1,0x5E03,0x8005,0x4E0E,0x968F,0x9644,0x8BC1,0x4E66,0x4E0D,0x5339,0x914D,0x3002))
 }
 
-$hasMachineTrust = Test-MachineCertificateTrust -Thumbprint $expectedThumbprint
 $windowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($windowsIdentity)
 $isAdministrator = $principal.IsInRole(
@@ -165,6 +172,38 @@ if ($TrustOnly) {
     exit 10
 }
 
+$existingPackages = @(
+    Get-AppxPackage -Name $expectedPackageName -ErrorAction Stop)
+if ($existingPackages.Count -gt 1) {
+    throw (Localized "The installed QuickLook Next package identity is invalid." @(0x5DF2,0x5B89,0x88C5,0x7684,0x0020,0x0051,0x0075,0x0069,0x0063,0x006B,0x004C,0x006F,0x006F,0x006B,0x0020,0x004E,0x0065,0x0078,0x0074,0x0020,0x5305,0x6807,0x8BC6,0x65E0,0x6548,0x3002))
+}
+if ($existingPackages.Count -eq 1) {
+    $existingPackage = $existingPackages[0]
+    $installedVersion = $null
+    if ([string]$existingPackage.Name -ne $packageIdentity.Name -or
+        -not [string]::Equals(
+            [string]$existingPackage.Publisher,
+            $packageIdentity.Publisher,
+            [System.StringComparison]::Ordinal) -or
+        -not [version]::TryParse(
+            [string]$existingPackage.Version,
+            [ref]$installedVersion) -or
+        $installedVersion.Major -gt 65535 -or
+        $installedVersion.Minor -gt 65535 -or
+        $installedVersion.Build -gt 65535 -or
+        $installedVersion.Revision -gt 65535) {
+        throw (Localized "The installed QuickLook Next package identity is invalid." @(0x5DF2,0x5B89,0x88C5,0x7684,0x0020,0x0051,0x0075,0x0069,0x0063,0x006B,0x004C,0x006F,0x006F,0x006B,0x0020,0x004E,0x0065,0x0078,0x0074,0x0020,0x5305,0x6807,0x8BC6,0x65E0,0x6548,0x3002))
+    }
+    if ($targetVersion -eq $installedVersion) {
+        Write-Host (Localized "QuickLook Next is already installed at this version." @(0x0051,0x0075,0x0069,0x0063,0x006B,0x004C,0x006F,0x006F,0x006B,0x0020,0x004E,0x0065,0x0078,0x0074,0x0020,0x5DF2,0x662F,0x5F53,0x524D,0x7248,0x672C,0x3002)) -ForegroundColor Green
+        return
+    }
+    if ($targetVersion -lt $installedVersion) {
+        throw (Localized "A newer version of QuickLook Next is already installed. Downgrades are not allowed." @(0x5DF2,0x5B89,0x88C5,0x66F4,0x9AD8,0x7248,0x672C,0x7684,0x0020,0x0051,0x0075,0x0069,0x0063,0x006B,0x004C,0x006F,0x006F,0x006B,0x0020,0x004E,0x0065,0x0078,0x0074,0xFF0C,0x4E0D,0x80FD,0x4F7F,0x7528,0x6B64,0x5B89,0x88C5,0x5305,0x964D,0x7EA7,0x3002))
+    }
+}
+
+$hasMachineTrust = Test-MachineCertificateTrust -Thumbprint $expectedThumbprint
 $addedCertificate = $false
 $registrationCompleted = $false
 try {
