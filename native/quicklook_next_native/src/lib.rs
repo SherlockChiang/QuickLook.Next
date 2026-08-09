@@ -977,6 +977,7 @@ fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'stati
 // [decode_ms:u32 LE][resize_ms:u32 LE][convert_ms:u32 LE][premultiplied BGRA bytes].
 
 const MAX_IMAGE_RASTER_DIMENSION: u32 = 2048;
+const IMAGE_PACKET_HEADER_BYTES: usize = 28;
 const IMAGE_WAVEFORM_WIDTH: u32 = 192;
 const IMAGE_WAVEFORM_HEIGHT: u32 = 96;
 const IMAGE_WAVEFORM_CHANNELS: usize = 3;
@@ -1289,12 +1290,23 @@ pub unsafe extern "C" fn ql_decode_image_handle(
                 "webp" => ImageFormat::WebP,
                 _ => return QL_ERROR_INVALID_ARGUMENT,
             };
-            if let Err(status) = validate_handle_image_dimensions(
+            let required = match preflight_native_image_packet_length(
                 &mut file,
                 required_format,
                 MAX_NATIVE_IMAGE_DECODE_PIXELS,
+                target_width,
+                target_height,
+                false,
             ) {
-                return status;
+                Ok(required) => required,
+                Err(status) => return status,
+            };
+            if cancel_requested(cancel_cb) {
+                return QL_ERROR_CANCELLED;
+            }
+            *out_required = required;
+            if required > out_cap {
+                return QL_ERROR_BUFFER_TOO_SMALL;
             }
             decode_image_bgra_reader(
                 &mut file,
@@ -1324,7 +1336,7 @@ pub unsafe extern "C" fn ql_decode_image_handle(
                 }
             }
         };
-        let mut packet = Vec::with_capacity(28 + bgra.len());
+        let mut packet = Vec::with_capacity(IMAGE_PACKET_HEADER_BYTES + bgra.len());
         packet.extend_from_slice(&width.to_le_bytes());
         packet.extend_from_slice(&height.to_le_bytes());
         packet.extend_from_slice(&original_width.to_le_bytes());
@@ -1420,12 +1432,23 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
                 "webp" => ImageFormat::WebP,
                 _ => return QL_ERROR_INVALID_ARGUMENT,
             };
-            if let Err(status) = validate_handle_image_dimensions(
+            let required = match preflight_native_image_packet_length(
                 &mut file,
                 required_format,
                 MAX_NATIVE_IMAGE_DECODE_PIXELS,
+                target_width,
+                target_height,
+                true,
             ) {
-                return status;
+                Ok(required) => required,
+                Err(status) => return status,
+            };
+            if cancel_requested(cancel_cb) {
+                return QL_ERROR_CANCELLED;
+            }
+            *out_required = required;
+            if required > out_cap {
+                return QL_ERROR_BUFFER_TOO_SMALL;
             }
             decode_image_bgra_reader_with_waveform(
                 &mut file,
@@ -1808,7 +1831,7 @@ fn validate_handle_image_dimensions<R: Read + Seek>(
     reader: &mut R,
     required_format: ImageFormat,
     max_pixels: u64,
-) -> std::result::Result<(), i32> {
+) -> std::result::Result<(u32, u32), i32> {
     reader.seek(SeekFrom::Start(0)).map_err(|_| QL_ERROR_IO)?;
     let image_reader = ImageReader::new(BufReader::new(&mut *reader))
         .with_guessed_format()
@@ -1829,7 +1852,56 @@ fn validate_handle_image_dimensions<R: Read + Seek>(
     {
         return Err(QL_ERROR_LIMIT_EXCEEDED);
     }
-    Ok(())
+    Ok((width, height))
+}
+
+fn preflight_native_image_packet_length<R: Read + Seek>(
+    reader: &mut R,
+    required_format: ImageFormat,
+    max_pixels: u64,
+    target_width: u32,
+    target_height: u32,
+    include_waveform: bool,
+) -> std::result::Result<usize, i32> {
+    let (source_width, source_height) =
+        validate_handle_image_dimensions(reader, required_format, max_pixels)?;
+    let orientation = if required_format == ImageFormat::Jpeg {
+        reader.seek(SeekFrom::Start(0)).map_err(|_| QL_ERROR_IO)?;
+        jpeg_metadata_from_reader(&mut *reader)
+            .map_err(|_| QL_ERROR_MALFORMED)?
+            .orientation
+    } else {
+        None
+    };
+    reader.seek(SeekFrom::Start(0)).map_err(|_| QL_ERROR_IO)?;
+    let (oriented_width, oriented_height) = match orientation {
+        Some(5..=8) => (source_height, source_width),
+        _ => (source_width, source_height),
+    };
+    let (width, height) = native_image_target_dimensions(
+        oriented_width,
+        oriented_height,
+        target_width,
+        target_height,
+    );
+    let width = usize::try_from(width).map_err(|_| QL_ERROR_LIMIT_EXCEEDED)?;
+    let height = usize::try_from(height).map_err(|_| QL_ERROR_LIMIT_EXCEEDED)?;
+    checked_native_image_packet_length(width, height, include_waveform)
+        .ok_or(QL_ERROR_LIMIT_EXCEEDED)
+}
+
+fn checked_native_image_packet_length(
+    width: usize,
+    height: usize,
+    include_waveform: bool,
+) -> Option<usize> {
+    let raster_bytes = width.checked_mul(height)?.checked_mul(4)?;
+    let fixed_bytes = if include_waveform {
+        IMAGE_WAVEFORM_PACKET_HEADER_BYTES.checked_add(IMAGE_WAVEFORM_DENSITY_BYTES)?
+    } else {
+        IMAGE_PACKET_HEADER_BYTES
+    };
+    fixed_bytes.checked_add(raster_bytes)
 }
 
 #[doc = include_str!("ffi_pointer_safety.md")]
@@ -2173,7 +2245,9 @@ fn checked_native_image_decode_peak_bytes(input: NativeImageDecodeBudgetInput) -
         .checked_add(target_rgba_bytes)?
         .checked_add(target_rgba_bytes)?
         .checked_add(waveform_bytes)?;
-    let packet_peak = target_rgba_bytes.checked_mul(2)?.checked_add(28)?;
+    let packet_peak = target_rgba_bytes
+        .checked_mul(2)?
+        .checked_add(u64::try_from(IMAGE_PACKET_HEADER_BYTES).ok()?)?;
 
     Some(orientation_peak.max(conversion_peak).max(packet_peak))
 }
@@ -3614,6 +3688,22 @@ mod tests {
     }
 
     #[test]
+    fn native_image_packet_length_checks_plain_waveform_and_overflow() {
+        assert_eq!(
+            checked_native_image_packet_length(2, 1, false),
+            Some(IMAGE_PACKET_HEADER_BYTES + 8)
+        );
+        assert_eq!(
+            checked_native_image_packet_length(2, 1, true),
+            Some(IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 8 + IMAGE_WAVEFORM_DENSITY_BYTES)
+        );
+        assert_eq!(
+            checked_native_image_packet_length(usize::MAX, 2, false),
+            None
+        );
+    }
+
+    #[test]
     fn checked_raster_writer_writes_exact_packet_and_rejects_bad_layout() {
         let bgra = [3u8, 2, 1, 255, 30, 20, 10, 128];
         let mut packet = [0u8; 16];
@@ -3771,6 +3861,34 @@ mod tests {
         assert_eq!(decoded.1, 1);
         assert_eq!(decoded.2, 1);
         assert_eq!(decoded.3, 2);
+    }
+
+    #[test]
+    fn native_image_packet_preflight_honors_jpeg_orientation() {
+        let mut jpeg = std::io::Cursor::new(jpeg_with_orientation_segment(6));
+
+        assert_eq!(
+            preflight_native_image_packet_length(
+                &mut jpeg,
+                ImageFormat::Jpeg,
+                MAX_NATIVE_IMAGE_DECODE_PIXELS,
+                1,
+                2,
+                false,
+            ),
+            Ok(IMAGE_PACKET_HEADER_BYTES + 4)
+        );
+        assert_eq!(
+            preflight_native_image_packet_length(
+                &mut jpeg,
+                ImageFormat::Jpeg,
+                MAX_NATIVE_IMAGE_DECODE_PIXELS,
+                1,
+                2,
+                true,
+            ),
+            Ok(IMAGE_WAVEFORM_PACKET_HEADER_BYTES + 4 + IMAGE_WAVEFORM_DENSITY_BYTES)
+        );
     }
 
     #[test]
@@ -6062,9 +6180,14 @@ mod handle_v2_tests {
     }
 
     static IMAGE_METADATA_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
+    static STATIC_IMAGE_PREFLIGHT_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
 
     extern "C" fn cancel_image_metadata_during_read() -> bool {
         IMAGE_METADATA_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 4
+    }
+
+    extern "C" fn cancel_static_image_after_preflight() -> bool {
+        STATIC_IMAGE_PREFLIGHT_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 2
     }
 
     static ARCHIVE_OUTPUT_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
@@ -8685,6 +8808,131 @@ mod handle_v2_tests {
         assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(packet[4..8].try_into().unwrap()), 1);
         assert_eq!(file.stream_position().unwrap(), position);
+        drop(file);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn raster_image_handle_sizes_output_before_full_pixel_decode() {
+        const EDGE: u32 = MAX_IMAGE_RASTER_DIMENSION;
+        let raster_bytes = usize::try_from(EDGE).unwrap() * usize::try_from(EDGE).unwrap() * 4;
+        let claimed_file_bytes = u32::try_from(54 + raster_bytes).unwrap();
+        let mut truncated_bmp = vec![0u8; 54];
+        truncated_bmp[0..2].copy_from_slice(b"BM");
+        truncated_bmp[2..6].copy_from_slice(&claimed_file_bytes.to_le_bytes());
+        truncated_bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+        truncated_bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        truncated_bmp[18..22].copy_from_slice(&(EDGE as i32).to_le_bytes());
+        truncated_bmp[22..26].copy_from_slice(&(EDGE as i32).to_le_bytes());
+        truncated_bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        truncated_bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+        truncated_bmp[34..38].copy_from_slice(&(raster_bytes as u32).to_le_bytes());
+
+        let (path, mut file) = create_input("bin", &truncated_bmp);
+        file.seek(SeekFrom::Start(7))
+            .expect("position truncated BMP handle");
+        let position = file.stream_position().unwrap();
+        let logical_name = b"truncated.bmp";
+        let length = file.metadata().unwrap().len();
+
+        let mut required = 0usize;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                EDGE,
+                EDGE,
+                std::ptr::null_mut(),
+                0,
+                &mut required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert_eq!(required, IMAGE_PACKET_HEADER_BYTES + raster_bytes);
+        assert!(required > 8 * 1024 * 1024);
+
+        let mut waveform_required = 0usize;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                EDGE,
+                EDGE,
+                std::ptr::null_mut(),
+                0,
+                &mut waveform_required,
+                None,
+            ),
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        assert_eq!(
+            waveform_required,
+            IMAGE_WAVEFORM_PACKET_HEADER_BYTES + raster_bytes + IMAGE_WAVEFORM_DENSITY_BYTES
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        STATIC_IMAGE_PREFLIGHT_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        let mut cancelled_required = usize::MAX;
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                EDGE,
+                EDGE,
+                std::ptr::null_mut(),
+                0,
+                &mut cancelled_required,
+                Some(cancel_static_image_after_preflight),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(cancelled_required, 0);
+
+        STATIC_IMAGE_PREFLIGHT_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        cancelled_required = usize::MAX;
+        assert_eq!(
+            call_image_with_waveform_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                EDGE,
+                EDGE,
+                std::ptr::null_mut(),
+                0,
+                &mut cancelled_required,
+                Some(cancel_static_image_after_preflight),
+            ),
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(cancelled_required, 0);
+        assert_eq!(file.stream_position().unwrap(), position);
+
+        let mut exact = vec![0u8; required];
+        assert_eq!(
+            call_image_handle(
+                file.as_raw_handle() as isize,
+                length,
+                logical_name.as_ptr(),
+                logical_name.len(),
+                EDGE,
+                EDGE,
+                exact.as_mut_ptr(),
+                exact.len(),
+                &mut required,
+                None,
+            ),
+            QL_ERROR_MALFORMED
+        );
+        assert_eq!(file.stream_position().unwrap(), position);
+
         drop(file);
         let _ = fs::remove_file(path);
     }
