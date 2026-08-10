@@ -15,6 +15,7 @@ namespace QuickLook.Next.ParserHost.IntegrationTests;
 public sealed class ParserHostIntegrationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan TransferredHandleReleaseTimeout = TimeSpan.FromSeconds(20);
 
     [Fact]
     public async Task Repeated_handle_previews_release_sources_without_linear_handle_growth()
@@ -973,11 +974,15 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal(requestId, duplicateError.RequestId);
             Assert.Contains("Duplicate request ID", duplicateError.Message, StringComparison.Ordinal);
 
+            // The duplicate response is immediate, but the first native worker owns its transferred
+            // HANDLE until cooperative cancellation returns. Give that cleanup an independent bound so
+            // hosted-runner startup/response time cannot consume its release budget.
+            using var releaseTimeout = new CancellationTokenSource(TransferredHandleReleaseTimeout);
             await WaitUntilAsync(
                 () => TryOverwriteFile(firstPath, "first released")
                       && TryOverwriteFile(secondPath, "second released"),
-                timeout.Token);
-            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+                releaseTimeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), releaseTimeout.Token);
         }
         finally
         {
@@ -1121,6 +1126,7 @@ public sealed class ParserHostIntegrationTests
             Assert.NotNull(duplicateError);
             Assert.Equal(requestId, duplicateError.RequestId);
 
+            using var releaseTimeout = new CancellationTokenSource(TransferredHandleReleaseTimeout);
             string[] paths =
             [
                 firstMainPath,
@@ -1132,10 +1138,10 @@ public sealed class ParserHostIntegrationTests
             ];
             await WaitUntilAsync(
                 () => paths.All(path => TryOverwriteFile(path, "released SQLite bundle")),
-                timeout.Token);
+                releaseTimeout.Token);
             Assert.False(Directory.Exists(
                 Path.Combine(GetWritableRoot(host), "parser-input", "input-" + requestId)));
-            await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+            await channel.SendAsync(new PreviewClose(requestId), releaseTimeout.Token);
         }
         finally
         {
