@@ -962,13 +962,17 @@ public sealed class ParserHostIntegrationTests
             second.Handle.Dispose();
 
             PreviewError? duplicateError = null;
+            bool previewReadyReceived = false;
             for (int responseCount = 0; responseCount < 2 && duplicateError is null; responseCount++)
             {
                 ControlMessage? response = await channel.ReceiveAsync(timeout.Token);
                 if (response is PreviewError error)
                     duplicateError = error;
                 else
+                {
                     Assert.IsType<PreviewReady>(response);
+                    previewReadyReceived = true;
+                }
             }
             Assert.NotNull(duplicateError);
             Assert.Equal(requestId, duplicateError.RequestId);
@@ -978,7 +982,10 @@ public sealed class ParserHostIntegrationTests
             // HANDLE until cooperative cancellation returns. Give that cleanup an independent bound so
             // hosted-runner startup/response time cannot consume its release budget.
             using var releaseTimeout = new CancellationTokenSource(TransferredHandleReleaseTimeout);
-            await WaitUntilAsync(
+            await WaitForDuplicateHandleReleaseAsync(
+                channel,
+                requestId,
+                previewReadyReceived,
                 () => TryOverwriteFile(firstPath, "first released")
                       && TryOverwriteFile(secondPath, "second released"),
                 releaseTimeout.Token);
@@ -1106,6 +1113,7 @@ public sealed class ParserHostIntegrationTests
             secondShm.Handle.Dispose();
 
             PreviewError? duplicateError = null;
+            bool previewReadyReceived = false;
             for (int responseCount = 0; responseCount < 2 && duplicateError is null; responseCount++)
             {
                 ControlMessage response =
@@ -1121,6 +1129,7 @@ public sealed class ParserHostIntegrationTests
                     Assert.Equal(
                         requestId,
                         Assert.IsType<PreviewReady>(response).RequestId);
+                    previewReadyReceived = true;
                 }
             }
             Assert.NotNull(duplicateError);
@@ -1136,7 +1145,10 @@ public sealed class ParserHostIntegrationTests
                 secondWalPath,
                 secondShmPath,
             ];
-            await WaitUntilAsync(
+            await WaitForDuplicateHandleReleaseAsync(
+                channel,
+                requestId,
+                previewReadyReceived,
                 () => paths.All(path => TryOverwriteFile(path, "released SQLite bundle")),
                 releaseTimeout.Token);
             Assert.False(Directory.Exists(
@@ -2472,6 +2484,46 @@ public sealed class ParserHostIntegrationTests
     {
         while (!condition())
             await Task.Delay(25, cancellationToken);
+    }
+
+    private static async Task WaitForDuplicateHandleReleaseAsync(
+        PipeChannel channel,
+        string requestId,
+        bool previewReadyReceived,
+        Func<bool> releaseCondition,
+        CancellationToken cancellationToken)
+    {
+        if (previewReadyReceived)
+        {
+            await WaitUntilAsync(releaseCondition, cancellationToken);
+            return;
+        }
+
+        // The duplicate error can win the serialized pipe write before a large in-flight Ready. Keep one
+        // optional receive active so pipe backpressure cannot prevent the first worker from reaching its
+        // HANDLE-disposing finally block. No further receives occur after this helper, so cancellation
+        // cannot affect a later line-delimited frame.
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<ControlMessage?> optionalReady = channel.ReceiveAsync(drainCts.Token);
+        try
+        {
+            await WaitUntilAsync(releaseCondition, cancellationToken);
+        }
+        finally
+        {
+            drainCts.Cancel();
+            try
+            {
+                if (await optionalReady is { } trailing)
+                {
+                    PreviewReady ready = Assert.IsType<PreviewReady>(trailing);
+                    Assert.Equal(requestId, ready.RequestId);
+                }
+            }
+            catch (OperationCanceledException) when (drainCts.IsCancellationRequested)
+            {
+            }
+        }
     }
 
     private static (string Path, FileStream Writer) CreateArchiveOutput(
