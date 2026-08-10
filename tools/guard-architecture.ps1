@@ -137,6 +137,14 @@ try {
 catch {
     Add-Failure $_.Exception.Message
 }
+try {
+    Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-target-behavior.ps1") `
+        -Arguments @{ Root = $Root } `
+        -FailureMessage "Release target behavior test failed"
+}
+catch {
+    Add-Failure $_.Exception.Message
+}
 
 # Rule 1: WebView/WebView2 must not re-enter product source.
 $webViewPattern = '\b(WebView|WebView2|Microsoft\.Web\.WebView2)\b'
