@@ -16,6 +16,7 @@ if (Test-Path -LiteralPath $legacyPackageWorkflowPath) {
 }
 $packageAction = Get-Content -LiteralPath $packageActionPath -Raw
 $pages = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\pages.yml") -Raw
+$packMsix = Get-Content -LiteralPath (Join-Path $Root "tools\pack-msix.ps1") -Raw
 
 if ($packageAction -notmatch '(?ms)^runs:\s*\r?\n\s+using:\s+composite\s*\r?\n\s+steps:' -or
     $packageAction -match '\$\{\{\s*secrets\.') {
@@ -59,6 +60,9 @@ if ($stable -notmatch '(?m)^\s+environment:\s+release\s*$' -or
     throw "Stable and beta package jobs must bind directly to their channel Environment."
 }
 foreach ($workflow in @($stable, $beta)) {
+    if ($workflow -notmatch '(?m)^\s+timeout-minutes:\s+60\s*$') {
+        throw "Signed package jobs must retain a cold-runner release budget of 60 minutes."
+    }
     if ($workflow -notmatch 'release-pfx-base64:\s*\$\{\{\s*secrets\.QUICKLOOK_RELEASE_PFX_BASE64\s*\}\}' -or
         $workflow -notmatch 'release-pfx-password:\s*\$\{\{\s*secrets\.QUICKLOOK_RELEASE_PFX_PASSWORD\s*\}\}') {
         throw "Each channel must pass only its Environment signing secrets to the package action."
@@ -111,6 +115,12 @@ if ($packageAction -notmatch 'actions/cache@[0-9a-f]{40}' -or
     $packageAction -notmatch 'new-release-metadata\.ps1' -or
     $packageAction -notmatch 'Stable release has no user-visible changes') {
     throw "Release caching, environment isolation, metadata, and visible-change guards are required."
+}
+if ($packMsix -notmatch
+        'ZipFile\]::CreateFromDirectory\([\s\S]{0,300}CompressionLevel\]::Fastest' -or
+    $packMsix -notmatch
+        'creating installer archive[\s\S]*validating installer archive') {
+    throw "Installer packaging must avoid optimal recompression of the signed MSIX and expose its validation phase."
 }
 if ($packageAction -notmatch
         'Check release signing configuration[\s\S]*QUICKLOOK_RELEASE_PFX_BASE64[\s\S]*QUICKLOOK_RELEASE_PFX_PASSWORD[\s\S]*Check NuGet vulnerabilities') {

@@ -11,7 +11,7 @@ jobs:
   package:
     runs-on: windows-2025
     environment: beta
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
     outputs:

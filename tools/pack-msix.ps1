@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 . (Join-Path $PSScriptRoot "checked-invocation.ps1")
 $root = Split-Path $PSScriptRoot -Parent
 $versionFile = Join-Path $root "VERSION"
@@ -194,9 +195,17 @@ Copy-Item -LiteralPath (Join-Path $root "dist\THIRD-PARTY-NOTICES.txt") -Destina
 
 $installerPath = Resolve-ArtifactChildPath $installerName
 Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $installerPath -CompressionLevel Optimal
+Write-Host "== creating installer archive ==" -ForegroundColor Cyan
+# The dominant entry is an already-compressed MSIX. Avoid spending hosted-runner
+# minutes recompressing it at Optimal while retaining ordinary ZIP compatibility.
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $installerRoot,
+    $installerPath,
+    [IO.Compression.CompressionLevel]::Fastest,
+    $false)
 $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $installerName" | Set-Content -LiteralPath "$installerPath.sha256" -Encoding ascii
+Write-Host "== validating installer archive ==" -ForegroundColor Cyan
 Invoke-CheckedScript -Path (Join-Path $PSScriptRoot "test-release-artifacts.ps1") `
     -Arguments @{
         InstallerPath = $installerPath
