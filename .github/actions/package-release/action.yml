@@ -36,6 +36,7 @@ runs:
         with:
           toolchain: 1.96.0
           targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
 
       - name: Cache dependency downloads
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
