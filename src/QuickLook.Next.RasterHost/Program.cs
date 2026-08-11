@@ -1084,6 +1084,10 @@ void StartAnimationDecode(
             }
             finally
             {
+                // CloseAnimationAsync waits on this gate before returning. Release the child
+                // source lease first so that close also fences the parent file lifetime.
+                source?.Dispose();
+                source = null;
                 gate.Release();
             }
         }
