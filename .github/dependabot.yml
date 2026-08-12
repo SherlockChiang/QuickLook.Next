@@ -15,7 +15,7 @@ updates:
     commit-message:
       prefix: deps
   - package-ecosystem: cargo
-    directory: /native/quicklook_next_native
+    directory: /native
     schedule:
       interval: monthly
     open-pull-requests-limit: 5

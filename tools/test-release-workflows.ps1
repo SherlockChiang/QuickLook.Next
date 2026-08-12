@@ -16,7 +16,16 @@ if (Test-Path -LiteralPath $legacyPackageWorkflowPath) {
 }
 $packageAction = Get-Content -LiteralPath $packageActionPath -Raw
 $pages = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\pages.yml") -Raw
+$dependabot = Get-Content -LiteralPath (Join-Path $Root ".github\dependabot.yml") -Raw
 $packMsix = Get-Content -LiteralPath (Join-Path $Root "tools\pack-msix.ps1") -Raw
+
+$cargoUpdates = [regex]::Matches(
+    $dependabot,
+    '(?ms)^\s{2}- package-ecosystem:\s*cargo\s*$.*?(?=^\s{2}- package-ecosystem:|\z)')
+if ($cargoUpdates.Count -ne 1 -or
+    $cargoUpdates[0].Value -notmatch '(?m)^\s{4}directory:\s*/native\s*$') {
+    throw "Dependabot Cargo updates must target the native workspace root so native/Cargo.lock stays synchronized."
+}
 
 if ($packageAction -notmatch '(?ms)^runs:\s*\r?\n\s+using:\s+composite\s*\r?\n\s+steps:' -or
     $packageAction -match '\$\{\{\s*secrets\.') {
