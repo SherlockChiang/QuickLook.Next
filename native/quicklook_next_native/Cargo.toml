@@ -11,11 +11,22 @@ crate-type = ["cdylib"]
 
 [dependencies]
 quick-xml = "0.41"
-zip = "2.2"
+zip = { version = "8.6", default-features = false, features = [
+    "aes-crypto",
+    "bzip2",
+    "deflate64",
+    "deflate-flate2",
+    "deflate-zopfli",
+    "lzma",
+    "ppmd",
+    "time",
+    "xz",
+    "zstd",
+] }
 encoding_rs = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-flate2 = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico", "tiff", "webp"] }
 resvg = { version = "0.47", default-features = false, features = ["system-fonts", "text"] }
