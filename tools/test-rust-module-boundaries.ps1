@@ -49,6 +49,7 @@ $archiveListingPath = Join-Path $Root "native\quicklook_next_native\src\preview\
 $archiveListingTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\listing\tests.rs"
 $archiveExtractPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract.rs"
 $archiveExtractTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract\tests.rs"
+$archiveExternalZipTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\archive\extract\external_zip.rs"
 $packagePath = Join-Path $Root "native\quicklook_next_native\src\preview\package\mod.rs"
 $packageAndroidPath = Join-Path $Root "native\quicklook_next_native\src\preview\package\android.rs"
 $packageTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\package\tests.rs"
@@ -99,6 +100,7 @@ foreach ($path in @(
         $archiveListingTestsPath,
         $archiveExtractPath,
         $archiveExtractTestsPath,
+        $archiveExternalZipTestsPath,
         $packagePath,
         $packageAndroidPath,
         $packageTestsPath,
@@ -1238,6 +1240,14 @@ if ($failures.Count -eq 0) {
     $archiveExtractTestsLineCount = @(Get-Content -LiteralPath $archiveExtractTestsPath).Count
     if ($archiveExtractTestsLineCount -gt 220) {
         $failures.Add("The focused archive extraction tests grew beyond 220 lines: $archiveExtractTestsLineCount")
+    }
+    $archiveExtractTestsText = Get-Content -LiteralPath $archiveExtractTestsPath -Raw
+    if ($archiveExtractTestsText -notmatch '(?m)^#\[path = "external_zip\.rs"\]\s*\r?\nmod external_zip;\s*$') {
+        $failures.Add("Archive extraction tests must keep external ZIP compatibility fixtures in a focused submodule.")
+    }
+    $archiveExternalZipTestsLineCount = @(Get-Content -LiteralPath $archiveExternalZipTestsPath).Count
+    if ($archiveExternalZipTestsLineCount -gt 360) {
+        $failures.Add("The external ZIP compatibility fixtures grew beyond 360 lines: $archiveExternalZipTestsLineCount")
     }
 
     if ($previewText -notmatch '(?m)^mod package;\s*$' -or
