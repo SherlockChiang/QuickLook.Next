@@ -24,8 +24,14 @@ public sealed class RasterHostAnimationTests
     {
         string pipeName = $"quicklook_next_raster_animation_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
         string token = RandomNumberGenerator.GetHexString(32);
-        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            4 * 1024,
+            4 * 1024);
         string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-{Guid.NewGuid():N}.bin");
         string logicalPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.{extension}");
         string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
@@ -68,6 +74,7 @@ public sealed class RasterHostAnimationTests
             }, timeout.Token);
 
             PreviewReady? previewReady = null;
+            PreviewImageWaveform? waveform = null;
             while (previewReady is null)
             {
                 ControlMessage? received = await channel.ReceiveAsync(timeout.Token);
@@ -86,6 +93,13 @@ public sealed class RasterHostAnimationTests
                 }
                 if (extension == "gif")
                     Assert.False(message is PreviewImageWaveform, "GIF must not publish an RGB waveform.");
+                else if (message is PreviewImageWaveform receivedWaveform)
+                {
+                    Assert.Null(waveform);
+                    Assert.Equal(previewRequestId, receivedWaveform.RequestId);
+                    Assert.True(ImageWaveformBuilder.IsValid(receivedWaveform.Waveform));
+                    waveform = receivedWaveform;
+                }
                 previewReady = message as PreviewReady;
             }
 
@@ -116,6 +130,13 @@ public sealed class RasterHostAnimationTests
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (extension == "gif")
                     Assert.False(message is PreviewImageWaveform, "GIF must not publish an RGB waveform.");
+                else if (message is PreviewImageWaveform receivedWaveform)
+                {
+                    Assert.Null(waveform);
+                    Assert.Equal(previewRequestId, receivedWaveform.RequestId);
+                    Assert.True(ImageWaveformBuilder.IsValid(receivedWaveform.Waveform));
+                    waveform = receivedWaveform;
+                }
                 frames = message as PreviewAnimationFramesReady;
             }
             Assert.Equal(previewRequestId, frames.PreviewRequestId);
@@ -164,7 +185,10 @@ public sealed class RasterHostAnimationTests
                 await channel.SendAsync(
                     new PreviewClose(previewRequestId),
                     previewCloseTimeout.Token);
-                await WaitUntilAsync(
+                await WaitForPreviewInputReleaseAsync(
+                    channel,
+                    previewRequestId,
+                    extension != "gif" && waveform is null,
                     () => TryOverwriteFile(physicalPath),
                     previewCloseTimeout.Token);
             }
@@ -295,6 +319,47 @@ public sealed class RasterHostAnimationTests
     {
         while (!condition())
             await Task.Delay(20, cancellationToken);
+    }
+
+    private static async Task WaitForPreviewInputReleaseAsync(
+        PipeChannel channel,
+        string previewRequestId,
+        bool mayPublishWaveform,
+        Func<bool> releaseCondition,
+        CancellationToken cancellationToken)
+    {
+        if (!mayPublishWaveform)
+        {
+            await WaitUntilAsync(releaseCondition, cancellationToken);
+            return;
+        }
+
+        // The animation packet can win the serialized host write before the static preview's
+        // optional waveform. Keep one final receive active so named-pipe backpressure cannot
+        // prevent PreviewClose from reaching the parent HANDLE cleanup. No reads follow this
+        // helper, so canceling a partial line cannot affect later protocol framing.
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<ControlMessage?> optionalWaveform = channel.ReceiveAsync(drainCts.Token);
+        try
+        {
+            await WaitUntilAsync(releaseCondition, cancellationToken);
+        }
+        finally
+        {
+            drainCts.Cancel();
+            try
+            {
+                if (await optionalWaveform is { } trailing)
+                {
+                    PreviewImageWaveform waveform = Assert.IsType<PreviewImageWaveform>(trailing);
+                    Assert.Equal(previewRequestId, waveform.RequestId);
+                    Assert.True(ImageWaveformBuilder.IsValid(waveform.Waveform));
+                }
+            }
+            catch (OperationCanceledException) when (drainCts.IsCancellationRequested)
+            {
+            }
+        }
     }
 
     private static bool CanDuplicateSection(Process host, long remoteHandle, int length)
