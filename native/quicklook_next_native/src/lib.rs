@@ -3879,6 +3879,28 @@ mod tests {
     }
 
     #[test]
+    fn native_svg_decode_clamps_default_object_bounding_box_filter_regions() {
+        // With the SVG default `objectBoundingBox` units, this region used to turn into a
+        // multi-terabyte intermediate allocation in the 0.47 renderer.  Keep this exact shape as
+        // a regression test for the 0.48 source-pixmap intersection and filter-region clamp.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+            <defs>
+                <filter id="huge" x="-1000" y="-1000" width="2800" height="2600">
+                    <feGaussianBlur stdDeviation="8"/>
+                </filter>
+            </defs>
+            <g filter="url(#huge)">
+                <rect x="0" y="0" width="4" height="4" fill="#2463eb"/>
+            </g>
+        </svg>"##;
+
+        let decoded = decode_svg_bgra_bytes(svg, 4, 4, None).expect("decode filtered svg");
+
+        assert_eq!((decoded.0, decoded.1), (4, 4));
+        assert_eq!(decoded.7.len(), 4 * 4 * 4);
+    }
+
+    #[test]
     fn native_svg_decode_handles_non_finite_filter_arithmetic_without_unbounded_output() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
             <defs>
