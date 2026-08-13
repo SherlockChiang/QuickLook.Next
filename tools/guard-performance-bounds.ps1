@@ -307,8 +307,13 @@ Require-Pattern $officeImageIntegration 'Pipe_disconnect_releases_unclosed_offic
 Require-Pattern $nativeLibrary 'office_layout_with_eighteen_large_images_stays_below_pipe_limit[\s\S]*assert!\(required\s*<\s*4\s*\*\s*1024\s*\*\s*1024\)[\s\S]*item\.get\("imageBase64"\)\.is_none' `
     "Rust must retain the 18-large-image control-pipe regression without inline Base64."
 $rasterHostIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostStaticImageHandleTests.cs"
+$rasterHostAnimationIntegration = Join-Path $Root "tests/QuickLook.Next.RasterHost.IntegrationTests/RasterHostAnimationTests.cs"
 Require-Pattern $rasterHostIntegration 'Repeated_image_handle_previews_release_sources_without_linear_handle_growth[\s\S]*warmupCycleCount\s*=\s*16[\s\S]*measuredCycleCount\s*=\s*32[\s\S]*PreviewSurfaceRelease[\s\S]*host\.HandleCount[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget' `
     "RasterHost must retain a repeat-preview source, surface, and HANDLE growth regression budget."
+Require-Pattern $rasterHostAnimationIntegration 'Animated_frames_are_section_backed_and_released_on_close[\s\S]*PipeOptions\.Asynchronous\s*\|\s*PipeOptions\.CurrentUserOnly,\s*4\s*\*\s*1024,\s*4\s*\*\s*1024[\s\S]*PreviewImageWaveform\?\s+waveform\s*=\s*null[\s\S]*WaitForPreviewInputReleaseAsync\(\s*channel,\s*previewRequestId,\s*extension\s*!=\s*"gif"\s*&&\s*waveform\s+is\s+null' `
+    "RasterHost animation cleanup must exercise optional waveform backpressure before releasing the parent input."
+Require-Pattern $rasterHostAnimationIntegration 'WaitForPreviewInputReleaseAsync\([\s\S]*CreateLinkedTokenSource\(cancellationToken\)[\s\S]*channel\.ReceiveAsync\(drainCts\.Token\)[\s\S]*WaitUntilAsync\(releaseCondition,\s*cancellationToken\)[\s\S]*drainCts\.Cancel\(\)[\s\S]*Assert\.IsType<PreviewImageWaveform>\(trailing\)[\s\S]*ImageWaveformBuilder\.IsValid\(waveform\.Waveform\)' `
+    "RasterHost animation cleanup tests must drain one optional waveform to avoid pipe-backpressure deadlock."
 $shellBrokerIntegration = Join-Path $Root "tests/QuickLook.Next.ShellBroker.IntegrationTests/ShellBrokerIntegrationTests.cs"
 Require-Pattern $shellBrokerIntegration 'Repeated_handoffs_do_not_leak_handles_or_packet_directories[\s\S]*warmupCycles\s*=\s*8[\s\S]*cycles\s*=\s*32[\s\S]*baselineHandles\s*\+\s*handleGrowthBudget[\s\S]*Assert\.Empty\(Directory\.EnumerateDirectories' `
     "ShellBroker must retain warmed repeated-HANDLE and packet-directory resource bounds."
