@@ -3849,6 +3849,74 @@ mod tests {
     }
 
     #[test]
+    fn native_svg_decode_does_not_read_data_uri_images() {
+        // This is a tiny nested SVG encoded as a data URI.  Keeping the payload inline makes the
+        // test independent of the filesystem and exercises the separate `resolve_data` hook.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+            <image href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9InJlZCIvPjwvc3ZnPg==" width="1" height="1"/>
+        </svg>"##;
+
+        let decoded = decode_svg_bgra_bytes(svg, 1, 1, None).expect("decode svg");
+
+        assert_eq!(decoded.7, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn native_svg_decode_clamps_huge_filter_regions() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+            <defs>
+                <filter id="huge" x="-1000000" y="-1000000" width="2000000" height="2000000">
+                    <feFlood flood-color="#ff0000"/>
+                </filter>
+            </defs>
+            <rect width="4" height="4" filter="url(#huge)"/>
+        </svg>"##;
+
+        let decoded = decode_svg_bgra_bytes(svg, 4, 4, None).expect("decode filtered svg");
+
+        assert_eq!((decoded.0, decoded.1), (4, 4));
+        assert_eq!(decoded.7.len(), 4 * 4 * 4);
+    }
+
+    #[test]
+    fn native_svg_decode_handles_non_finite_filter_arithmetic_without_unbounded_output() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+            <defs>
+                <filter id="arithmetic" x="0" y="0" width="2" height="2">
+                    <feComposite in="SourceGraphic" in2="SourceGraphic" operator="arithmetic" k1="1e100" k2="0" k3="0" k4="0"/>
+                </filter>
+            </defs>
+            <rect width="2" height="2" fill="#ff0000" filter="url(#arithmetic)"/>
+        </svg>"##;
+
+        // Depending on the parser's finite-value policy, malformed arithmetic is either rejected
+        // before rendering or clamped by resvg.  Both outcomes must remain fail-closed and bounded.
+        if let Some(decoded) = decode_svg_bgra_bytes(svg, 2, 2, None) {
+            assert_eq!((decoded.0, decoded.1), (2, 2));
+            assert_eq!(decoded.7.len(), 2 * 2 * 4);
+        }
+    }
+
+    #[test]
+    fn native_svg_markup_budget_honors_cancellation_before_tree_parse() {
+        static MARKUP_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
+
+        extern "C" fn cancel_after_first_markup_chunk() -> bool {
+            MARKUP_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 1
+        }
+
+        let mut svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>"##.to_vec();
+        svg.resize(128 * 1024, b' ');
+        MARKUP_CANCEL_POLLS.store(0, Ordering::SeqCst);
+
+        assert!(
+            decode_svg_bgra_bytes(svg.as_slice(), 1, 1, Some(cancel_after_first_markup_chunk))
+                .is_none()
+        );
+        assert!(MARKUP_CANCEL_POLLS.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[test]
     fn native_jpeg_decode_accepts_exif_orientation_corpus() {
         let path = temp_image_path("jpg");
         let jpeg = jpeg_with_orientation_segment(6);
