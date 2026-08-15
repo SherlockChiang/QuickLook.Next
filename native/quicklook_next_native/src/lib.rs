@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::mem::size_of;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -55,6 +55,50 @@ pub type CancelCallback = extern "C" fn() -> bool;
 pub type AnimationOutputCallback = extern "C" fn(usize) -> *mut u8;
 type AnimationFrameBgra = (u32, Vec<u8>);
 type DecodedAnimationBgra = (u32, u32, Vec<AnimationFrameBgra>);
+
+/// Reader adapter used at image-codec I/O boundaries. It cannot interrupt one already-running
+/// OS read or a codec's internal CPU loop, but it makes cancellation observable before and after
+/// every decoder read/seek so a stale preview does not wait for another full input pass.
+struct CancelableImageReader<R> {
+    reader: R,
+    cancel_cb: Option<CancelCallback>,
+}
+
+impl<R> CancelableImageReader<R> {
+    fn new(reader: R, cancel_cb: Option<CancelCallback>) -> Self {
+        Self { reader, cancel_cb }
+    }
+
+    fn cancelled_error() -> io::Error {
+        io::Error::other("preview cancelled")
+    }
+}
+
+impl<R: Read> Read for CancelableImageReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if cancel_requested(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        let read = self.reader.read(buffer)?;
+        if cancel_requested(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        Ok(read)
+    }
+}
+
+impl<R: Seek> Seek for CancelableImageReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        if cancel_requested(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        let offset = self.reader.seek(position)?;
+        if cancel_requested(self.cancel_cb) {
+            return Err(Self::cancelled_error());
+        }
+        Ok(offset)
+    }
+}
 
 static CALLBACK: Mutex<Option<Callback>> = Mutex::new(None);
 static HOOK_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
@@ -2258,7 +2302,7 @@ fn native_image_decode_fits_peak_budget(input: NativeImageDecodeBudgetInput) -> 
 }
 
 fn decode_image_bgra_reader_internal<R: Read + Seek>(
-    mut reader: R,
+    reader: R,
     logical_name: &str,
     target_width: u32,
     target_height: u32,
@@ -2266,6 +2310,7 @@ fn decode_image_bgra_reader_internal<R: Read + Seek>(
     required_format: Option<ImageFormat>,
     include_waveform: bool,
 ) -> Option<(DecodedImageBgra, Option<Vec<u8>>)> {
+    let mut reader = CancelableImageReader::new(reader, cancel_cb);
     if cancel_requested(cancel_cb) {
         return None;
     }
@@ -2429,6 +2474,7 @@ fn decode_gif_frames_bgra_reader<R: Read>(
     if cancel_requested(cancel_cb) {
         return None;
     }
+    let reader = CancelableImageReader::new(reader, cancel_cb);
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     let mut reader = options.read_info(BufReader::new(reader)).ok()?;
@@ -2755,6 +2801,7 @@ fn decode_webp_frames_bgra_reader<R: Read + Seek>(
     if cancel_requested(cancel_cb) {
         return None;
     }
+    let reader = CancelableImageReader::new(reader, cancel_cb);
     let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(reader)).ok()?;
     if !decoder.has_animation() {
         return None;
@@ -2789,6 +2836,7 @@ fn decode_png_frames_bgra_reader<R: Read + Seek>(
     if cancel_requested(cancel_cb) {
         return None;
     }
+    let reader = CancelableImageReader::new(reader, cancel_cb);
     let decoder = image::codecs::png::PngDecoder::new(BufReader::new(reader)).ok()?;
     let (original_width, original_height) = decoder.dimensions();
     if !decoder.is_apng().ok()?
@@ -3330,10 +3378,18 @@ fn cancel_requested(cancel_cb: Option<CancelCallback>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     extern "C" fn always_cancel() -> bool {
         true
+    }
+
+    static IMAGE_DECODER_CANCEL_POLLS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn cancel_after_decoder_read() -> bool {
+        IMAGE_DECODER_CANCEL_POLLS.fetch_add(1, Ordering::SeqCst) >= 2
     }
 
     #[test]
@@ -4290,6 +4346,79 @@ mod tests {
 
         assert_eq!(decoded.2.len(), 3);
         assert_eq!(decoded.2[2].1, vec![0, 255, 0, 255, 0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn image_decoder_reads_honor_cancellation_boundaries() {
+        let mut png_bytes = Cursor::new(Vec::new());
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("write PNG header");
+            writer
+                .write_image_data(&[255, 0, 0, 255])
+                .expect("write PNG pixels");
+            writer.finish().expect("finish PNG");
+        }
+
+        IMAGE_DECODER_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        assert!(decode_image_bgra_reader(
+            Cursor::new(png_bytes.into_inner()),
+            "cancel.png",
+            1,
+            1,
+            Some(cancel_after_decoder_read),
+            Some(ImageFormat::Png),
+        )
+        .is_none());
+        assert!(IMAGE_DECODER_CANCEL_POLLS.load(Ordering::SeqCst) >= 3);
+
+        let mut gif_bytes = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut gif_bytes, 1, 1, &[]).expect("create GIF");
+            let mut pixels = vec![255, 0, 0, 255];
+            let frame = gif::Frame::from_rgba_speed(1, 1, &mut pixels, 10);
+            encoder.write_frame(&frame).expect("write GIF frame");
+        }
+
+        IMAGE_DECODER_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        assert!(decode_gif_frames_bgra_reader(
+            Cursor::new(gif_bytes),
+            1,
+            1,
+            Some(cancel_after_decoder_read),
+        )
+        .is_none());
+        assert!(IMAGE_DECODER_CANCEL_POLLS.load(Ordering::SeqCst) >= 3);
+
+        let mut apng_bytes = Cursor::new(Vec::new());
+        {
+            let mut encoder = png::Encoder::new(&mut apng_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_animated(2, 0).expect("enable APNG");
+            let mut writer = encoder.write_header().expect("write APNG header");
+            writer.set_frame_delay(1, 10).expect("first APNG delay");
+            writer
+                .write_image_data(&[255, 0, 0, 255])
+                .expect("write first APNG frame");
+            writer.set_frame_delay(2, 10).expect("second APNG delay");
+            writer
+                .write_image_data(&[0, 255, 0, 255])
+                .expect("write second APNG frame");
+            writer.finish().expect("finish APNG");
+        }
+
+        IMAGE_DECODER_CANCEL_POLLS.store(0, Ordering::SeqCst);
+        assert!(decode_png_frames_bgra_reader(
+            Cursor::new(apng_bytes.into_inner()),
+            1,
+            1,
+            Some(cancel_after_decoder_read),
+        )
+        .is_none());
+        assert!(IMAGE_DECODER_CANCEL_POLLS.load(Ordering::SeqCst) >= 3);
     }
 
     fn temp_image_path(ext: &str) -> std::path::PathBuf {
