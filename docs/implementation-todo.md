@@ -195,6 +195,10 @@ the release-only `release:` prefix while this queue is in progress.
     before full pixel decode, including JPEG orientation and waveform bytes, so
     an undersized managed buffer does not cause a repeated full decode. Codec
     target-size decode and measured cancellation p95 remain open.
+  - [x] `R26-P1-08c` Make static image, GIF, WebP, and APNG decoder I/O
+    cancellation-aware at every reader boundary. This shortens stale-preview
+    cancellation around codec reads without changing the ABI or claiming to
+    interrupt an already-running OS read or codec CPU loop; measured p95 remains open.
 - [ ] `R26-P1-09` Move Explorer COM work off the keyboard-hook pump and replace the
   thumbnail worker's unbounded, non-cancellable queue with a bounded supervised
   broker or deadline-aware worker.
@@ -280,6 +284,20 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `cargo test --locked --manifest-path native/Cargo.toml raster_image_handle_sizes_output_before_full_pixel_decode` (1 passed)
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
   - Commit: `035bcc5`
+
+- [x] `R26-P1-08c` Make static image, GIF, WebP, and APNG decoder reads and
+  seeks observe the cancellation callback before and after codec I/O. A stale
+  preview now fails closed at the next reader boundary while the existing
+  post-decode error mapping, HANDLE ownership, and caller positions remain
+  unchanged; this is cancellation-latency groundwork, not a full p95 claim.
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native --lib image_decoder_reads_honor_cancellation_boundaries` (1 passed)
+  - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native --lib` (293 passed, 1 ignored)
+  - Verification: `cargo clippy --locked --manifest-path native/Cargo.toml -p quicklook_next_native --all-targets --all-features -- -D warnings`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Note: `tools/guard-architecture.ps1 -SkipDist` reached all guards but its
+    isolated MSBuild fixture was blocked by the host missing the pinned .NET
+    SDK `10.0.302` (only `10.0.303` is installed).
+  - Commit: `16de6e0`
 
 - [x] `R26-P1-03b` Render localized PDF page failure and timeout text inside the
   exact current request/page generation. Rendered, failed, or released pages
