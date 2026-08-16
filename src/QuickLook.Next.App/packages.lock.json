@@ -134,7 +134,7 @@
       "quicklook.next.core": {
         "type": "Project",
         "dependencies": {
-          "QuickLook.Next.Contracts": "[0.3.6, )"
+          "QuickLook.Next.Contracts": "[0.1.0, )"
         }
       }
     },
