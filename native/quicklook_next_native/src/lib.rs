@@ -1309,7 +1309,7 @@ pub unsafe extern "C" fn ql_decode_image_handle(
                 return QL_ERROR_BUFFER_TOO_SMALL;
             }
             decode_image_bgra_reader(
-                &mut file,
+                file,
                 &logical_name,
                 target_width,
                 target_height,
@@ -1451,7 +1451,7 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
                 return QL_ERROR_BUFFER_TOO_SMALL;
             }
             decode_image_bgra_reader_with_waveform(
-                &mut file,
+                file,
                 &logical_name,
                 target_width,
                 target_height,
@@ -4883,6 +4883,9 @@ unsafe fn reopen_handle_input_v2(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Each HANDLE preview owns its independently reopened file. Moving that file into the one-shot
+// renderer keeps path and HANDLE readers on the same `File` monomorphization without dynamic
+// dispatch; the original caller-owned HANDLE remains untouched.
 unsafe fn preview_handle_v2(
     source_handle: isize,
     expected_length: u64,
@@ -4892,7 +4895,7 @@ unsafe fn preview_handle_v2(
     out_cap: usize,
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
-    renderer: impl FnOnce(&mut fs::File, &str, i64, i64) -> std::result::Result<String, i32>,
+    renderer: impl FnOnce(fs::File, &str, i64, i64) -> std::result::Result<String, i32>,
 ) -> i32 {
     if out_required.is_null() {
         return QL_ERROR_INVALID_ARGUMENT;
@@ -4904,7 +4907,7 @@ unsafe fn preview_handle_v2(
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
-    let (mut file, logical_name, size, modified_unix) = match unsafe {
+    let (file, logical_name, size, modified_unix) = match unsafe {
         reopen_handle_input_v2(
             source_handle,
             expected_length,
@@ -4917,7 +4920,7 @@ unsafe fn preview_handle_v2(
         Err(status) => return status,
     };
 
-    let rendered = renderer(&mut file, &logical_name, size, modified_unix);
+    let rendered = renderer(file, &logical_name, size, modified_unix);
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
@@ -4956,8 +4959,8 @@ pub unsafe extern "C" fn ql_probe_file_handle(
             out_cap,
             out_required,
             None,
-            |file, logical_name, size, modified_unix| {
-                probe_reader_json(file, logical_name, size as u64, modified_unix)
+            |mut file, logical_name, size, modified_unix| {
+                probe_reader_json(&mut file, logical_name, size as u64, modified_unix)
             },
         )
     })
@@ -5000,8 +5003,8 @@ pub unsafe extern "C" fn ql_preview_image_metadata_handle(
             out_cap,
             out_required,
             cancel_cb,
-            |file, logical_name, _, _| {
-                preview::render_image_metadata_reader(file, logical_name, cancel_cb)
+            |mut file, logical_name, _, _| {
+                preview::render_image_metadata_reader(&mut file, logical_name, cancel_cb)
                     .map_err(reader_preview_status)
             },
         )
@@ -5057,8 +5060,8 @@ pub unsafe extern "C" fn ql_preview_text_handle(
             out_cap,
             out_required,
             cancel_cb,
-            |file, logical_name, _, _| {
-                let json = preview::render_text_reader(file, logical_name, cancel_cb);
+            |mut file, logical_name, _, _| {
+                let json = preview::render_text_reader(&mut file, logical_name, cancel_cb);
                 if json.is_empty() {
                     Err(if cancel_requested(cancel_cb) {
                         QL_ERROR_CANCELLED
@@ -5099,9 +5102,9 @@ pub unsafe extern "C" fn ql_preview_executable_handle(
             out_cap,
             out_required,
             cancel_cb,
-            |file, logical_name, size, modified_unix| {
+            |mut file, logical_name, size, modified_unix| {
                 preview::render_executable_reader(
-                    file,
+                    &mut file,
                     logical_name,
                     size,
                     modified_unix,
@@ -5139,9 +5142,15 @@ pub unsafe extern "C" fn ql_preview_torrent_handle(
             out_cap,
             out_required,
             cancel_cb,
-            |file, logical_name, size, modified_unix| {
-                preview::render_torrent_reader(file, logical_name, size, modified_unix, cancel_cb)
-                    .map_err(reader_preview_status)
+            |mut file, logical_name, size, modified_unix| {
+                preview::render_torrent_reader(
+                    &mut file,
+                    logical_name,
+                    size,
+                    modified_unix,
+                    cancel_cb,
+                )
+                .map_err(reader_preview_status)
             },
         )
     })
@@ -5329,7 +5338,7 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
         if out_buf.is_null() && out_cap != 0 {
             return QL_ERROR_INVALID_ARGUMENT;
         }
-        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+        let (file, logical_name, _, _) = match reopen_handle_input_v2(
             source_handle,
             expected_length,
             logical_name_utf8,
@@ -5340,7 +5349,7 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
             Err(status) => return status,
         };
         let (width, height, bgra) = match preview::extract_office_image_bgra_reader(
-            &mut file,
+            file,
             expected_length,
             &logical_name,
             cancel_cb,
@@ -5392,7 +5401,7 @@ pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
         {
             return QL_ERROR_INVALID_ARGUMENT;
         }
-        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+        let (file, logical_name, _, _) = match reopen_handle_input_v2(
             source_handle,
             expected_length,
             logical_name_utf8,
@@ -5411,7 +5420,7 @@ pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
             return QL_ERROR_INVALID_ARGUMENT;
         }
         let (width, height, bgra) = match preview::extract_office_layout_image_bgra_reader(
-            &mut file,
+            file,
             expected_length,
             &logical_name,
             &image_ref,
@@ -5454,7 +5463,7 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
         if out_buf.is_null() && out_cap != 0 {
             return QL_ERROR_INVALID_ARGUMENT;
         }
-        let (mut file, logical_name, _, _) = match reopen_handle_input_v2(
+        let (file, logical_name, _, _) = match reopen_handle_input_v2(
             source_handle,
             expected_length,
             logical_name_utf8,
@@ -5465,7 +5474,7 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
             Err(status) => return status,
         };
         let (width, height, bgra) = match preview::extract_package_icon_bgra_reader(
-            &mut file,
+            file,
             expected_length,
             &logical_name,
             cancel_cb,
@@ -5557,7 +5566,7 @@ pub unsafe extern "C" fn ql_preview_sqlite_handles(
             out_cap,
             out_required,
             cancel_cb,
-            |main, logical_name, _, modified_unix| {
+            |mut main, logical_name, _, modified_unix| {
                 if wal_handle == 0 && wal_expected_length != 0
                     || shm_handle == 0 && shm_expected_length != 0
                 {
@@ -5574,7 +5583,7 @@ pub unsafe extern "C" fn ql_preview_sqlite_handles(
                 let wal_reader = wal.as_mut().map(|file| file as &mut dyn Read);
                 let shm_reader = shm.as_mut().map(|file| file as &mut dyn Read);
                 preview::render_database_reader(
-                    main,
+                    &mut main,
                     main_expected_length,
                     preview::DatabaseCompanionReader {
                         reader: wal_reader,
