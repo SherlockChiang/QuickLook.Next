@@ -2,6 +2,7 @@ param(
     [string]$ExpectedVersion = "",
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
+    [string]$PackageIdentityName = "",
     [string]$CertificatePath = "",
     [string]$CertificatePassword = "",
     [switch]$CreateDevelopmentCertificate,
@@ -69,6 +70,12 @@ if ($LASTEXITCODE -ne 0) { throw "Native release build failed." }
 Write-Host "== building and testing solution ==" -ForegroundColor Cyan
 $versionProperties = @("/p:VersionPrefix=$version")
 if ($VersionSuffix) { $versionProperties += "/p:VersionSuffix=$VersionSuffix" }
+if ($PackageIdentityName) {
+    if ($PackageIdentityName -notmatch '^[A-Za-z0-9.-]{3,50}$') {
+        throw "PackageIdentityName must contain only identity-safe characters."
+    }
+    $versionProperties += "/p:ProjectPriIndexName=$PackageIdentityName"
+}
 dotnet build (Join-Path $root "QuickLook.Next.slnx") -c Release --no-restore @versionProperties
 if ($LASTEXITCODE -ne 0) { throw "Solution build failed." }
 dotnet test (Join-Path $root "QuickLook.Next.slnx") -c Release `

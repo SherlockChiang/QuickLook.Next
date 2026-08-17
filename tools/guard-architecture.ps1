@@ -2044,6 +2044,10 @@ $storeMsixVersionTest = Join-Path $PSScriptRoot "test-store-msix-version.ps1"
 Invoke-CheckedScript -Path $storeMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "Store MSIX version tests failed"
 
+$storePackageTest = Join-Path $PSScriptRoot "test-store-package.ps1"
+Invoke-CheckedScript -Path $storePackageTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Store package guard failed"
+
 $localMsixUpdateTest = Join-Path $PSScriptRoot "test-local-msix-update.ps1"
 Invoke-CheckedScript -Path $localMsixUpdateTest -Arguments @{ Root = $Root } `
     -FailureMessage "Local MSIX update tests failed"

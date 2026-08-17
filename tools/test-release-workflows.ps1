@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $ci = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\ci.yml") -Raw
 $stable = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\release.yml") -Raw
 $beta = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\beta-release.yml") -Raw
+$store = Get-Content -LiteralPath (Join-Path $Root ".github\workflows\store-package.yml") -Raw
 $packageActionPath = Join-Path $Root ".github\actions\package-release\action.yml"
 $legacyPackageWorkflowPath = Join-Path $Root ".github\workflows\package-release.yml"
 if (-not (Test-Path -LiteralPath $packageActionPath)) {
@@ -59,6 +60,26 @@ if ($packageAction -notmatch "cargo-audit 0\\\.22\\\.2" -or
 }
 if ($stable -notmatch "startsWith\(github\.event\.head_commit\.message, 'release:'\)") {
     throw "Stable releases must require an explicit release: commit."
+}
+if ($store -notmatch '(?ms)^on:\s*\r?\n\s+workflow_dispatch:' -or
+    $store -match '(?m)^\s+push:' -or
+    $store -notmatch 'pack-store-msix\.ps1' -or
+    $store -notmatch 'MICROSOFT_STORE_PACKAGE_IDENTITY_NAME' -or
+    $store -notmatch 'MICROSOFT_STORE_PUBLISHER' -or
+    $store -notmatch 'MICROSOFT_STORE_PUBLISHER_DISPLAY_NAME' -or
+    $store -notmatch 'actions/attest-build-provenance@[0-9a-f]{40}' -or
+    $store -notmatch 'actions/upload-artifact@[0-9a-f]{40}' -or
+    $store -notmatch 'artifacts/QuickLook\.Next-Store-\*\.msixupload') {
+    throw "The manual Microsoft Store candidate workflow is incomplete."
+}
+if ($store -match '(?i)QUICKLOOK_RELEASE_PFX|CertificatePassword|\.pfx|signtool') {
+    throw "Microsoft Store candidates must not depend on the sideload signing certificate."
+}
+if ($store -notmatch '(?m)^\s+timeout-minutes:\s+60\s*$' -or
+    $store -notmatch 'dotnet-version:\s+10\.0\.302' -or
+    $store -notmatch 'toolchain:\s+1\.96\.0' -or
+    $store -notmatch 'components:\s*rustfmt,\s*clippy') {
+    throw "Microsoft Store candidates must retain the pinned toolchain and release budget."
 }
 if ($stable -notmatch 'uses:\s+\./\.github/actions/package-release' -or
     $beta -notmatch 'uses:\s+\./\.github/actions/package-release') {
@@ -160,7 +181,7 @@ foreach ($workflow in @($stable, $beta)) {
         throw "Stable and beta releases must attest and publish release metadata."
     }
 }
-foreach ($workflow in @($ci, $stable, $beta, $packageAction, $pages)) {
+foreach ($workflow in @($ci, $stable, $beta, $store, $packageAction, $pages)) {
     if ($workflow -match 'uses:\s+actions/[^@\s]+@v\d') {
         throw "Official actions must remain pinned to immutable commit SHAs."
     }

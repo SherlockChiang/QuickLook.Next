@@ -3,6 +3,7 @@
 param(
     [string]$VersionPrefix = "",
     [string]$VersionSuffix = "",
+    [string]$PackageIdentityName = "",
     [string]$ArtifactsDirectory = "",
     [switch]$SkipBuild,
     [switch]$SkipArchive,
@@ -61,6 +62,12 @@ if (-not $SkipBuild) {
     }
     if ($VersionSuffix) {
         $buildArgs += "/p:VersionSuffix=$VersionSuffix"
+    }
+    if ($PackageIdentityName) {
+        if ($PackageIdentityName -notmatch '^[A-Za-z0-9.-]{3,50}$') {
+            throw "PackageIdentityName must contain only identity-safe characters."
+        }
+        $buildArgs += "/p:ProjectPriIndexName=$PackageIdentityName"
     }
     dotnet @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "Release solution build failed." }
