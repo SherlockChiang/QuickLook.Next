@@ -71,6 +71,7 @@ const translations = {
     footerBuilt: "Built in the open for Windows.",
     releases: "Releases",
     issues: "Issues",
+    privacy: "Privacy",
   },
   zh: {
     title: "QuickLook Next — Windows 原生文件快速预览",
@@ -129,6 +130,7 @@ const translations = {
     footerBuilt: "为 Windows 开放构建。",
     releases: "版本发布",
     issues: "问题反馈",
+    privacy: "隐私政策",
   },
 };
 

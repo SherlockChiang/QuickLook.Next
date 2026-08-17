@@ -310,6 +310,34 @@ body {
   line-height: 1.7;
 }
 
+.privacy-copy h2,
+.privacy-copy h3 {
+  font-size: 1.35rem;
+  font-weight: 850;
+  letter-spacing: -0.025em;
+}
+
+.privacy-copy p,
+.privacy-copy li {
+  color: rgb(71 85 105);
+  line-height: 1.8;
+}
+
+.privacy-copy ul {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
+.privacy-copy a {
+  color: rgb(8 145 178);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
 .reveal {
   opacity: 0;
   transform: translateY(18px);
@@ -371,7 +399,9 @@ body {
   }
 
   .feature-card p,
-  .architecture-card p {
+  .architecture-card p,
+  .privacy-copy p,
+  .privacy-copy li {
     color: rgb(255 255 255 / 0.5);
   }
 

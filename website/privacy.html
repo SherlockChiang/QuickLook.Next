@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Privacy policy for QuickLook Next, the native Windows file previewer."
+    />
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <title>Privacy policy — QuickLook Next</title>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-950 antialiased dark:bg-[#050815] dark:text-white">
+    <a
+      href="#content"
+      class="sr-only z-[100] rounded-full bg-white px-4 py-2 text-slate-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+    >
+      Skip to content
+    </a>
+
+    <header class="border-b border-slate-200/80 bg-[#071027] px-5 py-5 text-white dark:border-white/10 sm:px-8">
+      <nav class="mx-auto flex max-w-4xl items-center justify-between" aria-label="Privacy navigation">
+        <a href="./" class="flex items-center gap-3 font-semibold">
+          <img src="./favicon.png" alt="" class="size-8" />
+          QuickLook Next
+        </a>
+        <div class="flex items-center gap-4 text-sm text-white/70">
+          <a href="#english" class="transition hover:text-white">English</a>
+          <a href="#chinese" class="transition hover:text-white">中文</a>
+          <a href="https://github.com/SherlockChiang/QuickLook.Next" class="transition hover:text-white">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="content" class="mx-auto max-w-4xl px-5 py-14 sm:px-8 sm:py-20">
+      <section id="english" aria-labelledby="english-title">
+        <p class="section-kicker">QuickLook Next</p>
+        <h1 id="english-title" class="mt-4 text-4xl font-black tracking-[-0.045em] sm:text-6xl">
+          Privacy policy
+        </h1>
+        <p class="mt-4 text-sm text-slate-500 dark:text-white/45">Effective August 17, 2026</p>
+
+        <div class="privacy-copy mt-12 space-y-10">
+          <section>
+            <h2>Summary</h2>
+            <p>
+              QuickLook Next is an open-source Windows file previewer. It does not require an
+              account, run advertising, operate a telemetry backend, sell personal information,
+              or upload the files you preview to the QuickLook Next project.
+            </p>
+          </section>
+
+          <section>
+            <h2>Files and metadata</h2>
+            <p>
+              Files selected in Windows Explorer are read and processed on your device. Preview
+              content and metadata, including image EXIF metadata, remain local unless you choose
+              one of the external actions described below. Restricted helper processes may be
+              used for parsing and rendering, but they run on the same device.
+            </p>
+          </section>
+
+          <section>
+            <h2>Local settings and diagnostics</h2>
+            <p>
+              The app stores preferences and bounded diagnostic logs in your local application
+              data. Paths written to logs are redacted. Logs are rotated at approximately 4 MiB.
+              A diagnostics archive is created only after you confirm the disclosure and choose
+              where to save it. QuickLook Next does not upload that archive automatically.
+            </p>
+          </section>
+
+          <section>
+            <h2>Network access and third parties</h2>
+            <ul>
+              <li>
+                When you manually check for updates, the app downloads a small signed-release
+                metadata file from GitHub. GitHub may receive ordinary connection information,
+                such as your IP address and the app's update-check user agent, under GitHub's
+                privacy terms.
+              </li>
+              <li>
+                When you explicitly choose to open an image location in Google Maps, the app opens
+                a Google Maps URL containing latitude and longitude read from that image's EXIF
+                metadata. Those coordinates are then sent to Google by your browser.
+              </li>
+              <li>
+                For an online-only cloud file, the app asks for confirmation before requesting
+                hydration through Windows and the file's configured cloud provider. The provider's
+                own privacy terms apply to that download.
+              </li>
+              <li>
+                Links to GitHub, release downloads, and support open in your default browser and
+                are governed by the destination service's privacy terms.
+              </li>
+            </ul>
+          </section>
+
+          <section>
+            <h2>Retention and control</h2>
+            <p>
+              Settings and logs remain on your device until you remove them or Windows/app cleanup
+              removes them. You can decline cloud-file downloads, avoid external map links, skip
+              update checks, and choose not to create a diagnostics archive.
+            </p>
+          </section>
+
+          <section>
+            <h2>Children, changes, and contact</h2>
+            <p>
+              QuickLook Next is a general-purpose utility and is not directed to children. This
+              policy may be updated when app behavior changes; the effective date above identifies
+              the current version. Questions or privacy requests can be filed through
+              <a href="https://github.com/SherlockChiang/QuickLook.Next/issues">GitHub Issues</a>.
+            </p>
+          </section>
+        </div>
+      </section>
+
+      <hr class="my-16 border-slate-200 dark:border-white/10" />
+
+      <section id="chinese" aria-labelledby="chinese-title" lang="zh-CN">
+        <p class="section-kicker">QuickLook Next</p>
+        <h2 id="chinese-title" class="mt-4 text-4xl font-black tracking-[-0.045em] sm:text-5xl">
+          隐私政策
+        </h2>
+        <p class="mt-4 text-sm text-slate-500 dark:text-white/45">生效日期：2026 年 8 月 17 日</p>
+
+        <div class="privacy-copy mt-12 space-y-10">
+          <section>
+            <h3>摘要</h3>
+            <p>
+              QuickLook Next 是开源 Windows 文件预览工具。它不要求账号，不展示广告，不运行遥测后端，
+              不出售个人信息，也不会把你预览的文件上传给 QuickLook Next 项目。
+            </p>
+          </section>
+          <section>
+            <h3>本地文件、设置和诊断</h3>
+            <p>
+              在资源管理器中选中的文件及其元数据仅在本机处理。应用会在本地应用数据目录保存设置和有界日志，
+              日志中的路径会被脱敏并在约 4 MiB 时轮换。只有在你确认说明并选择保存位置后，应用才会生成诊断包，
+              且不会自动上传该文件。
+            </p>
+          </section>
+          <section>
+            <h3>网络访问</h3>
+            <ul>
+              <li>手动检查更新时，会从 GitHub 下载一份很小的发布元数据；GitHub 可能按其政策接收常规连接信息。</li>
+              <li>只有你主动点击在 Google 地图中打开位置时，浏览器才会把图片 EXIF 中的经纬度发送给 Google。</li>
+              <li>云端占位文件只有在你确认后，才会通过 Windows 和相应云服务提供商下载；该提供商的隐私条款适用。</li>
+              <li>GitHub、版本下载和支持链接会在默认浏览器中打开，并受目标服务的隐私条款约束。</li>
+            </ul>
+          </section>
+          <section>
+            <h3>控制与联系</h3>
+            <p>
+              你可以拒绝云文件下载、不使用外部地图链接、跳过更新检查，也可以不生成诊断包。
+              如有隐私问题或请求，请通过
+              <a href="https://github.com/SherlockChiang/QuickLook.Next/issues">GitHub Issues</a>
+              联系项目维护者。
+            </p>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="border-t border-slate-200/80 px-5 py-8 text-sm text-slate-600 dark:border-white/10 dark:text-white/55">
+      <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-4">
+        <p>© <span id="year"></span> QuickLook Next.</p>
+        <a href="./" class="transition hover:text-cyan-500">Back to QuickLook Next</a>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/privacy.js"></script>
+  </body>
+</html>
