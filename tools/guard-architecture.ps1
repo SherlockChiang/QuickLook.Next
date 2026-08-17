@@ -336,8 +336,9 @@ $restrictedSmokePath = Join-Path $Root "tools/smoke-restricted-host-launch.ps1"
 if (Test-Path $restrictedSmokePath) {
     $restrictedSmokeText = Get-Content -LiteralPath $restrictedSmokePath -Raw
     if ($restrictedSmokeText -notmatch '\$parserProcess\s*=\s*Start-AppSmoke\s+@\("--smoke-write-restricted-parser-host",\s*\$parserHost\)' -or
-        $restrictedSmokeText -notmatch 'ProcessStartInfo[\s\S]*ArgumentList\.Add') {
-        Add-Failure "Restricted ParserHost smoke must preserve exact arguments, including paths with spaces"
+        $restrictedSmokeText -notmatch 'ProcessStartInfo[\s\S]*ArgumentList\.Add' -or
+        $restrictedSmokeText -notmatch 'ConvertTo-WindowsCommandLineArgument[\s\S]*PSObject\.Properties\[''ArgumentList''\][\s\S]*\.Arguments\s*=') {
+        Add-Failure "Restricted ParserHost smoke must preserve exact arguments, including paths with spaces and Windows PowerShell 5.1"
     }
 }
 $appProgramPath = Join-Path $Root "src/QuickLook.Next.App/Program.cs"
