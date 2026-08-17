@@ -30,10 +30,30 @@ References:
 - [Code signing options for Windows app developers](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)
 - [Microsoft Store publish overview](https://learn.microsoft.com/en-us/windows/apps/publish/)
 
-## Current blockers
+## Current Store product
 
-Partner Center identity values are not yet available. The current package
-manifest intentionally remains the sideload identity:
+The `QuickLook Next` product name has been reserved in Partner Center as an
+`MSIX or PWA app` (product ID `9PM0XKBFJC6R`). The Store identity is now
+available and must be passed to the Store-only packaging workflow:
+
+```text
+Package/Identity/Name:                 Uranus92.QuickLookNext
+Package/Identity/Publisher:            CN=FDE9F71C-A397-410B-81EE-36E18F4325E5
+Package/Properties/PublisherDisplayName: Uranus92
+Store ID:                              9PM0XKBFJC6R
+Store page:                            https://apps.microsoft.com/detail/9PM0XKBFJC6R
+```
+
+Configure the three repository variables consumed by
+`.github/workflows/store-package.yml` with the exact values above:
+
+```text
+MICROSOFT_STORE_PACKAGE_IDENTITY_NAME=Uranus92.QuickLookNext
+MICROSOFT_STORE_PUBLISHER=CN=FDE9F71C-A397-410B-81EE-36E18F4325E5
+MICROSOFT_STORE_PUBLISHER_DISPLAY_NAME=Uranus92
+```
+
+The current package manifest intentionally remains the sideload identity:
 
 ```text
 Name:              SherlockChiang.QuickLookNext
@@ -41,20 +61,19 @@ Publisher:         CN=QuickLook Next Development
 PublisherDisplayName: QuickLook Next
 ```
 
-Do not replace those values until Partner Center provides the Store identity.
-The current product version is `0.3.7`; it cannot be used directly as a Store
-version because its first component is `0`. The Store launch should therefore
-be planned as a deliberate `1.0.0.0` package (or another explicitly documented
+Never replace those sideload values with the Store identity. The current
+product version is `0.3.7`; it cannot be used directly as a Store version
+because its first component is `0`. The Store launch should therefore be
+planned as a deliberate `1.0.0.0` package (or another explicitly documented
 monotonic Store version), while GitHub remains on the semantic release line.
 
 ## Identity and package checklist
 
-Before building the first candidate, record these exact values from Partner
-Center and review them into a Store-only configuration:
+Before building the first candidate, keep these exact values in the Store-only
+configuration and review the remaining submission inputs:
 
-- package identity name;
-- publisher subject;
-- publisher display name;
+- package identity name, publisher subject, and publisher display name (recorded
+  above and supplied through repository variables);
 - Store version (`X.Y.Z.0`);
 - supported architecture(s) and minimum Windows build;
 - Store listing languages and support URL;
