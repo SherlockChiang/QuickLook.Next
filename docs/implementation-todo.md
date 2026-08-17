@@ -299,6 +299,12 @@ Completed entries move here with the verification commands and commit hash.
     `File` into the one-shot renderer (`bed39b3`). The older boxed-reader
     experiment was intentionally omitted during rebase so cancellation keeps
     Rust static dispatch without a per-decode allocation or read/seek vtable.
+  - Integration verification: `tools/release.ps1 -SkipPackage -SkipSystemImageSmoke`
+    passed Rust 293/1, Core 281, ParserHost 45, RasterHost 29, ShellBroker 13,
+    external image corpus, and every architecture/UI/performance/installer guard.
+  - Release-size verification: Thin LTO with one codegen unit (`faec65a`) keeps
+    all three native DLL copies at 7,474,688 bytes and the exact 187-file `dist`
+    at 169.311 MiB, below the unchanged 170 MiB architecture budget.
   - Commit: `7448ff5`
 
 - [x] `R26-P1-03b` Render localized PDF page failure and timeout text inside the
