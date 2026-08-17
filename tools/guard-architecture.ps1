@@ -2040,6 +2040,10 @@ $formalMsixVersionTest = Join-Path $PSScriptRoot "test-formal-msix-version.ps1"
 Invoke-CheckedScript -Path $formalMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "Formal MSIX version tests failed"
 
+$storeMsixVersionTest = Join-Path $PSScriptRoot "test-store-msix-version.ps1"
+Invoke-CheckedScript -Path $storeMsixVersionTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Store MSIX version tests failed"
+
 $localMsixUpdateTest = Join-Path $PSScriptRoot "test-local-msix-update.ps1"
 Invoke-CheckedScript -Path $localMsixUpdateTest -Arguments @{ Root = $Root } `
     -FailureMessage "Local MSIX update tests failed"
