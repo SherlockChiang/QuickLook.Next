@@ -61,11 +61,11 @@ Publisher:         CN=QuickLook Next Development
 PublisherDisplayName: QuickLook Next
 ```
 
-Never replace those sideload values with the Store identity. The current
-product version is `0.3.7`; it cannot be used directly as a Store version
-because its first component is `0`. The Store launch should therefore be
-planned as a deliberate `1.0.0.0` package (or another explicitly documented
-monotonic Store version), while GitHub remains on the semantic release line.
+Never replace those sideload values with the Store identity. The Store launch
+version is now deliberately `1.0.0.0`, generated from the repository's
+semantic `VERSION=1.0.0`; the existing GitHub latest release remains `0.3.7`
+with its signed sideload identity and update metadata. Future GitHub releases
+can continue from the monotonic `1.0.0` semantic line.
 
 ## Identity and package checklist
 
@@ -74,7 +74,7 @@ configuration and review the remaining submission inputs:
 
 - package identity name, publisher subject, and publisher display name (recorded
   above and supplied through repository variables);
-- Store version (`X.Y.Z.0`);
+- Store version (`1.0.0.0`, generated from `VERSION=1.0.0`);
 - supported architecture(s) and minimum Windows build;
 - Store listing languages and support URL;
 - privacy-policy URL and contact address;
