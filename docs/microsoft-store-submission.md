@@ -86,6 +86,35 @@ is identity-bound. The candidate must also pass the existing payload proof,
 architecture guards, MSIX manifest validation, WACK, install, update, and
 uninstall checks before upload.
 
+## First real-identity candidate evidence
+
+The first `1.0.0.0` candidate was built from commit
+`14d11921040c1f7e5e04f15389f4bb023c3c1f78` on 2026-08-17. The local package
+validation confirmed the Store manifest identity, an x64 architecture, an
+unsigned package, and a `resources.pri` primary map named
+`Uranus92.QuickLookNext`. The local artifact hashes were:
+
+```text
+MSIX:       a186bcca6ede4a2ba1c125429e161b3df94d7aa13ba5fd93694b478ac6994c9a
+MSIXUPLOAD: b15ddb528ae2f38e90d49c802c85d6df82f37dae64f9ef615b95723cb022fa85
+```
+
+The manual `Microsoft Store Candidate` workflow run
+[`32035898127`](https://github.com/SherlockChiang/QuickLook.Next/actions/runs/32035898127)
+completed successfully from the same commit. It produced artifact ID
+`9290943884` (`QuickLook.Next-Microsoft-Store-1`), whose outer artifact ZIP is
+114,541,774 bytes with SHA-256
+`c555fb10fc8cf17c88e2c0f7e26ab11988f0e1c0b8fae34b8612362e008eb660`.
+GitHub attestation
+[`41157969`](https://github.com/SherlockChiang/QuickLook.Next/attestations/41157969)
+covers the MSIX, `.msixupload`, and metadata manifest as three subjects and is
+anchored in the Sigstore Rekor transparency log. The ordinary CI run
+[`32035883651`](https://github.com/SherlockChiang/QuickLook.Next/actions/runs/32035883651)
+also passed its release checks, dependency audits, and website build.
+
+No candidate was installed or uploaded to Partner Center. WACK and clean
+install/update/uninstall testing therefore remain mandatory before submission.
+
 ## Listing material still needed
 
 - English, Simplified Chinese, and Traditional Chinese descriptions;
