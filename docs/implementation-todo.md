@@ -294,10 +294,12 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `cargo test --locked --manifest-path native/Cargo.toml -p quicklook_next_native --lib` (293 passed, 1 ignored)
   - Verification: `cargo clippy --locked --manifest-path native/Cargo.toml -p quicklook_next_native --all-targets --all-features -- -D warnings`
   - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
-  - Note: `tools/guard-architecture.ps1 -SkipDist` reached all guards but its
-    isolated MSBuild fixture was blocked by the host missing the pinned .NET
-    SDK `10.0.302` (only `10.0.303` is installed).
-  - Commit: `16de6e0`
+  - Integration note: current `main` already deduplicates production image
+    decoder monomorphization by moving the independently reopened HANDLE
+    `File` into the one-shot renderer (`bed39b3`). The older boxed-reader
+    experiment was intentionally omitted during rebase so cancellation keeps
+    Rust static dispatch without a per-decode allocation or read/seek vtable.
+  - Commit: `7448ff5`
 
 - [x] `R26-P1-03b` Render localized PDF page failure and timeout text inside the
   exact current request/page generation. Rendered, failed, or released pages
