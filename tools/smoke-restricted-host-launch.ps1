@@ -4,10 +4,49 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function ConvertTo-WindowsCommandLineArgument([string]$Argument) {
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $quoted = [Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashCount = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]0x5C) {
+            $backslashCount++
+            continue
+        }
+
+        if ($character -eq '"') {
+            [void]$quoted.Append([char]0x5C, (($backslashCount * 2) + 1))
+            [void]$quoted.Append('"')
+        }
+        else {
+            [void]$quoted.Append([char]0x5C, $backslashCount)
+            [void]$quoted.Append($character)
+        }
+        $backslashCount = 0
+    }
+    [void]$quoted.Append([char]0x5C, ($backslashCount * 2))
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
 function Start-AppSmoke([string[]]$Arguments) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new($app)
     $startInfo.UseShellExecute = $false
-    foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    if ($null -ne $startInfo.PSObject.Properties['ArgumentList']) {
+        foreach ($argument in $Arguments) { $startInfo.ArgumentList.Add($argument) }
+    }
+    else {
+        # Windows PowerShell 5.1 targets .NET Framework, which does not expose
+        # ProcessStartInfo.ArgumentList. Preserve exact argv boundaries there,
+        # including host paths below a workspace whose name contains spaces.
+        $startInfo.Arguments = ($Arguments | ForEach-Object {
+            ConvertTo-WindowsCommandLineArgument $_
+        }) -join ' '
+    }
     $process = [Diagnostics.Process]::Start($startInfo)
     $process.WaitForExit()
     return $process
