@@ -6,8 +6,12 @@ $ErrorActionPreference = "Stop"
 $scriptPath = Join-Path $Root "tools\pack-store-msix.ps1"
 $releasePath = Join-Path $Root "tools\release.ps1"
 $packReleasePath = Join-Path $Root "tools\pack-release.ps1"
+$appProjectPath = Join-Path $Root "src\QuickLook.Next.App\QuickLook.Next.App.csproj"
 if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
     throw "Store MSIX packaging script is missing."
+}
+if (-not (Test-Path -LiteralPath $appProjectPath -PathType Leaf)) {
+    throw "The app project required for Store PRI generation is missing."
 }
 
 $command = Get-Command -Name $scriptPath
@@ -45,6 +49,10 @@ if ($text -match '(?i)SignTool|signtool|CertificatePassword|CreateDevelopmentCer
 
 $releaseText = Get-Content -LiteralPath $releasePath -Raw
 $packReleaseText = Get-Content -LiteralPath $packReleasePath -Raw
+$appProjectText = Get-Content -LiteralPath $appProjectPath -Raw
+if ($appProjectText -notmatch '<ProjectPriIndexName\s+Condition="''\$\(ProjectPriIndexName\)''\s+==\s+''\s*''">SherlockChiang\.QuickLookNext</ProjectPriIndexName>') {
+    throw "The app PRI identity must keep the sideload default conditional so Store builds can override it."
+}
 if ($releaseText -notmatch '\$PackageIdentityName' -or
     $releaseText -notmatch 'ProjectPriIndexName=\$PackageIdentityName' -or
     $packReleaseText -notmatch '\$PackageIdentityName' -or

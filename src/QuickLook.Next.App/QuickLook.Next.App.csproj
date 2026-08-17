@@ -12,7 +12,7 @@
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <ApplicationIcon>Assets\QuickLookNext.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ProjectPriIndexName>SherlockChiang.QuickLookNext</ProjectPriIndexName>
+    <ProjectPriIndexName Condition="'$(ProjectPriIndexName)' == ''">SherlockChiang.QuickLookNext</ProjectPriIndexName>
     <ProjectPriFileName>resources.pri</ProjectPriFileName>
     <QuickLookUsesNative>true</QuickLookUsesNative>
   </PropertyGroup>

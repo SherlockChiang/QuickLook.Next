@@ -32,9 +32,9 @@ foreach ($rule in $requiredPatterns) {
         throw $rule[1]
     }
 }
-if ($appProjectText -notmatch '<ProjectPriIndexName>SherlockChiang\.QuickLookNext</ProjectPriIndexName>' -or
+if ($appProjectText -notmatch '<ProjectPriIndexName\s+Condition="''\$\(ProjectPriIndexName\)''\s+==\s+''\s*''">SherlockChiang\.QuickLookNext</ProjectPriIndexName>' -or
     $appProjectText -notmatch '<ProjectPriFileName>resources\.pri</ProjectPriFileName>') {
-    throw "The app must generate one complete PRI using the MSIX package identity."
+    throw "The app must default to the sideload PRI identity while allowing a Store identity override."
 }
 foreach ($pattern in @(
     'makepri\.exe"\)\s+dump',
