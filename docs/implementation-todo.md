@@ -302,6 +302,15 @@ the release-only `release:` prefix while this queue is in progress.
 
 Completed entries move here with the verification commands and commit hash.
 
+- [x] `CI26-01` Stabilize the RasterHost repeated-image handle-growth guard on
+  hosted .NET/D3D stacks without increasing its 12-handle leak budget. Warm up
+  the bounded runtime-worker ramp for 64 cycles, derive the baseline from the
+  final eight warmup samples, and retain a separate 32-cycle measured window
+  with peak/last diagnostics.
+  - Verification: focused test passed 12/12 independent-process repetitions.
+  - Verification: all 29 RasterHost integration tests passed together.
+  - Commit: `bea5b7a`
+
 - [x] `R26-P1-08b` Compute the exact checked plain/waveform packet length from
   bounded header dimensions, target geometry, and JPEG orientation before full
   static-raster HANDLE decode. Cancellation wins after preflight and before
