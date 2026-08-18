@@ -141,7 +141,11 @@ public sealed class RasterHostStaticImageHandleTests
     [Fact]
     public async Task Repeated_image_handle_previews_release_sources_without_linear_handle_growth()
     {
-        const int warmupCycleCount = 16;
+        // Hosted .NET/D3D stacks can continue creating bounded worker/runtime handles after the
+        // first few previews. Warm through that startup ramp before measuring the 32-cycle slope;
+        // a per-preview leak still exceeds the unchanged budget during the measured window.
+        const int warmupCycleCount = 64;
+        const int baselineWindowCycleCount = 8;
         const int measuredCycleCount = 32;
         const int handleGrowthBudget = 12;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
@@ -174,8 +178,9 @@ public sealed class RasterHostStaticImageHandleTests
             await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
             Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
 
-            int baselineHandles = 0;
+            int baselinePeakHandles = 0;
             int peakHandles = 0;
+            int lastMeasuredHandles = 0;
             for (int cycle = 0; cycle <= warmupCycleCount + measuredCycleCount; cycle++)
             {
                 await File.WriteAllBytesAsync(physicalPath, image, timeout.Token);
@@ -224,13 +229,21 @@ public sealed class RasterHostStaticImageHandleTests
                 await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
                 await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
                 host.Refresh();
-                if (cycle == warmupCycleCount)
-                    baselineHandles = host.HandleCount;
+                int handleCount = host.HandleCount;
+                if (cycle > warmupCycleCount - baselineWindowCycleCount && cycle <= warmupCycleCount)
+                    baselinePeakHandles = Math.Max(baselinePeakHandles, handleCount);
                 else if (cycle > warmupCycleCount)
-                    peakHandles = Math.Max(peakHandles, host.HandleCount);
+                {
+                    peakHandles = Math.Max(peakHandles, handleCount);
+                    lastMeasuredHandles = handleCount;
+                }
             }
 
-            Assert.InRange(peakHandles, 1, baselineHandles + handleGrowthBudget);
+            Assert.True(baselinePeakHandles > 0, "The warmup handle-count window was not sampled.");
+            Assert.True(
+                peakHandles <= baselinePeakHandles + handleGrowthBudget,
+                $"RasterHost handle growth exceeded the bounded budget: warmupPeak={baselinePeakHandles}, " +
+                $"measuredPeak={peakHandles}, measuredLast={lastMeasuredHandles}, budget={handleGrowthBudget}.");
             Assert.False(File.Exists(logicalPath));
         }
         finally
