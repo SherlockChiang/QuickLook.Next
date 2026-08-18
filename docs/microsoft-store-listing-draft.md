@@ -150,8 +150,10 @@ screenshots from an unverified build.
 
 - Restore a working WACK environment (the current host's `appcert.exe` exits
   with `0xc0000142` before loading a package).
-- Obtain explicit approval before installing the Store candidate in an isolated
-  test environment; record clean install, update, rollback, and uninstall.
+- Obtain explicit approval before installing a Store-signed flight/acquisition
+  package in an isolated test environment; the unsigned submission candidate
+  itself is not a valid local AppX installation subject. Record clean install,
+  update, rollback, and uninstall without altering the submission artifact.
 - Complete the Partner Center age-rating questionnaire and verify all locale
   character limits.
 - Capture and review the final screenshots, then submit only after the package

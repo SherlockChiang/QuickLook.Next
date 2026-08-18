@@ -114,6 +114,12 @@ also passed its release checks, dependency audits, and website build.
 
 No candidate was installed or uploaded to Partner Center. WACK and clean
 install/update/uninstall testing therefore remain mandatory before submission.
+Because the candidate is intentionally unsigned for Microsoft to re-sign, it
+is not itself a valid local AppX installation/update subject. Those tests must
+use a Store-signed flight/acquisition package after Partner Center processing,
+or a separately produced test-signed copy whose identity and certificate are
+clearly kept out of the submission artifact. Never add the sideload signature
+to the Store candidate.
 
 ## Listing material still needed
 
