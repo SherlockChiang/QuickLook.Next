@@ -9,6 +9,32 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## Microsoft Store 1.0.0 launch queue
+
+This queue keeps Store onboarding separate from the signed GitHub sideload
+channel. Detailed identities, hashes, and test boundaries are recorded in
+`docs/microsoft-store-submission.md`.
+
+- [x] `STORE-01` Reserve the Store product and record its exact package identity
+  without changing the sideload manifest identity.
+- [x] `STORE-02` Build and attest the unsigned `1.0.0.0` x64 Store candidate;
+  pass the Store packaging, architecture, workflow, and dependency guards.
+- [x] `STORE-03` Draft the English, Simplified Chinese, and Traditional Chinese
+  listings, field limits, IARC factual basis, and certification notes.
+- [ ] `STORE-04` Create or update the Partner Center draft: upload the existing
+  `.msixupload`, export the live listing CSV, import the three locale drafts,
+  choose the category, and complete the live IARC questionnaire. Do not submit
+  for certification or enable automatic public publishing without explicit
+  owner confirmation.
+- [ ] `STORE-05` Obtain a Store-signed private-flight/acquisition package and,
+  with explicit install approval, record WACK plus clean install, update,
+  rollback, uninstall, crash-dialog, and first-launch evidence in an isolated
+  Windows test environment.
+- [ ] `STORE-06` Capture final-candidate Store screenshots, review the optional
+  300 x 300 tile icon/promotional assets, and verify every listing locale.
+- [ ] `STORE-07` Review the complete Partner Center diff and certification hold;
+  submit only after a separate explicit owner confirmation.
+
 ## 2026-08-04 review execution queue
 
 This queue turns the August repository review into independently verifiable local

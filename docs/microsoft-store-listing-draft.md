@@ -1,9 +1,9 @@
 # Microsoft Store listing draft
 
-Status: draft only. Nothing in this file has been entered into or submitted
-through Partner Center. Confirm the current Partner Center character limits,
-locale names, age-rating questionnaire, and screenshot dimensions before
-copying any field.
+Status: Partner Center-ready draft. Nothing in this file has been entered into
+or submitted through Partner Center. The text and image constraints below were
+rechecked against Microsoft Learn on 2026-08-18; the live Partner Center form
+remains authoritative if its schema changes.
 
 ## Product facts
 
@@ -15,6 +15,37 @@ copying any field.
 - Support: <https://github.com/SherlockChiang/QuickLook.Next/issues>
 - Privacy policy: <https://sherlockchiang.github.io/QuickLook.Next/privacy.html>
 - Source and release history: <https://github.com/SherlockChiang/QuickLook.Next>
+
+## Verified listing constraints
+
+- A description is required and accepts at most 10,000 plain-text characters.
+- The optional short description accepts at most 1,000 characters; Microsoft
+  recommends staying below 270 characters because some views truncate there.
+- Up to 20 product features may be supplied. Each accepts at most 200
+  characters and Partner Center adds the bullets.
+- Each listing needs a description and at least one screenshot. Microsoft
+  recommends at least four screenshots and accepts up to 10 desktop images.
+- Desktop screenshots must be PNG, no larger than 50 MB, and at least
+  1366 x 768. A caption may contain at most 200 characters.
+- For a bulk import, first export Partner Center's UTF-8 CSV and preserve its
+  `Field`, `ID`, and `Type` columns exactly. Add or edit only the locale value
+  columns (`en-us`, `zh-cn`, and `zh-tw` as emitted by that export) and import
+  the complete folder when local screenshot assets are included.
+
+Sources: [Store listing fields](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/add-and-edit-store-listing-info),
+[screenshots and images](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images), and
+[listing import/export](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/import-and-export-store-listings).
+
+## Proposed Partner Center classification
+
+- Primary category: **Utilities + tools**.
+- Subcategory: leave unset unless the live form requires one; QuickLook Next
+  previews files but is not a file manager.
+- Optional secondary category: **Productivity**.
+- Base price: free.
+- Publishing hold: do not publish automatically. Keep the first submission on
+  manual hold until Store-signed acquisition, upgrade, rollback, and uninstall
+  evidence is recorded.
 
 ## English (en-US)
 
@@ -130,10 +161,55 @@ questionnaire:
   or otherwise chosen by the user. Preview content is processed locally and is
   not uploaded to the project.
 
+## Age-rating factual basis
+
+Use these facts while answering the live IARC questionnaire; do not infer an
+answer solely from this draft because IARC can change its questions:
+
+- QuickLook Next is a general-purpose utility, not a game and not directed to
+  children.
+- It has no account system, advertising, telemetry backend, in-app purchases,
+  chat, social feed, matchmaking, or developer-operated content catalog.
+- It displays user-selected local files, which may contain arbitrary content
+  owned or obtained by the user. The app does not curate or distribute that
+  content.
+- Network-related actions are explicit and ancillary: manual update checks,
+  opening an EXIF location in the browser, following support links, or asking
+  Windows to hydrate a cloud placeholder after confirmation.
+
+Microsoft uses the live questionnaire to generate IARC ratings and requires
+all questions to be answered accurately. The publisher display name and email
+address are shared with IARC as part of that process. See
+[Age ratings for MSIX apps](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/age-ratings).
+
+## Certification notes draft
+
+> QuickLook Next is a local Windows file-preview utility and requires no test
+> account. In File Explorer, select a supported file and press Space to open or
+> close the preview. The optional startup task keeps the tray/hotkey integration
+> available and can be disabled in Settings.
+>
+> The package declares `runFullTrust` because the packaged WinUI desktop shell
+> starts the Rust-first ParserHost and the RasterHost/ShellBroker helper
+> processes used for bounded local parsing, rendering, and Explorer integration.
+> Previewed files are not executed and are not uploaded to the project.
+>
+> Normal previewing works offline. Network access occurs only for user-initiated
+> update checks, external support/map links, or confirmed cloud-placeholder
+> hydration through Windows and the configured cloud provider. The privacy
+> policy documents these cases.
+>
+> Please test clean launch, Explorer Space-key preview, Settings startup-task
+> control, and several common local formats. Difficult formats are isolated in
+> supervised helper processes so a parser or renderer failure should return an
+> in-app error rather than terminate the shell.
+
 ## Screenshot plan
 
-Capture these only from the final candidate after the clean-install and
-upgrade checks, using the exact dimensions Partner Center requests:
+Capture these only from the final Store-signed candidate after the clean-install
+and upgrade checks. Use PNG at 1920 x 1080 (comfortably above the 1366 x 768
+desktop minimum), keep each file below 50 MB, and keep captions within 200
+characters:
 
 1. Hero: Explorer selection with a clean image preview and the Space workflow.
 2. Image details: zoom/pan view with EXIF or color information visible.
@@ -154,7 +230,8 @@ screenshots from an unverified build.
   package in an isolated test environment; the unsigned submission candidate
   itself is not a valid local AppX installation subject. Record clean install,
   update, rollback, and uninstall without altering the submission artifact.
-- Complete the Partner Center age-rating questionnaire and verify all locale
-  character limits.
+- Export the live Partner Center listing CSV before any bulk import, then map
+  the three prepared locales onto its unchanged schema.
+- Complete the live Partner Center age-rating questionnaire.
 - Capture and review the final screenshots, then submit only after the package
   and listing data agree on identity and version.

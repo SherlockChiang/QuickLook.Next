@@ -121,15 +121,21 @@ or a separately produced test-signed copy whose identity and certificate are
 clearly kept out of the submission artifact. Never add the sideload signature
 to the Store candidate.
 
-## Listing material still needed
+## Listing readiness checklist
 
-- English, Simplified Chinese, and Traditional Chinese descriptions;
-- short description and feature highlights;
-- screenshots at the Store-requested dimensions;
-- Store hero/icon assets derived from the existing icon set;
-- support URL and privacy-policy URL;
-- explanation for `runFullTrust` and startup-task behavior;
-- a clean-install and upgrade test report.
+- [x] Draft English, Simplified Chinese, and Traditional Chinese descriptions.
+- [x] Draft short descriptions and feature highlights.
+- [x] Record current listing field limits and desktop screenshot requirements.
+- [x] Record the support URL and deployed privacy-policy URL.
+- [x] Draft `runFullTrust`, startup-task, network-behavior, and certification
+  notes.
+- [ ] Export Partner Center's live listing CSV and map the three locale drafts
+  onto its unchanged schema.
+- [ ] Confirm the category and complete the live IARC age-rating questionnaire.
+- [ ] Capture final-candidate screenshots at the Store-requested dimensions.
+- [ ] Produce the optional 300 x 300 Store tile icon and any promotional art
+  selected for the first listing.
+- [ ] Record Store-signed clean-install, update, rollback, and uninstall tests.
 
 No Partner Center submission or product reservation is performed by the local
 build until the identity values and account access are confirmed.
