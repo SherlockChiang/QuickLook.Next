@@ -309,7 +309,8 @@ Completed entries move here with the verification commands and commit hash.
   with peak/last diagnostics.
   - Verification: focused test passed 12/12 independent-process repetitions.
   - Verification: all 29 RasterHost integration tests passed together.
-  - Commit: `bea5b7a`
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Commits: `bea5b7a`, `700483e`
 
 - [x] `R26-P1-08b` Compute the exact checked plain/waveform packet length from
   bounded header dimensions, target geometry, and JPEG orientation before full
