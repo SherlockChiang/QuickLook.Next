@@ -14,6 +14,10 @@ certification. The Store build uses Microsoft's Store identity and signing;
 the GitHub release channel below remains the signed sideload distribution for
 development and direct downloads.
 
+<a href="https://apps.microsoft.com/detail/9PM0XKBFJC6R?hl=en-us&amp;gl=US">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get QuickLook Next from the Microsoft Store" />
+</a>
+
 ![QuickLook Next previewing its own app artwork](docs/images/quicklook-next-hero.png)
 
 QuickLook Next is a fast, native file previewer for Windows Explorer. Its WinUI 3 interface, Rust-powered parsing, GPU-composited image surfaces, and isolated helper processes keep previews responsive without sacrificing safety.

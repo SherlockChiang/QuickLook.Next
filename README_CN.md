@@ -13,6 +13,10 @@
 Microsoft 分配的 Store 身份并由 Microsoft 签名；下方 GitHub Releases 仍是独立的
 开发签名侧载和直接下载渠道。
 
+<a href="https://apps.microsoft.com/detail/9PM0XKBFJC6R?hl=zh-cn&amp;gl=CN">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="从 Microsoft Store 获取 QuickLook Next" />
+</a>
+
 ![QuickLook Next 正在预览自己的应用图](docs/images/quicklook-next-hero.png)
 
 QuickLook Next 是快速、原生的 Windows 文件预览工具。WinUI 3 界面、Rust 解析、GPU 合成图片表面和隔离辅助进程共同保障预览流畅性与安全性。
