@@ -7,6 +7,11 @@
 [![最新版本](https://img.shields.io/github/v/release/SherlockChiang/QuickLook.Next?display_name=tag&sort=semver)](https://github.com/SherlockChiang/QuickLook.Next/releases/latest)
 ![Windows 10 和 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)
 ![架构](https://img.shields.io/badge/architecture-x64-555555)
+[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-certified-107C10?logo=microsoft)](https://apps.microsoft.com/detail/9PM0XKBFJC6R)
+
+**QuickLook Next 1.0.0.0（x64）已通过 Microsoft Store 认证。** Store 版本使用
+Microsoft 分配的 Store 身份并由 Microsoft 签名；下方 GitHub Releases 仍是独立的
+开发签名侧载和直接下载渠道。
 
 ![QuickLook Next 正在预览自己的应用图](docs/images/quicklook-next-hero.png)
 
