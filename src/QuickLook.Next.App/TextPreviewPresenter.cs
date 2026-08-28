@@ -63,6 +63,7 @@ internal sealed class TextPreviewPresenter
     private bool _showLineNumbers;
     private double _textScale = 1;
     private string _textSize = "default";
+    private bool _focusContent;
     private TextLineIndex? _textLineIndex;
     private IReadOnlyList<TextLineItem>? _textLines;
     private MarkdownPresentation? _markdownPresentation;
@@ -104,8 +105,10 @@ internal sealed class TextPreviewPresenter
         (double Width, double Height) maxContent,
         bool wrap,
         string textSize,
-        bool lineNumbers)
+        bool lineNumbers,
+        bool focusContent)
     {
+        _focusContent = focusContent;
         _textSize = textSize;
         _textScale = TextScale(textSize);
         _showLineNumbers = lineNumbers;
@@ -187,8 +190,15 @@ internal sealed class TextPreviewPresenter
         }
 
         ApplyOutlineVisibility();
-        FrameworkElement focusTarget = isStructuredMarkdown ? _markdownListView : _textBlock;
-        focusTarget.Focus(FocusState.Programmatic);
+        if (focusContent)
+        {
+            FrameworkElement focusTarget = isStructuredMarkdown
+                ? _markdownListView
+                : useLineList
+                    ? _textListView
+                    : _textBlock;
+            focusTarget.Focus(FocusState.Programmatic);
+        }
         var size = EstimateTextPreviewSize(text, ready.TextFormat, wrap, maxContent);
         if (_outlineItems.Count > 0)
             size = (Math.Min(maxContent.Width, size.Width + OutlineWidth + OutlineGap), size.Height);
@@ -416,7 +426,7 @@ internal sealed class TextPreviewPresenter
     {
         _tokenBrushes.Clear();
         if (_lastReady is not null)
-            Render(_lastReady, _lastMaxContent, _wrap, _textSize, _showLineNumbers);
+            Render(_lastReady, _lastMaxContent, _wrap, _textSize, _showLineNumbers, _focusContent);
     }
 
     public void SetWrapping(bool wrap)
@@ -444,7 +454,7 @@ internal sealed class TextPreviewPresenter
                 wrappingMode,
                 _lastReady.TextFormat,
                 _lastReady.Markdown is not null);
-            Render(_lastReady, _lastMaxContent, wrap, textSize, lineNumbers);
+            Render(_lastReady, _lastMaxContent, wrap, textSize, lineNumbers, _focusContent);
         }
     }
 

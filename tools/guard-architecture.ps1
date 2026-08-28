@@ -1060,9 +1060,8 @@ if (Test-Path $parserHostProgram) {
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
         "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL\s*\}'
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
-        "ql_set_preview_visible" = '\{\s*PREVIEW_VISIBLE\.store\(visible\s*!=\s*0,\s*Ordering::SeqCst\);\s*\}'
     }
-    $voidBoundaryExports = @("ql_get_selection")
+    $voidBoundaryExports = @("ql_get_selection", "ql_set_preview_visible")
     $nativeExports = [regex]::Matches(
         $nativeLibText,
         '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')

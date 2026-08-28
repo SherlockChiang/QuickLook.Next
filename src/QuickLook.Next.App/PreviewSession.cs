@@ -140,6 +140,13 @@ internal sealed class PreviewSession
             || !string.Equals(path, ExplorerAnchorPath, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Explorer-originated previews stay non-activating so the shell retains keyboard focus for
+    /// arrow-key selection follow-up. Content may request focus only for in-preview navigation.
+    /// </summary>
+    public bool ShouldActivatePreview(bool contentNeedsFocus)
+        => contentNeedsFocus && Source == PreviewNavigationSource.WindowNavigation;
+
     public void CancelOperation()
     {
         if (_operationCts is null)

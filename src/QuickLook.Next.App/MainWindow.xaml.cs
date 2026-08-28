@@ -1405,8 +1405,22 @@ public sealed partial class MainWindow : Window
         return elapsed >= 0 && elapsed < DuplicateOpenCloseGuardMs;
     }
 
-    private static bool ShouldActivatePreview(PreviewReady ready)
-        => ready.TextContent is not null || ready.Listing is not null || ready.Table is not null || ready.Markdown is not null || ready.OfficeLayout is not null;
+    private bool ShouldActivatePreview(PreviewReady ready)
+    {
+        bool contentNeedsFocus = ready.TextContent is not null
+            || ready.Listing is not null
+            || ready.Table is not null
+            || ready.Markdown is not null
+            || ready.OfficeLayout is not null;
+        bool activate = _previewSession.ShouldActivatePreview(contentNeedsFocus);
+        if (contentNeedsFocus && !activate)
+        {
+            DiagLog.Write(
+                "App",
+                $"preview stays non-activating for Explorer follow-up; source={_previewSession.Source}; path={_previewSession.ActivePath ?? "<none>"}");
+        }
+        return activate;
+    }
 
     private void UpdatePreviewChrome(PreviewReady ready, bool showRasterTools = false)
     {
@@ -1844,6 +1858,10 @@ public sealed partial class MainWindow : Window
         {
             if (!_previewSession.IsCurrentError(context))
                 return;
+            // Keep Explorer keyboard focus for Explorer-originated errors. The action buttons
+            // remain available by mouse; only in-window navigation requests a focus transfer.
+            if (!_previewSession.ShouldActivatePreview(contentNeedsFocus: true))
+                return;
             if (ErrorRetryButton.Visibility == Visibility.Visible)
                 ErrorRetryButton.Focus(FocusState.Programmatic);
             else if (ErrorActionsPanel.Visibility == Visibility.Visible)
@@ -2120,7 +2138,8 @@ public sealed partial class MainWindow : Window
             GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight),
             wrap,
             AppSettings.Current.TextSize,
-            AppSettings.Current.TextLineNumbers);
+            AppSettings.Current.TextLineNumbers,
+            ShouldActivatePreview(ready));
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;

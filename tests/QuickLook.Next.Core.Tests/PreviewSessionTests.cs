@@ -90,4 +90,36 @@ public sealed class PreviewSessionTests
         Assert.Null(session.ErrorContext);
         Assert.Null(session.ErrorActionPath);
     }
+
+    [Fact]
+    public void Explorer_open_preview_keeps_shell_focus_for_follow_up()
+        => AssertPreviewActivation(
+            PreviewNavigationSource.ExplorerOpen,
+            contentNeedsFocus: true,
+            expectedActivation: false);
+
+    [Fact]
+    public void Explorer_switch_preview_keeps_shell_focus_for_follow_up()
+        => AssertPreviewActivation(
+            PreviewNavigationSource.ExplorerSwitch,
+            contentNeedsFocus: true,
+            expectedActivation: false);
+
+    [Fact]
+    public void Window_navigation_preview_can_take_focus()
+        => AssertPreviewActivation(
+            PreviewNavigationSource.WindowNavigation,
+            contentNeedsFocus: true,
+            expectedActivation: true);
+
+    private static void AssertPreviewActivation(
+        PreviewNavigationSource source,
+        bool contentNeedsFocus,
+        bool expectedActivation)
+    {
+        var session = new PreviewSession();
+        session.Begin("item.txt", source);
+
+        Assert.Equal(expectedActivation, session.ShouldActivatePreview(contentNeedsFocus));
+    }
 }
