@@ -215,7 +215,10 @@ the release-only `release:` prefix while this queue is in progress.
       the C ABI and panic boundary, and make architecture/module guards scan
       the focused source file. Add null, length-cap, and output-boundary tests.
       - Verification: Rust fmt, Clippy, workspace tests (297 passed, 1 ignored),
-        FFI safety, module-boundary, performance-bounds, and architecture guards.
+        FFI safety, module-boundary, and performance-bounds guards passed;
+        architecture guard reached all Rust checks but its isolated MSBuild
+        fixture is locally blocked by the pinned SDK `10.0.302` (only
+        `10.0.303`/`10.0.400` are installed).
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
