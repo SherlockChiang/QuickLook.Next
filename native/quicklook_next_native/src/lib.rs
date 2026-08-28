@@ -11,7 +11,6 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::mem::size_of;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -26,6 +25,11 @@ mod preview;
 mod rar_listing;
 mod win32;
 
+// Keep shared FFI helpers available to the remaining crate-local adapters.
+pub(crate) use ffi::common::{
+    ffi_boundary, ffi_void_boundary, optional_utf8_arg, owned_utf8_arg, utf8_arg, write_json_out,
+    write_v2_out,
+};
 // Keep the moved route symbols available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::routing::{ql_is_archive, ql_is_text, ql_preview_folder};
@@ -209,42 +213,6 @@ const MAX_ANIMATED_FRAME_DIMENSION: u32 = 1024;
 const MAX_ANIMATED_FRAMES: usize = 120;
 const MAX_ANIMATED_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ANIMATION_HANDLE_INPUT_BYTES: u64 = 256 * 1024 * 1024;
-fn utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
-    if ptr.is_null() || len > max_len {
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-    std::str::from_utf8(bytes).ok()
-}
-
-/// Copy a bounded UTF-8 FFI argument into Rust-owned storage.
-///
-/// # Safety
-/// `ptr` must be readable for `len` bytes for the duration of this call.
-unsafe fn owned_utf8_arg(ptr: *const u8, len: usize, max_len: usize) -> Option<String> {
-    if ptr.is_null() || len > max_len {
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
-    std::str::from_utf8(bytes).ok().map(str::to_owned)
-}
-
-fn optional_utf8_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a str> {
-    if ptr.is_null() {
-        return (len == 0).then_some("");
-    }
-    utf8_arg(ptr, len, max_len)
-}
-
-fn optional_bytes_arg<'a>(ptr: *const u8, len: usize, max_len: usize) -> Option<&'a [u8]> {
-    if ptr.is_null() {
-        return (len == 0).then_some(&[]);
-    }
-    if len > max_len {
-        return None;
-    }
-    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
-}
 
 /// Send a tagged UTF-16 string back to the managed host.
 fn emit(msg: &str) {
@@ -6306,48 +6274,6 @@ pub unsafe extern "C" fn ql_preview_torrent_cancelable(
     })
 }
 
-fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {
-    let bytes = json.as_bytes();
-    let needed = bytes.len();
-    if needed > out_cap {
-        return -(needed as i32);
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, needed);
-    }
-    needed as i32
-}
-
-/// # Safety
-/// `out_required` must be writable and, when output is copied, `out_buf` must be writable for
-/// `out_cap` bytes and must not overlap `bytes`.
-unsafe fn write_v2_out(
-    bytes: &[u8],
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-) -> i32 {
-    unsafe { *out_required = bytes.len() };
-    if bytes.len() > out_cap {
-        return QL_ERROR_BUFFER_TOO_SMALL;
-    }
-    if !bytes.is_empty() {
-        if out_buf.is_null() {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, bytes.len()) };
-    }
-    QL_OK
-}
-
-fn ffi_boundary(body: impl FnOnce() -> i32) -> i32 {
-    catch_unwind(AssertUnwindSafe(body)).unwrap_or(QL_ERROR_INTERNAL)
-}
-
-fn ffi_void_boundary(body: impl FnOnce()) {
-    let _ = catch_unwind(AssertUnwindSafe(body));
-}
-
 #[test]
 fn native_abi_version_is_stable() {
     assert_eq!(ql_abi_version(), 3);
@@ -10168,15 +10094,5 @@ mod handle_v2_tests {
         drop(wal);
         let _ = fs::remove_file(path);
         let _ = fs::remove_file(wal_path);
-    }
-
-    #[test]
-    fn ffi_boundary_contains_panics() {
-        assert_eq!(ffi_boundary(|| panic!("test panic")), QL_ERROR_INTERNAL);
-    }
-
-    #[test]
-    fn ffi_void_boundary_contains_panics() {
-        ffi_void_boundary(|| panic!("test panic"));
     }
 }

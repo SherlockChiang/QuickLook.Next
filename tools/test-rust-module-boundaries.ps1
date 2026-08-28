@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
+$ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
@@ -61,6 +62,7 @@ $failures = [Collections.Generic.List[string]]::new()
 foreach ($path in @(
         $libPath,
         $ffiModulePath,
+        $ffiCommonPath,
         $ffiRoutingPath,
         $win32ModulePath,
         $shellThumbnailPath,
@@ -117,6 +119,7 @@ foreach ($path in @(
 if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
+    $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
@@ -171,13 +174,67 @@ if ($failures.Count -eq 0) {
     }
 
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
         $failures.Add(
-            "lib.rs must compose ffi::routing and retain its three crate-private route re-exports.")
+            "lib.rs must compose ffi::common/ffi::routing and retain its three crate-private route re-exports.")
     }
 
-    if ($ffiRoutingText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+    if ($ffiCommonText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiCommonText -match '#\[no_mangle\]' -or
+        $ffiCommonText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add(
+            "ffi::common must use explicit imports and must not expose a C ABI surface.")
+    }
+    $commonExports = [regex]::Matches(
+        $ffiCommonText,
+        '(?m)^pub(?:\([^)]+\))?\s+')
+    if ($commonExports.Count -ne 8 -or $ffiCommonText -match '(?m)^pub\s+') {
+        $failures.Add(
+            "ffi::common must expose exactly eight crate-private helpers and no bare pub items.")
+    }
+    $commonHelpers = @(
+        "utf8_arg",
+        "owned_utf8_arg",
+        "optional_utf8_arg",
+        "optional_bytes_arg",
+        "write_json_out",
+        "write_v2_out",
+        "ffi_boundary",
+        "ffi_void_boundary")
+    foreach ($commonHelper in $commonHelpers) {
+        $commonHelperPattern = '(?m)^pub\(crate\)\s+' +
+            '(?:unsafe\s+)?fn\s+' + [regex]::Escape($commonHelper) +
+            '(?:<[^>]*>)?\s*\('
+        if ($ffiCommonText -notmatch $commonHelperPattern) {
+            $failures.Add("ffi::common lost required helper: $commonHelper")
+        }
+    }
+    $rootCommonDefinitionPattern = '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:' +
+        (($commonHelpers | ForEach-Object { [regex]::Escape($_) }) -join '|') +
+        ')(?:<[^>]*>)?\s*\('
+    if ($libText -match $rootCommonDefinitionPattern) {
+        $failures.Add("lib.rs must not retain ffi::common helper definitions.")
+    }
+    foreach ($commonTest in @(
+            'utf8_arguments_reject_null_nonzero_and_invalid_bytes',
+            'optional_arguments_accept_only_null_zero_length',
+            'oversized_arguments_are_rejected_before_dereference',
+            'json_output_preserves_length_and_capacity_contract',
+            'v2_output_reports_required_size_and_invalid_output',
+            'panic_boundaries_map_or_contain_panics')) {
+        if ($ffiCommonText -notmatch "fn\s+$commonTest\s*\(") {
+            $failures.Add("ffi::common lost focused test: $commonTest")
+        }
+    }
+    $ffiCommonLineCount = @(Get-Content -LiteralPath $ffiCommonPath).Count
+    if ($ffiCommonLineCount -gt 240) {
+        $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
+    }
+
+    if ($ffiRoutingText -notmatch '(?m)^use\s+super::common::\{' -or
+        $ffiRoutingText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
         $ffiRoutingText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")') {
         $failures.Add(
             "ffi::routing must keep explicit imports and a thin unsafe C ABI surface.")

@@ -1056,6 +1056,14 @@ if (Test-Path $parserHostProgram) {
 
     $nativeLibPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
+    $nativeCommonPath = Join-Path $Root "native/quicklook_next_native/src/ffi/common.rs"
+    if (Test-Path -LiteralPath $nativeCommonPath -PathType Leaf) {
+        $nativeCommonText = Get-Content -LiteralPath $nativeCommonPath -Raw
+    }
+    else {
+        $nativeCommonText = ""
+        Add-Failure "Missing Rust FFI common source: $nativeCommonPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1144,8 +1152,29 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "ffi::routing lost expected export: $routingName"
         }
     }
-    if ($nativeLibText -notmatch 'fn\s+ffi_boundary\(body:\s*impl\s+FnOnce\(\)\s*->\s*i32\)\s*->\s*i32\s*\{\s*catch_unwind\(AssertUnwindSafe\(body\)\)\.unwrap_or\(QL_ERROR_INTERNAL\)\s*\}' -or
-        $nativeLibText -notmatch 'fn\s+ffi_void_boundary\(body:\s*impl\s+FnOnce\(\)\)\s*\{\s*let\s+_\s*=\s*catch_unwind\(AssertUnwindSafe\(body\)\);\s*\}') {
+    $commonHelpers = @(
+        "utf8_arg",
+        "owned_utf8_arg",
+        "optional_utf8_arg",
+        "optional_bytes_arg",
+        "write_json_out",
+        "write_v2_out",
+        "ffi_boundary",
+        "ffi_void_boundary")
+    foreach ($commonHelper in $commonHelpers) {
+        $commonHelperPattern = '(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+' +
+            [regex]::Escape($commonHelper) + '(?:<[^>]*>)?\s*\('
+        if ($nativeCommonText -notmatch $commonHelperPattern) {
+            Add-Failure "ffi::common lost required helper: $commonHelper"
+        }
+        $rootCommonDefinitionPattern = '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+' +
+            [regex]::Escape($commonHelper) + '(?:<[^>]*>)?\s*\('
+        if ($nativeLibText -match $rootCommonDefinitionPattern) {
+            Add-Failure "lib.rs must not retain ffi::common helper definition: $commonHelper"
+        }
+    }
+    if ($nativeCommonText -notmatch 'pub\(crate\)\s+fn\s+ffi_boundary\(body:\s*impl\s+FnOnce\(\)\s*->\s*i32\)\s*->\s*i32\s*\{\s*catch_unwind\(AssertUnwindSafe\(body\)\)\.unwrap_or\(QL_ERROR_INTERNAL\)\s*\}' -or
+        $nativeCommonText -notmatch 'pub\(crate\)\s+fn\s+ffi_void_boundary\(body:\s*impl\s+FnOnce\(\)\)\s*\{\s*let\s+_\s*=\s*catch_unwind\(AssertUnwindSafe\(body\)\);\s*\}') {
         Add-Failure "Rust FFI panic boundaries must map i32 exports to INTERNAL and contain void-export panics"
     }
     foreach ($entryPoint in @(

@@ -1,10 +1,9 @@
 //! Thin C ABI adapters for preview routing and format detection.
 
-use crate::preview;
-use crate::{
-    ffi_boundary, optional_bytes_arg, optional_utf8_arg, utf8_arg, write_json_out, CancelCallback,
-    MAX_FFI_MAGIC_BYTES, MAX_FFI_STRING_BYTES,
+use super::common::{
+    ffi_boundary, optional_bytes_arg, optional_utf8_arg, utf8_arg, write_json_out,
 };
+use crate::{preview, CancelCallback, MAX_FFI_MAGIC_BYTES, MAX_FFI_STRING_BYTES};
 
 /// Render a folder listing. Returns JSON length, 0 on failure.
 #[doc = include_str!("../ffi_pointer_safety.md")]
@@ -80,10 +79,9 @@ pub unsafe extern "C" fn ql_is_archive(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        optional_bytes_arg, optional_utf8_arg, ql_is_text, ql_preview_folder, MAX_FFI_MAGIC_BYTES,
-        MAX_FFI_STRING_BYTES,
-    };
+    use super::{ql_is_text, ql_preview_folder};
+    use crate::ffi::common::{optional_bytes_arg, optional_utf8_arg};
+    use crate::{MAX_FFI_MAGIC_BYTES, MAX_FFI_STRING_BYTES};
 
     #[test]
     fn optional_arguments_accept_null_only_with_zero_length() {

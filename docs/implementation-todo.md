@@ -219,6 +219,14 @@ the release-only `release:` prefix while this queue is in progress.
         architecture guard reached all Rust checks but its isolated MSBuild
         fixture is locally blocked by the pinned SDK `10.0.302` (only
         `10.0.303`/`10.0.400` are installed).
+    - [x] `R26-P1-07d-2` Move the shared UTF-8/pointer, output-buffer, and
+      panic-boundary helpers into `native/quicklook_next_native/src/ffi/common.rs`;
+      preserve signatures, error codes, and ownership semantics while adding
+      focused boundary tests and location guards.
+      - Verification: Rust fmt, Clippy, workspace tests (301 passed, 1 ignored),
+        FFI safety, module-boundary, and performance-bounds guards passed;
+        the local architecture guard's isolated MSBuild fixture remains blocked
+        by the pinned SDK `10.0.302` (only `10.0.303`/`10.0.400` are installed).
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
