@@ -20,10 +20,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::{AnimationDecoder, ImageDecoder, ImageFormat, ImageReader};
 
+mod ffi;
 mod native_input;
 mod preview;
 mod rar_listing;
 mod win32;
+
+// Keep the moved route symbols available to crate-local integration tests and adapters.
+#[allow(unused_imports)]
+pub(crate) use ffi::routing::{ql_is_archive, ql_is_text, ql_preview_folder};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -6298,78 +6303,6 @@ pub unsafe extern "C" fn ql_preview_torrent_cancelable(
             return -3;
         }
         write_json_out(&json, out_buf, out_cap)
-    })
-}
-
-/// Render a folder listing. Returns JSON length, 0 on failure.
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_folder(
-    path_utf8: *const u8,
-    path_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-            return 0;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let json = preview::render_folder(path, cancel_cb);
-        write_json_out(&json, out_buf, out_cap)
-    })
-}
-
-/// Check if a file is text-like (for routing in the App).
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_is_text(
-    ext_utf8: *const u8,
-    ext_len: usize,
-    magic: *const u8,
-    magic_len: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
-            Some(bytes) => bytes,
-            None => return 0,
-        };
-        if preview::is_text(ext, magic) {
-            1
-        } else {
-            0
-        }
-    })
-}
-
-/// Check if a file is an archive (for routing).
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_is_archive(
-    ext_utf8: *const u8,
-    ext_len: usize,
-    kind_utf8: *const u8,
-    kind_len: usize,
-    magic: *const u8,
-    magic_len: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
-            Some(bytes) => bytes,
-            None => return 0,
-        };
-        if preview::is_archive(ext, kind, magic) {
-            1
-        } else {
-            0
-        }
     })
 }
 

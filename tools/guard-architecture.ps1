@@ -1056,6 +1056,14 @@ if (Test-Path $parserHostProgram) {
 
     $nativeLibPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
+    $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
+    if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
+        $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
+    }
+    else {
+        $nativeRoutingText = ""
+        Add-Failure "Missing Rust FFI routing source: $nativeRoutingPath"
+    }
     $panicBoundaryExemptions = @{
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
         "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL\s*\}'
@@ -1096,6 +1104,44 @@ if (Test-Path $parserHostProgram) {
 
         if ($entryBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
             Add-Failure "$entryPoint must contain panics before returning across the Rust FFI boundary"
+        }
+    }
+
+    # FFI route adapters live in a focused module; scan that file independently so an export
+    # cannot inherit a body boundary from an unrelated source file.
+    $routingExports = [regex]::Matches(
+        $nativeRoutingText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $routingAbiExports = [regex]::Matches(
+        $nativeRoutingText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+')
+    $expectedRoutingExports = @("ql_preview_folder", "ql_is_text", "ql_is_archive")
+    if ($routingExports.Count -ne $expectedRoutingExports.Count -or
+        $routingAbiExports.Count -ne $expectedRoutingExports.Count) {
+        Add-Failure "ffi::routing must expose exactly three unsafe C ABI exports"
+    }
+    for ($routingIndex = 0; $routingIndex -lt $routingExports.Count; $routingIndex++) {
+        $routingMatch = $routingExports[$routingIndex]
+        $routingName = $routingMatch.Groups["name"].Value
+        $routingEnd = if ($routingIndex + 1 -lt $routingExports.Count) {
+            $routingExports[$routingIndex + 1].Index
+        }
+        else {
+            $nativeRoutingText.Length
+        }
+        $routingBody = $nativeRoutingText.Substring(
+            $routingMatch.Index,
+            $routingEnd - $routingMatch.Index)
+        if ($expectedRoutingExports -notcontains $routingName -or
+            $routingBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            Add-Failure "$routingName must contain panics before returning across the Rust FFI boundary"
+        }
+    }
+    foreach ($routingName in $expectedRoutingExports) {
+        $routingPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($routingName) + '\s*\('
+        if ($nativeRoutingText -notmatch $routingPattern) {
+            Add-Failure "ffi::routing lost expected export: $routingName"
         }
     }
     if ($nativeLibText -notmatch 'fn\s+ffi_boundary\(body:\s*impl\s+FnOnce\(\)\s*->\s*i32\)\s*->\s*i32\s*\{\s*catch_unwind\(AssertUnwindSafe\(body\)\)\.unwrap_or\(QL_ERROR_INTERNAL\)\s*\}' -or

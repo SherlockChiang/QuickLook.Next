@@ -5,6 +5,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
+$ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
+$ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
@@ -58,6 +60,8 @@ $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
         $libPath,
+        $ffiModulePath,
+        $ffiRoutingPath,
         $win32ModulePath,
         $shellThumbnailPath,
         $previewPath,
@@ -112,6 +116,8 @@ foreach ($path in @(
 
 if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
+    $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
+    $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
@@ -162,6 +168,65 @@ if ($failures.Count -eq 0) {
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
         $failures.Add("lib.rs must compose the explicit win32::shell_thumbnail module.")
+    }
+
+    if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
+        $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
+        $failures.Add(
+            "lib.rs must compose ffi::routing and retain its three crate-private route re-exports.")
+    }
+
+    if ($ffiRoutingText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiRoutingText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")') {
+        $failures.Add(
+            "ffi::routing must keep explicit imports and a thin unsafe C ABI surface.")
+    }
+    $routingExports = [regex]::Matches(
+        $ffiRoutingText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $expectedRoutingExports = @("ql_preview_folder", "ql_is_text", "ql_is_archive")
+    $routingAbiExports = [regex]::Matches(
+        $ffiRoutingText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+')
+    $routingNoMangleCount = [regex]::Matches(
+        $ffiRoutingText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($routingExports.Count -ne $expectedRoutingExports.Count -or
+        $routingAbiExports.Count -ne $expectedRoutingExports.Count -or
+        $routingNoMangleCount -ne $expectedRoutingExports.Count) {
+        $failures.Add("ffi::routing must expose exactly three unsafe C ABI exports.")
+    }
+    foreach ($routingExport in $expectedRoutingExports) {
+        $routingPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($routingExport) + '\s*\('
+        if ($ffiRoutingText -notmatch $routingPattern) {
+            $failures.Add("ffi::routing lost expected export: $routingExport")
+        }
+    }
+    foreach ($requiredRoutingImport in @(
+            'ffi_boundary',
+            'optional_bytes_arg',
+            'optional_utf8_arg',
+            'utf8_arg',
+            'write_json_out',
+            'CancelCallback',
+            'MAX_FFI_MAGIC_BYTES',
+            'MAX_FFI_STRING_BYTES')) {
+        if ($ffiRoutingText -notmatch "\b$requiredRoutingImport\b") {
+            $failures.Add("ffi::routing lost required boundary import: $requiredRoutingImport")
+        }
+    }
+    foreach ($routingExport in $expectedRoutingExports) {
+        $routingPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($routingExport) + '\s*\('
+        if ($libText -match $routingPattern) {
+            $failures.Add("$routingExport implementation must remain in ffi::routing, not lib.rs.")
+        }
+    }
+    $ffiRoutingLineCount = @(Get-Content -LiteralPath $ffiRoutingPath).Count
+    if ($ffiRoutingLineCount -gt 150) {
+        $failures.Add("The focused ffi::routing module grew beyond 150 lines: $ffiRoutingLineCount")
     }
 
     foreach ($forbidden in @(

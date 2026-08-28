@@ -210,6 +210,12 @@ the release-only `release:` prefix while this queue is in progress.
         - Commits: `2189aa5`, `de8f2e8`
   - [ ] `R26-P1-07d` Move exported entry points and raw-pointer validation into
     focused FFI modules, leaving `lib.rs` as a small composition root.
+    - [x] `R26-P1-07d-1` Move the folder preview and text/archive routing
+      exports into `native/quicklook_next_native/src/ffi/routing.rs`, preserve
+      the C ABI and panic boundary, and make architecture/module guards scan
+      the focused source file. Add null, length-cap, and output-boundary tests.
+      - Verification: Rust fmt, Clippy, workspace tests (297 passed, 1 ignored),
+        FFI safety, module-boundary, performance-bounds, and architecture guards.
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
