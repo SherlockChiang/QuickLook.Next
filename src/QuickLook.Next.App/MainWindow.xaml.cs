@@ -87,10 +87,9 @@ public sealed partial class MainWindow : Window
     private bool _keyboardCloseQueued;
     private bool _isModalDialogOpen;
     private readonly SemaphoreSlim _modalDialogGate = new(1, 1);
-    private long _lastPreviewRevealTick;
+    private readonly DuplicateOpenCloseGuard _duplicateOpenCloseGuard = new(DuplicateOpenCloseGuardMs);
     private long _loadingShellShowStarted;
     private PreviewLifecycleTiming? _previewTiming;
-    private string? _lastPreviewRevealPath;
     private ScrollViewer? _imageFilmstripScrollViewer;
     private bool _imageFilmstripDragging;
     private bool _imageFilmstripSuppressClick;
@@ -645,6 +644,7 @@ public sealed partial class MainWindow : Window
     {
         _previewTiming?.Complete("closed");
         CancelPreviewFrameCallbacks();
+        _duplicateOpenCloseGuard.Clear();
         string? requestId = _previewSession.CurrentRequestId;
         _previewSession.BeginClose();
         ResetPreview();
@@ -1340,8 +1340,7 @@ public sealed partial class MainWindow : Window
             CompositionTarget.Rendering -= OnPreviewFinalFirstFrame;
             CompositionTarget.Rendering += OnPreviewFinalFirstFrame;
         }
-        _lastPreviewRevealTick = Environment.TickCount64;
-        _lastPreviewRevealPath = _previewSession.CurrentPath;
+        _duplicateOpenCloseGuard.NoteReveal(_previewSession.CurrentPath, Environment.TickCount64);
     }
 
     private void OnPreviewFinalFirstFrame(object? sender, object e)
@@ -1397,13 +1396,7 @@ public sealed partial class MainWindow : Window
     }
 
     private bool ShouldIgnoreDuplicateOpenClose(string path)
-    {
-        if (!string.Equals(_lastPreviewRevealPath, path, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        long elapsed = Environment.TickCount64 - _lastPreviewRevealTick;
-        return elapsed >= 0 && elapsed < DuplicateOpenCloseGuardMs;
-    }
+        => _duplicateOpenCloseGuard.ShouldIgnoreToggleClose(path, Environment.TickCount64);
 
     private bool ShouldActivateWindow(PreviewReady ready)
     {

@@ -22,6 +22,8 @@
              Link="AppModel\PreviewSession.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\SyntaxHighlighter.cs"
              Link="AppModel\SyntaxHighlighter.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\DuplicateOpenCloseGuard.cs"
+             Link="AppModel\DuplicateOpenCloseGuard.cs" />
   </ItemGroup>
   <Target Name="StageSupervisedHostCrashProbe" AfterTargets="Build">
     <Error Condition="!Exists('$(SupervisedHostCrashProbeOutput)QuickLook.Next.SupervisedHostCrashProbe.exe')"
