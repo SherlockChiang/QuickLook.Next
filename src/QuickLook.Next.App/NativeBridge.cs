@@ -275,9 +275,11 @@ internal sealed class NativeBridge : IDisposable
             : call is not null
             ? CallPreview(call, path)
             : ShouldUseNativeInfo(probe) ? CallInfoPreview(path, probe) : null;
-        return string.IsNullOrWhiteSpace(json)
-            ? null
-            : PreviewReadyJson.TryParse(requestId, json, out PreviewReady? ready, out _) ? ready : null;
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        using var parseTrace = DiagLog.TraceScope("Native", $"preview json parse; bytes={json.Length}", 20);
+        return PreviewReadyJson.TryParse(requestId, json, out PreviewReady? ready, out _) ? ready : null;
     }
 
     public PreviewListing? TryPreviewFolderListing(string path)

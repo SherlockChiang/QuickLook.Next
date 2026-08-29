@@ -2126,6 +2126,7 @@ public sealed partial class MainWindow : Window
         _rasterPresenter?.Clear();
 
         bool wrap = TextWrappingPolicy.ShouldWrap(AppSettings.Current.TextWrapping, ready.TextFormat, ready.Markdown is not null);
+        MarkPreviewPhase(_previewSession.Generation, "text-render-start", $"chars={ready.TextContent?.Length ?? 0}");
         TextPreviewResult result = _textPresenter!.Render(
             ready,
             GetMaxContentSize(MaxTextWindowWidth, MaxTextWindowHeight),
@@ -2133,6 +2134,7 @@ public sealed partial class MainWindow : Window
             AppSettings.Current.TextSize,
             AppSettings.Current.TextLineNumbers,
             _previewSession.ShouldFocusContent());
+        MarkPreviewPhase(_previewSession.Generation, "text-render-complete", $"status={result.Status}");
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
