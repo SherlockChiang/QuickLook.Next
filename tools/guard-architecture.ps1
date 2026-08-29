@@ -1072,6 +1072,14 @@ if (Test-Path $parserHostProgram) {
         $nativeRoutingText = ""
         Add-Failure "Missing Rust FFI routing source: $nativeRoutingPath"
     }
+    $nativePathPreviewPath = Join-Path $Root "native/quicklook_next_native/src/ffi/path_preview.rs"
+    if (Test-Path -LiteralPath $nativePathPreviewPath -PathType Leaf) {
+        $nativePathPreviewText = Get-Content -LiteralPath $nativePathPreviewPath -Raw
+    }
+    else {
+        $nativePathPreviewText = ""
+        Add-Failure "Missing Rust FFI path-preview source: $nativePathPreviewPath"
+    }
     $panicBoundaryExemptions = @{
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
         "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL\s*\}'
@@ -1152,6 +1160,68 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "ffi::routing lost expected export: $routingName"
         }
     }
+    # Path-based preview adapters live in their own focused module; scan that file independently
+    # so each exported entry point retains an explicit panic boundary and safety surface.
+    $pathPreviewExports = [regex]::Matches(
+        $nativePathPreviewText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $pathPreviewAbiExports = [regex]::Matches(
+        $nativePathPreviewText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+')
+    $expectedPathPreviewExports = @(
+        "ql_preview_text",
+        "ql_preview_text_cancelable",
+        "ql_preview_info",
+        "ql_preview_executable",
+        "ql_preview_executable_cancelable",
+        "ql_preview_ebook",
+        "ql_preview_ebook_cancelable",
+        "ql_preview_torrent",
+        "ql_preview_torrent_cancelable",
+        "ql_preview_archive")
+    if ($pathPreviewExports.Count -ne $expectedPathPreviewExports.Count -or
+        $pathPreviewAbiExports.Count -ne $expectedPathPreviewExports.Count) {
+        Add-Failure "ffi::path_preview must expose exactly ten unsafe C ABI exports"
+    }
+    if ($nativePathPreviewText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativePathPreviewText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativePathPreviewText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::path_preview must use explicit imports and must not expose a non-C ABI surface"
+    }
+    foreach ($pathPreviewName in $expectedPathPreviewExports) {
+        $pathPreviewPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($pathPreviewName) + '\s*\('
+        if ($nativePathPreviewText -notmatch $pathPreviewPattern) {
+            Add-Failure "ffi::path_preview lost expected export: $pathPreviewName"
+        }
+        if ($nativeLibText -match $pathPreviewPattern) {
+            Add-Failure "$pathPreviewName must remain in ffi::path_preview, not lib.rs"
+        }
+    }
+    for ($pathPreviewIndex = 0; $pathPreviewIndex -lt $pathPreviewExports.Count; $pathPreviewIndex++) {
+        $pathPreviewMatch = $pathPreviewExports[$pathPreviewIndex]
+        $pathPreviewEnd = if ($pathPreviewIndex + 1 -lt $pathPreviewExports.Count) {
+            $pathPreviewExports[$pathPreviewIndex + 1].Index
+        }
+        else {
+            $nativePathPreviewText.Length
+        }
+        $pathPreviewBody = $nativePathPreviewText.Substring(
+            $pathPreviewMatch.Index,
+            $pathPreviewEnd - $pathPreviewMatch.Index)
+        $pathPreviewName = $pathPreviewMatch.Groups["name"].Value
+        if ($expectedPathPreviewExports -notcontains $pathPreviewName -or
+            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            Add-Failure "$pathPreviewName must contain panics before returning across the Rust FFI boundary"
+        }
+    }
+    if ($nativePathPreviewText -notmatch '\b(cancel_requested|preview|CancelCallback|MAX_FFI_STRING_BYTES)\b' -or
+        $nativePathPreviewText -notmatch '\b(?:ffi_boundary|optional_utf8_arg|utf8_arg|write_json_out)\b') {
+        Add-Failure "ffi::path_preview lost its explicit bounded adapter dependencies"
+    }
+    if (@(Get-Content -LiteralPath $nativePathPreviewPath).Count -gt 320) {
+        Add-Failure "The focused ffi::path_preview module grew beyond 320 lines"
+    }
     $commonHelpers = @(
         "utf8_arg",
         "owned_utf8_arg",
@@ -1192,7 +1262,9 @@ if (Test-Path $parserHostProgram) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
         $entryEnd = if ($entryStart -ge 0) {
-            $nativeLibText.IndexOf("#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+            $nextExport = $nativeLibText.IndexOf(
+                "#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+            if ($nextExport -ge 0) { $nextExport } else { $nativeLibText.Length }
         } else {
             -1
         }
@@ -1218,7 +1290,9 @@ if (Test-Path $parserHostProgram) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
         $entryEnd = if ($entryStart -ge 0) {
-            $nativeLibText.IndexOf("#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+            $nextExport = $nativeLibText.IndexOf(
+                "#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
+            if ($nextExport -ge 0) { $nextExport } else { $nativeLibText.Length }
         } else {
             -1
         }
@@ -1243,7 +1317,9 @@ if (Test-Path $parserHostProgram) {
     $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle('
     $archiveEntryStart = $nativeLibText.IndexOf($archiveEntrySignature, [StringComparison]::Ordinal)
     $archiveEntryEnd = if ($archiveEntryStart -ge 0) {
-        $nativeLibText.IndexOf("#[no_mangle]", $archiveEntryStart + $archiveEntrySignature.Length, [StringComparison]::Ordinal)
+        $nextExport = $nativeLibText.IndexOf(
+            "#[no_mangle]", $archiveEntryStart + $archiveEntrySignature.Length, [StringComparison]::Ordinal)
+        if ($nextExport -ge 0) { $nextExport } else { $nativeLibText.Length }
     } else {
         -1
     }

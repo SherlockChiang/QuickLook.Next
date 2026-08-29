@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
+$ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
@@ -63,6 +64,7 @@ foreach ($path in @(
         $libPath,
         $ffiModulePath,
         $ffiCommonPath,
+        $ffiPathPreviewPath,
         $ffiRoutingPath,
         $win32ModulePath,
         $shellThumbnailPath,
@@ -120,6 +122,7 @@ if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
+    $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
@@ -175,10 +178,48 @@ if ($failures.Count -eq 0) {
 
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
         $failures.Add(
-            "lib.rs must compose ffi::common/ffi::routing and retain its three crate-private route re-exports.")
+            "lib.rs must compose ffi::common/ffi::path_preview/ffi::routing and retain crate-private re-exports.")
+    }
+
+    $expectedPathPreviewExports = @(
+        "ql_preview_text",
+        "ql_preview_text_cancelable",
+        "ql_preview_info",
+        "ql_preview_executable",
+        "ql_preview_executable_cancelable",
+        "ql_preview_ebook",
+        "ql_preview_ebook_cancelable",
+        "ql_preview_torrent",
+        "ql_preview_torrent_cancelable",
+        "ql_preview_archive")
+    $pathPreviewReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::path_preview::\{(?<items>.*?)\};')
+    if (-not $pathPreviewReExportMatch.Success) {
+        $failures.Add(
+            "lib.rs must retain the exact crate-private ffi::path_preview re-export block.")
+    }
+    else {
+        $pathPreviewReExportNames = @(
+            [regex]::Matches(
+                $pathPreviewReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($pathPreviewReExportNames.Count -ne $expectedPathPreviewExports.Count -or
+            @($pathPreviewReExportNames | Sort-Object -Unique).Count -ne $expectedPathPreviewExports.Count) {
+            $failures.Add(
+                "lib.rs ffi::path_preview re-export must contain exactly ten unique preview exports.")
+        }
+        foreach ($pathPreviewExport in $expectedPathPreviewExports) {
+            if ($pathPreviewReExportNames -notcontains $pathPreviewExport) {
+                $failures.Add(
+                    "lib.rs ffi::path_preview re-export lost expected symbol: $pathPreviewExport")
+            }
+        }
     }
 
     if ($ffiCommonText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
@@ -284,6 +325,79 @@ if ($failures.Count -eq 0) {
     $ffiRoutingLineCount = @(Get-Content -LiteralPath $ffiRoutingPath).Count
     if ($ffiRoutingLineCount -gt 150) {
         $failures.Add("The focused ffi::routing module grew beyond 150 lines: $ffiRoutingLineCount")
+    }
+
+    if ($ffiPathPreviewText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiPathPreviewText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiPathPreviewText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::path_preview must use explicit imports and a thin unsafe C ABI surface.")
+    }
+    $pathPreviewExports = [regex]::Matches(
+        $ffiPathPreviewText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $pathPreviewAbiExports = [regex]::Matches(
+        $ffiPathPreviewText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+')
+    $pathPreviewNoMangleCount = [regex]::Matches(
+        $ffiPathPreviewText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($pathPreviewExports.Count -ne $expectedPathPreviewExports.Count -or
+        $pathPreviewAbiExports.Count -ne $expectedPathPreviewExports.Count -or
+        $pathPreviewNoMangleCount -ne $expectedPathPreviewExports.Count) {
+        $failures.Add("ffi::path_preview must expose exactly ten unsafe C ABI exports.")
+    }
+    foreach ($pathPreviewExport in $expectedPathPreviewExports) {
+        $pathPreviewPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($pathPreviewExport) + '\s*\('
+        if ($ffiPathPreviewText -notmatch $pathPreviewPattern) {
+            $failures.Add("ffi::path_preview lost expected export: $pathPreviewExport")
+        }
+        if ($libText -match $pathPreviewPattern) {
+            $failures.Add("$pathPreviewExport implementation must remain in ffi::path_preview, not lib.rs.")
+        }
+    }
+    foreach ($requiredPathPreviewImport in @(
+            'ffi_boundary',
+            'optional_utf8_arg',
+            'utf8_arg',
+            'write_json_out',
+            'cancel_requested',
+            'preview',
+            'CancelCallback',
+            'MAX_FFI_STRING_BYTES')) {
+        if ($ffiPathPreviewText -notmatch "\b$requiredPathPreviewImport\b") {
+            $failures.Add("ffi::path_preview lost required boundary import: $requiredPathPreviewImport")
+        }
+    }
+    for ($pathPreviewIndex = 0; $pathPreviewIndex -lt $pathPreviewExports.Count; $pathPreviewIndex++) {
+        $pathPreviewMatch = $pathPreviewExports[$pathPreviewIndex]
+        $pathPreviewEnd = if ($pathPreviewIndex + 1 -lt $pathPreviewExports.Count) {
+            $pathPreviewExports[$pathPreviewIndex + 1].Index
+        }
+        else {
+            $ffiPathPreviewText.Length
+        }
+        $pathPreviewBody = $ffiPathPreviewText.Substring(
+            $pathPreviewMatch.Index,
+            $pathPreviewEnd - $pathPreviewMatch.Index)
+        $pathPreviewName = $pathPreviewMatch.Groups["name"].Value
+        if ($expectedPathPreviewExports -notcontains $pathPreviewName -or
+            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            $failures.Add("$pathPreviewName must contain panics before returning across the Rust FFI boundary")
+        }
+    }
+    foreach ($pathPreviewTest in @(
+            'simple_preview_exports_honor_cancellation_before_file_access',
+            'path_preview_exports_reject_invalid_pointer_contracts',
+            'info_preview_treats_invalid_optional_kind_as_empty')) {
+        if ($ffiPathPreviewText -notmatch "fn\s+$pathPreviewTest\s*\(") {
+            $failures.Add("ffi::path_preview lost focused test: $pathPreviewTest")
+        }
+    }
+    $ffiPathPreviewLineCount = @(Get-Content -LiteralPath $ffiPathPreviewPath).Count
+    if ($ffiPathPreviewLineCount -gt 320) {
+        $failures.Add("The focused ffi::path_preview module grew beyond 320 lines: $ffiPathPreviewLineCount")
     }
 
     foreach ($forbidden in @(

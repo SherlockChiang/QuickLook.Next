@@ -227,6 +227,16 @@ the release-only `release:` prefix while this queue is in progress.
         FFI safety, module-boundary, and performance-bounds guards passed;
         the local architecture guard's isolated MSBuild fixture remains blocked
         by the pinned SDK `10.0.302` (only `10.0.303`/`10.0.400` are installed).
+    - [x] `R26-P1-07d-3` Move the ten path-based text, info, executable, archive,
+      ebook, and torrent preview exports into `native/quicklook_next_native/src/ffi/path_preview.rs`;
+      preserve the C ABI, cancellation checks, bounded UTF-8/output contracts,
+      and add focused invalid-pointer/cancellation coverage. Extend the Rust
+      module and architecture guards to scan the focused path-preview surface.
+      - Verification: Rust fmt, Clippy, workspace tests (304 passed, 1 ignored),
+        FFI safety, module-boundary, and performance-bounds guards passed;
+        the local architecture guard reached all Rust and functional checks but
+        remains blocked only by the isolated pinned SDK `10.0.302` fixture.
+      - Commit: pending
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
