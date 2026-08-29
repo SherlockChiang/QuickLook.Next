@@ -50,7 +50,16 @@ pub(crate) fn optional_bytes_arg<'a>(
 }
 
 pub(crate) fn write_json_out(json: &str, out_buf: *mut u8, out_cap: usize) -> i32 {
-    let bytes = json.as_bytes();
+    write_bytes_out(json.as_bytes(), out_buf, out_cap)
+}
+
+/// Copy `bytes` into the caller's buffer. Returns the written length, or the negated required
+/// size when the buffer is too small.
+///
+/// # Safety
+/// When bytes are copied, `out_buf` must be writable for `out_cap` bytes and must not overlap
+/// `bytes`.
+pub(crate) fn write_bytes_out(bytes: &[u8], out_buf: *mut u8, out_cap: usize) -> i32 {
     let needed = bytes.len();
     if needed > out_cap {
         return -(needed as i32);

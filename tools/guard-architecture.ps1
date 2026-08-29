@@ -1222,6 +1222,54 @@ if (Test-Path $parserHostProgram) {
     if (@(Get-Content -LiteralPath $nativePathPreviewPath).Count -gt 320) {
         Add-Failure "The focused ffi::path_preview module grew beyond 320 lines"
     }
+    # Highlight tokenization crosses the ABI with its own bounded adapter; scan that module
+    # independently so the export keeps an explicit panic boundary and packet contract.
+    $nativeHighlightPath = Join-Path $Root "native/quicklook_next_native/src/ffi/highlight.rs"
+    if (Test-Path -LiteralPath $nativeHighlightPath -PathType Leaf) {
+        $nativeHighlightText = Get-Content -LiteralPath $nativeHighlightPath -Raw
+    }
+    else {
+        $nativeHighlightText = ""
+        Add-Failure "Missing Rust FFI highlight source: $nativeHighlightPath"
+    }
+    $highlightExports = [regex]::Matches(
+        $nativeHighlightText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $expectedHighlightExports = @("ql_highlight_spans")
+    if ($highlightExports.Count -ne $expectedHighlightExports.Count) {
+        Add-Failure "ffi::highlight must expose exactly one unsafe C ABI export"
+    }
+    for ($highlightIndex = 0; $highlightIndex -lt $highlightExports.Count; $highlightIndex++) {
+        $highlightMatch = $highlightExports[$highlightIndex]
+        $highlightEnd = if ($highlightIndex + 1 -lt $highlightExports.Count) {
+            $highlightExports[$highlightIndex + 1].Index
+        }
+        else {
+            $nativeHighlightText.Length
+        }
+        $highlightBody = $nativeHighlightText.Substring(
+            $highlightMatch.Index,
+            $highlightEnd - $highlightMatch.Index)
+        $highlightName = $highlightMatch.Groups["name"].Value
+        if ($expectedHighlightExports -notcontains $highlightName -or
+            $highlightBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            Add-Failure "$highlightName must contain panics before returning across the Rust FFI boundary"
+        }
+    }
+    foreach ($highlightName in $expectedHighlightExports) {
+        $highlightPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($highlightName) + '\s*\('
+        if ($nativeLibText -match $highlightPattern) {
+            Add-Failure "$highlightName must remain in ffi::highlight, not lib.rs"
+        }
+    }
+    if ($nativeHighlightText -notmatch '\b(?:optional_utf8_arg|write_bytes_out)\b' -or
+        $nativeHighlightText -notmatch 'MAX_HIGHLIGHT_TEXT_BYTES') {
+        Add-Failure "ffi::highlight lost its explicit bounded adapter dependencies"
+    }
+    if (@(Get-Content -LiteralPath $nativeHighlightPath).Count -gt 260) {
+        Add-Failure "The focused ffi::highlight module grew beyond 260 lines"
+    }
     $commonHelpers = @(
         "utf8_arg",
         "owned_utf8_arg",

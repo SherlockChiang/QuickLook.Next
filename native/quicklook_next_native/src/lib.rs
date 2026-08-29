@@ -144,6 +144,8 @@ thread_local! {
 // A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
 const MAX_FFI_STRING_BYTES: usize = 128 * 1024;
 const MAX_FFI_MAGIC_BYTES: usize = 4096;
+// Highlight text is already bounded by the managed MaxHighlightedChars gate (256K UTF-16 chars).
+const MAX_HIGHLIGHT_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
 const MAX_OFFICE_IMAGE_REF_BYTES: usize = 2048;
 const MAX_ARCHIVE_ENTRY_NAME_BYTES: usize = u16::MAX as usize;

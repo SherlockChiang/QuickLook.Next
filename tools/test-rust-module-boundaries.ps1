@@ -231,9 +231,9 @@ if ($failures.Count -eq 0) {
     $commonExports = [regex]::Matches(
         $ffiCommonText,
         '(?m)^pub(?:\([^)]+\))?\s+')
-    if ($commonExports.Count -ne 8 -or $ffiCommonText -match '(?m)^pub\s+') {
+    if ($commonExports.Count -ne 9 -or $ffiCommonText -match '(?m)^pub\s+') {
         $failures.Add(
-            "ffi::common must expose exactly eight crate-private helpers and no bare pub items.")
+            "ffi::common must expose exactly nine crate-private helpers and no bare pub items.")
     }
     $commonHelpers = @(
         "utf8_arg",
@@ -241,6 +241,7 @@ if ($failures.Count -eq 0) {
         "optional_utf8_arg",
         "optional_bytes_arg",
         "write_json_out",
+        "write_bytes_out",
         "write_v2_out",
         "ffi_boundary",
         "ffi_void_boundary")

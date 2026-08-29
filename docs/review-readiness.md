@@ -15,6 +15,9 @@ left visible instead of hidden behind vague TODOs.
   MIME/mail plus seek-based Outlook CFB, EPUB/FB2 ebook parsing, media, archive, Office, package,
   and database families now live in focused submodules with their own tests. The remaining
   binary-info families continue through narrow explicit routes.
+- Syntax-highlight tokenization lives in the native layer: `ql_highlight_spans` returns bounded
+  UTF-16-offset token spans for the managed text presenter to slice, with caps on input bytes and
+  span count, and the App degrades to plain rendering if the native call is unavailable.
 - RasterHost is lazy-started and scoped to surface-producing work: images, PDF
   page rasterization, shell thumbnails, and fallback media/image surfaces.
 - Supervised RasterHost, ParserHost, and ShellBroker processes apply a shared

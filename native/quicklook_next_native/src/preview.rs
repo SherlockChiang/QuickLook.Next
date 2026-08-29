@@ -25,6 +25,7 @@ mod elf;
 mod executable;
 mod folder;
 mod font;
+mod highlight;
 mod image_metadata;
 mod mail;
 mod media;
@@ -68,6 +69,7 @@ use executable::{
 };
 pub use executable::{render_executable, render_executable_reader};
 pub(crate) use folder::render_folder;
+pub(crate) use highlight::{highlight_spans, HighlightSpan};
 pub use image_metadata::render_image_metadata;
 pub(crate) use image_metadata::render_image_metadata_reader;
 use image_metadata::{
