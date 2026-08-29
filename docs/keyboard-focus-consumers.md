@@ -24,7 +24,7 @@ contract instead of reverse-engineering the two paths.
 | Space | Hook toggles the preview: close when visible, open otherwise (`WM_QL_PREVIEW` / `WM_QL_CLOSE`) | `ClosePreviewFromKeyboard` unless the focused element uses Space |
 | Arrow keys | Delayed selection switch: generation-checked 80 ms timer re-reads the Explorer selection (`WM_QL_SWITCH_DELAYED`) | In-preview content navigation (filmstrip siblings, list views) |
 | Mouse click on an Explorer item | Delayed selection switch (`mouse_proc`) | Ownership transfer to the preview window |
-| Esc | Close preview (`WM_QL_CLOSE`) | The hook still sees Esc while the preview is visible and closes the preview; the text search box additionally closes search first |
+| Esc | Close preview (`WM_QL_CLOSE`) | The hook closes the preview only when no text input in the preview has focus; the text search or filter box dismisses itself first without closing the preview |
 | Ctrl+F | — (the hook ignores chords) | Text search (`OpenTextSearch`) or listing filter (`FocusFilter`) |
 | F3 / Shift+F3 | — | Search next/previous |
 | + / - (OEM or numpad) | Zoom in/out (`WM_QL_ZOOM_IN` / `WM_QL_ZOOM_OUT`) | — |
@@ -33,9 +33,11 @@ contract instead of reverse-engineering the two paths.
 
 ## Guardrails
 
-- Hook-driven keys require no modifiers, suppress Explorer text inputs
-  (`explorer_text_input_active` class check for Edit/RichEdit), and — except F5/F11 and Esc —
-  additionally require Explorer to be the foreground window.
+- Hook-driven keys require no modifiers, suppress text inputs
+  (`foreground_text_input_active` class check for Edit/RichEdit on the foreground window's
+  focus), and — except F5/F11 and Esc — additionally require Explorer to be the foreground
+  window. Esc is checked against the actual focus owner so dismissing the preview's own search
+  or filter box never also closes the preview.
 - Switch messages carry `PREVIEW_VISIBILITY_GENERATION`. The pump re-validates with
   `accepts_switch_event` before arming the 80 ms timer, and `switch_timer_proc` re-checks
   `SWITCH_GENERATION` and `PREVIEW_VISIBLE` at fire time. Hiding posts `WM_QL_CANCEL_SWITCH`;

@@ -441,6 +441,18 @@ fn accepts_switch_event(
     preview_visible && message_visibility_generation == current_visibility_generation
 }
 
+/// A physical Esc may close the preview only while the shell or the preview window is the
+/// foreground focus owner, and only when that owner has no text input focused. Typing Esc into
+/// the preview's own search or filter box must dismiss that control without closing the preview
+/// underneath it.
+fn esc_close_should_fire(
+    explorer_foreground: bool,
+    preview_visible: bool,
+    foreground_text_input: bool,
+) -> bool {
+    (explorer_foreground || preview_visible) && !foreground_text_input
+}
+
 /// Keep this callback cheap: classify the key, post a thread message, return immediately.
 /// No allocations, no locks, no callback into managed code — all of that happens on the pump thread.
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -452,7 +464,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         let is_up = m == WM_KEYUP || m == WM_SYSKEYUP;
         let bare_key = !modifier_key_down();
         let explorer_foreground = foreground_is_explorer_window();
-        let text_input_active = explorer_foreground && explorer_text_input_active();
+        let text_input_active = explorer_foreground && foreground_text_input_active();
 
         if kb.vkCode == VK_SPACE_U32 {
             if is_down
@@ -489,11 +501,19 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 );
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
-            if is_down
-                && (explorer_foreground || PREVIEW_VISIBLE.load(Ordering::SeqCst))
-                && !text_input_active
-            {
-                let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
+            // Esc closes the preview only while the shell or the preview window owns focus and
+            // neither has a text input focused. The foreground check is lazy so non-Esc keys
+            // never pay for GetGUIThreadInfo on the hook thread.
+            let preview_visible = PREVIEW_VISIBLE.load(Ordering::SeqCst);
+            if is_down && (explorer_foreground || preview_visible) {
+                let foreground_text_input = foreground_text_input_active();
+                if esc_close_should_fire(
+                    explorer_foreground,
+                    preview_visible,
+                    foreground_text_input,
+                ) {
+                    let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
+                }
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
             if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
@@ -546,7 +566,7 @@ unsafe fn key_down(vk: u32) -> bool {
     (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
 }
 
-unsafe fn explorer_text_input_active() -> bool {
+unsafe fn foreground_text_input_active() -> bool {
     let foreground = GetForegroundWindow();
     if foreground.0.is_null() {
         return false;
@@ -3463,6 +3483,22 @@ mod tests {
         assert!(accepts_switch_event(7, 7, true));
         assert!(!accepts_switch_event(6, 7, true));
         assert!(!accepts_switch_event(7, 7, false));
+    }
+
+    #[test]
+    fn esc_close_spares_text_input_focus_in_either_owner() {
+        // Shell owns focus over plain content: Esc closes.
+        assert!(esc_close_should_fire(true, true, false));
+        // Shell owns focus with an Explorer rename/search box focused: suppressed.
+        assert!(!esc_close_should_fire(true, true, true));
+        // Preview owns focus over plain content: Esc closes.
+        assert!(esc_close_should_fire(false, true, false));
+        // Preview owns focus over its own search or filter box: suppressed so one physical Esc
+        // cannot dismiss both the control and the preview.
+        assert!(!esc_close_should_fire(false, true, true));
+        // Neither owner: never fires.
+        assert!(!esc_close_should_fire(false, false, false));
+        assert!(!esc_close_should_fire(true, false, true));
     }
 
     #[test]
