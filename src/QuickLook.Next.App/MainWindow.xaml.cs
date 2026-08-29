@@ -3252,6 +3252,10 @@ public sealed partial class MainWindow : Window
         button.BorderThickness = selected ? new Thickness(1) : new Thickness(0);
     }
 
+    // Keyboard ownership is split by focus owner: Explorer keeps focus for Explorer-originated
+    // previews and the native low-level hook consumes shell-side keys, while this handler covers
+    // keys typed while the preview window owns focus. The full consumer matrix lives in
+    // docs/keyboard-focus-consumers.md.
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
