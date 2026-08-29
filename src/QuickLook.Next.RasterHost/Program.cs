@@ -342,7 +342,7 @@ try
         request.Cancel();
     }
     await DrainTerminalWorkersAsync();
-    await Task.WhenAll(remainingMetadataRequests.Select(static request => request.Worker));
+    await DrainMetadataWorkersAsync(remainingMetadataRequests);
     foreach (PdfPreviewSession session in pdfSessions.Values)
         await DisposePdfSessionAsync(session, "pipe-disconnect");
     pdfSessions.Clear();
@@ -410,6 +410,33 @@ async Task DrainTerminalWorkersAsync()
         {
             DiagLog.Write("RasterHost", "terminal worker drain observed a failed task: " + ex);
         }
+    }
+}
+
+async Task DrainMetadataWorkersAsync(ImageMetadataRequestState[] requests)
+{
+    if (requests.Length == 0)
+        return;
+
+    // Metadata workers honor their own cancellation and 1.5s reader timeouts, but every terminal
+    // drain needs a hard budget: an unbounded await here would keep the host alive indefinitely
+    // if a reader stalls inside a native call under load.
+    TimeSpan budget = TimeSpan.FromSeconds(10);
+    try
+    {
+        await Task.WhenAll(requests.Select(static request => request.Worker))
+            .WaitAsync(budget);
+    }
+    catch (TimeoutException)
+    {
+        DiagLog.Write(
+            "RasterHost",
+            $"metadata worker drain timed out; exiting host: workers={requests.Length}");
+        SupervisedHostProcessPolicy.ExitImmediately(31);
+    }
+    catch (Exception ex)
+    {
+        DiagLog.Write("RasterHost", "metadata worker drain observed a failed task: " + ex);
     }
 }
 
