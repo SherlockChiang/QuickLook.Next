@@ -236,7 +236,7 @@ the release-only `release:` prefix while this queue is in progress.
         FFI safety, module-boundary, and performance-bounds guards passed;
         the local architecture guard reached all Rust and functional checks but
         remains blocked only by the isolated pinned SDK `10.0.302` fixture.
-      - Commit: pending
+      - Commit: `5109172`
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
