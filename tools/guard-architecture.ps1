@@ -1880,7 +1880,8 @@ if (Test-Path $rasterHostRoot) {
         $rasterHostText -notmatch 'TryAcquire\(\s*RetainedRasterOperations\.Metadata' -or
         $rasterHostText -notmatch 'PreviewImageMetadataReady\(' -or
         $rasterHostText -notmatch 'imageMetadataTimeout\s*=\s*TimeSpan\.FromMilliseconds\(1500\)' -or
-        $rasterHostText -notmatch 'remainingMetadataRequests[\s\S]*request\.Cancel\(\)[\s\S]*Task\.WhenAll\(remainingMetadataRequests') {
+        $rasterHostText -notmatch 'remainingMetadataRequests[\s\S]*request\.Cancel\(\)[\s\S]*DrainMetadataWorkersAsync\(remainingMetadataRequests' -or
+        $rasterHostText -notmatch 'async Task DrainMetadataWorkersAsync\(ImageMetadataRequestState\[\] requests\)[\s\S]*?WaitAsync\(budget\)[\s\S]*?ExitImmediately\(31\)') {
         Add-Failure "RasterHost image metadata must combine bounded native and Windows-codec HANDLE readers, remain path-free/cancellable, and drain on disconnect"
     }
     $pdfSessionPath = Join-Path $rasterHostRoot "PdfPreviewSession.cs"
