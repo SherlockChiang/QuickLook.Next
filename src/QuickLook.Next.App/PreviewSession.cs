@@ -141,11 +141,19 @@ internal sealed class PreviewSession
     }
 
     /// <summary>
-    /// Explorer-originated previews stay non-activating so the shell retains keyboard focus for
-    /// arrow-key selection follow-up. Content may request focus only for in-preview navigation.
+    /// Whether the preview window may activate (take window-level keyboard focus). Explorer-originated
+    /// previews stay non-activating so the shell retains focus for arrow-key selection follow-up.
     /// </summary>
-    public bool ShouldActivatePreview(bool contentNeedsFocus)
+    public bool ShouldActivateWindow(bool contentNeedsFocus)
         => contentNeedsFocus && Source == PreviewNavigationSource.WindowNavigation;
+
+    /// <summary>
+    /// Whether preview content may move element-level keyboard focus (error buttons, text content).
+    /// It follows the same Explorer-keeps-focus policy as <see cref="ShouldActivateWindow"/> but is
+    /// asked independently so element focus never depends on a particular content type list.
+    /// </summary>
+    public bool ShouldFocusContent()
+        => Source == PreviewNavigationSource.WindowNavigation;
 
     public void CancelOperation()
     {

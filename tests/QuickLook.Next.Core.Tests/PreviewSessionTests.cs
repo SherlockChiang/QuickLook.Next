@@ -93,33 +93,46 @@ public sealed class PreviewSessionTests
 
     [Fact]
     public void Explorer_open_preview_keeps_shell_focus_for_follow_up()
-        => AssertPreviewActivation(
+        => AssertFocusPolicy(
             PreviewNavigationSource.ExplorerOpen,
             contentNeedsFocus: true,
-            expectedActivation: false);
+            expectedWindowActivation: false,
+            expectedContentFocus: false);
 
     [Fact]
     public void Explorer_switch_preview_keeps_shell_focus_for_follow_up()
-        => AssertPreviewActivation(
+        => AssertFocusPolicy(
             PreviewNavigationSource.ExplorerSwitch,
             contentNeedsFocus: true,
-            expectedActivation: false);
+            expectedWindowActivation: false,
+            expectedContentFocus: false);
 
     [Fact]
     public void Window_navigation_preview_can_take_focus()
-        => AssertPreviewActivation(
+        => AssertFocusPolicy(
             PreviewNavigationSource.WindowNavigation,
             contentNeedsFocus: true,
-            expectedActivation: true);
+            expectedWindowActivation: true,
+            expectedContentFocus: true);
 
-    private static void AssertPreviewActivation(
+    [Fact]
+    public void Window_navigation_activation_still_requires_content_focus_need()
+        => AssertFocusPolicy(
+            PreviewNavigationSource.WindowNavigation,
+            contentNeedsFocus: false,
+            expectedWindowActivation: false,
+            expectedContentFocus: true);
+
+    private static void AssertFocusPolicy(
         PreviewNavigationSource source,
         bool contentNeedsFocus,
-        bool expectedActivation)
+        bool expectedWindowActivation,
+        bool expectedContentFocus)
     {
         var session = new PreviewSession();
         session.Begin("item.txt", source);
 
-        Assert.Equal(expectedActivation, session.ShouldActivatePreview(contentNeedsFocus));
+        Assert.Equal(expectedWindowActivation, session.ShouldActivateWindow(contentNeedsFocus));
+        Assert.Equal(expectedContentFocus, session.ShouldFocusContent());
     }
 }

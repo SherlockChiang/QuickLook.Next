@@ -914,7 +914,7 @@ public sealed partial class MainWindow : Window
                 _previewSession.CommitPath(path);
                 _previewSession.SetRequestId(null);
                 StatusText.Text = ShowMediaPreview(mediaReady);
-                RevealPreviewWindow(ShouldActivatePreview(mediaReady));
+                RevealPreviewWindow(ShouldActivateWindow(mediaReady));
                 return;
             }
 
@@ -1014,7 +1014,7 @@ public sealed partial class MainWindow : Window
                     PreviewReady r when r.TextContent is not null => ShowTextPreview(r),
                     _ => UiStrings.BuildPreviewStatus(nativeReady.Kind, nativeReady.Title),
                 };
-                RevealPreviewWindow(ShouldActivatePreview(nativeReady));
+                RevealPreviewWindow(ShouldActivateWindow(nativeReady));
                 return;
             }
 
@@ -1102,7 +1102,7 @@ public sealed partial class MainWindow : Window
                         {
                             _imageWaveformPresenter!.Clear();
                         }
-                        RevealPreviewWindow(ShouldActivatePreview(shellReady));
+                        RevealPreviewWindow(ShouldActivateWindow(shellReady));
                         return;
                     }
                 }
@@ -1126,7 +1126,7 @@ public sealed partial class MainWindow : Window
                 PreviewReady r => ShowRasterPreview(r),
                 _ => "?",
             };
-            RevealPreviewWindow(result is PreviewReady ready && ShouldActivatePreview(ready));
+            RevealPreviewWindow(result is PreviewReady ready && ShouldActivateWindow(ready));
             if (result is PreviewReady
                 && animatedPlan is not null)
             {
@@ -1405,14 +1405,14 @@ public sealed partial class MainWindow : Window
         return elapsed >= 0 && elapsed < DuplicateOpenCloseGuardMs;
     }
 
-    private bool ShouldActivatePreview(PreviewReady ready)
+    private bool ShouldActivateWindow(PreviewReady ready)
     {
         bool contentNeedsFocus = ready.TextContent is not null
             || ready.Listing is not null
             || ready.Table is not null
             || ready.Markdown is not null
             || ready.OfficeLayout is not null;
-        bool activate = _previewSession.ShouldActivatePreview(contentNeedsFocus);
+        bool activate = _previewSession.ShouldActivateWindow(contentNeedsFocus);
         if (contentNeedsFocus && !activate)
         {
             DiagLog.Write(
@@ -1860,7 +1860,7 @@ public sealed partial class MainWindow : Window
                 return;
             // Keep Explorer keyboard focus for Explorer-originated errors. The action buttons
             // remain available by mouse; only in-window navigation requests a focus transfer.
-            if (!_previewSession.ShouldActivatePreview(contentNeedsFocus: true))
+            if (!_previewSession.ShouldFocusContent())
                 return;
             if (ErrorRetryButton.Visibility == Visibility.Visible)
                 ErrorRetryButton.Focus(FocusState.Programmatic);
@@ -2139,7 +2139,7 @@ public sealed partial class MainWindow : Window
             wrap,
             AppSettings.Current.TextSize,
             AppSettings.Current.TextLineNumbers,
-            ShouldActivatePreview(ready));
+            _previewSession.ShouldFocusContent());
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;
