@@ -124,10 +124,12 @@ if ($mainWindow.Length -gt 0) {
 
 $focusDocs = Read-RequiredFile "docs/keyboard-focus-consumers.md"
 if ($focusDocs.Length -gt 0) {
-    Require-Pattern $focusDocs 'non-activating overlay[\s\S]*SW_SHOWNOACTIVATE[\s\S]*SWP_NOACTIVATE' `
-        "The focus contract must retain a non-activating Explorer overlay."
-    Require-Pattern $focusDocs 'Explorer-originated sessions never[\s\S]*call `Activate\(\)`' `
-        "The focus contract must keep Explorer-originated sessions from activating."
+    Require-Pattern $focusDocs 'initial Explorer-open session transfers keyboard focus to[\s\S]*later Explorer-originated switches stay non-activating' `
+        "The focus contract must activate the initial Space-open and preserve non-activating switches."
+    Require-Pattern $focusDocs 'ExplorerSwitch[\s\S]*SW_SHOWNOACTIVATE[\s\S]*SWP_NOACTIVATE' `
+        "The focus contract must retain a non-activating Explorer switch path."
+    Require-Pattern $focusDocs 'initial `ExplorerOpen`[\s\S]*`WindowNavigation` focus[\s\S]*`ExplorerSwitch` never[\s\S]*calls? `Activate\(\)`' `
+        "The focus contract must distinguish initial activation from Explorer switches."
     Require-Pattern $focusDocs 'transient `HWND_TOPMOST` pulse[\s\S]*`HWND_NOTOPMOST`[\s\S]*permanently system-topmost' `
         "The focus contract must forbid a permanently topmost preview window."
 }

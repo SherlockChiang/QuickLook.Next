@@ -1270,7 +1270,11 @@ public sealed partial class MainWindow : Window
         _loadingShellShowStarted = Stopwatch.GetTimestamp();
         CompositionTarget.Rendering -= OnLoadingShellFirstFrame;
         CompositionTarget.Rendering += OnLoadingShellFirstFrame;
-        ShowPreviewWindow(activate: false, resizeToDefault: true);
+        // The first Space-open owns the keyboard immediately. Explorer switches arrive while the
+        // preview is already visible and remain non-activating so the shell can keep selecting.
+        ShowPreviewWindow(
+            activate: _previewSession.Source == PreviewNavigationSource.ExplorerOpen,
+            resizeToDefault: true);
         AnnouncePreviewLifecycle(
             LoadingRing,
             StatusText.Text,
@@ -1842,8 +1846,8 @@ public sealed partial class MainWindow : Window
         {
             if (!_previewSession.IsCurrentError(context))
                 return;
-            // Keep Explorer keyboard focus for Explorer-originated errors. The action buttons
-            // remain available by mouse; only in-window navigation requests a focus transfer.
+            // Initial Space-open sessions own focus so error actions are keyboard reachable; later
+            // Explorer switches keep shell focus and leave the actions available by mouse.
             if (!_previewSession.ShouldFocusContent())
                 return;
             if (ErrorRetryButton.Visibility == Visibility.Visible)
@@ -3238,10 +3242,9 @@ public sealed partial class MainWindow : Window
         button.BorderThickness = selected ? new Thickness(1) : new Thickness(0);
     }
 
-    // Keyboard ownership is split by focus owner: Explorer keeps focus for Explorer-originated
-    // previews and the native low-level hook consumes shell-side keys, while this handler covers
-    // keys typed while the preview window owns focus. The full consumer matrix lives in
-    // docs/keyboard-focus-consumers.md.
+    // Keyboard ownership is split by focus owner: the initial Explorer open transfers focus to the
+    // preview, later Explorer switches keep shell focus, and this handler covers keys typed while
+    // the preview window owns focus. The full consumer matrix lives in docs/keyboard-focus-consumers.md.
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         bool controlDown = (Microsoft.UI.Input.InputKeyboardSource

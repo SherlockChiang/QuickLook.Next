@@ -92,12 +92,20 @@ public sealed class PreviewSessionTests
     }
 
     [Fact]
-    public void Explorer_open_preview_keeps_shell_focus_for_follow_up()
+    public void Explorer_open_preview_activates_for_initial_space_open()
         => AssertFocusPolicy(
             PreviewNavigationSource.ExplorerOpen,
             contentNeedsFocus: true,
-            expectedWindowActivation: false,
-            expectedContentFocus: false);
+            expectedWindowActivation: true,
+            expectedContentFocus: true);
+
+    [Fact]
+    public void Explorer_open_preview_activates_even_without_focusable_content()
+        => AssertFocusPolicy(
+            PreviewNavigationSource.ExplorerOpen,
+            contentNeedsFocus: false,
+            expectedWindowActivation: true,
+            expectedContentFocus: true);
 
     [Fact]
     public void Explorer_switch_preview_keeps_shell_focus_for_follow_up()
@@ -108,9 +116,9 @@ public sealed class PreviewSessionTests
             expectedContentFocus: false);
 
     [Fact]
-    public void Explorer_preview_never_activates_even_without_focusable_content()
+    public void Explorer_switch_preview_never_activates_even_without_focusable_content()
         => AssertFocusPolicy(
-            PreviewNavigationSource.ExplorerOpen,
+            PreviewNavigationSource.ExplorerSwitch,
             contentNeedsFocus: false,
             expectedWindowActivation: false,
             expectedContentFocus: false);

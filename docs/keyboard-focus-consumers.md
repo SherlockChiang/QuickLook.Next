@@ -1,22 +1,23 @@
 # Keyboard Focus Ownership And Key Consumers
 
-The preview is a non-activating overlay: Explorer-originated previews must leave keyboard
-focus in the shell so arrow-key selection follow-up keeps working. This note records which
-component consumes each key for each focus owner, so new keys can be added against the same
-contract instead of reverse-engineering the two paths.
+The preview uses two focus modes: the initial Explorer-open session transfers keyboard focus to
+QuickLook, while later Explorer-originated switches stay non-activating so shell selection
+follow-up keeps working. This note records which component consumes each key for each focus owner,
+so new keys can be added against the same contract instead of reverse-engineering the two paths.
 
 ## Ownership model
 
-1. Explorer-originated sessions (`PreviewNavigationSource.ExplorerOpen` / `ExplorerSwitch`)
-   reveal the window with `SW_SHOWNOACTIVATE` / `SWP_NOACTIVATE`. `WS_EX_NOACTIVATE` is removed
-   when the window is shown so a later click can still focus it.
-2. Clicking the preview window transfers keyboard focus to the preview. This is the intended
-   ownership hand-off; Explorer-driven switching stops afterwards because the native hook only
-   acts while Explorer is the foreground window.
-3. `PreviewSession.ShouldActivateWindow` / `ShouldFocusContent` gate window activation and
-   element-level focus to `WindowNavigation` sessions only. Explorer-originated sessions never
-   call `Activate()` and never move element focus.
-4. The window controller may use a transient `HWND_TOPMOST` pulse to recover z-order on reveal or
+1. The initial `ExplorerOpen` session created by Space activates the preview and may move focus to
+   its content. The loading shell uses the normal activation path so focus does not depend on the
+   preview type or on the final renderer.
+2. `ExplorerSwitch` sessions reveal with `SW_SHOWNOACTIVATE` / `SWP_NOACTIVATE`, preserving shell
+   focus for selection follow-up. `WS_EX_NOACTIVATE` is removed when the window is shown so a later
+   click can still focus it.
+3. Clicking the preview window transfers keyboard focus to the preview. Explorer-driven switching
+   stops afterwards because the native hook only acts while Explorer is the foreground window.
+4. `PreviewSession.ShouldActivateWindow` / `ShouldFocusContent` allow initial `ExplorerOpen` and
+   `WindowNavigation` focus; `ExplorerSwitch` never calls `Activate()` or moves element focus.
+5. The window controller may use a transient `HWND_TOPMOST` pulse to recover z-order on reveal or
    resize, but immediately demotes the window with `HWND_NOTOPMOST`; preview visibility must not
    leave the window permanently system-topmost.
 
