@@ -1304,15 +1304,6 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            if (activate)
-            {
-                _windowController.SetNoActivateStyle(enabled: false);
-                Activate();
-            }
-            else
-            {
-                _windowController.SetNoActivateStyle(enabled: false);
-            }
             _windowController.Raise(activate);
             EnsureCompositor();
         }
@@ -2931,7 +2922,7 @@ public sealed partial class MainWindow : Window
         double contentHeight,
         double maxWidth,
         double maxHeight,
-        bool setTopmost = true)
+        bool raiseWindow = true)
     {
         if (_isFullscreen)
             return;
@@ -2943,7 +2934,7 @@ public sealed partial class MainWindow : Window
             maxWidth,
             maxHeight,
             RasterizationScale);
-        DiagLog.Write("App", $"window resize content={contentWidth:0}x{contentHeight:0}; target={size.Width}x{size.Height}; visible={_previewVisible}; pending={_previewRevealPending}; topmost={setTopmost}");
+        DiagLog.Write("App", $"window resize content={contentWidth:0}x{contentHeight:0}; target={size.Width}x{size.Height}; visible={_previewVisible}; pending={_previewRevealPending}; raise={raiseWindow}");
         TemporarilyHideWindowForTransitionResize();
         AppWindow appWindow = GetAppWindow();
         PointInt32? position = PreviewWindowSizer.GetCenteredPosition(GetWindowId(), size);
@@ -2951,7 +2942,7 @@ public sealed partial class MainWindow : Window
             appWindow.MoveAndResize(new RectInt32(point.X, point.Y, size.Width, size.Height));
         else
             appWindow.Resize(size);
-        if (setTopmost && _previewVisible)
+        if (raiseWindow && _previewVisible)
             _windowController.Raise(activate: false);
     }
 
@@ -3795,22 +3786,28 @@ public sealed partial class MainWindow : Window
     {
         using var trace = DiagLog.TraceScope("App", $"window show activate={activate}; resizeDefault={resizeToDefault}; visible={_previewVisible}", 100);
         bool openingFromHidden = !_previewVisible;
-        if (activate)
-            _windowController.SetNoActivateStyle(enabled: false);
-        else
-            _windowController.SetNoActivateStyle(enabled: false);
+        _windowController.SetNoActivateStyle(enabled: false);
         var appWindow = GetAppWindow();
         if (!_previewVisible && resizeToDefault)
-            ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, setTopmost: false);
+            ResizeWindowForContent(560, 340, MaxTextWindowWidth, MaxTextWindowHeight, raiseWindow: false);
         if (openingFromHidden)
             CenterPreviewWindowInCurrentDisplay(appWindow);
+        bool fallbackShown = false;
         try { appWindow.Show(false); }
         catch
         {
-            if (activate) Activate();
-            else _windowController.ShowNoActivate();
+            _windowController.ShowNoActivate();
+            fallbackShown = true;
         }
-        _windowController.Raise(activate);
+        if (fallbackShown)
+        {
+            if (activate)
+                Activate();
+        }
+        else
+        {
+            _windowController.Raise(activate);
+        }
         EnsureCompositor();
         _previewVisible = true;
         SetBackgroundEfficiency(enabled: false);

@@ -108,6 +108,14 @@ public sealed class PreviewSessionTests
             expectedContentFocus: false);
 
     [Fact]
+    public void Explorer_preview_never_activates_even_without_focusable_content()
+        => AssertFocusPolicy(
+            PreviewNavigationSource.ExplorerOpen,
+            contentNeedsFocus: false,
+            expectedWindowActivation: false,
+            expectedContentFocus: false);
+
+    [Fact]
     public void Window_navigation_preview_can_take_focus()
         => AssertFocusPolicy(
             PreviewNavigationSource.WindowNavigation,

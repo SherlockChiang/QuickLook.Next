@@ -16,6 +16,9 @@ contract instead of reverse-engineering the two paths.
 3. `PreviewSession.ShouldActivateWindow` / `ShouldFocusContent` gate window activation and
    element-level focus to `WindowNavigation` sessions only. Explorer-originated sessions never
    call `Activate()` and never move element focus.
+4. The window controller may use a transient `HWND_TOPMOST` pulse to recover z-order on reveal or
+   resize, but immediately demotes the window with `HWND_NOTOPMOST`; preview visibility must not
+   leave the window permanently system-topmost.
 
 ## Consumer matrix
 

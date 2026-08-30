@@ -2181,6 +2181,10 @@ $performanceBoundsGuard = Join-Path $PSScriptRoot "guard-performance-bounds.ps1"
 Invoke-CheckedScript -Path $performanceBoundsGuard -Arguments @{ Root = $Root } `
     -FailureMessage "Performance bounds guard failed"
 
+$previewWindowFocusGuard = Join-Path $PSScriptRoot "test-preview-window-focus.ps1"
+Invoke-CheckedScript -Path $previewWindowFocusGuard -Arguments @{ Root = $Root } `
+    -FailureMessage "Preview-window focus guard failed"
+
 $textSearchContractTest = Join-Path $PSScriptRoot "test-text-search-contract.ps1"
 Invoke-CheckedScript -Path $textSearchContractTest -Arguments @{ Root = $Root } `
     -FailureMessage "Text-search contract guard failed"
