@@ -3805,7 +3805,7 @@ public sealed partial class MainWindow : Window
         if (fallbackShown)
         {
             if (activate)
-                Activate();
+                _windowController.Activate();
         }
         else
         {

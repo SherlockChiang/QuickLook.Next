@@ -68,8 +68,42 @@ if ($controller.Length -gt 0) {
             "Non-activating Raise calls must carry SWP_NOACTIVATE."
         Require-Pattern $raise 'PulseTopmost\s*\(\s*hwnd\s*,\s*flags\s*\)' `
             "Raise must use the bounded z-order pulse."
-        Require-Pattern $raise 'if\s*\(activate\)\s*\r?\n\s*_window\.Activate\s*\(\)' `
+        Require-Pattern $raise 'if\s*\(activate\)\s*\r?\n\s*Activate\s*\(\)' `
             "Raise may activate the WinUI window only for an explicit activation request."
+    }
+
+    $activateMatch = [regex]::Match(
+        $controller,
+        'public\s+void\s+Activate\s*\(\s*\)([\s\S]*?)(?=\r?\n\s*public\s+void\s+ReleaseTopmost)')
+    if (-not $activateMatch.Success) {
+        Add-Failure "PreviewWindowController.Activate is missing."
+    }
+    else {
+        $activateWindow = $activateMatch.Groups[1].Value
+        Require-Pattern $activateWindow '_window\.Activate\s*\(\)' `
+            "Explicit activation must first activate the WinUI window."
+        Require-Pattern $activateWindow 'EnsureForegroundInputOwnership\s*\(\s*hwnd\s*\)' `
+            "Explicit activation must transfer foreground input ownership."
+    }
+
+    $foregroundMatch = [regex]::Match(
+        $controller,
+        'private\s+static\s+void\s+EnsureForegroundInputOwnership\s*\([^)]*\)([\s\S]*?)(?=\r?\n\s*private\s+static\s+void\s+PulseTopmost)')
+    if (-not $foregroundMatch.Success) {
+        Add-Failure "Explicit activation must keep a bounded foreground-input ownership helper."
+    }
+    else {
+        $foreground = $foregroundMatch.Groups[1].Value
+        Require-Pattern $foreground 'AttachThreadInput\s*\([^;]*attach:\s*true\)' `
+            "Foreground activation must temporarily join the Explorer and UI input queues."
+        Require-Pattern $foreground 'SetForegroundWindow\s*\(\s*hwnd\s*\)' `
+            "Foreground activation must explicitly request Win32 foreground ownership."
+        Require-Pattern $foreground 'SetActiveWindow\s*\(\s*hwnd\s*\)' `
+            "Foreground activation must set the active HWND while input queues are joined."
+        Require-Pattern $foreground 'SetFocus\s*\(\s*hwnd\s*\)' `
+            "Foreground activation must assign keyboard focus while input queues are joined."
+        Require-Pattern $foreground 'finally[\s\S]*AttachThreadInput\s*\([^;]*attach:\s*false\)' `
+            "Foreground activation must always detach the joined input queues."
     }
 
     $showMatch = [regex]::Match(
@@ -105,7 +139,7 @@ if ($mainWindow.Length -gt 0) {
             "ShowPreviewWindow must track whether its AppWindow fallback already performed the z-order operation."
         Require-Pattern $showBody 'catch\s*\{[\s\S]{0,160}?_windowController\.ShowNoActivate\(\)[\s\S]{0,80}?fallbackShown\s*=\s*true' `
             "ShowPreviewWindow fallback must use the non-activating controller path exactly once."
-        Require-Pattern $showBody 'if\s*\(fallbackShown\)[\s\S]{0,180}?if\s*\(activate\)[\s\S]{0,80}?Activate\(\)[\s\S]{0,180}?else\s*\{[\s\S]{0,80}?_windowController\.Raise\(activate\)' `
+        Require-Pattern $showBody 'if\s*\(fallbackShown\)[\s\S]{0,180}?if\s*\(activate\)[\s\S]{0,80}?_windowController\.Activate\(\)[\s\S]{0,180}?else\s*\{[\s\S]{0,80}?_windowController\.Raise\(activate\)' `
             "ShowPreviewWindow must activate or raise after the fallback, but never perform both paths."
     }
 

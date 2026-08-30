@@ -26,7 +26,14 @@ internal sealed class PreviewWindowController
         SetNoActivateStyle(enabled: false);
         PulseTopmost(hwnd, flags);
         if (activate)
-            _window.Activate();
+            Activate();
+    }
+
+    public void Activate()
+    {
+        nint hwnd = _hwndProvider();
+        _window.Activate();
+        EnsureForegroundInputOwnership(hwnd);
     }
 
     public void ReleaseTopmost()
@@ -70,6 +77,52 @@ internal sealed class PreviewWindowController
         DiagLog.Write("App", $"window ShowWindow(SW_HIDE) result={hidden}; lastError={Marshal.GetLastWin32Error()}");
     }
 
+    private static void EnsureForegroundInputOwnership(nint hwnd)
+    {
+        nint sourceForeground = GetForegroundWindow();
+        uint currentThread = GetCurrentThreadId();
+        uint sourceThread = sourceForeground != nint.Zero
+            ? GetWindowThreadProcessId(sourceForeground, out _)
+            : 0;
+        bool attached = false;
+        int attachError = 0;
+        if (sourceForeground != hwnd && sourceThread != 0 && sourceThread != currentThread)
+        {
+            attached = AttachThreadInput(currentThread, sourceThread, attach: true);
+            if (!attached)
+                attachError = Marshal.GetLastWin32Error();
+        }
+
+        bool foregroundSet;
+        nint previousActive;
+        nint previousFocus;
+        bool detached = true;
+        int detachError = 0;
+        try
+        {
+            foregroundSet = SetForegroundWindow(hwnd);
+            previousActive = SetActiveWindow(hwnd);
+            previousFocus = SetFocus(hwnd);
+        }
+        finally
+        {
+            if (attached)
+            {
+                detached = AttachThreadInput(currentThread, sourceThread, attach: false);
+                if (!detached)
+                    detachError = Marshal.GetLastWin32Error();
+            }
+        }
+
+        nint finalForeground = GetForegroundWindow();
+        DiagLog.Write(
+            "App",
+            $"window foreground ownership source=0x{sourceForeground:X}; sourceTid={sourceThread}; uiTid={currentThread}; " +
+            $"attached={attached}/{attachError}; setForeground={foregroundSet}; previousActive=0x{previousActive:X}; " +
+            $"previousFocus=0x{previousFocus:X}; final=0x{finalForeground:X}; owns={finalForeground == hwnd}; " +
+            $"detached={detached}/{detachError}");
+    }
+
     private static void PulseTopmost(nint hwnd, uint flags)
     {
         bool topmost = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
@@ -103,5 +156,28 @@ internal sealed class PreviewWindowController
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetActiveWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern nint SetFocus(nint hWnd);
 
 }
