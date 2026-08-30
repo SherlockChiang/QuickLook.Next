@@ -2185,6 +2185,10 @@ $previewWindowFocusGuard = Join-Path $PSScriptRoot "test-preview-window-focus.ps
 Invoke-CheckedScript -Path $previewWindowFocusGuard -Arguments @{ Root = $Root } `
     -FailureMessage "Preview-window focus guard failed"
 
+$dialogThemeResourceTest = Join-Path $PSScriptRoot "test-dialog-theme-resources.ps1"
+Invoke-CheckedScript -Path $dialogThemeResourceTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Dialog theme resource guard failed"
+
 $textSearchContractTest = Join-Path $PSScriptRoot "test-text-search-contract.ps1"
 Invoke-CheckedScript -Path $textSearchContractTest -Arguments @{ Root = $Root } `
     -FailureMessage "Text-search contract guard failed"

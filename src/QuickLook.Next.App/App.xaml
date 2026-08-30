@@ -7,6 +7,57 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- Keep modal surfaces aligned with the preview chrome while preserving system contrast. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="QuickLookDialogBackgroundBrush" Color="#F8FFFFFF" />
+                    <StaticResource x:Key="QuickLookDialogForegroundBrush" ResourceKey="TextFillColorPrimaryBrush" />
+                    <SolidColorBrush x:Key="QuickLookDialogBorderBrush" Color="#18000000" />
+                    <SolidColorBrush x:Key="QuickLookDialogTopOverlayBrush" Color="#0A000000" />
+                    <StaticResource x:Key="QuickLookDialogSeparatorBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+                    <StaticResource x:Key="QuickLookDialogSmokeBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                    <StaticResource x:Key="QuickLookDialogLightDismissOverlayBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                    <StaticResource x:Key="ContentDialogBackground" ResourceKey="QuickLookDialogBackgroundBrush" />
+                    <StaticResource x:Key="ContentDialogForeground" ResourceKey="QuickLookDialogForegroundBrush" />
+                    <StaticResource x:Key="ContentDialogBorderBrush" ResourceKey="QuickLookDialogBorderBrush" />
+                    <StaticResource x:Key="ContentDialogTopOverlay" ResourceKey="QuickLookDialogTopOverlayBrush" />
+                    <StaticResource x:Key="ContentDialogSeparatorBorderBrush" ResourceKey="QuickLookDialogSeparatorBrush" />
+                    <StaticResource x:Key="ContentDialogSmokeFill" ResourceKey="QuickLookDialogSmokeBrush" />
+                    <StaticResource x:Key="ContentDialogLightDismissOverlayBackground" ResourceKey="QuickLookDialogLightDismissOverlayBrush" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="QuickLookDialogBackgroundBrush" Color="#E61F1F1F" />
+                    <StaticResource x:Key="QuickLookDialogForegroundBrush" ResourceKey="TextFillColorPrimaryBrush" />
+                    <SolidColorBrush x:Key="QuickLookDialogBorderBrush" Color="#24FFFFFF" />
+                    <SolidColorBrush x:Key="QuickLookDialogTopOverlayBrush" Color="#12FFFFFF" />
+                    <StaticResource x:Key="QuickLookDialogSeparatorBrush" ResourceKey="CardStrokeColorDefaultBrush" />
+                    <StaticResource x:Key="QuickLookDialogSmokeBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                    <StaticResource x:Key="QuickLookDialogLightDismissOverlayBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                    <StaticResource x:Key="ContentDialogBackground" ResourceKey="QuickLookDialogBackgroundBrush" />
+                    <StaticResource x:Key="ContentDialogForeground" ResourceKey="QuickLookDialogForegroundBrush" />
+                    <StaticResource x:Key="ContentDialogBorderBrush" ResourceKey="QuickLookDialogBorderBrush" />
+                    <StaticResource x:Key="ContentDialogTopOverlay" ResourceKey="QuickLookDialogTopOverlayBrush" />
+                    <StaticResource x:Key="ContentDialogSeparatorBorderBrush" ResourceKey="QuickLookDialogSeparatorBrush" />
+                    <StaticResource x:Key="ContentDialogSmokeFill" ResourceKey="QuickLookDialogSmokeBrush" />
+                    <StaticResource x:Key="ContentDialogLightDismissOverlayBackground" ResourceKey="QuickLookDialogLightDismissOverlayBrush" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="QuickLookDialogBackgroundBrush" ResourceKey="SystemColorWindowColorBrush" />
+                    <StaticResource x:Key="QuickLookDialogForegroundBrush" ResourceKey="SystemColorWindowTextColorBrush" />
+                    <StaticResource x:Key="QuickLookDialogBorderBrush" ResourceKey="SystemColorWindowTextColorBrush" />
+                    <StaticResource x:Key="QuickLookDialogTopOverlayBrush" ResourceKey="SystemControlTransparentBrush" />
+                    <StaticResource x:Key="QuickLookDialogSeparatorBrush" ResourceKey="SystemColorWindowTextColorBrush" />
+                    <SolidColorBrush x:Key="QuickLookDialogSmokeBrush" Color="{ThemeResource SystemColorWindowColor}" Opacity="0.8" />
+                    <SolidColorBrush x:Key="QuickLookDialogLightDismissOverlayBrush" Color="{ThemeResource SystemColorWindowColor}" Opacity="0.8" />
+                    <StaticResource x:Key="ContentDialogBackground" ResourceKey="QuickLookDialogBackgroundBrush" />
+                    <StaticResource x:Key="ContentDialogForeground" ResourceKey="QuickLookDialogForegroundBrush" />
+                    <StaticResource x:Key="ContentDialogBorderBrush" ResourceKey="QuickLookDialogBorderBrush" />
+                    <StaticResource x:Key="ContentDialogTopOverlay" ResourceKey="QuickLookDialogTopOverlayBrush" />
+                    <StaticResource x:Key="ContentDialogSeparatorBorderBrush" ResourceKey="QuickLookDialogSeparatorBrush" />
+                    <StaticResource x:Key="ContentDialogSmokeFill" ResourceKey="QuickLookDialogSmokeBrush" />
+                    <StaticResource x:Key="ContentDialogLightDismissOverlayBackground" ResourceKey="QuickLookDialogLightDismissOverlayBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
             <Style x:Key="MarkdownPrimaryTextBlockStyle" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
             </Style>
