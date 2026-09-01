@@ -10,7 +10,7 @@ name = "quicklook_next_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-quick-xml = "0.41"
+quick-xml = "0.42"
 zip = { version = "8.6", default-features = false, features = [
     "aes-crypto",
     "bzip2",
