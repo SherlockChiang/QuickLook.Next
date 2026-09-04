@@ -1161,6 +1161,14 @@ if (Test-Path $parserHostProgram) {
         $nativeHandlePreviewText = ""
         Add-Failure "Missing Rust FFI HANDLE preview source: $nativeHandlePreviewPath"
     }
+    $nativeHandleContainerPath = Join-Path $Root "native/quicklook_next_native/src/ffi/handle_container.rs"
+    if (Test-Path -LiteralPath $nativeHandleContainerPath -PathType Leaf) {
+        $nativeHandleContainerText = Get-Content -LiteralPath $nativeHandleContainerPath -Raw
+    }
+    else {
+        $nativeHandleContainerText = ""
+        Add-Failure "Missing Rust container HANDLE preview source: $nativeHandleContainerPath"
+    }
     $nativeHandleStructuredPath = Join-Path $Root "native/quicklook_next_native/src/ffi/handle_structured.rs"
     if (Test-Path -LiteralPath $nativeHandleStructuredPath -PathType Leaf) {
         $nativeHandleStructuredText = Get-Content -LiteralPath $nativeHandleStructuredPath -Raw
@@ -1579,12 +1587,69 @@ if (Test-Path $parserHostProgram) {
     if (@(Get-Content -LiteralPath $nativeHandleStructuredPath).Count -gt 260) {
         Add-Failure "The focused ffi::handle_structured module grew beyond 260 lines"
     }
-    foreach ($entryPoint in @(
-        "ql_preview_sqlite_handles",
+
+    # Container-backed JSON HANDLE routes remain thin consumers of the shared ABI 2 boundary.
+    $expectedHandleContainerExports = @(
         "ql_preview_archive_handle",
+        "ql_preview_package_handle",
         "ql_preview_office_handle",
-        "ql_preview_ebook_handle"
-    )) {
+        "ql_preview_ebook_handle")
+    $handleContainerExports = [regex]::Matches(
+        $nativeHandleContainerText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($handleContainerExports.Count -ne $expectedHandleContainerExports.Count -or
+        $nativeHandleContainerText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeHandleContainerText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeHandleContainerText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::handle_container must expose exactly four unsafe C ABI entry points"
+    }
+    foreach ($handleContainerName in $expectedHandleContainerExports) {
+        $handleContainerSignature = "pub unsafe extern `"C`" fn $handleContainerName("
+        $handleContainerStart = $nativeHandleContainerText.IndexOf(
+            $handleContainerSignature,
+            [StringComparison]::Ordinal)
+        $handleContainerEnd = if ($handleContainerStart -ge 0) {
+            $nextHandleContainerExport = $nativeHandleContainerText.IndexOf(
+                "#[no_mangle]",
+                $handleContainerStart + $handleContainerSignature.Length,
+                [StringComparison]::Ordinal)
+            if ($nextHandleContainerExport -ge 0) {
+                $nextHandleContainerExport
+            }
+            else {
+                $nativeHandleContainerText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $handleContainerBody = if ($handleContainerStart -ge 0 -and
+            $handleContainerEnd -gt $handleContainerStart) {
+            $nativeHandleContainerText.Substring(
+                $handleContainerStart,
+                $handleContainerEnd - $handleContainerStart)
+        }
+        else {
+            ""
+        }
+        if ($handleContainerBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $handleContainerBody -notmatch 'preview_handle_v2\(' -or
+            $handleContainerBody -notmatch '\.map_err\(reader_preview_status\)') {
+            Add-Failure "$handleContainerName must contain panics, use the shared ABI 2 HANDLE contract, and preserve reader error mapping"
+        }
+        if ($nativeLibText -match [regex]::Escape($handleContainerSignature)) {
+            Add-Failure "$handleContainerName must remain in ffi::handle_container, not lib.rs"
+        }
+    }
+    if ($nativeHandleContainerText -notmatch
+        'fn\s+container_handle_exports_cancel_before_handle_access\s*\(') {
+        Add-Failure "ffi::handle_container lost its pre-HANDLE cancellation test"
+    }
+    if (@(Get-Content -LiteralPath $nativeHandleContainerPath).Count -gt 260) {
+        Add-Failure "The focused ffi::handle_container module grew beyond 260 lines"
+    }
+
+    foreach ($entryPoint in @("ql_preview_sqlite_handles")) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
         $entryEnd = if ($entryStart -ge 0) {

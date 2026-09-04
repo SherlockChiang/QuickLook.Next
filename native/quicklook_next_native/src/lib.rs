@@ -32,6 +32,12 @@ pub(crate) use ffi::common::{
 // Keep stable ABI discovery available to crate-local tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::contract::{ql_abi_version, ql_capabilities, ql_probe};
+// Keep moved container HANDLE preview exports available to crate-local tests.
+#[allow(unused_imports)]
+pub(crate) use ffi::handle_container::{
+    ql_preview_archive_handle, ql_preview_ebook_handle, ql_preview_office_handle,
+    ql_preview_package_handle,
+};
 // Keep shared HANDLE boundary helpers and moved foundational adapters available to the root.
 #[allow(unused_imports)]
 pub(crate) use ffi::handle_preview::{
@@ -5083,123 +5089,6 @@ fn reopen_optional_handle(
         })
 }
 
-/// Render an archive listing from a borrowed Windows file handle.
-///
-/// Package formats intentionally remain on the legacy path pipeline. The returned archive listing
-/// has an empty root path so callers cannot accidentally resolve the logical filename as a path.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_archive_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        preview_handle_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            out_buf,
-            out_cap,
-            out_required,
-            cancel_cb,
-            |file, logical_name, _, modified_unix| {
-                preview::render_archive_reader(
-                    file,
-                    logical_name,
-                    expected_length,
-                    modified_unix,
-                    cancel_cb,
-                )
-                .map_err(reader_preview_status)
-            },
-        )
-    })
-}
-
-/// Render package metadata from a borrowed Windows file handle.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_package_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        preview_handle_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            out_buf,
-            out_cap,
-            out_required,
-            cancel_cb,
-            |file, logical_name, _, _| {
-                preview::render_package_reader(file, logical_name, expected_length, cancel_cb)
-                    .map_err(reader_preview_status)
-            },
-        )
-    })
-}
-
-/// Render an Office preview from a borrowed Windows file handle.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_office_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        preview_handle_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            out_buf,
-            out_cap,
-            out_required,
-            cancel_cb,
-            |file, logical_name, _, modified_unix| {
-                preview::render_office_reader(
-                    file,
-                    logical_name,
-                    expected_length,
-                    modified_unix,
-                    cancel_cb,
-                )
-                .map_err(reader_preview_status)
-            },
-        )
-    })
-}
-
 /// Extract a useful embedded Office image from a borrowed Windows file handle.
 /// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
 ///
@@ -5373,46 +5262,6 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
             return QL_ERROR_CANCELLED;
         }
         write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
-    })
-}
-
-/// Render an ebook from a borrowed Windows file handle.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_ebook_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        preview_handle_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            out_buf,
-            out_cap,
-            out_required,
-            cancel_cb,
-            |file, logical_name, _, modified_unix| {
-                preview::render_ebook_reader(
-                    file,
-                    logical_name,
-                    expected_length,
-                    modified_unix,
-                    cancel_cb,
-                )
-                .map_err(reader_preview_status)
-            },
-        )
     })
 }
 
