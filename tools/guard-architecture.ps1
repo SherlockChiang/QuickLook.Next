@@ -993,6 +993,7 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiText -notmatch 'HandleImageMetadata\s*=\s*1UL\s*<<\s*19' -or
         $nativeAbiText -notmatch 'DirectGifAnimationOutput\s*=\s*1UL\s*<<\s*20' -or
         $nativeAbiText -notmatch 'HandleMail\s*=\s*1UL\s*<<\s*21' -or
+        $nativeAbiText -notmatch 'HandlePdfText\s*=\s*1UL\s*<<\s*22' -or
         $parserHandleInputs -notmatch '\bHandleText\b' -or
         $parserHandleInputs -notmatch '\bHandleExecutable\b' -or
         $parserHandleInputs -notmatch '\bHandleTorrent\b' -or
@@ -1006,6 +1007,7 @@ if (Test-Path $parserHostProgram) {
         $parserHandleInputs -notmatch '\bHandlePackageIcon\b' -or
         $parserHandleInputs -notmatch '\bHandleOfficeLayoutImage\b' -or
         $parserHandleInputs -notmatch '\bHandleMail\b' -or
+        $parserHandleInputs -notmatch '\bHandlePdfText\b' -or
         $rasterHandleInputs -notmatch '\bHandleStaticImage\b' -or
         $rasterHandleInputs -notmatch '\bHandleSvg\b' -or
         $rasterHandleInputs -notmatch '\bHandleGif\b' -or
@@ -1013,8 +1015,9 @@ if (Test-Path $parserHostProgram) {
         $rasterHandleInputs -match '\bHandleAnimation\b' -or
         $rasterHandleInputs -match '\bHandleImageMetadata\b' -or
         $rasterHandleInputs -match '\bHandleMail\b' -or
+        $rasterHandleInputs -match '\bHandlePdfText\b' -or
         $nativeAbiText -notmatch 'StatusLimitExceeded\s*=\s*-9') {
-        Add-Failure "Native ABI HANDLE capability bits 0-21 and LIMIT_EXCEEDED status must remain stable; mail belongs to ParserHost while animation, metadata, and direct GIF output remain optional"
+        Add-Failure "Native ABI HANDLE capability bits 0-22 and LIMIT_EXCEEDED status must remain stable; mail and PDF text belong to ParserHost while animation, metadata, and direct GIF output remain optional"
     }
 
     $previewFormatPolicyPath = Join-Path $Root "src/QuickLook.Next.Core/PreviewFormatPolicy.cs"
@@ -1082,7 +1085,7 @@ if (Test-Path $parserHostProgram) {
     }
     $panicBoundaryExemptions = @{
         "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
-        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL\s*\}'
+        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}'
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
     }
     $voidBoundaryExports = @("ql_get_selection", "ql_set_preview_visible")
@@ -1305,6 +1308,7 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_office_handle",
         "ql_preview_ebook_handle"
         "ql_preview_image_metadata_handle"
+        "ql_extract_pdf_text_handle"
         "ql_probe_file_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
@@ -1556,6 +1560,7 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_IMAGE_METADATA:\s*u64\s*=\s*1\s*<<\s*19' -or
         $nativeLibText -notmatch 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_MAIL:\s*u64\s*=\s*1\s*<<\s*21' -or
+        $nativeLibText -notmatch 'QL_FEATURE_HANDLE_PDF_TEXT:\s*u64\s*=\s*1\s*<<\s*22' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
@@ -1573,8 +1578,24 @@ if (Test-Path $parserHostProgram) {
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_IMAGE_METADATA\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\b' -or
         $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_MAIL\b' -or
+        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PDF_TEXT\b' -or
         $nativeLibText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
-        Add-Failure "Rust must advertise HANDLE capability bits 3-21 and retain LIMIT_EXCEEDED"
+        Add-Failure "Rust must advertise HANDLE capability bits 3-22 and retain LIMIT_EXCEEDED"
+    }
+    $nativePdfTextPath = Join-Path $Root "native/quicklook_next_native/src/preview/pdf_text.rs"
+    if (-not (Test-Path -LiteralPath $nativePdfTextPath -PathType Leaf)) {
+        Add-Failure "Missing Rust PDF text source: $nativePdfTextPath"
+    }
+    else {
+        $nativePdfText = Get-Content -LiteralPath $nativePdfTextPath -Raw
+        if ($nativePdfText -notmatch 'MAX_PDF_TEXT_INPUT_BYTES:\s*u64\s*=\s*128\s*\*\s*1024\s*\*\s*1024' -or
+            $nativePdfText -notmatch 'MAX_PDF_TEXT_PAGES:\s*usize\s*=\s*2_048' -or
+            $nativePdfText -notmatch 'MAX_PDF_TEXT_TOTAL_BYTES:\s*usize\s*=\s*1024\s*\*\s*1024' -or
+            $nativePdfText -notmatch 'LoadOptions::with_max_decompressed_size\(' -or
+            $nativePdfText -notmatch 'extract_text_with_limit\(' -or
+            $nativePdfText -notmatch 'check_cancelled\(cancel_cb\)') {
+            Add-Failure "Rust PDF text extraction must retain explicit input, page, decompression, text, and cancellation bounds"
+        }
     }
     $nativeOfficeTypesPath = Join-Path $Root "native/quicklook_next_native/src/preview/types.rs"
     $nativeOfficeTypesText = Get-Content -LiteralPath $nativeOfficeTypesPath -Raw

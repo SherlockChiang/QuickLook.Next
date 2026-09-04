@@ -25,6 +25,7 @@ public static class NativeAbi
     public const ulong HandleImageMetadata = 1UL << 19;
     public const ulong DirectGifAnimationOutput = 1UL << 20;
     public const ulong HandleMail = 1UL << 21;
+    public const ulong HandlePdfText = 1UL << 22;
     public const ulong ParserHandleInputs =
         HandleText
         | HandleExecutable
@@ -38,7 +39,8 @@ public static class NativeAbi
         | HandlePackage
         | HandlePackageIcon
         | HandleOfficeLayoutImage
-        | HandleMail;
+        | HandleMail
+        | HandlePdfText;
     public const ulong RasterHandleInputs = HandleStaticImage | HandleSvg | HandleGif | HandleRasterImage;
     public const int MaxLogicalNameUtf8Bytes = 4 * 255;
     public const int MaxOfficeImageRefUtf8Bytes = 2048;
@@ -53,6 +55,7 @@ public static class NativeAbi
     public const long MaxSqliteWalBytes = 64L * 1024 * 1024;
     public const long MaxSqliteShmBytes = 4L * 1024 * 1024;
     public const long MaxArchiveEntryOutputBytes = 64L * 1024 * 1024;
+    public const long MaxPdfTextInputBytes = 128L * 1024 * 1024;
 
     // Stable status values for HANDLE entry points. Legacy path entry points retain their
     // existing per-function return conventions until they are migrated.

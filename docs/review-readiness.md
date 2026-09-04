@@ -54,6 +54,10 @@ left visible instead of hidden behind vague TODOs.
     source length. FAT/DIFAT/directory/mini-stream/property limits remain explicit and all physical
     CFB reads share a 1 MiB cumulative budget, so valid properties beyond 256 KiB remain visible
     without buffering the complete message.
+  - Lazy PDF text search/copy uses `ql_extract_pdf_text_handle` and capability bit 22 over a
+    reopen of the exact pinned PDF object. Rust owns page mapping and hard input, page,
+    decompression, object, per-page text, and aggregate text bounds; malformed work remains inside
+    the supervised 512 MiB ParserHost and does not delay raster first-page rendering.
   - SQLite uses the dedicated `PreviewOpenSqliteHandles` IPC envelope and
     `ql_preview_sqlite_handles` ABI entry point. The host adopts the main/WAL/SHM slots before
     validation and never creates an input anchor. Only the App derives `-wal`/`-shm` sibling names.

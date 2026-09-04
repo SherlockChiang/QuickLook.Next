@@ -172,6 +172,7 @@ const QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT: u64 = 1 << 18;
 const QL_FEATURE_HANDLE_IMAGE_METADATA: u64 = 1 << 19;
 const QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT: u64 = 1 << 20;
 const QL_FEATURE_HANDLE_MAIL: u64 = 1 << 21;
+const QL_FEATURE_HANDLE_PDF_TEXT: u64 = 1 << 22;
 
 const QL_OK: i32 = 0;
 const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
@@ -213,6 +214,7 @@ pub extern "C" fn ql_capabilities() -> u64 {
         | QL_FEATURE_HANDLE_IMAGE_METADATA
         | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT
         | QL_FEATURE_HANDLE_MAIL
+        | QL_FEATURE_HANDLE_PDF_TEXT
 }
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES: u64 = 896 * 1024 * 1024;
@@ -5223,6 +5225,45 @@ fn reader_preview_status(error: preview::ReaderPreviewError) -> i32 {
     }
 }
 
+/// Extract a bounded, page-mapped PDF text sidecar from a borrowed Windows file handle.
+///
+/// This is a lazy follow-up for search and clipboard commands. The caller retains the source
+/// handle; Rust reopens it independently and never resolves the logical filename as authority.
+///
+/// # Safety
+/// `source_handle` must be a valid borrowed disk-file HANDLE whose length is
+/// `expected_length`; `logical_name_utf8` must be readable for `logical_name_len` bytes,
+/// `out_required` must be writable, and a non-null `out_buf` must be writable for
+/// `out_cap` bytes. The caller retains ownership of the source HANDLE.
+#[no_mangle]
+pub unsafe extern "C" fn ql_extract_pdf_text_handle(
+    source_handle: isize,
+    expected_length: u64,
+    logical_name_utf8: *const u8,
+    logical_name_len: usize,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_required: *mut usize,
+    cancel_cb: Option<CancelCallback>,
+) -> i32 {
+    ffi_boundary(|| unsafe {
+        preview_handle_v2(
+            source_handle,
+            expected_length,
+            logical_name_utf8,
+            logical_name_len,
+            out_buf,
+            out_cap,
+            out_required,
+            cancel_cb,
+            |file, _, _, _| {
+                preview::render_pdf_text_reader(file, expected_length, cancel_cb)
+                    .map_err(reader_preview_status)
+            },
+        )
+    })
+}
+
 /// Render bounded Rust-native image metadata from a borrowed Windows file handle.
 ///
 /// # Safety
@@ -6131,6 +6172,7 @@ fn native_abi_version_is_stable() {
     let required = required | QL_FEATURE_HANDLE_IMAGE_METADATA;
     let required = required | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT;
     let required = required | QL_FEATURE_HANDLE_MAIL;
+    let required = required | QL_FEATURE_HANDLE_PDF_TEXT;
     assert_eq!(ql_capabilities() & required, required);
 }
 

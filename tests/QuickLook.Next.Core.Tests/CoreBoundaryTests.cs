@@ -225,6 +225,7 @@ public sealed class CoreBoundaryTests : IDisposable
         Assert.Equal(1UL << 19, NativeAbi.HandleImageMetadata);
         Assert.Equal(1UL << 20, NativeAbi.DirectGifAnimationOutput);
         Assert.Equal(1UL << 21, NativeAbi.HandleMail);
+        Assert.Equal(1UL << 22, NativeAbi.HandlePdfText);
         Assert.Equal(
             NativeAbi.HandleText
                 | NativeAbi.HandleExecutable
@@ -238,7 +239,8 @@ public sealed class CoreBoundaryTests : IDisposable
                 | NativeAbi.HandlePackage
                 | NativeAbi.HandlePackageIcon
                 | NativeAbi.HandleOfficeLayoutImage
-                | NativeAbi.HandleMail,
+                | NativeAbi.HandleMail
+                | NativeAbi.HandlePdfText,
             NativeAbi.ParserHandleInputs);
         Assert.Equal(
             NativeAbi.HandleStaticImage | NativeAbi.HandleSvg | NativeAbi.HandleGif | NativeAbi.HandleRasterImage,

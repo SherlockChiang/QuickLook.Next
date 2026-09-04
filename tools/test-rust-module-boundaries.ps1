@@ -14,6 +14,7 @@ $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\common.rs"
+$previewPdfTextPath = Join-Path $Root "native\quicklook_next_native\src\preview\pdf_text.rs"
 $previewBoundedPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded.rs"
 $previewBoundedTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded\tests.rs"
 $fontPath = Join-Path $Root "native\quicklook_next_native\src\preview\font.rs"
@@ -70,6 +71,7 @@ foreach ($path in @(
         $shellThumbnailPath,
         $previewPath,
         $previewCommonPath,
+        $previewPdfTextPath,
         $previewBoundedPath,
         $previewBoundedTestsPath,
         $fontPath,
@@ -128,6 +130,7 @@ if ($failures.Count -eq 0) {
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
     $previewCommonText = Get-Content -LiteralPath $previewCommonPath -Raw
+    $previewPdfText = Get-Content -LiteralPath $previewPdfTextPath -Raw
     $previewBoundedText = Get-Content -LiteralPath $previewBoundedPath -Raw
     $previewBoundedTestsText = Get-Content -LiteralPath $previewBoundedTestsPath -Raw
     $fontText = Get-Content -LiteralPath $fontPath -Raw
@@ -183,6 +186,42 @@ if ($failures.Count -eq 0) {
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
         $failures.Add(
             "lib.rs must compose ffi::common/ffi::path_preview/ffi::routing and retain crate-private re-exports.")
+    }
+
+    if ($previewText -notmatch '(?m)^mod pdf_text;\s*$' -or
+        $previewText -notmatch '(?m)^pub\(crate\) use pdf_text::render_pdf_text_reader;\s*$') {
+        $failures.Add("preview.rs must compose the focused bounded PDF text module.")
+    }
+    if ($previewPdfText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $previewPdfText -match '#\[no_mangle\]' -or
+        $previewPdfText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add("preview::pdf_text must use explicit imports and expose no C ABI surface.")
+    }
+    foreach ($pdfTextBound in @(
+            'MAX_PDF_TEXT_INPUT_BYTES',
+            'MAX_PDF_TEXT_PAGES',
+            'MAX_PDF_LOAD_STREAM_BYTES',
+            'MAX_PDF_PAGE_DECOMPRESSED_BYTES',
+            'MAX_PDF_TEXT_PAGE_BYTES',
+            'MAX_PDF_TEXT_TOTAL_BYTES',
+            'extract_text_with_limit',
+            'check_cancelled')) {
+        if ($previewPdfText -notmatch "\b$pdfTextBound\b") {
+            $failures.Add("preview::pdf_text lost required bound: $pdfTextBound")
+        }
+    }
+    foreach ($pdfTextTest in @(
+            'extracts_bounded_text_with_page_mapping',
+            'rejects_oversized_or_cancelled_inputs_before_parsing',
+            'rejects_malformed_pdf',
+            'byte_truncation_preserves_utf8_boundaries')) {
+        if ($previewPdfText -notmatch "fn\s+$pdfTextTest\s*\(") {
+            $failures.Add("preview::pdf_text lost focused test: $pdfTextTest")
+        }
+    }
+    $previewPdfTextLineCount = @(Get-Content -LiteralPath $previewPdfTextPath).Count
+    if ($previewPdfTextLineCount -gt 300) {
+        $failures.Add("The focused preview::pdf_text module grew beyond 300 lines: $previewPdfTextLineCount")
     }
 
     $expectedPathPreviewExports = @(

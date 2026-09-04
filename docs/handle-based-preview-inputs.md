@@ -254,6 +254,7 @@ bit 18 HANDLE_ARCHIVE_ENTRY_OUTPUT (caller-owned bounded archive-entry output ob
 bit 19 HANDLE_IMAGE_METADATA (optional parent-bound Rust metadata sidecar)
 bit 20 DIRECT_GIF_ANIMATION_OUTPUT (optional exact-size callback output; stable GIF exports remain fallback)
 bit 21 HANDLE_MAIL (bounded RFC 5322/EML and seek-based Outlook MSG metadata)
+bit 22 HANDLE_PDF_TEXT (lazy bounded page-mapped text for PDF search and copy)
 ```
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
@@ -264,6 +265,14 @@ The corresponding implemented entry points share the validated/reopened HANDLE a
 packets, `ql_decode_image_with_waveform_handle` for single-pass RGB density, and
 `ql_decode_animation_frames_handle` for GIF/WebP/APNG animation packets, plus
 `ql_preview_image_metadata_handle` for the optional retained-image metadata child.
+`ql_extract_pdf_text_handle` is a lazy ParserHost follow-up over an App-retained reopen of the
+same pinned PDF object. Rust caps input at 128 MiB, object count at 250,000, extraction at 2,048
+pages, per-page decompression at 8 MiB, per-page text at 64 KiB, and aggregate text at 1 MiB.
+It uses `lopdf 0.44` with default features disabled: the crate is MIT licensed, actively
+maintained, adds no native runtime, and provides the decompression-limited page extraction API
+needed to avoid an ad-hoc PDF parser. The tradeoff is additional Rust code size and transient
+ParserHost memory only after a user invokes PDF search or copy; the raster first-page path is
+unchanged.
 `ql_extract_archive_entry_handle` remains as an ABI-compatible legacy temp-path export but is not
 used by ParserHost.
 `ql_decode_gif_frames_handle` and `ql_decode_gif_frames_sized_cancelable` remain the stable GIF

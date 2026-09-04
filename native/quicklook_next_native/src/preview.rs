@@ -31,6 +31,7 @@ mod mail;
 mod media;
 mod office;
 mod package;
+mod pdf_text;
 mod text;
 mod torrent;
 mod types;
@@ -85,6 +86,7 @@ pub(crate) use package::{
     extract_package_icon_bgra, extract_package_icon_bgra_reader, render_package_reader,
 };
 use package::{is_package_path, render_package};
+pub(crate) use pdf_text::render_pdf_text_reader;
 pub(crate) use text::{is_text, is_text_file, render_text, render_text_reader};
 use torrent::parse_bencode;
 pub use torrent::{render_torrent, render_torrent_reader};
