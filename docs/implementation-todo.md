@@ -36,6 +36,14 @@ remaining work below stays ordered by risk and user-visible impact.
     fixture blocker because this machine lacks pinned SDK `10.0.302`.
   - Commit: `7239ad2`
 
+- [ ] `R26-UX-03` Add lazy, bounded PDF text search and copy without delaying
+  first-page rendering. Rust owns PDF text extraction, page mapping, truncation,
+  cancellation, and malformed/encrypted-document handling inside the supervised
+  ParserHost boundary; WinUI owns the search bar, match navigation, page jumps,
+  and clipboard commands. Initial delivery may copy a match or one page's
+  extracted text, but must not imply coordinate-accurate selection that the
+  raster preview does not provide.
+
 ## Microsoft Store 1.0.0 launch queue
 
 This queue keeps Store onboarding separate from the signed GitHub sideload
@@ -332,7 +340,6 @@ the release-only `release:` prefix while this queue is in progress.
 
 ## P2: Product capabilities
 
-- [ ] Add bounded PDF text search and copy.
 - [ ] Add user-visible cache usage/clear controls, shortcut conflict diagnostics, and a bounded
   diagnostics export that redacts local paths by default.
 - [ ] Add an ARM64 build/test lane while keeping x86 out of scope until user demand justifies it.
