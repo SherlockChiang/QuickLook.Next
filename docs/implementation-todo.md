@@ -9,6 +9,14 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## September 2026 interaction queue
+
+- [ ] `R26-UX-01` Make focused previews support repeatable keyboard page navigation:
+  PDF arrow/Page Up/Page Down input moves by whole pages, image Left/Right input
+  advances through neighboring files, modifier chords retain zoom/pan/control
+  ownership, and rapid image repeats navigate from the pending path instead of
+  reopening the same sibling.
+
 ## Microsoft Store 1.0.0 launch queue
 
 This queue keeps Store onboarding separate from the signed GitHub sideload
