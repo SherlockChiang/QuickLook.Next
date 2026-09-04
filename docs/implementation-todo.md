@@ -340,8 +340,21 @@ the release-only `release:` prefix while this queue is in progress.
         repository checks and remains blocked only by its isolated
         missing-SDK-`10.0.302` fixture.
       - Commit: `542d00e`
-  - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
-    reviewed schema, and fail the architecture guard when generated files drift.
+  - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
+    stable HANDLE status values for Rust and C# from the reviewed
+    `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
+    signatures handwritten, validate schema names/values/ranges, and make the
+    architecture guard fail on exact generated-file drift or declarations that
+    leak back into the handwritten composition roots.
+    - Verification: generator `-Check`, Rust fmt, Clippy, workspace tests
+      (339 passed, 1 ignored), Core Release build (0 warnings/errors), FFI safety
+      (72 files, 60 raw-pointer exports), lint-scope (72 files, 20 scoped ABI
+      exemptions), module-boundary, performance-bounds, and format-registry
+      guards passed. The native Release DLL built through its MSBuild contract
+      with SDK `10.0.400` in 2 minutes 04 seconds; the architecture guard completed
+      all repository checks and remains blocked only by its isolated pinned-SDK
+      `10.0.302` fixture (`10.0.303`/`10.0.400` are installed locally).
+    - Commit: `bb8bdbb`
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
   output sizing, and measurable cancellation latency for RasterHost image work.
   - [x] `R26-P1-08a` Reject static native image decodes whose checked peak model
