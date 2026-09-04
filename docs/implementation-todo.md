@@ -287,6 +287,18 @@ the release-only `release:` prefix while this queue is in progress.
         the local architecture guard reached all Rust and functional checks but
         remains blocked only by the isolated pinned SDK `10.0.302` fixture.
       - Commit: `5109172`
+    - [x] `R26-P1-07d-4` Move the stable ABI version, capability discovery, and
+      arithmetic smoke-test exports into
+      `native/quicklook_next_native/src/ffi/contract.rs`; preserve the exact C
+      ABI, keep capability constants in the composition root, retain the
+      infallible getter bodies and panic-bounded probe, and make architecture,
+      module-boundary, and performance guards scan the focused contract module.
+      - Verification: Rust fmt, Clippy, workspace tests (335 passed, 1 ignored),
+        FFI safety (68 files, 60 raw-pointer exports), module-boundary, and
+        performance-bounds guards passed; the architecture guard completed all
+        repository checks and remains blocked only by the isolated pinned SDK
+        `10.0.302` fixture (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `bb37035`
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
