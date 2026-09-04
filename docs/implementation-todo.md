@@ -382,6 +382,22 @@ the release-only `release:` prefix while this queue is in progress.
         blocked only by its isolated pinned-SDK `10.0.302` fixture
         (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `7a5636d`
+    - [x] `R26-P1-07d-11` Move the three Shell thumbnail exports into the
+      92-line `native/quicklook_next_native/src/ffi/thumbnail.rs` adapter and
+      keep the STA, COM, GDI, request-queue, and allocation implementation in
+      `win32::shell_thumbnail`. Preserve legacy flag behavior, typed status
+      mapping, panic containment, bounded UTF-8/output handling, and the
+      pre-dispatch size regression test. Raster packet writers are now consumed
+      directly by focused FFI siblings instead of leaking through `lib.rs`.
+      - Verification: Rust fmt, Clippy, workspace tests (340 passed, 1 ignored),
+        FFI safety (78 files, 60 raw-pointer exports), lint-scope (78 files,
+        20 scoped ABI exemptions), module-boundary, thumbnail-priority,
+        performance-bounds, format-registry, and generated-ABI drift guards
+        passed. The native Release DLL built through its MSBuild contract in
+        1 minute 10 seconds; the architecture guard completed every repository
+        check and remains blocked only by its isolated pinned-SDK `10.0.302`
+        fixture (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `bb170f1`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
