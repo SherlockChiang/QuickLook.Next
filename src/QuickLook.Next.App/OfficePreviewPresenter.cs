@@ -17,6 +17,7 @@ internal sealed class OfficePreviewPresenter
 {
     private const int MaxCellsPerPage = 2048;
     private const int MaxLayoutItemsPerPage = 2048;
+    private const int MaxPresentedPages = 16;
     private const int MaxOfficeImageReferences = 18;
     private const int MaxLegacyImageBase64Chars = 1024 * 1024;
     private static readonly SolidColorBrush OfficeWhiteBrush = new(Colors.White);
@@ -30,6 +31,8 @@ internal sealed class OfficePreviewPresenter
 
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
+    private readonly Border _coveragePanel;
+    private readonly TextBlock _coverageText;
     private readonly Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> _getHighContrast;
     private readonly Func<string, string, int, int, CancellationToken, Task<NativeRasterImage?>>? _loadOfficeImage;
     private readonly List<PageSlot> _pageSlots = [];
@@ -43,11 +46,15 @@ internal sealed class OfficePreviewPresenter
     public OfficePreviewPresenter(
         ScrollViewer scrollViewer,
         StackPanel pagesPanel,
+        Border coveragePanel,
+        TextBlock coverageText,
         Func<(bool Enabled, Windows.UI.Color Background, Windows.UI.Color Foreground)> getHighContrast,
         Func<string, string, int, int, CancellationToken, Task<NativeRasterImage?>>? loadOfficeImage = null)
     {
         _scrollViewer = scrollViewer;
         _pagesPanel = pagesPanel;
+        _coveragePanel = coveragePanel;
+        _coverageText = coverageText;
         _getHighContrast = getHighContrast;
         _loadOfficeImage = loadOfficeImage;
         _scrollViewer.ViewChanged += (_, _) => QueueVirtualPageUpdate();
@@ -61,6 +68,13 @@ internal sealed class OfficePreviewPresenter
         _lastMaxContent = maxContent;
         OfficeLayout layout = ready.OfficeLayout!;
         _layout = layout;
+        OfficeCoverage coverage = OfficeCoveragePolicy.Evaluate(
+            layout.Pages.Length,
+            layout.RepresentedPageCount,
+            layout.TotalPageCount,
+            layout.PageLimit,
+            MaxPresentedPages);
+        ShowCoverage(layout.LayoutKind, coverage);
 
         _pagesPanel.Children.Clear();
         _pageSlots.Clear();
@@ -74,10 +88,12 @@ internal sealed class OfficePreviewPresenter
                 ready.RequestId,
                 BuildImageDecodeTargets(layout, maxPageWidth));
         }
-        int renderedPageCount = Math.Min(layout.Pages.Length, 16);
-        foreach ((OfficePage page, int index) in layout.Pages.Take(16).Select((page, index) => (page, index)))
+        int renderedPageCount = coverage.RepresentedPages;
+        foreach ((OfficePage page, int index) in layout.Pages
+                     .Take(renderedPageCount)
+                     .Select((page, index) => (page, index)))
         {
-            Border host = CreatePageHost(layout, page, maxPageWidth, index, renderedPageCount);
+            Border host = CreatePageHost(layout, page, maxPageWidth, index, coverage.TotalPages);
             var slot = new PageSlot(page, host);
             _pageSlots.Add(slot);
             _pagesPanel.Children.Add(host);
@@ -114,6 +130,34 @@ internal sealed class OfficePreviewPresenter
         _virtualUpdateQueued = false;
         _pageSlots.Clear();
         _pagesPanel.Children.Clear();
+        HideCoverage();
+    }
+
+    private void ShowCoverage(string layoutKind, OfficeCoverage coverage)
+    {
+        string format = layoutKind.ToLowerInvariant() switch
+        {
+            "presentation" => UiStrings.OfficeSlideCoverageFormat,
+            "workbook" => UiStrings.OfficeSheetCoverageFormat,
+            _ => UiStrings.OfficePageCoverageFormat,
+        };
+        string message = UiStrings.Format(
+            format,
+            coverage.RepresentedPages,
+            coverage.TotalPages,
+            coverage.PageLimit);
+        _coverageText.Text = message;
+        AutomationProperties.SetName(_coverageText, message);
+        AutomationProperties.SetHelpText(_coveragePanel, message);
+        _coveragePanel.Visibility = Visibility.Visible;
+    }
+
+    private void HideCoverage()
+    {
+        _coverageText.Text = "";
+        AutomationProperties.SetName(_coverageText, "");
+        AutomationProperties.SetHelpText(_coveragePanel, "");
+        _coveragePanel.Visibility = Visibility.Collapsed;
     }
 
     private static Border CreatePageHost(OfficeLayout layout, OfficePage page, double maxPageWidth, int index, int count)
@@ -624,7 +668,7 @@ internal sealed class OfficePreviewPresenter
         double maxPageWidth)
     {
         var targets = new Dictionary<string, ImageDecodeTarget>(StringComparer.Ordinal);
-        foreach (OfficePage page in layout.Pages.Take(16))
+        foreach (OfficePage page in layout.Pages.Take(MaxPresentedPages))
         {
             double pageWidth = Math.Max(320, page.Width > 0 ? page.Width : layout.Width);
             double scale = LayoutScale(layout, pageWidth, maxPageWidth);

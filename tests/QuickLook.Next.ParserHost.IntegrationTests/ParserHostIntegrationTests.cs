@@ -1883,6 +1883,9 @@ public sealed class ParserHostIntegrationTests
             OfficeLayout layout = Assert.IsType<OfficeLayout>(ready.OfficeLayout);
             Assert.Equal("document", layout.LayoutKind);
             Assert.NotEmpty(layout.Pages);
+            Assert.Equal(layout.Pages.Length, layout.RepresentedPageCount);
+            Assert.True(layout.TotalPageCount >= layout.RepresentedPageCount);
+            Assert.Equal(8, layout.PageLimit);
             Assert.Contains(layout.Pages.SelectMany(page => page.Items),
                 item => item.Text?.Contains("ParserHost DOCX marker", StringComparison.Ordinal) == true);
         }
@@ -1941,6 +1944,9 @@ public sealed class ParserHostIntegrationTests
             Assert.Contains("ParserHost XLSX marker", xlsx.TextContent);
             OfficeLayout workbook = Assert.IsType<OfficeLayout>(xlsx.OfficeLayout);
             Assert.Equal("workbook", workbook.LayoutKind);
+            Assert.Equal(1, workbook.RepresentedPageCount);
+            Assert.Equal(1, workbook.TotalPageCount);
+            Assert.Equal(6, workbook.PageLimit);
             Assert.Contains(workbook.Pages.SelectMany(page => page.Cells), cell => cell.Text == "ParserHost XLSX marker");
 
             PreviewReady pptx = await PreviewOfficeAsync(channel, pptxPath, timeout.Token);
@@ -1949,6 +1955,9 @@ public sealed class ParserHostIntegrationTests
             Assert.Equal(1, pptxText.Split("ParserHost PPTX marker", StringSplitOptions.None).Length - 1);
             OfficeLayout presentation = Assert.IsType<OfficeLayout>(pptx.OfficeLayout);
             Assert.Equal("presentation", presentation.LayoutKind);
+            Assert.Equal(1, presentation.RepresentedPageCount);
+            Assert.Equal(1, presentation.TotalPageCount);
+            Assert.Equal(30, presentation.PageLimit);
             Assert.Equal("ParserHost PPTX marker", Assert.Single(presentation.Pages).Title);
             Assert.Contains(presentation.Pages.SelectMany(page => page.Items), item => item.Text == "ParserHost PPTX marker");
 

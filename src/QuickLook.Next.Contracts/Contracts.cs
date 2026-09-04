@@ -64,6 +64,9 @@ public sealed record OfficeLayout(string LayoutKind)
 {
     public double Width { get; init; }
     public double Height { get; init; }
+    public int RepresentedPageCount { get; init; }
+    public int TotalPageCount { get; init; }
+    public int PageLimit { get; init; }
     public OfficePage[] Pages { get; init; } = [];
 }
 

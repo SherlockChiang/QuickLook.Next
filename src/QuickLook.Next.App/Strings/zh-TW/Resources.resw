@@ -1069,4 +1069,7 @@
   <data name="PdfDocumentEmptyStatus" xml:space="preserve"><value>此 PDF 不包含可預覽的頁面。</value></data>
   <data name="PdfDocumentPartialStatusFormat" xml:space="preserve"><value>共有 {1:N0} 頁，其中 {0:N0} 頁無法轉譯。</value></data>
   <data name="PdfDocumentFailedStatus" xml:space="preserve"><value>無法轉譯此 PDF 的任何頁面。</value></data>
+  <data name="OfficeSlideCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 張投影片中的 {0:N0} 張（預覽上限 {2:N0} 張）。</value></data>
+  <data name="OfficeSheetCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 個工作表中的 {0:N0} 個（預覽上限 {2:N0} 個）。</value></data>
+  <data name="OfficePageCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 個近似頁面中的 {0:N0} 個（預覽上限 {2:N0} 個）。</value></data>
 </root>

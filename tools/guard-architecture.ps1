@@ -464,13 +464,19 @@ else {
 $contractsPath = Join-Path $Root "src/QuickLook.Next.Contracts/Contracts.cs"
 if (Test-Path $contractsPath) {
     $contractsText = Get-Content -LiteralPath $contractsPath -Raw
+    $officeLayout = [regex]::Match(
+        $contractsText,
+        'record\s+OfficeLayout\(string LayoutKind\)[\s\S]*?(?=\r?\n\})').Value
     $officeItem = [regex]::Match(
         $contractsText,
         'record\s+OfficeLayoutItem\(string Kind\)[\s\S]*?(?=\r?\n\})').Value
-    if ($officeItem -notmatch 'string\?\s+ImageRef\s*\{\s*get;\s*init;\s*\}' -or
+    if ($officeLayout -notmatch 'int\s+RepresentedPageCount\s*\{\s*get;\s*init;\s*\}' -or
+        $officeLayout -notmatch 'int\s+TotalPageCount\s*\{\s*get;\s*init;\s*\}' -or
+        $officeLayout -notmatch 'int\s+PageLimit\s*\{\s*get;\s*init;\s*\}' -or
+        $officeItem -notmatch 'string\?\s+ImageRef\s*\{\s*get;\s*init;\s*\}' -or
         $officeItem -notmatch 'long\s+ImageByteLength\s*\{\s*get;\s*init;\s*\}' -or
         $officeItem -notmatch 'string\?\s+ImageBase64\s*\{\s*get;\s*init;\s*\}') {
-        Add-Failure "Office layout contracts must publish imageRef/length while retaining one-version ImageBase64 deserialization compatibility"
+        Add-Failure "Office layout contracts must publish coverage and imageRef/length metadata while retaining one-version ImageBase64 deserialization compatibility"
     }
 }
 
@@ -2304,6 +2310,10 @@ Invoke-CheckedScript -Path $pdfPageFailureUiTest -Arguments @{ Root = $Root } `
 $pdfDocumentStateUiTest = Join-Path $PSScriptRoot "test-pdf-document-state-ui.ps1"
 Invoke-CheckedScript -Path $pdfDocumentStateUiTest -Arguments @{ Root = $Root } `
     -FailureMessage "PDF document-state UI guard failed"
+
+$officeCoverageUiTest = Join-Path $PSScriptRoot "test-office-coverage-ui.ps1"
+Invoke-CheckedScript -Path $officeCoverageUiTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Office coverage UI guard failed"
 
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
 Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `

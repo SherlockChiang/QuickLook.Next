@@ -232,6 +232,9 @@ internal static class UiStrings
     public static string OfficeSlideAccessibleNameFormat => Get(nameof(OfficeSlideAccessibleNameFormat));
     public static string OfficeSheetAccessibleNameFormat => Get(nameof(OfficeSheetAccessibleNameFormat));
     public static string OfficePageAccessibleNameFormat => Get(nameof(OfficePageAccessibleNameFormat));
+    public static string OfficeSlideCoverageFormat => Get(nameof(OfficeSlideCoverageFormat));
+    public static string OfficeSheetCoverageFormat => Get(nameof(OfficeSheetCoverageFormat));
+    public static string OfficePageCoverageFormat => Get(nameof(OfficePageCoverageFormat));
     public static string OfficeColumnHeaderAccessibleNameFormat => Get(nameof(OfficeColumnHeaderAccessibleNameFormat));
     public static string OfficeRowHeaderAccessibleNameFormat => Get(nameof(OfficeRowHeaderAccessibleNameFormat));
     public static string OfficeCellAccessibleNameFormat => Get(nameof(OfficeCellAccessibleNameFormat));

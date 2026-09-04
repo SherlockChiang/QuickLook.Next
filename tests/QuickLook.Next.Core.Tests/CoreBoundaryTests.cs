@@ -437,6 +437,34 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Office_coverage_policy_combines_native_and_presenter_limits()
+    {
+        Assert.Equal(
+            new OfficeCoverage(16, 40, 16, true),
+            OfficeCoveragePolicy.Evaluate(30, 30, 40, 30, 16));
+        Assert.Equal(
+            new OfficeCoverage(6, 7, 6, true),
+            OfficeCoveragePolicy.Evaluate(6, 6, 7, 6, 16));
+        Assert.Equal(
+            new OfficeCoverage(3, 3, 6, false),
+            OfficeCoveragePolicy.Evaluate(3, 3, 3, 6, 16));
+    }
+
+    [Fact]
+    public void Office_coverage_policy_bounds_hostile_and_legacy_metadata()
+    {
+        Assert.Equal(
+            new OfficeCoverage(3, 3, 3, false),
+            OfficeCoveragePolicy.Evaluate(3, int.MaxValue, -1, 1, 16));
+        Assert.Equal(
+            new OfficeCoverage(4, 4, 16, false),
+            OfficeCoveragePolicy.Evaluate(4, 0, 0, 0, 16));
+        Assert.Equal(
+            new OfficeCoverage(0, 12, 1, true),
+            OfficeCoveragePolicy.Evaluate(-4, 8, 12, -2, 0));
+    }
+
+    [Fact]
     public void Office_image_abi_bounds_control_and_pixel_payloads()
     {
         Assert.Equal(2048, NativeAbi.MaxOfficeImageRefUtf8Bytes);
@@ -510,14 +538,18 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
-    public void Preview_office_layout_json_preserves_lazy_image_reference_metadata()
+    public void Preview_office_layout_json_preserves_coverage_and_lazy_image_reference_metadata()
     {
         const string json = """
-            {"kind":"office","title":"slides.pptx","officeLayout":{"layoutKind":"presentation","width":960,"height":540,"pages":[{"title":"Slide 1","index":0,"width":960,"height":540,"cells":[],"items":[{"kind":"image","x":10,"y":20,"width":320,"height":180,"zIndex":2,"imageName":"photo.png","mimeType":"image/png","imageRef":"ppt/media/photo.png","imageByteLength":123456}]}]}}
+            {"kind":"office","title":"slides.pptx","officeLayout":{"layoutKind":"presentation","width":960,"height":540,"representedPageCount":30,"totalPageCount":42,"pageLimit":30,"pages":[{"title":"Slide 1","index":0,"width":960,"height":540,"cells":[],"items":[{"kind":"image","x":10,"y":20,"width":320,"height":180,"zIndex":2,"imageName":"photo.png","mimeType":"image/png","imageRef":"ppt/media/photo.png","imageByteLength":123456}]}]}}
             """;
 
         Assert.True(PreviewReadyJson.TryParse("request", json, out PreviewReady? ready, out string? error), error);
-        OfficeLayoutItem image = Assert.Single(Assert.Single(ready!.OfficeLayout!.Pages).Items);
+        OfficeLayout layout = Assert.IsType<OfficeLayout>(ready!.OfficeLayout);
+        Assert.Equal(30, layout.RepresentedPageCount);
+        Assert.Equal(42, layout.TotalPageCount);
+        Assert.Equal(30, layout.PageLimit);
+        OfficeLayoutItem image = Assert.Single(Assert.Single(layout.Pages).Items);
         Assert.Equal("ppt/media/photo.png", image.ImageRef);
         Assert.Equal(123456, image.ImageByteLength);
         Assert.Null(image.ImageBase64);

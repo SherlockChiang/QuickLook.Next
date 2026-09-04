@@ -479,4 +479,7 @@
   <data name="PdfDocumentEmptyStatus" xml:space="preserve"><value>此 PDF 不包含可预览的页面。</value></data>
   <data name="PdfDocumentPartialStatusFormat" xml:space="preserve"><value>共有 {1:N0} 页，其中 {0:N0} 页无法渲染。</value></data>
   <data name="PdfDocumentFailedStatus" xml:space="preserve"><value>无法渲染此 PDF 的任何页面。</value></data>
+  <data name="OfficeSlideCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 张幻灯片中的 {0:N0} 张（预览上限 {2:N0} 张）。</value></data>
+  <data name="OfficeSheetCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 个工作表中的 {0:N0} 个（预览上限 {2:N0} 个）。</value></data>
+  <data name="OfficePageCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 个近似页面中的 {0:N0} 个（预览上限 {2:N0} 个）。</value></data>
 </root>

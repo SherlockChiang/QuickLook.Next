@@ -267,6 +267,7 @@ public sealed partial class MainWindow : Window
             TextPreviewContainer,
             TablePreviewContainer,
             OfficeScrollViewer,
+            OfficeCoveragePanel,
             MediaPreviewElement,
             ListingPanel,
             ErrorPanel,
@@ -302,6 +303,8 @@ public sealed partial class MainWindow : Window
         _officePresenter = new OfficePreviewPresenter(
             OfficeScrollViewer,
             OfficePagesPanel,
+            OfficeCoveragePanel,
+            OfficeCoverageText,
             () => (IsHighContrast, _uiSettings.GetColorValue(UIColorType.Background), _uiSettings.GetColorValue(UIColorType.Foreground)),
             LoadOfficeLayoutImageAsync);
         _rasterPresenter = new RasterPreviewPresenter(PreviewRoot, RasterFallbackImage, ImageZoomText);
@@ -1611,7 +1614,7 @@ public sealed partial class MainWindow : Window
         if (ready.PreferredWidth > 0 && ready.PreferredHeight > 0)
             return $"{ready.PreferredWidth:N0} x {ready.PreferredHeight:N0}";
         if (ready.OfficeLayout is { Pages.Length: > 0 } layout)
-            return FormatPageCount(layout.Pages.Length);
+            return FormatPageCount(Math.Max(layout.Pages.Length, layout.TotalPageCount));
         if (ready.Listing is { } listing)
             return ListingPreviewPresenter.BuildRootSummary(listing);
         if (ready.Table is { } table)

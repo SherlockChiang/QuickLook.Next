@@ -421,7 +421,7 @@ if ([string]::IsNullOrWhiteSpace($animationReadMethod) -or
 }
 
 $officePresenter = Join-Path $Root "src/QuickLook.Next.App/OfficePreviewPresenter.cs"
-Require-Pattern $officePresenter 'layout\.Pages\.Take\(16\)' `
+Require-Pattern $officePresenter 'MaxPresentedPages\s*=\s*16[\s\S]*layout\.Pages\.Take\(MaxPresentedPages\)' `
     "Office preview must retain its bounded 16-page model."
 Require-Pattern $officePresenter 'if\s*\(index\s*<\s*2\)\s*\r?\n\s*Materialize\(slot\)' `
     "Office preview must not eagerly materialize more than the first two pages."

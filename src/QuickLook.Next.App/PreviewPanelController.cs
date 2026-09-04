@@ -14,6 +14,7 @@ internal sealed class PreviewPanelController
     private readonly FrameworkElement _textPreviewContainer;
     private readonly FrameworkElement _tableScrollViewer;
     private readonly FrameworkElement _officeScrollViewer;
+    private readonly FrameworkElement _officeCoveragePanel;
     private readonly FrameworkElement _mediaPreviewElement;
     private readonly FrameworkElement _listingPanel;
     private readonly FrameworkElement _errorPanel;
@@ -32,6 +33,7 @@ internal sealed class PreviewPanelController
         FrameworkElement textPreviewContainer,
         FrameworkElement tableScrollViewer,
         FrameworkElement officeScrollViewer,
+        FrameworkElement officeCoveragePanel,
         FrameworkElement mediaPreviewElement,
         FrameworkElement listingPanel,
         FrameworkElement errorPanel,
@@ -49,6 +51,7 @@ internal sealed class PreviewPanelController
         _textPreviewContainer = textPreviewContainer;
         _tableScrollViewer = tableScrollViewer;
         _officeScrollViewer = officeScrollViewer;
+        _officeCoveragePanel = officeCoveragePanel;
         _mediaPreviewElement = mediaPreviewElement;
         _listingPanel = listingPanel;
         _errorPanel = errorPanel;
@@ -69,6 +72,7 @@ internal sealed class PreviewPanelController
         _textPreviewContainer.Visibility = Visibility.Collapsed;
         _tableScrollViewer.Visibility = Visibility.Collapsed;
         _officeScrollViewer.Visibility = Visibility.Collapsed;
+        _officeCoveragePanel.Visibility = Visibility.Collapsed;
         _mediaPreviewElement.Visibility = Visibility.Collapsed;
         _listingPanel.Visibility = Visibility.Collapsed;
     }
