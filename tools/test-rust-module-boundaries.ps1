@@ -8,6 +8,7 @@ $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
+$ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
@@ -67,6 +68,7 @@ foreach ($path in @(
         $ffiModulePath,
         $ffiCommonPath,
         $ffiContractPath,
+        $ffiHandlePreviewPath,
         $ffiPathPreviewPath,
         $ffiRoutingPath,
         $win32ModulePath,
@@ -127,6 +129,7 @@ if ($failures.Count -eq 0) {
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
+    $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
@@ -185,6 +188,7 @@ if ($failures.Count -eq 0) {
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
@@ -357,6 +361,118 @@ if ($failures.Count -eq 0) {
     $ffiContractLineCount = @(Get-Content -LiteralPath $ffiContractPath).Count
     if ($ffiContractLineCount -gt 140) {
         $failures.Add("The focused ffi::contract module grew beyond 140 lines: $ffiContractLineCount")
+    }
+
+    $expectedHandlePreviewExports = @(
+        "ql_probe_file_handle",
+        "ql_extract_pdf_text_handle",
+        "ql_preview_image_metadata_handle")
+    $handlePreviewReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::handle_preview::\{(?<items>.*?)\};')
+    if (-not $handlePreviewReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the crate-private ffi::handle_preview re-export block.")
+    }
+    else {
+        foreach ($requiredHandlePreviewItem in @(
+                "preview_handle_v2",
+                "ql_extract_pdf_text_handle",
+                "ql_preview_image_metadata_handle",
+                "ql_probe_file_handle",
+                "reader_preview_status",
+                "reopen_handle_input_v2")) {
+            if ($handlePreviewReExportMatch.Groups["items"].Value -notmatch
+                "\b$requiredHandlePreviewItem\b") {
+                $failures.Add(
+                    "lib.rs ffi::handle_preview re-export lost: $requiredHandlePreviewItem")
+            }
+        }
+    }
+    if ($ffiHandlePreviewText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiHandlePreviewText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiHandlePreviewText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::handle_preview must use explicit imports and a thin unsafe C ABI surface.")
+    }
+    $handlePreviewExports = [regex]::Matches(
+        $ffiHandlePreviewText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $handlePreviewNoMangleCount = [regex]::Matches(
+        $ffiHandlePreviewText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($handlePreviewExports.Count -ne $expectedHandlePreviewExports.Count -or
+        $handlePreviewNoMangleCount -ne $expectedHandlePreviewExports.Count) {
+        $failures.Add("ffi::handle_preview must expose exactly three unsafe C ABI exports.")
+    }
+    foreach ($handlePreviewExport in $expectedHandlePreviewExports) {
+        $handlePreviewPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($handlePreviewExport) + '\s*\('
+        if ($ffiHandlePreviewText -notmatch $handlePreviewPattern) {
+            $failures.Add("ffi::handle_preview lost expected export: $handlePreviewExport")
+        }
+        if ($libText -match $handlePreviewPattern) {
+            $failures.Add(
+                "$handlePreviewExport implementation must remain in ffi::handle_preview, not lib.rs.")
+        }
+    }
+    foreach ($handlePreviewHelper in @(
+            "preview_handle_v2",
+            "reader_preview_status",
+            "reopen_handle_input_v2")) {
+        if ($ffiHandlePreviewText -notmatch
+            "(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+$handlePreviewHelper(?:<[^>]*>)?\s*\(") {
+            $failures.Add("ffi::handle_preview lost shared boundary helper: $handlePreviewHelper")
+        }
+        if ($libText -match
+            "(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+$handlePreviewHelper(?:<[^>]*>)?\s*\(") {
+            $failures.Add("$handlePreviewHelper implementation must not remain in lib.rs.")
+        }
+    }
+    foreach ($handlePreviewExport in $expectedHandlePreviewExports) {
+        $handlePreviewStart = $ffiHandlePreviewText.IndexOf(
+            "pub unsafe extern `"C`" fn $handlePreviewExport(",
+            [StringComparison]::Ordinal)
+        $handlePreviewEnd = if ($handlePreviewStart -ge 0) {
+            $nextHandlePreviewExport = $ffiHandlePreviewText.IndexOf(
+                "#[no_mangle]",
+                $handlePreviewStart + 1,
+                [StringComparison]::Ordinal)
+            if ($nextHandlePreviewExport -ge 0) {
+                $nextHandlePreviewExport
+            }
+            else {
+                $ffiHandlePreviewText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $handlePreviewBody = if ($handlePreviewStart -ge 0 -and
+            $handlePreviewEnd -gt $handlePreviewStart) {
+            $ffiHandlePreviewText.Substring(
+                $handlePreviewStart,
+                $handlePreviewEnd - $handlePreviewStart)
+        }
+        else {
+            ""
+        }
+        if ($handlePreviewBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $handlePreviewBody -notmatch 'preview_handle_v2\(') {
+            $failures.Add(
+                "$handlePreviewExport must contain panics and use the shared ABI 2 HANDLE contract.")
+        }
+    }
+    foreach ($handlePreviewTest in @(
+            "handle_preview_rejects_null_required_before_handle_access",
+            "handle_preview_rejects_null_output_with_capacity")) {
+        if ($ffiHandlePreviewText -notmatch "fn\s+$handlePreviewTest\s*\(") {
+            $failures.Add("ffi::handle_preview lost focused test: $handlePreviewTest")
+        }
+    }
+    $ffiHandlePreviewLineCount = @(Get-Content -LiteralPath $ffiHandlePreviewPath).Count
+    if ($ffiHandlePreviewLineCount -gt 300) {
+        $failures.Add(
+            "The focused ffi::handle_preview module grew beyond 300 lines: $ffiHandlePreviewLineCount")
     }
 
     if ($ffiRoutingText -notmatch '(?m)^use\s+super::common::\{' -or

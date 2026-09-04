@@ -1153,6 +1153,14 @@ if (Test-Path $parserHostProgram) {
         $nativeContractText = ""
         Add-Failure "Missing Rust FFI contract source: $nativeContractPath"
     }
+    $nativeHandlePreviewPath = Join-Path $Root "native/quicklook_next_native/src/ffi/handle_preview.rs"
+    if (Test-Path -LiteralPath $nativeHandlePreviewPath -PathType Leaf) {
+        $nativeHandlePreviewText = Get-Content -LiteralPath $nativeHandlePreviewPath -Raw
+    }
+    else {
+        $nativeHandlePreviewText = ""
+        Add-Failure "Missing Rust FFI HANDLE preview source: $nativeHandlePreviewPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1424,6 +1432,84 @@ if (Test-Path $parserHostProgram) {
         $nativeCommonText -notmatch 'pub\(crate\)\s+fn\s+ffi_void_boundary\(body:\s*impl\s+FnOnce\(\)\)\s*\{\s*let\s+_\s*=\s*catch_unwind\(AssertUnwindSafe\(body\)\);\s*\}') {
         Add-Failure "Rust FFI panic boundaries must map i32 exports to INTERNAL and contain void-export panics"
     }
+
+    # Foundational read-only HANDLE adapters and their pointer validation live together. Scan the
+    # focused source so moving exports cannot hide a lost panic, ownership, or output boundary.
+    $expectedHandlePreviewExports = @(
+        "ql_probe_file_handle",
+        "ql_extract_pdf_text_handle",
+        "ql_preview_image_metadata_handle")
+    $handlePreviewExports = [regex]::Matches(
+        $nativeHandlePreviewText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($handlePreviewExports.Count -ne $expectedHandlePreviewExports.Count -or
+        $nativeHandlePreviewText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeHandlePreviewText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeHandlePreviewText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::handle_preview must expose exactly three unsafe C ABI entry points and explicit crate-private helpers"
+    }
+    foreach ($handlePreviewHelper in @(
+            "reopen_handle_input_v2",
+            "preview_handle_v2",
+            "reader_preview_status")) {
+        $handlePreviewHelperPattern = '(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+' +
+            [regex]::Escape($handlePreviewHelper) + '(?:<[^>]*>)?\s*\('
+        if ($nativeHandlePreviewText -notmatch $handlePreviewHelperPattern) {
+            Add-Failure "ffi::handle_preview lost shared boundary helper: $handlePreviewHelper"
+        }
+        $rootHandlePreviewHelperPattern = '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+' +
+            [regex]::Escape($handlePreviewHelper) + '(?:<[^>]*>)?\s*\('
+        if ($nativeLibText -match $rootHandlePreviewHelperPattern) {
+            Add-Failure "$handlePreviewHelper must remain in ffi::handle_preview, not lib.rs"
+        }
+    }
+    foreach ($handlePreviewName in $expectedHandlePreviewExports) {
+        $handlePreviewSignature = "pub unsafe extern `"C`" fn $handlePreviewName("
+        $handlePreviewStart = $nativeHandlePreviewText.IndexOf(
+            $handlePreviewSignature,
+            [StringComparison]::Ordinal)
+        $handlePreviewEnd = if ($handlePreviewStart -ge 0) {
+            $nextHandlePreviewExport = $nativeHandlePreviewText.IndexOf(
+                "#[no_mangle]",
+                $handlePreviewStart + $handlePreviewSignature.Length,
+                [StringComparison]::Ordinal)
+            if ($nextHandlePreviewExport -ge 0) {
+                $nextHandlePreviewExport
+            }
+            else {
+                $nativeHandlePreviewText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $handlePreviewBody = if ($handlePreviewStart -ge 0 -and
+            $handlePreviewEnd -gt $handlePreviewStart) {
+            $nativeHandlePreviewText.Substring(
+                $handlePreviewStart,
+                $handlePreviewEnd - $handlePreviewStart)
+        }
+        else {
+            ""
+        }
+        if ($handlePreviewBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $handlePreviewBody -notmatch 'preview_handle_v2\(') {
+            Add-Failure "$handlePreviewName must contain panics and use the shared ABI 2 HANDLE contract"
+        }
+        if ($nativeLibText -match [regex]::Escape($handlePreviewSignature)) {
+            Add-Failure "$handlePreviewName must remain in ffi::handle_preview, not lib.rs"
+        }
+    }
+    if ($nativeHandlePreviewText -notmatch 'owned_utf8_arg\([\s\S]*MAX_LOGICAL_NAME_BYTES' -or
+        $nativeHandlePreviewText -notmatch 'Path::new\(&logical_name\)[\s\S]*\.file_name\(\)' -or
+        $nativeHandlePreviewText -notmatch 'native_input::reopen_borrowed_disk_file\(source_handle,\s*expected_length\)' -or
+        $nativeHandlePreviewText -notmatch 'out_required\.is_null\(\)[\s\S]*\*out_required\s*=\s*0[\s\S]*out_buf\.is_null\(\)\s*&&\s*out_cap\s*!=\s*0' -or
+        $nativeHandlePreviewText -notmatch 'write_v2_out\(json\.as_bytes\(\),\s*out_buf,\s*out_cap,\s*out_required\)') {
+        Add-Failure "ffi::handle_preview lost its bounded logical-name, HANDLE ownership, or output contract"
+    }
+    if (@(Get-Content -LiteralPath $nativeHandlePreviewPath).Count -gt 300) {
+        Add-Failure "The focused ffi::handle_preview module grew beyond 300 lines"
+    }
     foreach ($entryPoint in @(
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
@@ -1433,9 +1519,6 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_archive_handle",
         "ql_preview_office_handle",
         "ql_preview_ebook_handle"
-        "ql_preview_image_metadata_handle"
-        "ql_extract_pdf_text_handle"
-        "ql_probe_file_handle"
     )) {
         $signature = "pub unsafe extern `"C`" fn $entryPoint("
         $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
