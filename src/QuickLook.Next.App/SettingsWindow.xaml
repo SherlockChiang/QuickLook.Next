@@ -49,6 +49,47 @@
                     <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid x:Name="WindowLevelSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="WindowLevelTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="WindowLevelDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ComboBox x:Name="WindowLevelCombo" Grid.Column="1" MinHeight="40" HorizontalAlignment="Stretch"
+                                      AutomationProperties.LabeledBy="{x:Bind WindowLevelTitle}"
+                                      SelectionChanged="OnWindowLevelSelectionChanged">
+                                <ComboBoxItem x:Name="StandardWindowLevelItem" Tag="standard" />
+                                <ComboBoxItem x:Name="AlwaysOnTopWindowLevelItem" Tag="always-on-top" />
+                            </ComboBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
+                        <Grid x:Name="CloseOnFocusLossSettingGrid" ColumnSpacing="20" RowSpacing="10">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center" Spacing="3">
+                                <TextBlock x:Name="CloseOnFocusLossTitle" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <TextBlock x:Name="CloseOnFocusLossDescription" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="CloseOnFocusLossToggle" Grid.Column="1" MinHeight="40"
+                                          AutomationProperties.LabeledBy="{x:Bind CloseOnFocusLossTitle}"
+                                          Toggled="OnCloseOnFocusLossToggled" />
+                        </Grid>
+                    </Border>
+
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="18,14">
                         <Grid x:Name="LanguageSettingGrid" ColumnSpacing="20" RowSpacing="10">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>

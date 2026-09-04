@@ -17,9 +17,12 @@ so new keys can be added against the same contract instead of reverse-engineerin
    stops afterwards because the native hook only acts while Explorer is the foreground window.
 4. `PreviewSession.ShouldActivateWindow` / `ShouldFocusContent` allow initial `ExplorerOpen` and
    `WindowNavigation` focus; `ExplorerSwitch` never calls `Activate()` or moves element focus.
-5. The window controller may use a transient `HWND_TOPMOST` pulse to recover z-order on reveal or
-   resize, but immediately demotes the window with `HWND_NOTOPMOST`; preview visibility must not
-   leave the window permanently system-topmost.
+5. The standard window-level mode raises with `HWND_NOTOPMOST`, keeping the preview in the ordinary
+   application band without a transient system-topmost state. The explicit always-on-top mode uses
+   `HWND_TOPMOST` until the preview is hidden or the preference returns to standard.
+6. Optional focus-loss close is evaluated on a low-priority dispatcher callback so transient
+   activation changes can settle. It is suppressed while QuickLook Next settings or modal UI owns
+   the interaction and never changes the initial `ExplorerOpen` focus-transfer contract.
 
 ## Consumer matrix
 

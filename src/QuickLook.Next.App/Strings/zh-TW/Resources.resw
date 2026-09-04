@@ -141,6 +141,24 @@
   <data name="SettingsAutoStartDescription" xml:space="preserve">
     <value>登入後，讓 QuickLook Next 持續在通知區域中待命。</value>
   </data>
+  <data name="SettingsWindowLevel" xml:space="preserve">
+    <value>預覽視窗層級</value>
+  </data>
+  <data name="SettingsWindowLevelDescription" xml:space="preserve">
+    <value>標準模式只在需要時將視窗置於檔案總管上方；永遠置頂會讓預覽在關閉前保持在其他應用程式上方。</value>
+  </data>
+  <data name="SettingsWindowLevelStandard" xml:space="preserve">
+    <value>標準</value>
+  </data>
+  <data name="SettingsWindowLevelAlwaysOnTop" xml:space="preserve">
+    <value>永遠置頂</value>
+  </data>
+  <data name="SettingsCloseOnFocusLoss" xml:space="preserve">
+    <value>焦點移開時關閉預覽</value>
+  </data>
+  <data name="SettingsCloseOnFocusLossDescription" xml:space="preserve">
+    <value>其他應用程式取得焦點後隱藏預覽；QuickLook Next 的設定和對話框不會觸發關閉。</value>
+  </data>
   <data name="SettingsLanguage" xml:space="preserve">
     <value>語言</value>
   </data>

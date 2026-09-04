@@ -86,6 +86,8 @@ public sealed partial class MainWindow : Window
     private bool _previewTemporarilyHidden;
     private bool _keyboardCloseQueued;
     private bool _isModalDialogOpen;
+    private bool _previewWindowActivated;
+    private bool _focusLossCloseQueued;
     private readonly SemaphoreSlim _modalDialogGate = new(1, 1);
     private readonly DuplicateOpenCloseGuard _duplicateOpenCloseGuard = new(DuplicateOpenCloseGuardMs);
     private long _loadingShellShowStarted;
@@ -256,7 +258,12 @@ public sealed partial class MainWindow : Window
             ImagePreviewToolbar,
             ImageFilmstrip,
             OfficePagesPanel);
-        _windowController = new PreviewWindowController(this, () => WinRT.Interop.WindowNative.GetWindowHandle(this));
+        _windowController = new PreviewWindowController(
+            this,
+            () => WinRT.Interop.WindowNative.GetWindowHandle(this),
+            () => _settingsWindow is null
+                ? PreviewWindowPolicy.ParseLevel(AppSettings.Current.PreviewWindowLevel)
+                : PreviewWindowLevel.Standard);
         _textPresenter = new TextPreviewPresenter(
             TextPreviewBlock,
             TextScrollViewer,
@@ -386,6 +393,7 @@ public sealed partial class MainWindow : Window
             UIElement.PointerWheelChangedEvent,
             new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPreviewContentPointerWheelChanged),
             handledEventsToo: true);
+        Activated += OnPreviewWindowActivated;
         RootGrid.Loaded += (_, _) =>
         {
             if (RootGrid.XamlRoot is { } xamlRoot)
@@ -3871,6 +3879,35 @@ public sealed partial class MainWindow : Window
             PreviewContentHost.Opacity = 1;
     }
 
+    private void OnPreviewWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        _previewWindowActivated = args.WindowActivationState != WindowActivationState.Deactivated;
+        if (_previewWindowActivated || _focusLossCloseQueued)
+            return;
+
+        _focusLossCloseQueued = true;
+        int generation = _previewSession.Generation;
+        DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            () =>
+            {
+                _focusLossCloseQueued = false;
+                if (_previewSession.Generation != generation
+                    || !PreviewWindowPolicy.ShouldCloseAfterDeactivation(
+                        AppSettings.Current.ClosePreviewOnFocusLoss,
+                        _previewVisible,
+                        _previewWindowActivated,
+                        _isModalDialogOpen,
+                        _settingsWindow is not null))
+                {
+                    return;
+                }
+
+                DiagLog.Write("App", "preview close after confirmed focus loss");
+                _ = HandleNativeIntentSafelyAsync(new NativeIntent(PreviewIntent.Close, []));
+            });
+    }
+
     private void HidePreviewWindow()
     {
         using var trace = DiagLog.TraceScope("App", $"window hide visible={_previewVisible}; request={_previewSession.CurrentRequestId}", 100);
@@ -3966,7 +4003,11 @@ public sealed partial class MainWindow : Window
                 OnSettingsChanged,
                 () => _native.LastHookFailure ?? _native.HookStatus,
                 RetryNativeHook);
-            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+            _settingsWindow.Closed += (_, _) =>
+            {
+                _settingsWindow = null;
+                _windowController.ApplyConfiguredLevel(_previewVisible);
+            };
         }
         _settingsWindow.Activate();
     }
@@ -3991,6 +4032,7 @@ public sealed partial class MainWindow : Window
     private void OnSettingsChanged()
     {
         RefreshTrayIcon();
+        _windowController.ApplyConfiguredLevel(_previewVisible);
         if (PrefersReducedMotion)
             _animatedImagePresenter?.PausePlayback();
         UpdateImageAnimationPlaybackButton();

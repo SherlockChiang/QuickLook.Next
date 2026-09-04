@@ -519,12 +519,16 @@ Require-Pattern $textPreviewPresenter 'private bool _showLineNumbers;' `
 Require-Pattern $textPreviewPresenter '13\s*\*\s*_textScale' `
     "Text size preferences must scale plain text and code without unbounded input."
 $appSettings = Join-Path $Root "src/QuickLook.Next.App/AppSettings.cs"
-Require-Pattern $appSettings 'CurrentSchemaVersion\s*=\s*3' `
-    "Text display preferences must use settings schema version 3."
+Require-Pattern $appSettings 'CurrentSchemaVersion\s*=\s*4' `
+    "Window behavior preferences must use settings schema version 4."
 Require-Pattern $appSettings 'TextSize\s*=\s*"default"[\s\S]*TextLineNumbers\s*=\s*false' `
     "Text display preferences must retain safe defaults."
 Require-Pattern $appSettings 'SchemaVersion\s*<\s*3\s*\?\s*"default"\s*:\s*settings\.TextSize' `
     "Older settings schemas must migrate text display preferences instead of being rejected."
+Require-Pattern $appSettings 'PreviewWindowLevel\s*=\s*PreviewWindowPolicy\.StandardLevelSetting[\s\S]*ClosePreviewOnFocusLoss\s*=\s*false' `
+    "Window behavior preferences must default to the ordinary window band without focus-loss close."
+Require-Pattern $appSettings 'SchemaVersion\s*<\s*4[\s\S]*PreviewWindowPolicy\.StandardLevelSetting[\s\S]*SchemaVersion\s*>=\s*4\s*&&\s*settings\.ClosePreviewOnFocusLoss' `
+    "Older settings schemas must migrate to the non-topmost window behavior defaults."
 $nativeBridge = Join-Path $Root "src/QuickLook.Next.App/NativeBridge.cs"
 Require-Pattern $nativeBridge 'CallInfoPreview[\s\S]*while\s*\(cap\s*<=\s*MaxNativePreviewJsonBytes\)[\s\S]*needed\s*=\s*-n' `
     "Native database summaries must honor the required output size instead of falling back to file icons."

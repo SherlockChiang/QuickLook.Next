@@ -47,6 +47,12 @@
   <data name="SettingsGeneralDescription" xml:space="preserve"><value>选择 QuickLook Next 在 Windows 中的运行方式。</value></data>
   <data name="SettingsAutoStart" xml:space="preserve"><value>开机自启</value></data>
   <data name="SettingsAutoStartDescription" xml:space="preserve"><value>登录 Windows 后在通知区域保持 QuickLook Next 就绪。</value></data>
+  <data name="SettingsWindowLevel" xml:space="preserve"><value>预览窗口层级</value></data>
+  <data name="SettingsWindowLevelDescription" xml:space="preserve"><value>标准模式只在需要时将窗口置于资源管理器上方；始终置顶会让预览在关闭前保持在其他应用上方。</value></data>
+  <data name="SettingsWindowLevelStandard" xml:space="preserve"><value>标准</value></data>
+  <data name="SettingsWindowLevelAlwaysOnTop" xml:space="preserve"><value>始终置顶</value></data>
+  <data name="SettingsCloseOnFocusLoss" xml:space="preserve"><value>焦点移开时关闭预览</value></data>
+  <data name="SettingsCloseOnFocusLossDescription" xml:space="preserve"><value>其他应用获得焦点后隐藏预览；QuickLook Next 的设置和对话框不会触发关闭。</value></data>
   <data name="SettingsLanguage" xml:space="preserve"><value>语言</value></data>
   <data name="SettingsLanguageDescription" xml:space="preserve"><value>选择应用和托盘菜单使用的语言。</value></data>
   <data name="SettingsSystemLanguage" xml:space="preserve"><value>跟随系统语言</value></data>

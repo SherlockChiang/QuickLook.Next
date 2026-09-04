@@ -26,6 +26,8 @@
              Link="AppModel\DuplicateOpenCloseGuard.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewNavigationPolicy.cs"
              Link="AppModel\PreviewNavigationPolicy.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\PreviewWindowPolicy.cs"
+             Link="AppModel\PreviewWindowPolicy.cs" />
   </ItemGroup>
   <Target Name="StageSupervisedHostCrashProbe" AfterTargets="Build">
     <Error Condition="!Exists('$(SupervisedHostCrashProbeOutput)QuickLook.Next.SupervisedHostCrashProbe.exe')"

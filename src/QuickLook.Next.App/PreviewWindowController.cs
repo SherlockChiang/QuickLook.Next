@@ -8,11 +8,16 @@ internal sealed class PreviewWindowController
 {
     private readonly Window _window;
     private readonly Func<nint> _hwndProvider;
+    private readonly Func<PreviewWindowLevel> _windowLevelProvider;
 
-    public PreviewWindowController(Window window, Func<nint> hwndProvider)
+    public PreviewWindowController(
+        Window window,
+        Func<nint> hwndProvider,
+        Func<PreviewWindowLevel> windowLevelProvider)
     {
         _window = window;
         _hwndProvider = hwndProvider;
+        _windowLevelProvider = windowLevelProvider;
     }
 
     public void Raise(bool activate)
@@ -24,9 +29,31 @@ internal sealed class PreviewWindowController
             flags |= SWP_NOACTIVATE;
 
         SetNoActivateStyle(enabled: false);
-        PulseTopmost(hwnd, flags);
+        RaiseInConfiguredBand(hwnd, flags);
         if (activate)
             Activate();
+    }
+
+    public void ApplyConfiguredLevel(bool previewVisible)
+    {
+        if (!previewVisible)
+        {
+            ReleaseTopmost();
+            return;
+        }
+
+        nint hwnd = _hwndProvider();
+        bool applied = SetWindowPos(
+            hwnd,
+            GetConfiguredInsertAfter(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        DiagLog.Write(
+            "App",
+            $"window apply level={_windowLevelProvider()}; ok={applied}; lastError={Marshal.GetLastWin32Error()}");
     }
 
     public void Activate()
@@ -68,7 +95,7 @@ internal sealed class PreviewWindowController
         SetNoActivateStyle(enabled: false);
         bool shown = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         DiagLog.Write("App", $"window ShowWindow(SW_SHOWNOACTIVATE) result={shown}; lastError={Marshal.GetLastWin32Error()}");
-        PulseTopmost(hwnd, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        RaiseInConfiguredBand(hwnd, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     public void Hide()
@@ -123,16 +150,20 @@ internal sealed class PreviewWindowController
             $"detached={detached}/{detachError}");
     }
 
-    private static void PulseTopmost(nint hwnd, uint flags)
+    private void RaiseInConfiguredBand(nint hwnd, uint flags)
     {
-        bool topmost = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
-        int topmostError = Marshal.GetLastWin32Error();
-        bool notTopmost = SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
-        int notTopmostError = Marshal.GetLastWin32Error();
+        PreviewWindowLevel level = _windowLevelProvider();
+        bool raised = SetWindowPos(hwnd, GetInsertAfter(level), 0, 0, 0, 0, flags);
         DiagLog.Write(
             "App",
-            $"window topmost pulse flags=0x{flags:X}; topmost={topmost}/{topmostError}; notTopmost={notTopmost}/{notTopmostError}");
+            $"window raise level={level}; flags=0x{flags:X}; ok={raised}; lastError={Marshal.GetLastWin32Error()}");
     }
+
+    private nint GetConfiguredInsertAfter()
+        => GetInsertAfter(_windowLevelProvider());
+
+    private static nint GetInsertAfter(PreviewWindowLevel level)
+        => level == PreviewWindowLevel.AlwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
 
     private const int GWL_EXSTYLE = -20;
     private const int SW_HIDE = 0;

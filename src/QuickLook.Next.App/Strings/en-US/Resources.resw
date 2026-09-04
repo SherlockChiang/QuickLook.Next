@@ -172,6 +172,12 @@
   <data name="SettingsGeneralDescription" xml:space="preserve"><value>Choose how QuickLook Next behaves in Windows.</value></data>
   <data name="SettingsAutoStart" xml:space="preserve"><value>Start with Windows</value></data>
   <data name="SettingsAutoStartDescription" xml:space="preserve"><value>Keep QuickLook Next ready in the notification area after you sign in.</value></data>
+  <data name="SettingsWindowLevel" xml:space="preserve"><value>Preview window level</value></data>
+  <data name="SettingsWindowLevelDescription" xml:space="preserve"><value>Standard stays above Explorer only while needed. Always on top keeps the preview above other apps until it closes.</value></data>
+  <data name="SettingsWindowLevelStandard" xml:space="preserve"><value>Standard</value></data>
+  <data name="SettingsWindowLevelAlwaysOnTop" xml:space="preserve"><value>Always on top</value></data>
+  <data name="SettingsCloseOnFocusLoss" xml:space="preserve"><value>Close preview when focus moves away</value></data>
+  <data name="SettingsCloseOnFocusLossDescription" xml:space="preserve"><value>Hide the preview after another app becomes active. Settings and QuickLook Next dialogs do not close it.</value></data>
   <data name="SettingsLanguage" xml:space="preserve"><value>Language</value></data>
   <data name="SettingsLanguageDescription" xml:space="preserve"><value>Choose the language used by the app and tray menu.</value></data>
   <data name="SettingsSystemLanguage" xml:space="preserve"><value>Use system language</value></data>
