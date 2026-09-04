@@ -6,8 +6,6 @@
 //!      thread message, so the (latency-critical) COM selection read happens off the hook callback.
 //!   3. Explorer current selection via COM (IShellWindows → IShellBrowser → IFolderView).
 
-use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::mem::size_of;
@@ -15,7 +13,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use image::{AnimationDecoder, ImageDecoder, ImageFormat, ImageReader};
 
@@ -41,6 +39,9 @@ pub(crate) use ffi::contract::{ql_abi_version, ql_capabilities, ql_probe};
 // Keep moved database preview exports available to crate-local tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::database::{ql_preview_database_cancelable, ql_preview_sqlite_handles};
+// Keep the moved path probe export available to crate-local tests and adapters.
+#[allow(unused_imports)]
+pub(crate) use ffi::file_probe::ql_probe_file;
 // Keep moved container HANDLE preview exports available to crate-local tests.
 #[allow(unused_imports)]
 pub(crate) use ffi::handle_container::{
@@ -761,312 +762,6 @@ impl Drop for PwstrGuard {
     }
 }
 
-// ── File probe + cache ───────────────────────────────────────────────────────────────────────
-// The native layer is the single source of truth for "what is this file": extension, magic prefix,
-// a coarse kind, and metadata — cached by path+exact mtime+size so rapid edits cannot reuse stale data.
-
-struct ProbeCacheEntry {
-    modified: Option<SystemTime>,
-    size: u64,
-    sequence: u64,
-    json: String,
-}
-
-static PROBE_CACHE: OnceLock<Mutex<HashMap<String, ProbeCacheEntry>>> = OnceLock::new();
-static PROBE_CACHE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-const PROBE_CACHE_MAX: usize = 500;
-
-fn probe_cache() -> &'static Mutex<HashMap<String, ProbeCacheEntry>> {
-    PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Evict oldest entries when the cache exceeds PROBE_CACHE_MAX. Called after insertion.
-fn probe_cache_evict(cache: &mut HashMap<String, ProbeCacheEntry>) {
-    if cache.len() <= PROBE_CACHE_MAX {
-        return;
-    }
-    let oldest_key = cache
-        .iter()
-        .min_by_key(|(_, entry)| entry.sequence)
-        .map(|(k, _)| k.clone());
-    if let Some(key) = oldest_key {
-        cache.remove(&key);
-    }
-}
-
-/// Probe a file (UTF-8 path) and write its FileProbe JSON (UTF-8) into `out`.
-/// Returns the JSON byte length, `-needed` if the buffer is too small, or a negative error.
-///
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn ql_probe_file(
-    path_utf8: *const u8,
-    path_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return -1,
-        };
-        let json = match probe_json(path) {
-            Some(j) => j,
-            None => return -2,
-        };
-        let bytes = json.as_bytes();
-        if out.is_null() || out_cap < bytes.len() {
-            return -(bytes.len() as i32);
-        }
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
-        bytes.len() as i32
-    })
-}
-
-fn probe_json(path: &str) -> Option<String> {
-    let meta = fs::metadata(path).ok()?;
-    let size = meta.len();
-    let precise_modified = meta.modified().ok();
-    let modified = precise_modified
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    if let Ok(cache) = probe_cache().lock() {
-        if let Some(entry) = cache.get(path) {
-            if entry.modified == precise_modified && entry.size == size {
-                return Some(entry.json.clone());
-            }
-        }
-    }
-
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{}", e.to_lowercase()))
-        .unwrap_or_default();
-    let file_name = std::path::Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-
-    let mut buf = [0u8; 64];
-    let n = if meta.is_dir() {
-        0
-    } else {
-        fs::File::open(path)
-            .ok()
-            .map(|mut f| f.read(&mut buf).unwrap_or(0))
-            .unwrap_or(0)
-    };
-    let magic = &buf[..n];
-
-    let kind = if meta.is_dir() {
-        "folder"
-    } else {
-        classify(file_name, &ext, magic, size == 0)
-    };
-    let magic_hex: String = magic.iter().map(|b| format!("{b:02X}")).collect();
-    let animation = if kind == "image" {
-        fs::File::open(path)
-            .ok()
-            .and_then(|mut file| preview::probe_image_animation_reader(&mut file, file_name, size))
-    } else {
-        None
-    }
-    .unwrap_or_default();
-    let is_animated = match animation.is_animated {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "null",
-    };
-
-    let json = format!(
-        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{},\"isAnimated\":{}}}",
-        json_escape(path),
-        json_escape(&ext),
-        magic_hex,
-        kind,
-        size,
-        modified,
-        is_animated
-    );
-
-    {
-        if let Ok(mut cache) = probe_cache().lock() {
-            cache.insert(
-                path.to_string(),
-                ProbeCacheEntry {
-                    modified: precise_modified,
-                    size,
-                    sequence: PROBE_CACHE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
-                    json: json.clone(),
-                },
-            );
-            probe_cache_evict(&mut cache);
-        }
-    }
-    Some(json)
-}
-
-/// Coarse type classification. Container formats are recognized by extension first (e.g. .docx is a
-/// ZIP by magic but should be "office"), then images/pdf/archives by magic, then text.
-fn classify(file_name: &str, ext: &str, magic: &[u8], is_empty: bool) -> &'static str {
-    const OFFICE_EXTS: &[&str] = &[
-        ".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm", ".rtf",
-        ".odt", ".ods", ".odp",
-    ];
-    const VIDEO_EXTS: &[&str] = &[
-        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".mpg", ".mpeg", ".3gp",
-    ];
-    const AUDIO_EXTS: &[&str] = &[
-        ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus", ".mid",
-    ];
-    const ARCHIVE_EXTS: &[&str] = &[
-        ".zip", ".jar", ".nupkg", ".vsix", ".whl", ".cbz", ".xpi", ".tar", ".tgz", ".gz",
-    ];
-    const EBOOK_EXTS: &[&str] = &[".epub", ".fb2", ".mobi", ".azw", ".azw3"];
-    const IMAGE_EXTS: &[&str] = &[
-        ".png", ".jpg", ".jpeg", ".jpe", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".webp", ".ico",
-        ".heic", ".heif", ".avif", ".jxl", ".svg",
-    ];
-    const PACKAGE_EXTS: &[&str] = &[
-        ".apk",
-        ".apks",
-        ".aab",
-        ".msix",
-        ".msixbundle",
-        ".appx",
-        ".appxbundle",
-    ];
-    const DISK_IMAGE_EXTS: &[&str] = &[".img", ".iso", ".vhd", ".vhdx", ".vmdk", ".dmg"];
-    const EXECUTABLE_EXTS: &[&str] = &[".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx"];
-    const CERTIFICATE_EXTS: &[&str] = &[".cer", ".crt", ".der", ".pem", ".p7b", ".p7c"];
-    const FONT_EXTS: &[&str] = &[".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"];
-    const DATABASE_EXTS: &[&str] = &[
-        ".sqlite",
-        ".sqlite3",
-        ".db",
-        ".db3",
-        ".s3db",
-        ".sqlite-shm",
-        ".sqlite-wal",
-        ".mdb",
-        ".accdb",
-    ];
-    const MAIL_EXTS: &[&str] = &[".eml", ".msg", ".mbox", ".emlx"];
-    const CHM_EXTS: &[&str] = &[".chm"];
-    const DUMP_EXTS: &[&str] = &[".dmp", ".mdmp", ".dump", ".core"];
-    const ELF_EXTS: &[&str] = &[".elf", ".so", ".o"];
-    if OFFICE_EXTS.contains(&ext) {
-        return "office";
-    }
-    if EBOOK_EXTS.contains(&ext) {
-        return "ebook";
-    }
-    if CERTIFICATE_EXTS.contains(&ext) {
-        return "certificate";
-    }
-    if EXECUTABLE_EXTS.contains(&ext) || magic.starts_with(b"MZ") {
-        return "executable";
-    }
-    if FONT_EXTS.contains(&ext) {
-        return "font";
-    }
-    let lower_file_name = file_name.to_ascii_lowercase();
-    if DATABASE_EXTS.contains(&ext)
-        || lower_file_name.ends_with("-wal")
-        || lower_file_name.ends_with("-shm")
-    {
-        return "database";
-    }
-    if MAIL_EXTS.contains(&ext) {
-        return "mail";
-    }
-    if CHM_EXTS.contains(&ext) {
-        return "chm";
-    }
-    if DUMP_EXTS.contains(&ext) {
-        return "dump";
-    }
-    if ELF_EXTS.contains(&ext) {
-        return "elf";
-    }
-    if ext == ".torrent" {
-        return "torrent";
-    }
-    if DISK_IMAGE_EXTS.contains(&ext) {
-        return "disk-image";
-    }
-    if PACKAGE_EXTS.contains(&ext) {
-        return "package";
-    }
-    if VIDEO_EXTS.contains(&ext) {
-        return "video";
-    }
-    if AUDIO_EXTS.contains(&ext) {
-        return "audio";
-    }
-    if ARCHIVE_EXTS.contains(&ext) {
-        return "archive";
-    }
-    if IMAGE_EXTS.contains(&ext) {
-        return "image";
-    }
-
-    let m = magic;
-    if m.starts_with(&[0x89, 0x50, 0x4E, 0x47])              // PNG
-        || m.starts_with(&[0xFF, 0xD8, 0xFF])               // JPEG
-        || m.starts_with(b"GIF8")
-        || m.starts_with(b"BM")
-        || m.starts_with(&[0x49, 0x49, 0x2A, 0x00])         // TIFF (LE)
-        || m.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])         // TIFF (BE)
-        || (m.len() >= 12 && &m[0..4] == b"RIFF" && &m[8..12] == b"WEBP")
-    {
-        return "image";
-    }
-    if m.starts_with(b"%PDF") {
-        return "pdf";
-    }
-    if m.starts_with(&[0x00, 0x01, 0x00, 0x00])
-        || m.starts_with(b"OTTO")
-        || m.starts_with(b"ttcf")
-        || m.starts_with(b"wOFF")
-        || m.starts_with(b"wOF2")
-    {
-        return "font";
-    }
-    if m.starts_with(b"SQLite format 3\0") {
-        return "database";
-    }
-    if m.starts_with(b"ITSF") {
-        return "chm";
-    }
-    if m.starts_with(b"MDMP") {
-        return "dump";
-    }
-    if m.starts_with(&[0x7F, b'E', b'L', b'F']) {
-        return "elf";
-    }
-    if m.starts_with(&[0x50, 0x4B, 0x03, 0x04])             // ZIP / OOXML
-        || m.starts_with(&[0x1F, 0x8B])
-    // gzip
-        || rar_listing::is_rar_magic(m)
-    {
-        return "archive";
-    }
-
-    // Specialized extensions and binary signatures win above. For everything else, accept known
-    // text formats or a conservative printable-text prefix so uncommon config files remain useful.
-    if is_empty || preview::is_text_file(file_name, ext, magic) {
-        return "text";
-    }
-    "binary"
-}
-
 // ── Native image decode ──────────────────────────────────────────────────────────────────────
 // Decode common image formats in Rust and return a constrained BGRA raster for the .NET raster host.
 // Output layout: [w:u32 LE][h:u32 LE][orig_w:u32 LE][orig_h:u32 LE]
@@ -1267,44 +962,6 @@ pub unsafe extern "C" fn ql_decode_image_sized_cancelable(
         }
         total as i32
     })
-}
-
-fn probe_reader_json(
-    file: &mut fs::File,
-    logical_name: &str,
-    size: u64,
-    modified_unix: i64,
-) -> std::result::Result<String, i32> {
-    let ext = std::path::Path::new(logical_name)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| format!(".{}", value.to_lowercase()))
-        .unwrap_or_default();
-    let mut prefix = [0u8; 64];
-    let read = file.read(&mut prefix).map_err(|_| QL_ERROR_IO)?;
-    let magic = &prefix[..read];
-    let kind = classify(logical_name, &ext, magic, size == 0);
-    let magic_hex: String = magic.iter().map(|value| format!("{value:02X}")).collect();
-    let animation = if kind == "image" {
-        preview::probe_image_animation_reader(file, logical_name, size).unwrap_or_default()
-    } else {
-        Default::default()
-    };
-    let is_animated = match animation.is_animated {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "null",
-    };
-    Ok(format!(
-        "{{\"path\":\"{}\",\"extension\":\"{}\",\"magicHex\":\"{}\",\"kind\":\"{}\",\"size\":{},\"modifiedUnix\":{},\"isAnimated\":{}}}",
-        json_escape(logical_name),
-        json_escape(&ext),
-        magic_hex,
-        kind,
-        size,
-        modified_unix,
-        is_animated
-    ))
 }
 
 /// Decode a native-safe static image from a borrowed Windows file handle.
@@ -3513,133 +3170,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_accepts_known_and_sniffed_config_text() {
-        assert_eq!(
-            classify("app.config", ".config", b"<configuration>", false),
-            "text"
-        );
-        assert_eq!(
-            classify("mysql.cnf", ".cnf", b"[client]\r\nport=3306\r\n", false),
-            "text"
-        );
-        assert_eq!(
-            classify(
-                "vendor.custom",
-                ".custom",
-                b"feature.enabled=true\r\n",
-                false
-            ),
-            "text"
-        );
-        assert_eq!(classify("settings", "", b"root = true\r\n", false), "text");
-        assert_eq!(
-            classify("legacy.vendor", ".vendor", b"name=caf\xE9\r\n", false),
-            "text"
-        );
-    }
-
-    #[test]
-    fn classify_routes_svg_to_image_preview() {
-        assert_eq!(
-            classify("drawing.svg", ".svg", b"<svg xmlns=", false),
-            "image"
-        );
-    }
-
-    #[test]
-    fn classify_routes_sqlite_auxiliary_suffixes_to_database_preview() {
-        assert_eq!(classify("data.db-wal", ".db-wal", &[], false), "database");
-        assert_eq!(
-            classify("data.sqlite3-shm", ".sqlite3-shm", &[], false),
-            "database"
-        );
-    }
-
-    #[test]
-    fn classify_requires_rar_magic_instead_of_trusting_the_extension() {
-        assert_eq!(
-            classify("archive.rar", ".rar", rar_listing::RAR5_SIGNATURE, false),
-            "archive"
-        );
-        assert_eq!(
-            classify("legacy.bin", ".bin", rar_listing::RAR4_SIGNATURE, false),
-            "archive"
-        );
-        assert_eq!(
-            classify("renamed.rar", ".rar", &[0, 1, 2, 3, 4, 5, 6, 7], false),
-            "binary"
-        );
-        assert!(!preview::is_archive(
-            ".rar",
-            "archive",
-            b"Rar!\x1a\x07\x02\x00"
-        ));
-    }
-
-    #[test]
-    fn classify_accepts_known_text_file_names_with_empty_content() {
-        assert_eq!(classify("Dockerfile", "", b"", true), "text");
-        assert_eq!(classify("Makefile", "", b"", true), "text");
-        assert_eq!(classify(".editorconfig", "", b"", true), "text");
-        assert_eq!(classify(".gitignore", "", b"", true), "text");
-        assert_eq!(classify(".env", "", b"", true), "text");
-        assert_eq!(classify("settings.vendor", ".vendor", b"", true), "text");
-        assert_eq!(classify("settings", "", b"", true), "text");
-        assert_eq!(classify("empty.zip", ".zip", b"", true), "archive");
-    }
-
-    #[test]
-    fn classify_accepts_utf16_windows_config_text() {
-        let utf16_le = [0xFF, 0xFE, b'W', 0, b'i', 0, b'n', 0];
-        let utf16_be = [0xFE, 0xFF, 0, b'W', 0, b'i', 0, b'n'];
-        let utf16_localized = [0xFF, 0xFE, 0x4D, 0x50, 0x3D, 0, 0x3C, 0x50];
-        assert_eq!(classify("settings.reg", ".reg", &utf16_le, false), "text");
-        assert_eq!(
-            classify("settings.unknown", ".unknown", &utf16_be, false),
-            "text"
-        );
-        assert_eq!(
-            classify("settings.unknown", ".unknown", &utf16_localized, false),
-            "text"
-        );
-    }
-
-    #[test]
-    fn classify_does_not_treat_binary_prefixes_as_text() {
-        assert_eq!(
-            classify("file.unknown", ".unknown", &[0, 1, 2, 3, 4], false),
-            "binary"
-        );
-        assert_eq!(
-            classify("file.unknown", ".unknown", &[0xFF, 0xD9, 0x80], false),
-            "binary"
-        );
-        assert_eq!(
-            classify("file.bin", ".bin", b"d4:fake4:datae", false),
-            "binary"
-        );
-        assert_eq!(
-            classify("file.unknown", ".unknown", b"MZprintable header", false),
-            "executable"
-        );
-    }
-
-    #[test]
-    fn probe_cache_invalidates_when_file_changes_within_one_second() {
-        let path = temp_image_path("vendor");
-        fs::write(&path, b"enabled=true\r\n").expect("write text config");
-        let first = probe_json(path.to_str().unwrap()).expect("probe text config");
-        assert!(first.contains("\"kind\":\"text\""));
-
-        fs::write(&path, [0u8, 1, 2, 3, 4]).expect("replace with binary");
-        let second = probe_json(path.to_str().unwrap()).expect("probe replaced config");
-        let _ = fs::remove_file(path);
-
-        assert!(second.contains("\"kind\":\"binary\""));
-        assert!(second.contains("\"size\":5"));
-    }
-
-    #[test]
     fn native_image_decode_skips_extreme_pixel_counts() {
         assert!(!should_skip_native_image_decode(8_000, 6_000));
         assert!(should_skip_native_image_decode(8_001, 6_000));
@@ -4535,24 +4065,6 @@ mod tests {
     }
 }
 
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c < ' ' => {
-                let _ = write!(&mut out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod handle_v2_tests {
     use super::*;
@@ -4560,6 +4072,7 @@ mod handle_v2_tests {
     use std::os::windows::io::AsRawHandle;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     // SystemTime's observable precision can be lower than nanoseconds on Windows. The
     // counter keeps parallel tests from writing to the same temporary input file.
@@ -5633,9 +5146,10 @@ mod handle_v2_tests {
         }
 
         let (path, mut file) = create_input("png", &apng);
-        let path_probe: serde_json::Value =
-            serde_json::from_str(&probe_json(path.to_str().unwrap()).expect("path probe"))
-                .expect("path probe JSON");
+        let path_probe: serde_json::Value = serde_json::from_str(
+            &preview::file_probe::probe_path_json(path.to_str().unwrap()).expect("path probe"),
+        )
+        .expect("path probe JSON");
         assert_eq!(path_probe["isAnimated"], true);
 
         file.seek(SeekFrom::Start(5))

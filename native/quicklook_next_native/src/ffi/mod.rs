@@ -4,6 +4,7 @@ pub(crate) mod archive_entry;
 pub(crate) mod common;
 pub(crate) mod contract;
 pub(crate) mod database;
+pub(crate) mod file_probe;
 pub(crate) mod handle_container;
 pub(crate) mod handle_preview;
 pub(crate) mod handle_structured;

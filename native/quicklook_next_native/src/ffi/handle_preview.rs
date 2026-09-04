@@ -6,10 +6,9 @@ use std::time::UNIX_EPOCH;
 
 use super::common::{ffi_boundary, owned_utf8_arg, write_v2_out};
 use crate::{
-    cancel_requested, native_input, preview, probe_reader_json, CancelCallback,
-    MAX_LOGICAL_NAME_BYTES, QL_ERROR_CANCELLED, QL_ERROR_INTERNAL, QL_ERROR_INVALID_ARGUMENT,
-    QL_ERROR_INVALID_HANDLE, QL_ERROR_IO, QL_ERROR_LENGTH_MISMATCH, QL_ERROR_LIMIT_EXCEEDED,
-    QL_ERROR_MALFORMED,
+    cancel_requested, native_input, preview, CancelCallback, MAX_LOGICAL_NAME_BYTES,
+    QL_ERROR_CANCELLED, QL_ERROR_INTERNAL, QL_ERROR_INVALID_ARGUMENT, QL_ERROR_INVALID_HANDLE,
+    QL_ERROR_IO, QL_ERROR_LENGTH_MISMATCH, QL_ERROR_LIMIT_EXCEEDED, QL_ERROR_MALFORMED,
 };
 
 /// Shared implementation for ABI 2 HANDLE preview entry points.
@@ -146,7 +145,12 @@ pub unsafe extern "C" fn ql_probe_file_handle(
             out_required,
             None,
             |mut file, logical_name, size, modified_unix| {
-                probe_reader_json(&mut file, logical_name, size as u64, modified_unix)
+                preview::file_probe::probe_reader_json(
+                    &mut file,
+                    logical_name,
+                    size as u64,
+                    modified_unix,
+                )
             },
         )
     })

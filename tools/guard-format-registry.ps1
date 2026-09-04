@@ -16,11 +16,10 @@ Require-Pattern $nativeAbi "QL_NATIVE_ABI_VERSION:\s*u32\s*=\s*$abi" `
 Require-Pattern (Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.Generated.cs") "Version\s*=\s*$abi" `
     "Managed native ABI does not match format-registry.json."
 
-$nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
-
-$nativeText = Get-Content -LiteralPath $nativeLibrary -Raw
+$nativeFileProbe = Join-Path $Root "native/quicklook_next_native/src/preview/file_probe.rs"
+$nativeProbeText = Get-Content -LiteralPath $nativeFileProbe -Raw
 foreach ($kind in $registry.probeKinds) {
-    if ($nativeText -notmatch [regex]::Escape('"' + $kind + '"')) {
+    if ($nativeProbeText -notmatch [regex]::Escape('"' + $kind + '"')) {
         $failures.Add("Native probe kind missing: $kind")
     }
 }

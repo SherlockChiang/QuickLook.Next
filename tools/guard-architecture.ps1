@@ -1149,6 +1149,22 @@ if (Test-Path $parserHostProgram) {
 
     $nativeLibPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
     $nativeLibText = Get-Content -LiteralPath $nativeLibPath -Raw
+    $nativeFfiModulePath = Join-Path $Root "native/quicklook_next_native/src/ffi/mod.rs"
+    if (Test-Path -LiteralPath $nativeFfiModulePath -PathType Leaf) {
+        $nativeFfiModuleText = Get-Content -LiteralPath $nativeFfiModulePath -Raw
+    }
+    else {
+        $nativeFfiModuleText = ""
+        Add-Failure "Missing Rust FFI module root: $nativeFfiModulePath"
+    }
+    $nativePreviewPath = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
+    if (Test-Path -LiteralPath $nativePreviewPath -PathType Leaf) {
+        $nativePreviewText = Get-Content -LiteralPath $nativePreviewPath -Raw
+    }
+    else {
+        $nativePreviewText = ""
+        Add-Failure "Missing Rust preview module root: $nativePreviewPath"
+    }
     $nativeAbiGeneratedPath = Join-Path $Root "native/quicklook_next_native/src/abi_generated.rs"
     if (Test-Path -LiteralPath $nativeAbiGeneratedPath -PathType Leaf) {
         $nativeAbiGeneratedText = Get-Content -LiteralPath $nativeAbiGeneratedPath -Raw
@@ -1187,6 +1203,34 @@ if (Test-Path $parserHostProgram) {
     else {
         $nativeCommonText = ""
         Add-Failure "Missing Rust FFI common source: $nativeCommonPath"
+    }
+    $nativeFileProbeFfiPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/file_probe.rs"
+    if (Test-Path -LiteralPath $nativeFileProbeFfiPath -PathType Leaf) {
+        $nativeFileProbeFfiText = Get-Content -LiteralPath $nativeFileProbeFfiPath -Raw
+    }
+    else {
+        $nativeFileProbeFfiText = ""
+        Add-Failure "Missing Rust file-probe FFI source: $nativeFileProbeFfiPath"
+    }
+    $nativeFileProbeProviderPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/file_probe.rs"
+    if (Test-Path -LiteralPath $nativeFileProbeProviderPath -PathType Leaf) {
+        $nativeFileProbeProviderText =
+            Get-Content -LiteralPath $nativeFileProbeProviderPath -Raw
+    }
+    else {
+        $nativeFileProbeProviderText = ""
+        Add-Failure "Missing Rust file-probe provider source: $nativeFileProbeProviderPath"
+    }
+    $nativeFileProbeTestsPath =
+        Join-Path $Root "native/quicklook_next_native/src/preview/file_probe/tests.rs"
+    if (Test-Path -LiteralPath $nativeFileProbeTestsPath -PathType Leaf) {
+        $nativeFileProbeTestsText = Get-Content -LiteralPath $nativeFileProbeTestsPath -Raw
+    }
+    else {
+        $nativeFileProbeTestsText = ""
+        Add-Failure "Missing Rust file-probe provider tests: $nativeFileProbeTestsPath"
     }
     $nativeContractPath = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
     if (Test-Path -LiteralPath $nativeContractPath -PathType Leaf) {
@@ -1496,6 +1540,105 @@ if (Test-Path $parserHostProgram) {
     }
     if (@(Get-Content -LiteralPath $nativePathPreviewTestsPath).Count -gt 160) {
         Add-Failure "The focused ffi::path_preview tests grew beyond 160 lines"
+    }
+    # Path and borrowed-HANDLE probing share one provider. Keep filesystem/cache/classification
+    # mechanics out of lib.rs while the public ABI remains a thin, bounded panic-safe adapter.
+    if ($nativeFfiModuleText -notmatch '(?m)^pub\(crate\) mod file_probe;\s*$' -or
+        $nativePreviewText -notmatch '(?m)^pub\(crate\) mod file_probe;\s*$') {
+        Add-Failure "Rust file probing must remain composed through ffi::file_probe and preview::file_probe"
+    }
+    if ($nativeLibText -notmatch
+            '(?m)^pub\(crate\) use ffi::file_probe::ql_probe_file;\s*$') {
+        Add-Failure "lib.rs must retain the crate-private ffi::file_probe re-export"
+    }
+    $fileProbeFfiExports = [regex]::Matches(
+        $nativeFileProbeFfiText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $fileProbeFfiNoMangleCount = [regex]::Matches(
+        $nativeFileProbeFfiText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($fileProbeFfiExports.Count -ne 1 -or
+        $fileProbeFfiNoMangleCount -ne 1 -or
+        $fileProbeFfiExports[0].Groups["name"].Value -ne "ql_probe_file" -or
+        $nativeFileProbeFfiText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeFileProbeFfiText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeFileProbeFfiText -match
+            '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::file_probe must expose exactly one unsafe C ABI entry point"
+    }
+    if ($nativeFileProbeFfiText -notmatch
+            'ql_probe_file\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*preview::file_probe::probe_path_json\([\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*bytes\.len\(\)[\s\S]*return\s+-\(bytes\.len\(\)\s+as\s+i32\)[\s\S]*copy_nonoverlapping\(' -or
+        $nativeFileProbeFfiText -notmatch
+            'fn\s+file_probe_rejects_oversized_path_before_dereference\s*\(' -or
+        $nativeLibText -match
+            '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+ql_probe_file\s*\(') {
+        Add-Failure "ffi::file_probe lost its bounded path, panic, required-size, or copy contract"
+    }
+    $fileProbeProviderExports = [regex]::Matches(
+        $nativeFileProbeProviderText,
+        '(?m)^pub\(crate\)\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $fileProbeProviderNames = @(
+        $fileProbeProviderExports | ForEach-Object { $_.Groups["name"].Value })
+    if ($fileProbeProviderExports.Count -ne 2 -or
+        @($fileProbeProviderNames | Sort-Object -Unique).Count -ne 2 -or
+        $fileProbeProviderNames -notcontains "probe_path_json" -or
+        $fileProbeProviderNames -notcontains "probe_reader_json" -or
+        $nativeFileProbeProviderText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeFileProbeProviderText -match '#\[no_mangle\]' -or
+        $nativeFileProbeProviderText -match
+            'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"' -or
+        $nativeFileProbeProviderText -match '(?m)^pub\s+') {
+        Add-Failure "preview::file_probe must expose only its two crate-private path and HANDLE providers"
+    }
+    if ($nativeFileProbeProviderText -notmatch
+            '(?m)^const\s+PROBE_CACHE_MAX:\s*usize\s*=\s*500;\s*$' -or
+        $nativeFileProbeProviderText -notmatch
+            'entry\.modified\s*==\s*precise_modified\s*&&\s*entry\.size\s*==\s*size' -or
+        $nativeFileProbeProviderText -notmatch
+            'min_by_key\(\|\(_, entry\)\| entry\.sequence\)' -or
+        $nativeFileProbeProviderText -notmatch 'let mut prefix = \[0u8; 64\];' -or
+        $nativeFileProbeProviderText -notmatch 'fn\s+classify\s*\(' -or
+        $nativeFileProbeProviderText -notmatch 'probe_image_animation_reader\(' -or
+        $nativeFileProbeProviderText -notmatch 'is_text_file\(' -or
+        $nativeHandlePreviewText -notmatch
+            'preview::file_probe::probe_reader_json\(') {
+        Add-Failure "File probing lost its cache, bounded prefix, classifier, animation, or HANDLE sharing contract"
+    }
+    foreach ($movedFileProbeDefinition in @(
+            'struct\s+ProbeCacheEntry',
+            'static\s+PROBE_CACHE',
+            'fn\s+probe_cache\s*\(',
+            'fn\s+probe_json\s*\(',
+            'fn\s+probe_reader_json\s*\(',
+            'fn\s+classify\s*\(',
+            'fn\s+json_escape\s*\(')) {
+        if ($nativeLibText -match "(?m)^$movedFileProbeDefinition") {
+            Add-Failure "lib.rs must not retain file-probe implementation: $movedFileProbeDefinition"
+        }
+    }
+    foreach ($fileProbeTest in @(
+            'classify_accepts_known_and_sniffed_config_text',
+            'classify_routes_svg_to_image_preview',
+            'classify_routes_sqlite_auxiliary_suffixes_to_database_preview',
+            'classify_requires_rar_magic_instead_of_trusting_the_extension',
+            'classify_accepts_known_text_file_names_with_empty_content',
+            'classify_accepts_utf16_windows_config_text',
+            'classify_does_not_treat_binary_prefixes_as_text',
+            'probe_cache_invalidates_when_file_changes_within_one_second')) {
+        if ($nativeFileProbeTestsText -notmatch "fn\s+$fileProbeTest\s*\(") {
+            Add-Failure "preview::file_probe lost focused test: $fileProbeTest"
+        }
+    }
+    if (@(Get-Content -LiteralPath $nativeFileProbeFfiPath).Count -gt 90) {
+        Add-Failure "The focused ffi::file_probe module grew beyond 90 lines"
+    }
+    if (@(Get-Content -LiteralPath $nativeFileProbeProviderPath).Count -gt 380) {
+        Add-Failure "The focused preview::file_probe module grew beyond 380 lines"
+    }
+    if (@(Get-Content -LiteralPath $nativeFileProbeTestsPath).Count -gt 180) {
+        Add-Failure "The focused preview::file_probe tests grew beyond 180 lines"
     }
     # Highlight tokenization crosses the ABI with its own bounded adapter; scan that module
     # independently so the export keeps an explicit panic boundary and packet contract.
@@ -2114,8 +2257,6 @@ if (Test-Path $parserHostProgram) {
     if (@(Get-Content -LiteralPath $nativeArchiveEntryFfiTestsPath).Count -gt 80) {
         Add-Failure "The focused ffi::archive_entry tests grew beyond 80 lines"
     }
-    $nativePreviewPath = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
-    $nativePreviewText = Get-Content -LiteralPath $nativePreviewPath -Raw
     $nativeAnimationProbePath =
         Join-Path $Root "native/quicklook_next_native/src/preview/animation_probe.rs"
     $nativeAnimationProbeText = if (Test-Path -LiteralPath $nativeAnimationProbePath) {
@@ -2331,12 +2472,17 @@ if (Test-Path $parserHostProgram) {
         $nativeOfficeTypesText -match 'image_base64') {
         Add-Failure "Current Rust Office layout JSON must contain bounded coverage metadata plus image refs and lengths, never inline Base64 payloads"
     }
-    if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
-        $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
+    if ($nativeHandlePreviewText -notmatch
+            'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
+        $nativeHandlePreviewText -match 'fs::File::open\(\s*&?\s*logical_name\b') {
         Add-Failure "Native HANDLE logical names must be reduced to basenames and never opened as paths"
     }
-    if (([regex]::Matches($nativeLibText, 'probe_image_animation_reader\(')).Count -lt 2 -or
-        ([regex]::Matches($nativeLibText, '\\"isAnimated\\"')).Count -lt 2) {
+    if (([regex]::Matches(
+                $nativeFileProbeProviderText,
+                'probe_image_animation_reader\(')).Count -lt 2 -or
+        ([regex]::Matches(
+                $nativeFileProbeProviderText,
+                '\\"isAnimated\\"')).Count -lt 2) {
         Add-Failure "Rust path and HANDLE probes must share bounded GIF/WebP/APNG animation metadata"
     }
 }

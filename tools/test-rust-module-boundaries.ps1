@@ -12,6 +12,7 @@ $ffiArchiveEntryTestsPath = Join-Path $Root "native\quicklook_next_native\src\ff
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiDatabasePath = Join-Path $Root "native\quicklook_next_native\src\ffi\database.rs"
+$ffiFileProbePath = Join-Path $Root "native\quicklook_next_native\src\ffi\file_probe.rs"
 $ffiHandleContainerPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_container.rs"
 $ffiHeroImagePath = Join-Path $Root "native\quicklook_next_native\src\ffi\hero_image.rs"
 $ffiHeroImageTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\hero_image\tests.rs"
@@ -28,6 +29,8 @@ $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
 $previewPath = Join-Path $Root "native\quicklook_next_native\src\preview.rs"
 $previewCommonPath = Join-Path $Root "native\quicklook_next_native\src\preview\common.rs"
+$previewFileProbePath = Join-Path $Root "native\quicklook_next_native\src\preview\file_probe.rs"
+$previewFileProbeTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\file_probe\tests.rs"
 $previewPdfTextPath = Join-Path $Root "native\quicklook_next_native\src\preview\pdf_text.rs"
 $previewBoundedPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded.rs"
 $previewBoundedTestsPath = Join-Path $Root "native\quicklook_next_native\src\preview\bounded\tests.rs"
@@ -84,6 +87,7 @@ foreach ($path in @(
         $ffiCommonPath,
         $ffiContractPath,
         $ffiDatabasePath,
+        $ffiFileProbePath,
         $ffiHandleContainerPath,
         $ffiHeroImagePath,
         $ffiHeroImageTestsPath,
@@ -99,6 +103,8 @@ foreach ($path in @(
         $shellThumbnailPath,
         $previewPath,
         $previewCommonPath,
+        $previewFileProbePath,
+        $previewFileProbeTestsPath,
         $previewPdfTextPath,
         $previewBoundedPath,
         $previewBoundedTestsPath,
@@ -157,6 +163,7 @@ if ($failures.Count -eq 0) {
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiDatabaseText = Get-Content -LiteralPath $ffiDatabasePath -Raw
+    $ffiFileProbeText = Get-Content -LiteralPath $ffiFileProbePath -Raw
     $ffiHandleContainerText = Get-Content -LiteralPath $ffiHandleContainerPath -Raw
     $ffiHeroImageText = Get-Content -LiteralPath $ffiHeroImagePath -Raw
     $ffiHeroImageTestsText = Get-Content -LiteralPath $ffiHeroImageTestsPath -Raw
@@ -172,6 +179,8 @@ if ($failures.Count -eq 0) {
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
     $previewCommonText = Get-Content -LiteralPath $previewCommonPath -Raw
+    $previewFileProbeText = Get-Content -LiteralPath $previewFileProbePath -Raw
+    $previewFileProbeTestsText = Get-Content -LiteralPath $previewFileProbeTestsPath -Raw
     $previewPdfText = Get-Content -LiteralPath $previewPdfTextPath -Raw
     $previewBoundedText = Get-Content -LiteralPath $previewBoundedPath -Raw
     $previewBoundedTestsText = Get-Content -LiteralPath $previewBoundedTestsPath -Raw
@@ -240,6 +249,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod database;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod file_probe;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_container;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod hero_image;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
@@ -254,9 +264,10 @@ if ($failures.Count -eq 0) {
             "lib.rs must compose the focused FFI modules and retain crate-private re-exports.")
     }
 
-    if ($previewText -notmatch '(?m)^mod pdf_text;\s*$' -or
+    if ($previewText -notmatch '(?m)^pub\(crate\) mod file_probe;\s*$' -or
+        $previewText -notmatch '(?m)^mod pdf_text;\s*$' -or
         $previewText -notmatch '(?m)^pub\(crate\) use pdf_text::render_pdf_text_reader;\s*$') {
-        $failures.Add("preview.rs must compose the focused bounded PDF text module.")
+        $failures.Add("preview.rs must compose the focused file-probe and bounded PDF text modules.")
     }
     if ($previewPdfText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
         $previewPdfText -match '#\[no_mangle\]' -or
@@ -743,6 +754,100 @@ if ($failures.Count -eq 0) {
     if ($ffiHeroImageTestsLineCount -gt 120) {
         $failures.Add(
             "The focused ffi::hero_image tests grew beyond 120 lines: $ffiHeroImageTestsLineCount")
+    }
+
+    if ($libText -notmatch '(?m)^pub\(crate\) use ffi::file_probe::ql_probe_file;\s*$') {
+        $failures.Add("lib.rs must retain the crate-private ffi::file_probe export.")
+    }
+    $fileProbeExports = [regex]::Matches(
+        $ffiFileProbeText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $fileProbeNoMangleCount = [regex]::Matches(
+        $ffiFileProbeText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($fileProbeExports.Count -ne 1 -or
+        $fileProbeNoMangleCount -ne 1 -or
+        $fileProbeExports[0].Groups["name"].Value -ne "ql_probe_file" -or
+        $ffiFileProbeText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiFileProbeText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiFileProbeText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add("ffi::file_probe must expose exactly one unsafe C ABI entry point.")
+    }
+    if ($ffiFileProbeText -notmatch
+            'ql_probe_file\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*preview::file_probe::probe_path_json\([\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*bytes\.len\(\)[\s\S]*copy_nonoverlapping\(' -or
+        $ffiFileProbeText -notmatch
+            'fn\s+file_probe_rejects_oversized_path_before_dereference\s*\(' -or
+        $libText -match
+            '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+ql_probe_file\s*\(') {
+        $failures.Add("ffi::file_probe lost its bounded path, panic, or output negotiation contract.")
+    }
+    $fileProbeProviderExports = [regex]::Matches(
+        $previewFileProbeText,
+        '(?m)^pub\(crate\)\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($fileProbeProviderExports.Count -ne 2 -or
+        $previewFileProbeText -notmatch
+            '(?m)^pub\(crate\)\s+fn\s+probe_path_json\s*\(' -or
+        $previewFileProbeText -notmatch
+            '(?m)^pub\(crate\)\s+fn\s+probe_reader_json\s*\(' -or
+        $previewFileProbeText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $previewFileProbeText -match '#\[no_mangle\]' -or
+        $previewFileProbeText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"' -or
+        $previewFileProbeText -match '(?m)^pub\s+') {
+        $failures.Add(
+            "preview::file_probe must expose only its two crate-private path/HANDLE providers.")
+    }
+    if ($previewFileProbeText -notmatch
+            '(?m)^const\s+PROBE_CACHE_MAX:\s*usize\s*=\s*500;\s*$' -or
+        $previewFileProbeText -notmatch
+            'entry\.modified\s*==\s*precise_modified\s*&&\s*entry\.size\s*==\s*size' -or
+        $previewFileProbeText -notmatch 'min_by_key\(\|\(_, entry\)\| entry\.sequence\)' -or
+        $previewFileProbeText -notmatch 'let mut prefix = \[0u8; 64\];' -or
+        $previewFileProbeText -notmatch 'probe_image_animation_reader\(' -or
+        $previewFileProbeText -notmatch 'is_text_file\(' -or
+        $ffiHandlePreviewText -notmatch
+            'preview::file_probe::probe_reader_json\(') {
+        $failures.Add("File probing lost its cache, bounded prefix, classifier, animation, or HANDLE sharing contract.")
+    }
+    foreach ($movedProbeDefinition in @(
+            'struct\s+ProbeCacheEntry',
+            'static\s+PROBE_CACHE',
+            'fn\s+probe_cache\s*\(',
+            'fn\s+probe_json\s*\(',
+            'fn\s+probe_reader_json\s*\(',
+            'fn\s+classify\s*\(',
+            'fn\s+json_escape\s*\(')) {
+        if ($libText -match "(?m)^$movedProbeDefinition") {
+            $failures.Add("lib.rs must not retain file-probe implementation: $movedProbeDefinition")
+        }
+    }
+    foreach ($fileProbeTest in @(
+            'classify_accepts_known_and_sniffed_config_text',
+            'classify_routes_svg_to_image_preview',
+            'classify_routes_sqlite_auxiliary_suffixes_to_database_preview',
+            'classify_requires_rar_magic_instead_of_trusting_the_extension',
+            'classify_accepts_known_text_file_names_with_empty_content',
+            'classify_accepts_utf16_windows_config_text',
+            'classify_does_not_treat_binary_prefixes_as_text',
+            'probe_cache_invalidates_when_file_changes_within_one_second')) {
+        if ($previewFileProbeTestsText -notmatch "fn\s+$fileProbeTest\s*\(") {
+            $failures.Add("preview::file_probe lost focused test: $fileProbeTest")
+        }
+    }
+    $ffiFileProbeLineCount = @(Get-Content -LiteralPath $ffiFileProbePath).Count
+    if ($ffiFileProbeLineCount -gt 90) {
+        $failures.Add("The focused ffi::file_probe module grew beyond 90 lines: $ffiFileProbeLineCount")
+    }
+    $previewFileProbeLineCount = @(Get-Content -LiteralPath $previewFileProbePath).Count
+    if ($previewFileProbeLineCount -gt 380) {
+        $failures.Add(
+            "The focused preview::file_probe module grew beyond 380 lines: $previewFileProbeLineCount")
+    }
+    $previewFileProbeTestsLineCount = @(Get-Content -LiteralPath $previewFileProbeTestsPath).Count
+    if ($previewFileProbeTestsLineCount -gt 180) {
+        $failures.Add(
+            "The focused preview::file_probe tests grew beyond 180 lines: $previewFileProbeTestsLineCount")
     }
 
     $expectedHandlePreviewExports = @(

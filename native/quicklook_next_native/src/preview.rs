@@ -23,6 +23,7 @@ mod dump;
 mod ebook;
 mod elf;
 mod executable;
+pub(crate) mod file_probe;
 mod folder;
 mod font;
 mod highlight;
