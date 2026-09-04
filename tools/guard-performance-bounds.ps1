@@ -31,6 +31,7 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 $nativeAbiGenerated = Join-Path $Root "native/quicklook_next_native/src/abi_generated.rs"
 $nativeContract = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
+$nativeHeroImageFfi = Join-Path $Root "native/quicklook_next_native/src/ffi/hero_image.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
 $nativeBounded = Join-Path $Root "native/quicklook_next_native/src/preview/bounded.rs"
 $nativeBoundedTests = Join-Path $Root "native/quicklook_next_native/src/preview/bounded/tests.rs"
@@ -195,7 +196,7 @@ Require-Pattern $nativePreview 'MAX_OFFICE_INLINE_IMAGE_BYTES:\s*u64\s*=\s*768\s
     "Each Office layout image source must remain capped at 768 KiB."
 Require-Pattern $nativePreview 'MAX_OFFICE_LAYOUT_IMAGE_DIMENSION:\s*u32\s*=\s*1024' `
     "Office layout image output dimensions must remain capped at 1024 pixels."
-Require-Pattern $nativeLibrary 'ql_extract_office_layout_image_handle\([\s\S]*target_width\s*==\s*0[\s\S]*target_width\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION[\s\S]*target_height\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION' `
+Require-Pattern $nativeHeroImageFfi 'ql_extract_office_layout_image_handle\([\s\S]*target_width\s*==\s*0[\s\S]*target_width\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION[\s\S]*target_height\s*>\s*preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION' `
     "The Office layout image HANDLE ABI must reject zero and oversized output targets."
 
 $certificatePreview = Join-Path $Root "src/QuickLook.Next.Core/CertificatePreview.cs"

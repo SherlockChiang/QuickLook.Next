@@ -11,6 +11,8 @@ $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiDatabasePath = Join-Path $Root "native\quicklook_next_native\src\ffi\database.rs"
 $ffiHandleContainerPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_container.rs"
+$ffiHeroImagePath = Join-Path $Root "native\quicklook_next_native\src\ffi\hero_image.rs"
+$ffiHeroImageTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\hero_image\tests.rs"
 $ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
 $ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_structured.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
@@ -76,6 +78,8 @@ foreach ($path in @(
         $ffiContractPath,
         $ffiDatabasePath,
         $ffiHandleContainerPath,
+        $ffiHeroImagePath,
+        $ffiHeroImageTestsPath,
         $ffiHandlePreviewPath,
         $ffiHandleStructuredPath,
         $ffiPathPreviewPath,
@@ -142,6 +146,8 @@ if ($failures.Count -eq 0) {
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiDatabaseText = Get-Content -LiteralPath $ffiDatabasePath -Raw
     $ffiHandleContainerText = Get-Content -LiteralPath $ffiHandleContainerPath -Raw
+    $ffiHeroImageText = Get-Content -LiteralPath $ffiHeroImagePath -Raw
+    $ffiHeroImageTestsText = Get-Content -LiteralPath $ffiHeroImageTestsPath -Raw
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
@@ -219,6 +225,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod database;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_container;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod hero_image;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_structured;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
@@ -358,9 +365,9 @@ if ($failures.Count -eq 0) {
 
     $rasterPacketReExportMatch = [regex]::Match(
         $libText,
-        '(?m)^pub\(crate\) use ffi::raster_packet::\{write_raster_packet,\s*write_raster_packet_v2\};\s*$')
+        '(?m)^pub\(crate\) use ffi::raster_packet::write_raster_packet;\s*$')
     if (-not $rasterPacketReExportMatch.Success) {
-        $failures.Add("lib.rs must retain the exact crate-private ffi::raster_packet re-export block.")
+        $failures.Add("lib.rs must retain the crate-private path raster writer re-export.")
     }
     if ($ffiRasterPacketText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
         $ffiRasterPacketText -match '#\[no_mangle\]' -or
@@ -490,6 +497,140 @@ if ($failures.Count -eq 0) {
     if ($ffiDatabaseLineCount -gt 220) {
         $failures.Add(
             "The focused ffi::database module grew beyond 220 lines: $ffiDatabaseLineCount")
+    }
+
+    # Hero image path and HANDLE exports live together behind checked raster packet writers.
+    $expectedHeroImageExports = @(
+        "ql_extract_package_icon",
+        "ql_extract_package_icon_cancelable",
+        "ql_extract_office_image",
+        "ql_extract_office_image_cancelable",
+        "ql_extract_office_image_handle",
+        "ql_extract_office_layout_image_handle",
+        "ql_extract_package_icon_handle")
+    $heroImageReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::hero_image::\{(?<items>.*?)\};')
+    if (-not $heroImageReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the crate-private ffi::hero_image re-export block.")
+    }
+    else {
+        $heroImageReExportNames = @(
+            [regex]::Matches(
+                $heroImageReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($heroImageReExportNames.Count -ne $expectedHeroImageExports.Count -or
+            @($heroImageReExportNames | Sort-Object -Unique).Count -ne
+                $expectedHeroImageExports.Count) {
+            $failures.Add(
+                "lib.rs ffi::hero_image re-export must contain exactly seven unique exports.")
+        }
+        foreach ($heroImageExport in $expectedHeroImageExports) {
+            if ($heroImageReExportNames -notcontains $heroImageExport) {
+                $failures.Add(
+                    "lib.rs ffi::hero_image re-export lost expected symbol: $heroImageExport")
+            }
+        }
+    }
+    if ($ffiHeroImageText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiHeroImageText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiHeroImageText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::hero_image must use explicit imports and expose only its unsafe C ABI surface.")
+    }
+    $heroImageExports = [regex]::Matches(
+        $ffiHeroImageText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $heroImageNoMangleCount = [regex]::Matches(
+        $ffiHeroImageText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($heroImageExports.Count -ne $expectedHeroImageExports.Count -or
+        $heroImageNoMangleCount -ne $expectedHeroImageExports.Count) {
+        $failures.Add("ffi::hero_image must expose exactly seven unsafe C ABI exports.")
+    }
+    $pathHeroImageExports = @(
+        "ql_extract_package_icon",
+        "ql_extract_package_icon_cancelable",
+        "ql_extract_office_image",
+        "ql_extract_office_image_cancelable")
+    $handleHeroImageExports = @(
+        "ql_extract_office_image_handle",
+        "ql_extract_office_layout_image_handle",
+        "ql_extract_package_icon_handle")
+    foreach ($heroImageExport in $expectedHeroImageExports) {
+        $heroImagePattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($heroImageExport) + '\s*\('
+        if ($ffiHeroImageText -notmatch $heroImagePattern) {
+            $failures.Add("ffi::hero_image lost expected export: $heroImageExport")
+        }
+        if ($libText -match $heroImagePattern) {
+            $failures.Add(
+                "$heroImageExport implementation must remain in ffi::hero_image, not lib.rs.")
+        }
+
+        $heroImageStart = $ffiHeroImageText.IndexOf(
+            "pub unsafe extern `"C`" fn $heroImageExport(",
+            [StringComparison]::Ordinal)
+        $heroImageEnd = if ($heroImageStart -ge 0) {
+            $nextHeroImageExport = $ffiHeroImageText.IndexOf(
+                "#[no_mangle]",
+                $heroImageStart + 1,
+                [StringComparison]::Ordinal)
+            if ($nextHeroImageExport -ge 0) {
+                $nextHeroImageExport
+            }
+            else {
+                $ffiHeroImageText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $heroImageBody = if ($heroImageStart -ge 0 -and
+            $heroImageEnd -gt $heroImageStart) {
+            $ffiHeroImageText.Substring(
+                $heroImageStart,
+                $heroImageEnd - $heroImageStart)
+        }
+        else {
+            ""
+        }
+        if ($heroImageBody -notmatch 'ffi_boundary\(\|\|') {
+            $failures.Add("$heroImageExport must contain panics at the focused Rust FFI boundary.")
+        }
+        if ($pathHeroImageExports -contains $heroImageExport -and
+            ($heroImageBody -notmatch 'utf8_arg\(' -or
+                $heroImageBody -notmatch 'write_raster_packet\(')) {
+            $failures.Add(
+                "$heroImageExport lost its bounded path input or checked raster packet writer.")
+        }
+        if ($handleHeroImageExports -contains $heroImageExport -and
+            ($heroImageBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+                $heroImageBody -notmatch 'reopen_handle_input_v2\(' -or
+                $heroImageBody -notmatch 'write_raster_packet_v2\(' -or
+                $heroImageBody -match 'Vec::with_capacity\(\s*8\s*\+\s*bgra\.len\(\)\s*\)')) {
+            $failures.Add(
+                "$heroImageExport must reopen the HANDLE and write directly into the caller packet buffer.")
+        }
+    }
+    if ($ffiHeroImageText -notmatch 'MAX_OFFICE_IMAGE_REF_BYTES' -or
+        $ffiHeroImageText -notmatch 'preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION' -or
+        $ffiHeroImageTestsText -notmatch 'fn\s+hero_exports_cancel_before_file_access\s*\(' -or
+        $ffiHeroImageTestsText -notmatch 'fn\s+handle_hero_exports_cancel_before_handle_access\s*\(') {
+        $failures.Add(
+            "ffi::hero_image lost its Office image bounds or pre-access cancellation coverage.")
+    }
+    $ffiHeroImageLineCount = @(Get-Content -LiteralPath $ffiHeroImagePath).Count
+    if ($ffiHeroImageLineCount -gt 320) {
+        $failures.Add(
+            "The focused ffi::hero_image module grew beyond 320 lines: $ffiHeroImageLineCount")
+    }
+    $ffiHeroImageTestsLineCount = @(Get-Content -LiteralPath $ffiHeroImageTestsPath).Count
+    if ($ffiHeroImageTestsLineCount -gt 120) {
+        $failures.Add(
+            "The focused ffi::hero_image tests grew beyond 120 lines: $ffiHeroImageTestsLineCount")
     }
 
     $expectedHandlePreviewExports = @(

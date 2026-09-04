@@ -6,6 +6,7 @@ pub(crate) mod database;
 pub(crate) mod handle_container;
 pub(crate) mod handle_preview;
 pub(crate) mod handle_structured;
+pub(crate) mod hero_image;
 pub(crate) mod highlight;
 pub(crate) mod path_preview;
 pub(crate) mod raster_packet;

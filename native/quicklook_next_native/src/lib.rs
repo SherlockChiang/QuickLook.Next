@@ -43,6 +43,13 @@ pub(crate) use ffi::handle_container::{
     ql_preview_archive_handle, ql_preview_ebook_handle, ql_preview_office_handle,
     ql_preview_package_handle,
 };
+// Keep moved Office/package Hero exports available to crate-local tests and adapters.
+#[allow(unused_imports)]
+pub(crate) use ffi::hero_image::{
+    ql_extract_office_image, ql_extract_office_image_cancelable, ql_extract_office_image_handle,
+    ql_extract_office_layout_image_handle, ql_extract_package_icon,
+    ql_extract_package_icon_cancelable, ql_extract_package_icon_handle,
+};
 // Keep shared HANDLE boundary helpers and moved foundational adapters available to the root.
 #[allow(unused_imports)]
 pub(crate) use ffi::handle_preview::{
@@ -62,8 +69,8 @@ pub(crate) use ffi::path_preview::{
     ql_preview_executable_cancelable, ql_preview_info, ql_preview_text, ql_preview_text_cancelable,
     ql_preview_torrent, ql_preview_torrent_cancelable,
 };
-// Keep checked raster packet writers available to the remaining root adapters.
-pub(crate) use ffi::raster_packet::{write_raster_packet, write_raster_packet_v2};
+// Keep the checked raster packet writer available to the remaining root adapters.
+pub(crate) use ffi::raster_packet::write_raster_packet;
 // Keep the moved route symbols available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::routing::{ql_is_archive, ql_is_text, ql_preview_folder};
@@ -3544,31 +3551,6 @@ mod tests {
     }
 
     #[test]
-    fn hero_exports_honor_cancellation_before_file_access() {
-        let path = b"missing.zip";
-        let mut output = [0u8; 16];
-        let calls = [
-            ql_extract_package_icon_cancelable,
-            ql_extract_office_image_cancelable,
-        ];
-
-        for call in calls {
-            assert_eq!(
-                unsafe {
-                    call(
-                        path.as_ptr(),
-                        path.len(),
-                        output.as_mut_ptr(),
-                        output.len(),
-                        Some(always_cancel),
-                    )
-                },
-                -3
-            );
-        }
-    }
-
-    #[test]
     fn thumbnail_export_rejects_oversized_request_before_shell_dispatch() {
         let path = b"missing.file";
         let mut output = [0u8; 16];
@@ -4706,110 +4688,6 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     })
 }
 
-/// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).
-/// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_package_icon(
-    path_utf8: *const u8,
-    path_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return -1,
-        };
-
-        let (w, h, bgra) = match preview::extract_package_icon_bgra(path, None) {
-            Some(x) => x,
-            None => return -2,
-        };
-        write_raster_packet(w, h, &bgra, out, out_cap)
-    })
-}
-
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_package_icon_cancelable(
-    path_utf8: *const u8,
-    path_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        if cancel_requested(cancel_cb) {
-            return -3;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return -1,
-        };
-        let (w, h, bgra) = match preview::extract_package_icon_bgra(path, cancel_cb) {
-            Some(value) => value,
-            None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-        };
-        if cancel_requested(cancel_cb) {
-            return -3;
-        }
-        write_raster_packet(w, h, &bgra, out, out_cap)
-    })
-}
-
-/// Extract the first useful embedded image from an OOXML Office document.
-/// Output layout: [w:u32 LE][h:u32 LE][premultiplied BGRA bytes].
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_office_image(
-    path_utf8: *const u8,
-    path_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return -1,
-        };
-
-        let (w, h, bgra) = match preview::extract_office_image_bgra(path, None) {
-            Some(x) => x,
-            None => return -2,
-        };
-        write_raster_packet(w, h, &bgra, out, out_cap)
-    })
-}
-
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_office_image_cancelable(
-    path_utf8: *const u8,
-    path_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        if cancel_requested(cancel_cb) {
-            return -3;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return -1,
-        };
-        let (w, h, bgra) = match preview::extract_office_image_bgra(path, cancel_cb) {
-            Some(value) => value,
-            None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
-        };
-        if cancel_requested(cancel_cb) {
-            return -3;
-        }
-        write_raster_packet(w, h, &bgra, out, out_cap)
-    })
-}
-
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
@@ -4870,182 +4748,6 @@ pub unsafe extern "C" fn ql_preview_image_metadata(
         };
         let json = preview::render_image_metadata(path);
         write_json_out(&json, out_buf, out_cap)
-    })
-}
-
-/// Extract a useful embedded Office image from a borrowed Windows file handle.
-/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_office_image_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        if out_required.is_null() {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        *out_required = 0;
-        if out_buf.is_null() && out_cap != 0 {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        let (file, logical_name, _, _) = match reopen_handle_input_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            cancel_cb,
-        ) {
-            Ok(input) => input,
-            Err(status) => return status,
-        };
-        let (width, height, bgra) = match preview::extract_office_image_bgra_reader(
-            file,
-            expected_length,
-            &logical_name,
-            cancel_cb,
-        ) {
-            Ok(image) => image,
-            Err(error) => return reader_preview_status(error),
-        };
-        if cancel_requested(cancel_cb) {
-            return QL_ERROR_CANCELLED;
-        }
-        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
-    })
-}
-
-/// Extract one Office layout image by its canonical ZIP media reference.
-/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
-///
-/// # Safety
-/// The caller retains ownership of `source_handle` and must keep every pointer valid for the
-/// complete call. Rust reopens the source HANDLE with an independent file position. `image_ref`
-/// must be a canonical, relative ZIP path under the media root matching `logical_name`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    image_ref_utf8: *const u8,
-    image_ref_len: usize,
-    target_width: u32,
-    target_height: u32,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        if out_required.is_null() {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        *out_required = 0;
-        if out_buf.is_null() && out_cap != 0 {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        if target_width == 0
-            || target_height == 0
-            || target_width > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
-            || target_height > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION
-        {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        let (file, logical_name, _, _) = match reopen_handle_input_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            cancel_cb,
-        ) {
-            Ok(input) => input,
-            Err(status) => return status,
-        };
-        let image_ref =
-            match owned_utf8_arg(image_ref_utf8, image_ref_len, MAX_OFFICE_IMAGE_REF_BYTES) {
-                Some(image_ref) if !image_ref.is_empty() => image_ref,
-                _ => return QL_ERROR_INVALID_ARGUMENT,
-            };
-        if !preview::office_layout_image_ref_is_valid(&logical_name, &image_ref) {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        let (width, height, bgra) = match preview::extract_office_layout_image_bgra_reader(
-            file,
-            expected_length,
-            &logical_name,
-            &image_ref,
-            target_width,
-            target_height,
-            cancel_cb,
-        ) {
-            Ok(image) => image,
-            Err(error) => return reader_preview_status(error),
-        };
-        if cancel_requested(cancel_cb) {
-            return QL_ERROR_CANCELLED;
-        }
-        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
-    })
-}
-
-/// Extract a package icon from a borrowed Windows file handle.
-/// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle`.
-#[no_mangle]
-pub unsafe extern "C" fn ql_extract_package_icon_handle(
-    source_handle: isize,
-    expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        if out_required.is_null() {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        *out_required = 0;
-        if out_buf.is_null() && out_cap != 0 {
-            return QL_ERROR_INVALID_ARGUMENT;
-        }
-        let (file, logical_name, _, _) = match reopen_handle_input_v2(
-            source_handle,
-            expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            cancel_cb,
-        ) {
-            Ok(input) => input,
-            Err(status) => return status,
-        };
-        let (width, height, bgra) = match preview::extract_package_icon_bgra_reader(
-            file,
-            expected_length,
-            &logical_name,
-            cancel_cb,
-        ) {
-            Ok(image) => image,
-            Err(error) => return reader_preview_status(error),
-        };
-        if cancel_requested(cancel_cb) {
-            return QL_ERROR_CANCELLED;
-        }
-        write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
     })
 }
 
