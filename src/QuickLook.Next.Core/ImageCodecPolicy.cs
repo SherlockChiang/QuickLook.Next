@@ -2,6 +2,11 @@ namespace QuickLook.Next.Core;
 
 public static class PreviewErrorCodes
 {
+    public const string Unknown = "preview.unknown";
+    public const string ContentFailed = "preview.content.failed";
+    public const string TimedOut = "preview.timeout";
+    public const string ServiceUnavailable = "preview.service.unavailable";
+    public const string SurfaceFailed = "preview.surface.failed";
     public const string ImageCodecRequired = "image.codec.required";
     public const string ImageDecodeFailed = "image.decode.failed";
 }
