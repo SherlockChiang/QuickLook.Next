@@ -1161,6 +1161,14 @@ if (Test-Path $parserHostProgram) {
         $nativeHandlePreviewText = ""
         Add-Failure "Missing Rust FFI HANDLE preview source: $nativeHandlePreviewPath"
     }
+    $nativeHandleStructuredPath = Join-Path $Root "native/quicklook_next_native/src/ffi/handle_structured.rs"
+    if (Test-Path -LiteralPath $nativeHandleStructuredPath -PathType Leaf) {
+        $nativeHandleStructuredText = Get-Content -LiteralPath $nativeHandleStructuredPath -Raw
+    }
+    else {
+        $nativeHandleStructuredText = ""
+        Add-Failure "Missing Rust structured HANDLE preview source: $nativeHandleStructuredPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1510,11 +1518,68 @@ if (Test-Path $parserHostProgram) {
     if (@(Get-Content -LiteralPath $nativeHandlePreviewPath).Count -gt 300) {
         Add-Failure "The focused ffi::handle_preview module grew beyond 300 lines"
     }
-    foreach ($entryPoint in @(
+
+    # Textual and metadata HANDLE routes are thin consumers of the shared ABI 2 boundary. Keep
+    # their format-specific closures together and independently guarded from the composition root.
+    $expectedHandleStructuredExports = @(
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
         "ql_preview_torrent_handle",
-        "ql_preview_mail_handle",
+        "ql_preview_mail_handle")
+    $handleStructuredExports = [regex]::Matches(
+        $nativeHandleStructuredText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($handleStructuredExports.Count -ne $expectedHandleStructuredExports.Count -or
+        $nativeHandleStructuredText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeHandleStructuredText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeHandleStructuredText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::handle_structured must expose exactly four unsafe C ABI entry points"
+    }
+    foreach ($handleStructuredName in $expectedHandleStructuredExports) {
+        $handleStructuredSignature = "pub unsafe extern `"C`" fn $handleStructuredName("
+        $handleStructuredStart = $nativeHandleStructuredText.IndexOf(
+            $handleStructuredSignature,
+            [StringComparison]::Ordinal)
+        $handleStructuredEnd = if ($handleStructuredStart -ge 0) {
+            $nextHandleStructuredExport = $nativeHandleStructuredText.IndexOf(
+                "#[no_mangle]",
+                $handleStructuredStart + $handleStructuredSignature.Length,
+                [StringComparison]::Ordinal)
+            if ($nextHandleStructuredExport -ge 0) {
+                $nextHandleStructuredExport
+            }
+            else {
+                $nativeHandleStructuredText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $handleStructuredBody = if ($handleStructuredStart -ge 0 -and
+            $handleStructuredEnd -gt $handleStructuredStart) {
+            $nativeHandleStructuredText.Substring(
+                $handleStructuredStart,
+                $handleStructuredEnd - $handleStructuredStart)
+        }
+        else {
+            ""
+        }
+        if ($handleStructuredBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $handleStructuredBody -notmatch 'preview_handle_v2\(') {
+            Add-Failure "$handleStructuredName must contain panics and use the shared ABI 2 HANDLE contract"
+        }
+        if ($nativeLibText -match [regex]::Escape($handleStructuredSignature)) {
+            Add-Failure "$handleStructuredName must remain in ffi::handle_structured, not lib.rs"
+        }
+        if ($handleStructuredName -eq "ql_preview_mail_handle" -and
+            $handleStructuredBody -notmatch 'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
+            Add-Failure "ql_preview_mail_handle must pass the exact reopened HANDLE reader, length, metadata, and cancellation callback into Rust mail parsing"
+        }
+    }
+    if (@(Get-Content -LiteralPath $nativeHandleStructuredPath).Count -gt 260) {
+        Add-Failure "The focused ffi::handle_structured module grew beyond 260 lines"
+    }
+    foreach ($entryPoint in @(
         "ql_preview_sqlite_handles",
         "ql_preview_archive_handle",
         "ql_preview_office_handle",
@@ -1537,10 +1602,6 @@ if (Test-Path $parserHostProgram) {
         if ($entryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
             $entryBody -notmatch 'preview_handle_v2\(') {
             Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
-        }
-        if ($entryPoint -eq "ql_preview_mail_handle" -and
-            $entryBody -notmatch 'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
-            Add-Failure "ql_preview_mail_handle must pass the exact reopened HANDLE reader, length, metadata, and cancellation callback into Rust mail parsing"
         }
     }
     foreach ($entryPoint in @(

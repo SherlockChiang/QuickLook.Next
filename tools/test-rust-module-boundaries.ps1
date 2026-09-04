@@ -9,6 +9,7 @@ $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
+$ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_structured.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
@@ -69,6 +70,7 @@ foreach ($path in @(
         $ffiCommonPath,
         $ffiContractPath,
         $ffiHandlePreviewPath,
+        $ffiHandleStructuredPath,
         $ffiPathPreviewPath,
         $ffiRoutingPath,
         $win32ModulePath,
@@ -130,6 +132,7 @@ if ($failures.Count -eq 0) {
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
+    $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
@@ -189,6 +192,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_structured;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
@@ -473,6 +477,101 @@ if ($failures.Count -eq 0) {
     if ($ffiHandlePreviewLineCount -gt 300) {
         $failures.Add(
             "The focused ffi::handle_preview module grew beyond 300 lines: $ffiHandlePreviewLineCount")
+    }
+
+    $expectedHandleStructuredExports = @(
+        "ql_preview_text_handle",
+        "ql_preview_executable_handle",
+        "ql_preview_torrent_handle",
+        "ql_preview_mail_handle")
+    $handleStructuredReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::handle_structured::\{(?<items>.*?)\};')
+    if (-not $handleStructuredReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the crate-private ffi::handle_structured re-export block.")
+    }
+    else {
+        foreach ($handleStructuredExport in $expectedHandleStructuredExports) {
+            if ($handleStructuredReExportMatch.Groups["items"].Value -notmatch
+                "\b$handleStructuredExport\b") {
+                $failures.Add(
+                    "lib.rs ffi::handle_structured re-export lost: $handleStructuredExport")
+            }
+        }
+    }
+    if ($ffiHandleStructuredText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiHandleStructuredText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiHandleStructuredText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::handle_structured must use explicit imports and a thin unsafe C ABI surface.")
+    }
+    $handleStructuredExports = [regex]::Matches(
+        $ffiHandleStructuredText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $handleStructuredNoMangleCount = [regex]::Matches(
+        $ffiHandleStructuredText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($handleStructuredExports.Count -ne $expectedHandleStructuredExports.Count -or
+        $handleStructuredNoMangleCount -ne $expectedHandleStructuredExports.Count) {
+        $failures.Add("ffi::handle_structured must expose exactly four unsafe C ABI exports.")
+    }
+    foreach ($handleStructuredExport in $expectedHandleStructuredExports) {
+        $handleStructuredPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($handleStructuredExport) + '\s*\('
+        if ($ffiHandleStructuredText -notmatch $handleStructuredPattern) {
+            $failures.Add(
+                "ffi::handle_structured lost expected export: $handleStructuredExport")
+        }
+        if ($libText -match $handleStructuredPattern) {
+            $failures.Add(
+                "$handleStructuredExport implementation must remain in ffi::handle_structured, not lib.rs.")
+        }
+        $handleStructuredStart = $ffiHandleStructuredText.IndexOf(
+            "pub unsafe extern `"C`" fn $handleStructuredExport(",
+            [StringComparison]::Ordinal)
+        $handleStructuredEnd = if ($handleStructuredStart -ge 0) {
+            $nextHandleStructuredExport = $ffiHandleStructuredText.IndexOf(
+                "#[no_mangle]",
+                $handleStructuredStart + 1,
+                [StringComparison]::Ordinal)
+            if ($nextHandleStructuredExport -ge 0) {
+                $nextHandleStructuredExport
+            }
+            else {
+                $ffiHandleStructuredText.Length
+            }
+        }
+        else {
+            -1
+        }
+        $handleStructuredBody = if ($handleStructuredStart -ge 0 -and
+            $handleStructuredEnd -gt $handleStructuredStart) {
+            $ffiHandleStructuredText.Substring(
+                $handleStructuredStart,
+                $handleStructuredEnd - $handleStructuredStart)
+        }
+        else {
+            ""
+        }
+        if ($handleStructuredBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+            $handleStructuredBody -notmatch 'preview_handle_v2\(') {
+            $failures.Add(
+                "$handleStructuredExport must contain panics and use the shared ABI 2 HANDLE contract.")
+        }
+    }
+    if ($ffiHandleStructuredText -notmatch
+        'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
+        $failures.Add(
+            "ffi::handle_structured must pass the exact reopened HANDLE reader into Rust mail parsing.")
+    }
+    if ($ffiHandleStructuredText -notmatch
+        'fn\s+structured_handle_exports_cancel_before_handle_access\s*\(') {
+        $failures.Add("ffi::handle_structured lost its pre-HANDLE cancellation test.")
+    }
+    $ffiHandleStructuredLineCount = @(Get-Content -LiteralPath $ffiHandleStructuredPath).Count
+    if ($ffiHandleStructuredLineCount -gt 260) {
+        $failures.Add(
+            "The focused ffi::handle_structured module grew beyond 260 lines: $ffiHandleStructuredLineCount")
     }
 
     if ($ffiRoutingText -notmatch '(?m)^use\s+super::common::\{' -or
