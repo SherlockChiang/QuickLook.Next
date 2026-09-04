@@ -1051,4 +1051,19 @@
   <data name="ImageMetadataFlashRedEyeReduction" xml:space="preserve"><value>防紅眼</value></data>
   <data name="ImageMetadataFlashReturnDetected" xml:space="preserve"><value>偵測到回光</value></data>
   <data name="ImageMetadataFlashReturnNotDetected" xml:space="preserve"><value>未偵測到回光</value></data>
+  <data name="PdfSearchPlaceholder" xml:space="preserve"><value>在 PDF 中尋找</value></data>
+  <data name="PdfSearchAccessibleName" xml:space="preserve"><value>在 PDF 預覽中尋找</value></data>
+  <data name="PdfSearchPreviousMatch" xml:space="preserve"><value>上一個 PDF 文字相符項目</value></data>
+  <data name="PdfSearchNextMatch" xml:space="preserve"><value>下一個 PDF 文字相符項目</value></data>
+  <data name="PdfSearchClose" xml:space="preserve"><value>關閉 PDF 搜尋</value></data>
+  <data name="PdfSearchLoading" xml:space="preserve"><value>正在讀取可搜尋文字…</value></data>
+  <data name="PdfSearchUnavailable" xml:space="preserve"><value>此 PDF 無法使用文字搜尋。</value></data>
+  <data name="PdfSearchNoText" xml:space="preserve"><value>找不到可搜尋文字。</value></data>
+  <data name="PdfSearchEncrypted" xml:space="preserve"><value>此 PDF 已加密，無法搜尋其中的文字。</value></data>
+  <data name="PdfSearchFailed" xml:space="preserve"><value>無法讀取 PDF 文字。</value></data>
+  <data name="PdfSearchTruncated" xml:space="preserve"><value>為遵守預覽限制，可搜尋文字已截斷。</value></data>
+  <data name="PdfSearchPartialFormat" xml:space="preserve"><value>可搜尋文字不完整；有 {0:N0} 頁無法讀取。</value></data>
+  <data name="PdfCopyPageText" xml:space="preserve"><value>複製目前頁面文字</value></data>
+  <data name="PdfPageTextCopied" xml:space="preserve"><value>已複製頁面文字</value></data>
+  <data name="PdfPageTextUnavailable" xml:space="preserve"><value>目前頁面沒有可搜尋文字。</value></data>
 </root>

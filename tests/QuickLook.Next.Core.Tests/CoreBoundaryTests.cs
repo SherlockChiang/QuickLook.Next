@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using QuickLook.Next.App;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using Xunit;
@@ -320,6 +321,88 @@ public sealed class CoreBoundaryTests : IDisposable
         var close = new PdfTextClose("d".PadLeft(32, 'd'));
         ControlMessage parsedClose = ProtocolJson.Deserialize(ProtocolJson.Serialize(close));
         Assert.Equal(close, Assert.IsType<PdfTextClose>(parsedClose));
+    }
+
+    [Fact]
+    public void Pdf_text_controller_maps_bounded_matches_to_pages_and_wraps_navigation()
+    {
+        var controller = new PdfTextController(
+            (_, _, _, _) => Task.FromResult<PdfTextDocument?>(null));
+        controller.ApplyDocument(new PdfTextDocument(
+            "ready",
+            3,
+            [
+                new PdfTextPage(0, "First needle", false),
+                new PdfTextPage(1, "Needle then needle", false),
+                new PdfTextPage(2, "   ", false),
+            ],
+            false,
+            0));
+
+        PdfTextSearchState state = controller.SetSearchQuery("NEEDLE");
+        Assert.Equal((1, 3, 0), (state.Current, state.Count, state.PageIndex));
+        state = controller.MoveSearch(1);
+        Assert.Equal((2, 3, 1), (state.Current, state.Count, state.PageIndex));
+        state = controller.MoveSearch(1);
+        Assert.Equal((3, 3, 1), (state.Current, state.Count, state.PageIndex));
+        state = controller.MoveSearch(1);
+        Assert.Equal((1, 3, 0), (state.Current, state.Count, state.PageIndex));
+        Assert.Equal("Needle then needle", controller.GetPageText(1));
+        Assert.Null(controller.GetPageText(2));
+    }
+
+    [Fact]
+    public void Pdf_text_controller_caps_dense_cross_page_matches()
+    {
+        var controller = new PdfTextController(
+            (_, _, _, _) => Task.FromResult<PdfTextDocument?>(null));
+        controller.ApplyDocument(new PdfTextDocument(
+            "ready",
+            2,
+            [
+                new PdfTextPage(0, new string('a', PdfTextController.MaxMatches), false),
+                new PdfTextPage(1, new string('a', PdfTextController.MaxMatches), false),
+            ],
+            false,
+            0));
+
+        PdfTextSearchState state = controller.SetSearchQuery("a");
+
+        Assert.Equal(PdfTextController.MaxMatches, state.Count);
+        Assert.Equal(0, state.PageIndex);
+    }
+
+    [Fact]
+    public async Task Pdf_text_controller_discards_stale_completion_and_releases_source()
+    {
+        Directory.CreateDirectory(_tempRoot);
+        string path = Path.Combine(_tempRoot, "stale.pdf");
+        File.WriteAllBytes(path, "%PDF-1.7"u8.ToArray());
+        var source = WindowsHandleTransfer.OpenPinnedReadOnlyFile(path);
+        var extractionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishExtraction = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = new PdfTextController(async (_, _, _, _) =>
+        {
+            extractionStarted.SetResult();
+            await finishExtraction.Task;
+            return new PdfTextDocument(
+                "ready",
+                1,
+                [new PdfTextPage(0, "stale text", false)],
+                false,
+                0);
+        });
+        controller.SetSource(source.Handle, source.Length, path);
+
+        Task<PdfTextSearchState> load = controller.EnsureLoadedAsync(CancellationToken.None);
+        await extractionStarted.Task;
+        controller.Clear();
+        finishExtraction.SetResult();
+        await load;
+
+        Assert.True(source.Handle.IsClosed);
+        Assert.Equal(PdfTextLoadStatus.Unavailable, controller.State.LoadStatus);
+        Assert.Null(controller.GetPageText(0));
     }
 
     [Fact]

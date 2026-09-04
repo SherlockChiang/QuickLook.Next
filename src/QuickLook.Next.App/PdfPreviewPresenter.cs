@@ -14,6 +14,8 @@ namespace QuickLook.Next.App;
 
 internal sealed class PdfPreviewPresenter
 {
+    public event Action<int>? CurrentPageChanged;
+
     private enum PdfPageState
     {
         Requested,
@@ -252,6 +254,11 @@ internal sealed class PdfPreviewPresenter
     public bool GoToNextPage()
         => ScrollToPage(_currentPageIndex + 1);
 
+    public bool GoToPage(int pageIndex)
+        => ScrollToPage(pageIndex);
+
+    public int CurrentPageIndex => _currentPageIndex;
+
     public void Clear()
     {
         string? requestId = _requestId;
@@ -311,6 +318,7 @@ internal sealed class PdfPreviewPresenter
 
         _currentPageIndex = pageIndex;
         UpdatePager();
+        CurrentPageChanged?.Invoke(pageIndex);
     }
 
     private void UpdatePager()

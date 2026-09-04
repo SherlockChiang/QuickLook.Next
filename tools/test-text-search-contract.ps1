@@ -76,8 +76,8 @@ if ($mainWindow.Length -gt 0) {
             "Closing search must clear highlights and return focus to preview content."),
         @('FocusTextPreviewContent\(\)[\s\S]{0,420}?MarkdownListView\.Visibility[\s\S]{0,180}?TextListView\.Visibility[\s\S]{0,180}?TextPreviewBlock[\s\S]{0,100}?Focus\(FocusState\.Programmatic\)',
             "Focus restoration must cover Markdown, virtual text rows, and rich text."),
-        @('ResetPreview\(\)[\s\S]{0,260}?ResetTextSearchUi\(\)[\s\S]{0,220}?_textPresenter\?\.Clear\(\)',
-            "Preview reset must hide and clear search before releasing presenter state.")
+        @('ResetPreview\(\)[\s\S]{0,260}?ResetTextSearchUi\(\)[\s\S]{0,120}?ResetPdfSearchUi\(\)[\s\S]{0,420}?_textPresenter\?\.Clear\(\)',
+            "Preview reset must hide and clear text/PDF search before releasing presenter state.")
     )
     foreach ($requirement in $requirements) {
         Require-Pattern $mainWindow $requirement[0] $requirement[1]

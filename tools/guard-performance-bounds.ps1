@@ -924,6 +924,23 @@ if ($mainWindowXamlText -notmatch 'x:Name="TableScrollViewer"[\s\S]*?HorizontalS
     $failures.Add("Table previews must keep the bottom horizontal scrollbar visible.")
 }
 
+$pdfTextController = Join-Path $Root "src/QuickLook.Next.App/PdfTextController.cs"
+Require-Pattern $pdfTextController 'MaxQueryChars\s*=\s*256[\s\S]*MaxMatches\s*=\s*TextSearchIndex\.MaxMatches[\s\S]*_query\.Length\s*>\s*MaxQueryChars[\s\S]*_matches\.Count\s*>=\s*MaxMatches' `
+    "PDF text search must retain its 256-character query and 10,000-match global bounds."
+Require-Pattern $pdfTextController 'SetSource\(SafeFileHandle source,[\s\S]*sourceLength\s+is\s*<\s*0\s+or\s*>\s*NativeAbi\.MaxPdfTextInputBytes[\s\S]*LoadCoreAsync\([\s\S]*ReopenReadOnlyFile\(source,\s*sourceLength\)' `
+    "PDF text extraction must retain its input-size cap and reopen only the exact retained HANDLE."
+Require-Pattern $mainWindow 'OpenPdfSearch\(\)[\s\S]{0,600}?EnsurePdfSearchLoadedAsync\(navigateCurrent:\s*true\)' `
+    "PDF text extraction must remain lazy and start only from the explicit search UI."
+$showPdfDocument = [regex]::Match(
+    $mainWindowText,
+    'private\s+string\s+ShowPdfDocument\([\s\S]*?(?=\r?\n\s*private\s+string\s+ShowTextPreview\()').Value
+if ([string]::IsNullOrWhiteSpace($showPdfDocument) -or
+    $showPdfDocument -match 'PdfText|EnsurePdfSearchLoaded|ExtractPdfText|ParserHost') {
+    $failures.Add("PDF first render must not eagerly extract searchable text.")
+}
+Require-Pattern $mainWindow 'rasterSource\s*=\s*pinnedPreviewHandle;[\s\S]{0,520}?pdfTextSourceHandle\s*=\s*WindowsHandleTransfer\.ReopenReadOnlyFile\(\s*rasterSource,\s*pinnedPreviewLength\)[\s\S]{0,420}?BeginPinnedRasterOpen\(' `
+    "PDF text extraction must retain an exact sidecar HANDLE before RasterHost takes source ownership."
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Performance bounds guard failed:" -ForegroundColor Red

@@ -621,4 +621,19 @@
   <data name="ImageMetadataFlashRedEyeReduction" xml:space="preserve"><value>Red-eye reduction</value></data>
   <data name="ImageMetadataFlashReturnDetected" xml:space="preserve"><value>Return detected</value></data>
   <data name="ImageMetadataFlashReturnNotDetected" xml:space="preserve"><value>Return not detected</value></data>
+  <data name="PdfSearchPlaceholder" xml:space="preserve"><value>Find in PDF</value></data>
+  <data name="PdfSearchAccessibleName" xml:space="preserve"><value>Find in PDF preview</value></data>
+  <data name="PdfSearchPreviousMatch" xml:space="preserve"><value>Previous PDF text match</value></data>
+  <data name="PdfSearchNextMatch" xml:space="preserve"><value>Next PDF text match</value></data>
+  <data name="PdfSearchClose" xml:space="preserve"><value>Close PDF search</value></data>
+  <data name="PdfSearchLoading" xml:space="preserve"><value>Reading searchable text…</value></data>
+  <data name="PdfSearchUnavailable" xml:space="preserve"><value>Text search is unavailable for this PDF.</value></data>
+  <data name="PdfSearchNoText" xml:space="preserve"><value>No searchable text was found.</value></data>
+  <data name="PdfSearchEncrypted" xml:space="preserve"><value>This PDF is encrypted, so its text cannot be searched.</value></data>
+  <data name="PdfSearchFailed" xml:space="preserve"><value>PDF text could not be read.</value></data>
+  <data name="PdfSearchTruncated" xml:space="preserve"><value>Searchable text was truncated to stay within preview limits.</value></data>
+  <data name="PdfSearchPartialFormat" xml:space="preserve"><value>Searchable text is partial; {0:N0} page(s) could not be read.</value></data>
+  <data name="PdfCopyPageText" xml:space="preserve"><value>Copy current page text</value></data>
+  <data name="PdfPageTextCopied" xml:space="preserve"><value>Page text copied</value></data>
+  <data name="PdfPageTextUnavailable" xml:space="preserve"><value>This page has no searchable text.</value></data>
 </root>

@@ -61,6 +61,7 @@ public sealed partial class MainWindow : Window
     private ImageSidecarController? _imageSidecarController;
     private ExifPreviewPresenter? _exifPresenter;
     private PdfPreviewPresenter? _pdfPresenter;
+    private readonly PdfTextController _pdfTextController;
     private MediaPreviewPresenter? _mediaPresenter;
     private Compositor? _compositor;
     private TrayIconManager? _trayIcon;
@@ -96,6 +97,7 @@ public sealed partial class MainWindow : Window
     private bool _imageFilmstripDragging;
     private bool _imageFilmstripSuppressClick;
     private bool _suppressTextSearchTextChanged;
+    private bool _suppressPdfSearchTextChanged;
     private Windows.Foundation.Point _imageFilmstripDragStart;
     private double _imageFilmstripDragStartOffset;
     private readonly UISettings _uiSettings = new();
@@ -228,6 +230,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _pdfTextController = new PdfTextController(LoadPdfTextDocumentAsync);
         TextSearchBox.PlaceholderText = UiStrings.TextSearchPlaceholder;
         AutomationProperties.SetName(CloudProgressPanel, UiStrings.CloudProgressAccessibleName);
         AutomationProperties.SetName(CloudProgressBar, UiStrings.CloudProgressAccessibleName);
@@ -239,6 +242,17 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(TextSearchNextButton, UiStrings.TextSearchNextMatch);
         ToolTipService.SetToolTip(TextSearchCloseButton, UiStrings.TextSearchClose);
         ApplyTextSearchState(default);
+        PdfSearchBox.PlaceholderText = UiStrings.PdfSearchPlaceholder;
+        AutomationProperties.SetName(PdfSearchBox, UiStrings.PdfSearchAccessibleName);
+        AutomationProperties.SetName(PdfSearchPreviousButton, UiStrings.PdfSearchPreviousMatch);
+        AutomationProperties.SetName(PdfSearchNextButton, UiStrings.PdfSearchNextMatch);
+        AutomationProperties.SetName(PdfCopyPageTextButton, UiStrings.PdfCopyPageText);
+        AutomationProperties.SetName(PdfSearchCloseButton, UiStrings.PdfSearchClose);
+        ToolTipService.SetToolTip(PdfSearchPreviousButton, UiStrings.PdfSearchPreviousMatch);
+        ToolTipService.SetToolTip(PdfSearchNextButton, UiStrings.PdfSearchNextMatch);
+        ToolTipService.SetToolTip(PdfCopyPageTextButton, UiStrings.PdfCopyPageText);
+        ToolTipService.SetToolTip(PdfSearchCloseButton, UiStrings.PdfSearchClose);
+        ApplyPdfSearchState(_pdfTextController.State);
         ListingFilterBox.PlaceholderText = UiStrings.ListingFilterPlaceholder;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ListingFilterBox, UiStrings.ListingFilterAccessibleName);
         _thumbnailScheduler = new NativeThumbnailScheduler(_native);
@@ -248,6 +262,7 @@ public sealed partial class MainWindow : Window
             AnimatedImagePreviewRoot,
             PdfScrollViewer,
             PdfPagerBar,
+            PdfSearchBar,
             TextPreviewContainer,
             TablePreviewContainer,
             OfficeScrollViewer,
@@ -324,6 +339,7 @@ public sealed partial class MainWindow : Window
             DispatcherQueue,
             () => _compositor,
             () => _supervisor);
+        _pdfPresenter.CurrentPageChanged += _ => ApplyPdfSearchState(_pdfTextController.State);
         _mediaPresenter = new MediaPreviewPresenter(MediaPreviewElement);
         _mediaPresenter.MediaFailed += OnMediaPreviewFailed;
         _listingPresenter = new ListingPreviewPresenter(
@@ -691,6 +707,21 @@ public sealed partial class MainWindow : Window
         await _parserSupervisor.EnsureStartedAsync(cancellationToken);
     }
 
+    private async Task<PdfTextDocument?> LoadPdfTextDocumentAsync(
+        Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        await EnsureParserHostStartedAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return await _parserSupervisor!.ExtractPdfTextAsync(
+            sourceHandle,
+            sourceLength,
+            logicalPath,
+            cancellationToken);
+    }
+
     private async Task HandleNativeIntentAsync(NativeIntent intent, long receivedAt)
     {
         // +/- zoom the image preview (only when one is showing; the global key isn't swallowed elsewhere).
@@ -777,6 +808,7 @@ public sealed partial class MainWindow : Window
         StatusText.Text = UiStrings.Format(UiStrings.OpeningFileFormat, System.IO.Path.GetFileName(path));
         ShowPreviewLoadingShell();
         Microsoft.Win32.SafeHandles.SafeFileHandle? pinnedPreviewHandle = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? pdfTextSourceHandle = null;
         long pinnedPreviewLength = 0;
         try
         {
@@ -1061,6 +1093,20 @@ public sealed partial class MainWindow : Window
             {
                 Microsoft.Win32.SafeHandles.SafeFileHandle rasterSource = pinnedPreviewHandle;
                 pinnedPreviewHandle = null;
+                if (probe.Kind.Equals("pdf", StringComparison.OrdinalIgnoreCase)
+                    && pinnedPreviewLength <= NativeAbi.MaxPdfTextInputBytes)
+                {
+                    try
+                    {
+                        pdfTextSourceHandle = WindowsHandleTransfer.ReopenReadOnlyFile(
+                            rasterSource,
+                            pinnedPreviewLength);
+                    }
+                    catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+                    {
+                        DiagLog.Write("App", "optional PDF text source unavailable: " + ex.Message);
+                    }
+                }
                 var pinnedRequest = BeginPinnedRasterOpen(
                     path,
                     probe,
@@ -1126,6 +1172,11 @@ public sealed partial class MainWindow : Window
                 TryShowHostError(session, previewError);
                 return;
             }
+            if (result is PreviewReady { Kind: "pdf" } && pdfTextSourceHandle is not null)
+            {
+                _pdfTextController.SetSource(pdfTextSourceHandle, pinnedPreviewLength, path);
+                pdfTextSourceHandle = null;
+            }
             StatusText.Text = result switch
             {
                 PreviewReady r when r.Kind == "pdf" => ShowPdfDocument(requestId, r),
@@ -1177,6 +1228,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            pdfTextSourceHandle?.Dispose();
             pinnedPreviewHandle?.Dispose();
             if (archiveHandoff is not null && !archiveHandoffTransferred)
             {
@@ -2376,6 +2428,7 @@ public sealed partial class MainWindow : Window
         DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         ResetCloudProgressUi();
         ResetTextSearchUi();
+        ResetPdfSearchUi();
         _rasterPresenter?.Clear();
         _animatedImagePresenter?.Clear();
         _imageWaveformPresenter?.Clear();
@@ -3278,7 +3331,8 @@ public sealed partial class MainWindow : Window
         bool modifierDown = shiftDown
             || controlDown
             || IsVirtualKeyDown(Windows.System.VirtualKey.Menu);
-        bool focusedControlUsesSpace = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement() is Control;
+        object? focusedElement = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement();
+        bool focusedControlUsesSpace = focusedElement is Control;
         if (e.Key == Windows.System.VirtualKey.Space
             && !modifierDown
             && !focusedControlUsesSpace
@@ -3314,6 +3368,36 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        bool pdfPreviewVisible = PdfScrollViewer.Visibility == Visibility.Visible;
+        if (pdfPreviewVisible && controlDown && e.Key == Windows.System.VirtualKey.F)
+        {
+            OpenPdfSearch();
+            e.Handled = true;
+            return;
+        }
+        if (pdfPreviewVisible
+            && PdfSearchBar.Visibility == Visibility.Visible
+            && e.Key == Windows.System.VirtualKey.F3)
+        {
+            MovePdfSearch(shiftDown ? -1 : 1);
+            e.Handled = true;
+            return;
+        }
+        if (pdfPreviewVisible
+            && PdfSearchBar.Visibility == Visibility.Visible
+            && e.Key == Windows.System.VirtualKey.Escape)
+        {
+            ClosePdfSearch();
+            e.Handled = true;
+            return;
+        }
+        if (pdfPreviewVisible
+            && PdfSearchBar.Visibility == Visibility.Visible
+            && ReferenceEquals(focusedElement, PdfSearchBox))
+        {
+            return;
+        }
+
         if (ListingPanel.Visibility == Visibility.Visible && controlDown && e.Key == Windows.System.VirtualKey.F)
         {
             _listingPresenter?.FocusFilter();
@@ -3326,7 +3410,7 @@ public sealed partial class MainWindow : Window
             || (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible);
 
         PreviewNavigationAction navigationAction = PreviewNavigationPolicy.Resolve(
-            pdfVisible: PdfScrollViewer.Visibility == Visibility.Visible,
+            pdfVisible: pdfPreviewVisible,
             imagePreviewVisible,
             modifierDown,
             ToPreviewNavigationKey(e.Key));
@@ -3418,6 +3502,185 @@ public sealed partial class MainWindow : Window
     private static bool IsVirtualKeyDown(Windows.System.VirtualKey key)
         => (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
             & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+
+    private void OpenPdfSearch()
+    {
+        if (PdfScrollViewer.Visibility != Visibility.Visible)
+            return;
+
+        PdfSearchBar.Visibility = Visibility.Visible;
+        PdfSearchBox.Focus(FocusState.Programmatic);
+        PdfSearchBox.SelectAll();
+        ApplyPdfSearchState(_pdfTextController.SetSearchQuery(PdfSearchBox.Text));
+        _ = EnsurePdfSearchLoadedAsync(navigateCurrent: true);
+    }
+
+    private async Task<bool> EnsurePdfSearchLoadedAsync(bool navigateCurrent)
+    {
+        int generation = _previewSession.Generation;
+        CancellationToken cancellationToken = CurrentPreviewToken;
+        Task<PdfTextSearchState> loadTask = _pdfTextController.EnsureLoadedAsync(cancellationToken);
+        ApplyPdfSearchState(_pdfTextController.State);
+        PdfTextSearchState state = await loadTask;
+        if (!IsPreviewGenerationCurrent(generation, cancellationToken)
+            || PdfScrollViewer.Visibility != Visibility.Visible)
+        {
+            return false;
+        }
+
+        state = _pdfTextController.SetSearchQuery(PdfSearchBox.Text);
+        ApplyPdfSearchState(state);
+        if (navigateCurrent)
+            NavigateToPdfSearchMatch(state);
+        return true;
+    }
+
+    private void OnPdfSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_suppressPdfSearchTextChanged)
+            return;
+
+        PdfTextSearchState state = _pdfTextController.SetSearchQuery(PdfSearchBox.Text);
+        ApplyPdfSearchState(state);
+        NavigateToPdfSearchMatch(state);
+    }
+
+    private void OnPdfSearchPreviousClick(object sender, RoutedEventArgs e)
+        => MovePdfSearch(-1);
+
+    private void OnPdfSearchNextClick(object sender, RoutedEventArgs e)
+        => MovePdfSearch(1);
+
+    private void MovePdfSearch(int delta)
+    {
+        PdfTextSearchState state = _pdfTextController.MoveSearch(delta);
+        ApplyPdfSearchState(state);
+        NavigateToPdfSearchMatch(state);
+    }
+
+    private void NavigateToPdfSearchMatch(PdfTextSearchState state)
+    {
+        if (state.PageIndex >= 0)
+            _pdfPresenter?.GoToPage(state.PageIndex);
+    }
+
+    private async void OnPdfCopyPageTextClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!await EnsurePdfSearchLoadedAsync(navigateCurrent: false))
+                return;
+            int pageIndex = _pdfPresenter?.CurrentPageIndex ?? -1;
+            string? text = _pdfTextController.GetPageText(pageIndex);
+            if (text is null)
+            {
+                PdfSearchStatusText.Text = UiStrings.PdfPageTextUnavailable;
+                PdfSearchStatusText.Visibility = Visibility.Visible;
+                return;
+            }
+
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            PdfSearchStatusText.Text = UiStrings.PdfPageTextCopied;
+            PdfSearchStatusText.Visibility = Visibility.Visible;
+            AnnouncePreviewLifecycle(
+                PdfSearchBar,
+                UiStrings.PdfPageTextCopied,
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.ImportantMostRecent);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "PDF page text copy failed: " + ex.Message);
+            PdfSearchStatusText.Text = UiStrings.PdfSearchFailed;
+            PdfSearchStatusText.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void OnPdfSearchCloseClick(object sender, RoutedEventArgs e)
+        => ClosePdfSearch();
+
+    private void OnPdfSearchBoxKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        bool shiftDown = IsVirtualKeyDown(Windows.System.VirtualKey.Shift);
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            MovePdfSearch(shiftDown ? -1 : 1);
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            ClosePdfSearch();
+            e.Handled = true;
+        }
+    }
+
+    private void ClosePdfSearch()
+    {
+        PdfSearchBar.Visibility = Visibility.Collapsed;
+        _suppressPdfSearchTextChanged = true;
+        try
+        {
+            PdfSearchBox.Text = "";
+        }
+        finally
+        {
+            _suppressPdfSearchTextChanged = false;
+        }
+        ApplyPdfSearchState(_pdfTextController.ClearSearch());
+        PdfScrollViewer.Focus(FocusState.Programmatic);
+    }
+
+    private void ResetPdfSearchUi()
+    {
+        PdfSearchBar.Visibility = Visibility.Collapsed;
+        _suppressPdfSearchTextChanged = true;
+        try
+        {
+            PdfSearchBox.Text = "";
+        }
+        finally
+        {
+            _suppressPdfSearchTextChanged = false;
+        }
+        _pdfTextController.Clear();
+        ApplyPdfSearchState(_pdfTextController.State);
+    }
+
+    private void ApplyPdfSearchState(PdfTextSearchState state)
+    {
+        PdfSearchCountText.Text = UiStrings.Format(
+            UiStrings.TextSearchCountFormat,
+            state.Current,
+            state.Count);
+        bool hasMatches = state.Count > 0;
+        PdfSearchPreviousButton.IsEnabled = hasMatches;
+        PdfSearchNextButton.IsEnabled = hasMatches;
+        PdfSearchProgressRing.IsActive = state.LoadStatus == PdfTextLoadStatus.Loading;
+        PdfSearchProgressRing.Visibility = PdfSearchProgressRing.IsActive
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        PdfCopyPageTextButton.IsEnabled = _pdfPresenter is { } presenter
+            && _pdfTextController.GetPageText(presenter.CurrentPageIndex) is not null;
+
+        string status = state.LoadStatus switch
+        {
+            PdfTextLoadStatus.Unavailable => UiStrings.PdfSearchUnavailable,
+            PdfTextLoadStatus.Loading => UiStrings.PdfSearchLoading,
+            PdfTextLoadStatus.Ready when state.Truncated => UiStrings.PdfSearchTruncated,
+            PdfTextLoadStatus.Partial => UiStrings.Format(UiStrings.PdfSearchPartialFormat, state.FailedPages),
+            PdfTextLoadStatus.NoText => UiStrings.PdfSearchNoText,
+            PdfTextLoadStatus.Encrypted => UiStrings.PdfSearchEncrypted,
+            PdfTextLoadStatus.Failed => UiStrings.PdfSearchFailed,
+            _ => "",
+        };
+        PdfSearchStatusText.Text = status;
+        PdfSearchStatusText.Visibility = string.IsNullOrEmpty(status)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
 
     private void OpenTextSearch()
     {

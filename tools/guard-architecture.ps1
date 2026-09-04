@@ -1707,11 +1707,11 @@ if (Test-Path $mainWindowPath) {
     if (([regex]::Matches($mainWindowText, '_native\.ProbeFileHandle\(')).Count -ne 1 -or
         ([regex]::Matches($mainWindowText, 'WindowsHandleTransfer\.OpenPinnedReadOnlyFile\(path\)')).Count -ne 1 -or
         $mainWindowText -notmatch 'preparedProbe\s*=\s*await Task\.Run\([\s\S]{0,180}PreparePreviewProbe\(path,\s*mayRequireHydration\)[\s\S]{0,220}pinnedPreviewHandle\s*=\s*preparedProbe\.Handle' -or
-        $mainWindowText -notmatch 'finally\s*\{\s*pinnedPreviewHandle\?\.Dispose\(\);') {
+        $mainWindowText -notmatch 'finally\s*\{\s*pdfTextSourceHandle\?\.Dispose\(\);\s*pinnedPreviewHandle\?\.Dispose\(\);') {
         Add-Failure "App preview routing must consume one authoritative early HANDLE probe and release any source not transferred to a host"
     }
     if ($mainWindowText -notmatch 'parserSource\s*=\s*pinnedPreviewHandle;\s*pinnedPreviewHandle\s*=\s*null;[\s\S]{0,180}BeginPinnedParserOpen\(\s*path,\s*probe,\s*parserSource,\s*pinnedPreviewLength\)' -or
-        $mainWindowText -notmatch 'rasterSource\s*=\s*pinnedPreviewHandle;\s*pinnedPreviewHandle\s*=\s*null;[\s\S]{0,180}BeginPinnedRasterOpen\(\s*path,\s*probe,\s*rasterSource,\s*pinnedPreviewLength,') {
+        $mainWindowText -notmatch 'rasterSource\s*=\s*pinnedPreviewHandle;\s*pinnedPreviewHandle\s*=\s*null;[\s\S]{0,1200}BeginPinnedRasterOpen\(\s*path,\s*probe,\s*rasterSource,\s*pinnedPreviewLength,') {
         Add-Failure "ParserHost and RasterHost must receive the same pinned identity used by the authoritative HANDLE probe"
     }
     if ($mainWindowText -notmatch 'else if\s*\(pinnedPreviewHandle\s+is\s+not\s+null\)[\s\S]{0,500}BeginPinnedParserOpen' -or
@@ -2285,6 +2285,10 @@ Invoke-CheckedScript -Path $dialogThemeResourceTest -Arguments @{ Root = $Root }
 $textSearchContractTest = Join-Path $PSScriptRoot "test-text-search-contract.ps1"
 Invoke-CheckedScript -Path $textSearchContractTest -Arguments @{ Root = $Root } `
     -FailureMessage "Text-search contract guard failed"
+
+$pdfTextSearchContractTest = Join-Path $PSScriptRoot "test-pdf-text-search-contract.ps1"
+Invoke-CheckedScript -Path $pdfTextSearchContractTest -Arguments @{ Root = $Root } `
+    -FailureMessage "PDF text-search contract guard failed"
 
 $cloudProgressUiTest = Join-Path $PSScriptRoot "test-cloud-progress-ui.ps1"
 Invoke-CheckedScript -Path $cloudProgressUiTest -Arguments @{ Root = $Root } `

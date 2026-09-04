@@ -275,6 +275,77 @@
                     </Button>
                 </StackPanel>
             </Border>
+            <Border x:Name="PdfSearchBar"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,12,26,0"
+                    Padding="6"
+                    Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                <Grid ColumnSpacing="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="180" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="PdfSearchBox"
+                             MaxLength="256"
+                             MinHeight="40"
+                             TextChanged="OnPdfSearchTextChanged"
+                             KeyDown="OnPdfSearchBoxKeyDown" />
+                    <ProgressRing x:Name="PdfSearchProgressRing"
+                                  Grid.Column="1"
+                                  Width="20"
+                                  Height="20"
+                                  IsActive="False"
+                                  Visibility="Collapsed"
+                                  VerticalAlignment="Center" />
+                    <TextBlock x:Name="PdfSearchStatusText"
+                               Grid.Column="2"
+                               MaxWidth="170"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock x:Name="PdfSearchCountText"
+                               Grid.Column="3"
+                               MinWidth="54"
+                               VerticalAlignment="Center"
+                               TextAlignment="Center"
+                               AutomationProperties.LiveSetting="Polite" />
+                    <Button x:Name="PdfSearchPreviousButton"
+                            Grid.Column="4"
+                            Click="OnPdfSearchPreviousClick"
+                            Style="{StaticResource PreviewIconButtonStyle}">
+                        <FontIcon Glyph="&#xE70E;" FontSize="14" />
+                    </Button>
+                    <Button x:Name="PdfSearchNextButton"
+                            Grid.Column="5"
+                            Click="OnPdfSearchNextClick"
+                            Style="{StaticResource PreviewIconButtonStyle}">
+                        <FontIcon Glyph="&#xE70D;" FontSize="14" />
+                    </Button>
+                    <Button x:Name="PdfCopyPageTextButton"
+                            Grid.Column="6"
+                            Click="OnPdfCopyPageTextClick"
+                            Style="{StaticResource PreviewIconButtonStyle}">
+                        <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                    </Button>
+                    <Button x:Name="PdfSearchCloseButton"
+                            Grid.Column="7"
+                            Click="OnPdfSearchCloseClick"
+                            Style="{StaticResource PreviewIconButtonStyle}">
+                        <FontIcon Glyph="&#xE711;" FontSize="14" />
+                    </Button>
+                </Grid>
+            </Border>
             <Border x:Name="MarkdownOutlinePanel"
                     x:Uid="MarkdownOutlinePanel"
                     Visibility="Collapsed"

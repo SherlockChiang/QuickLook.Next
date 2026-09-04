@@ -461,4 +461,19 @@
   <data name="ImageMetadataFlashRedEyeReduction" xml:space="preserve"><value>防红眼</value></data>
   <data name="ImageMetadataFlashReturnDetected" xml:space="preserve"><value>检测到回光</value></data>
   <data name="ImageMetadataFlashReturnNotDetected" xml:space="preserve"><value>未检测到回光</value></data>
+  <data name="PdfSearchPlaceholder" xml:space="preserve"><value>在 PDF 中查找</value></data>
+  <data name="PdfSearchAccessibleName" xml:space="preserve"><value>在 PDF 预览中查找</value></data>
+  <data name="PdfSearchPreviousMatch" xml:space="preserve"><value>上一个 PDF 文本匹配项</value></data>
+  <data name="PdfSearchNextMatch" xml:space="preserve"><value>下一个 PDF 文本匹配项</value></data>
+  <data name="PdfSearchClose" xml:space="preserve"><value>关闭 PDF 搜索</value></data>
+  <data name="PdfSearchLoading" xml:space="preserve"><value>正在读取可搜索文本…</value></data>
+  <data name="PdfSearchUnavailable" xml:space="preserve"><value>此 PDF 无法使用文本搜索。</value></data>
+  <data name="PdfSearchNoText" xml:space="preserve"><value>未找到可搜索文本。</value></data>
+  <data name="PdfSearchEncrypted" xml:space="preserve"><value>此 PDF 已加密，无法搜索其中的文本。</value></data>
+  <data name="PdfSearchFailed" xml:space="preserve"><value>无法读取 PDF 文本。</value></data>
+  <data name="PdfSearchTruncated" xml:space="preserve"><value>为遵守预览限制，可搜索文本已截断。</value></data>
+  <data name="PdfSearchPartialFormat" xml:space="preserve"><value>可搜索文本不完整；有 {0:N0} 页无法读取。</value></data>
+  <data name="PdfCopyPageText" xml:space="preserve"><value>复制当前页文本</value></data>
+  <data name="PdfPageTextCopied" xml:space="preserve"><value>已复制页面文本</value></data>
+  <data name="PdfPageTextUnavailable" xml:space="preserve"><value>当前页没有可搜索文本。</value></data>
 </root>
