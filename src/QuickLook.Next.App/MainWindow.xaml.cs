@@ -365,6 +365,10 @@ public sealed partial class MainWindow : Window
         PreviewRoot.PointerCaptureLost += OnPreviewRootPointerCaptureLost;
         PreviewRoot.DoubleTapped += OnPreviewRootDoubleTapped;
         RootGrid.KeyDown += OnRootGridKeyDown;
+        PdfScrollViewer.AddHandler(
+            UIElement.KeyDownEvent,
+            new Microsoft.UI.Xaml.Input.KeyEventHandler(OnPdfScrollViewerKeyDown),
+            handledEventsToo: true);
         GetAppWindow().Closing += (appWindow, args) =>
         {
             // Intercept the close (X button / Alt+F4 / taskbar close): hide the window instead of
@@ -2041,6 +2045,20 @@ public sealed partial class MainWindow : Window
     private void OnNextPdfPageClick(object sender, RoutedEventArgs e)
         => _pdfPresenter?.GoToNextPage();
 
+    private void OnPdfScrollViewerKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        bool modifierDown = IsVirtualKeyDown(Windows.System.VirtualKey.Shift)
+            || IsVirtualKeyDown(Windows.System.VirtualKey.Control)
+            || IsVirtualKeyDown(Windows.System.VirtualKey.Menu);
+        PreviewNavigationAction action = PreviewNavigationPolicy.Resolve(
+            pdfVisible: PdfScrollViewer.Visibility == Visibility.Visible,
+            imageVisible: false,
+            modifierDown,
+            ToPreviewNavigationKey(e.Key));
+        if (TryExecutePreviewNavigation(action))
+            e.Handled = true;
+    }
+
     private string ShowRasterPreview(PreviewReady ready)
     {
         UpdatePreviewChrome(ready, showRasterTools: true);
@@ -3185,7 +3203,7 @@ public sealed partial class MainWindow : Window
 
     private async Task NavigateImageSiblingAsync(int delta)
     {
-        string? currentPath = _previewSession.CurrentPath;
+        string? currentPath = _previewSession.ActivePath;
         if (string.IsNullOrWhiteSpace(currentPath))
             return;
 
@@ -3247,18 +3265,11 @@ public sealed partial class MainWindow : Window
     // the preview window owns focus. The full consumer matrix lives in docs/keyboard-focus-consumers.md.
     private void OnRootGridKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
-        bool controlDown = (Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
-            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
-        bool shiftDown = (Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
-            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
-        bool modifierDown = (Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
-            || (Microsoft.UI.Input.InputKeyboardSource
-                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0
-            || (Microsoft.UI.Input.InputKeyboardSource
-                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu) & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
+        bool controlDown = IsVirtualKeyDown(Windows.System.VirtualKey.Control);
+        bool shiftDown = IsVirtualKeyDown(Windows.System.VirtualKey.Shift);
+        bool modifierDown = shiftDown
+            || controlDown
+            || IsVirtualKeyDown(Windows.System.VirtualKey.Menu);
         bool focusedControlUsesSpace = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement() is Control;
         if (e.Key == Windows.System.VirtualKey.Space
             && !modifierDown
@@ -3305,6 +3316,19 @@ public sealed partial class MainWindow : Window
         bool imagePreviewVisible =
             (_rasterPresenter?.HasSurface == true && PreviewRoot.Visibility == Visibility.Visible)
             || (_animatedImagePresenter?.HasImage == true && AnimatedImagePreviewRoot.Visibility == Visibility.Visible);
+
+        PreviewNavigationAction navigationAction = PreviewNavigationPolicy.Resolve(
+            pdfVisible: PdfScrollViewer.Visibility == Visibility.Visible,
+            imagePreviewVisible,
+            modifierDown,
+            ToPreviewNavigationKey(e.Key));
+        if (navigationAction is PreviewNavigationAction.PreviousPdfPage or PreviewNavigationAction.NextPdfPage
+            && TryExecutePreviewNavigation(navigationAction))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (!imagePreviewVisible)
             return;
 
@@ -3345,19 +3369,47 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (e.Key == Windows.System.VirtualKey.Left)
+        if (navigationAction is PreviewNavigationAction.PreviousImage or PreviewNavigationAction.NextImage
+            && TryExecutePreviewNavigation(navigationAction))
         {
-            _ = NavigateImageSiblingAsync(-1);
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Windows.System.VirtualKey.Right)
-        {
-            _ = NavigateImageSiblingAsync(1);
             e.Handled = true;
         }
     }
+
+    private bool TryExecutePreviewNavigation(PreviewNavigationAction action)
+    {
+        switch (action)
+        {
+            case PreviewNavigationAction.PreviousPdfPage:
+                return _pdfPresenter?.GoToPreviousPage() == true;
+            case PreviewNavigationAction.NextPdfPage:
+                return _pdfPresenter?.GoToNextPage() == true;
+            case PreviewNavigationAction.PreviousImage:
+                _ = NavigateImageSiblingAsync(-1);
+                return true;
+            case PreviewNavigationAction.NextImage:
+                _ = NavigateImageSiblingAsync(1);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static PreviewNavigationKey ToPreviewNavigationKey(Windows.System.VirtualKey key)
+        => key switch
+        {
+            Windows.System.VirtualKey.Left => PreviewNavigationKey.Left,
+            Windows.System.VirtualKey.Right => PreviewNavigationKey.Right,
+            Windows.System.VirtualKey.Up => PreviewNavigationKey.Up,
+            Windows.System.VirtualKey.Down => PreviewNavigationKey.Down,
+            Windows.System.VirtualKey.PageUp => PreviewNavigationKey.PageUp,
+            Windows.System.VirtualKey.PageDown => PreviewNavigationKey.PageDown,
+            _ => PreviewNavigationKey.Other,
+        };
+
+    private static bool IsVirtualKeyDown(Windows.System.VirtualKey key)
+        => (Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
+            & Windows.UI.Core.CoreVirtualKeyStates.Down) != 0;
 
     private void OpenTextSearch()
     {

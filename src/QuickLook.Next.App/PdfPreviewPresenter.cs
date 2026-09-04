@@ -246,10 +246,10 @@ internal sealed class PdfPreviewPresenter
         TrimSurfaceCache(renderFirst, renderLast);
     }
 
-    public void GoToPreviousPage()
+    public bool GoToPreviousPage()
         => ScrollToPage(_currentPageIndex - 1);
 
-    public void GoToNextPage()
+    public bool GoToNextPage()
         => ScrollToPage(_currentPageIndex + 1);
 
     public void Clear()
@@ -281,16 +281,16 @@ internal sealed class PdfPreviewPresenter
         UpdatePager();
     }
 
-    private void ScrollToPage(int pageIndex)
+    private bool ScrollToPage(int pageIndex)
     {
-        if (_pageCount == 0)
-            return;
+        if (_pageCount == 0 || pageIndex < 0 || pageIndex >= _pageCount)
+            return false;
 
-        pageIndex = Math.Clamp(pageIndex, 0, _pageCount - 1);
         double targetOffset = PagePanelTopPadding + _pageTopOffsets[pageIndex];
         SetCurrentPage(pageIndex);
         _scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
         RequestVisiblePages();
+        return true;
     }
 
     private void SetCurrentPage(int pageIndex)

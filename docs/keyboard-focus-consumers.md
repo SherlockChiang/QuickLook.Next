@@ -26,7 +26,8 @@ so new keys can be added against the same contract instead of reverse-engineerin
 | Input | Explorer owns keyboard focus | Preview window owns keyboard focus |
 | --- | --- | --- |
 | Space | Hook toggles the preview: close when visible, open otherwise (`WM_QL_PREVIEW` / `WM_QL_CLOSE`) | `ClosePreviewFromKeyboard` unless the focused element uses Space |
-| Arrow keys | Delayed selection switch: generation-checked 80 ms timer re-reads the Explorer selection (`WM_QL_SWITCH_DELAYED`) | In-preview content navigation (filmstrip siblings, list views) |
+| Arrow keys | Delayed selection switch: generation-checked 80 ms timer re-reads the Explorer selection (`WM_QL_SWITCH_DELAYED`) | PDF Left/Up and Right/Down move by whole pages; image Left/Right moves between neighboring files; other previews retain their local list/scroll behavior |
+| Page Up / Page Down | — | PDF previous/next page |
 | Mouse click on an Explorer item | Delayed selection switch (`mouse_proc`) | Ownership transfer to the preview window |
 | Esc | Close preview (`WM_QL_CLOSE`) | The hook closes the preview only when no text input in the preview has focus; the text search or filter box dismisses itself first without closing the preview |
 | Ctrl+F | — (the hook ignores chords) | Text search (`OpenTextSearch`) or listing filter (`FocusFilter`) |
@@ -51,6 +52,10 @@ so new keys can be added against the same contract instead of reverse-engineerin
 - Duplicate close intents (hook and window key handling can both fire for one physical key)
   are deduplicated by `_keyboardCloseQueued` and the duplicate open/close reveal guard in
   `MainWindow`.
+- PDF page keys are also observed from the nested `ScrollViewer` after its class handling so
+  page navigation remains available when the document surface owns element focus. Image repeats
+  resolve from `PreviewSession.ActivePath`, allowing each new key repeat to supersede an in-flight
+  sibling preview instead of reopening the same file.
 
 ## Code pointers
 

@@ -56,6 +56,7 @@ The installer contains a signed MSIX and its project development certificate. Wi
 | Zoom image | Mouse wheel or `+` / `-` |
 | Reset image view | `Home` or `Ctrl+0` |
 | Browse neighboring images | `Left` / `Right` while the image preview is focused |
+| Move between PDF pages | `Left` / `Up` / `Page Up` and `Right` / `Down` / `Page Down` |
 
 Space keeps its normal behavior when focus is inside a text field, button, list item, toggle, or slider. Closing a preview hides the window; QuickLook Next remains available from the system tray.
 
