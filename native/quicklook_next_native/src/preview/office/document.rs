@@ -104,10 +104,8 @@ fn build_docx_layout<R: Read + Seek>(
     let mut has_layout_content = false;
 
     for paragraph in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let clipped = paragraph.chars().take(420).collect::<String>();
-        let line_count = (clipped.chars().count() as f64 / 72.0)
-            .ceil()
-            .clamp(1.0, 5.0);
+        let clipped_char_count = paragraph.chars().take(420).count();
+        let line_count = (clipped_char_count as f64 / 72.0).ceil().clamp(1.0, 5.0);
         let height = 24.0 * line_count + 10.0;
         if y + height > page_height - margin {
             if page_index <= MAX_OFFICE_DOCUMENT_PAGES && !items.is_empty() {
@@ -120,6 +118,7 @@ fn build_docx_layout<R: Read + Seek>(
 
         has_layout_content = true;
         if page_index <= MAX_OFFICE_DOCUMENT_PAGES {
+            let clipped = paragraph.chars().take(420).collect::<String>();
             items.push(OfficeLayoutItemDto {
                 kind: "text".to_string(),
                 x: margin,
