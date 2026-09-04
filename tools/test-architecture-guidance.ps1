@@ -117,8 +117,10 @@ Assert-Matches $errorAdr 'must never branch\s+on\s+the\s+human-readable\s+host\s
     "The error ADR must prohibit stringly typed recovery logic."
 Assert-Matches $errorAdr 'generation[\s\S]*cancellation token[\s\S]*path' `
     "Error UI/actions must bind to the current preview snapshot."
-Assert-Matches $errorAdr 'R26-P1-04[\s\S]*does not claim' `
-    "The ADR must not claim that Copy Diagnostics is already implemented."
+Assert-Matches $errorAdr 'R26-P1-04[\s\S]*sealed[\s\S]*stable error[\s\S]*lifecycle phase[\s\S]*correlation ID[\s\S]*application version[\s\S]*normalized format[\s\S]*coarse size bucket' `
+    "The ADR must define the implemented fixed Copy Diagnostics schema."
+Assert-Matches $errorAdr 'accepts no[\s\S]*path[\s\S]*file name[\s\S]*localized message[\s\S]*title' `
+    "The ADR must define the Copy Diagnostics privacy boundary."
 
 $protocolText = Get-Content -LiteralPath (Join-Path $Root "src/QuickLook.Next.Core/Protocol.cs") -Raw
 $pendingText = Get-Content -LiteralPath (Join-Path $Root "src/QuickLook.Next.Core/PendingRequests.cs") -Raw

@@ -26,6 +26,11 @@ left visible instead of hidden behind vague TODOs.
   error dialogs with the process no-GP-fault-box mode. That guarantee takes
   priority over best-effort WER/local-dump capture; the RasterHost supervisor
   still records the exact decimal/hex exit code before scheduling a restart.
+- Preview errors expose a generation-bound Copy Diagnostics action. It copies a
+  sealed, maximum-1024-character JSON snapshot containing only a stable error
+  code, lifecycle phase, correlation ID, application version, normalized format,
+  and coarse size bucket. Paths, file names, localized messages, titles, and file
+  contents are not inputs to the schema.
 - Tray context menu handling is isolated in `TrayIconManager`. It uses a native
   popup menu because the preview window is normally hidden/no-activate, so a
   WinUI `MenuFlyout` anchored to the App XAML root is not reliable for tray

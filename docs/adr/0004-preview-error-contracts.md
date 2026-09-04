@@ -23,8 +23,9 @@ human-readable host message.
 The App maps known codes and local failure kinds to localized, user-safe titles,
 messages, and an explicit retry policy. Unknown codes and host exception text
 fail closed to a generic content/service error. Before showing an error, moving
-focus, or executing Retry/Open/Reveal, the App binds the failure to the current
-preview snapshot and revalidates generation, cancellation token, and path.
+focus, or executing Retry/Open/Reveal/Copy Diagnostics, the App binds the failure
+to the current preview snapshot and revalidates generation, cancellation token,
+and path.
 
 Timeout, disconnect, crash, invalid protocol, and incomplete ownership transfer
 are supervisor failures: fail pending requests, reclaim or recycle the host, and
@@ -41,17 +42,23 @@ recovery logic or shown directly by the App.
   previous file.
 - Adding a user-visible recovery branch requires a stable code and focused tests.
 
-## Follow-up
+## Copy diagnostics
 
-The redacted Copy Diagnostics payload (stable phase, correlation ID, version,
-format, and size bucket) remains tracked by `R26-P1-04`. When implemented it must
-be additive and redact local paths by default; this ADR does not claim that UI
-already exists.
+`R26-P1-04` adds a sealed, Core-created schema for the error panel's Copy
+Diagnostics action. The bounded JSON contains only schema version, stable error
+code, lifecycle phase, correlation ID, application version, normalized format,
+and a coarse size bucket. The constructor is internal and the factory accepts no
+path, file name, localized message, or title, so callers cannot populate the
+clipboard payload with those values. Format and size come from the Rust-first
+`FileProbe`; WinUI only binds the snapshot to the current error generation and
+performs the explicit clipboard write.
 
 ## Verification
 
 - `src/QuickLook.Next.Core/Protocol.cs`
 - `src/QuickLook.Next.Core/PendingRequests.cs`
+- `src/QuickLook.Next.Core/PreviewFailureDiagnostics.cs`
 - `src/QuickLook.Next.App/PreviewSession.cs`
+- `tools/test-preview-error-diagnostics-ui.ps1`
 - `tools/test-supervised-host-error-ui.ps1`
 - `tools/guard-stale-callbacks.ps1`

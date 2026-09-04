@@ -132,7 +132,7 @@ the release-only `release:` prefix while this queue is in progress.
   - [x] `R26-P1-03d` Preserve bounded Office represented/total/limit metadata
     from Rust through ParserHost and show localized slides, sheets, or
     approximate-page coverage within the WinUI 16-page presentation limit.
-- [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
+- [x] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
   phase, correlation ID, version, format, and size bucket but no local path.
 
 ### Rust-first architecture and performance
@@ -463,6 +463,26 @@ Completed entries move here with the verification commands and commit hash.
     MSBuild fixture stopped because local SDK `10.0.302` is unavailable
     (`10.0.303` and `10.0.400` are installed).
   - Commits: `4807928`, `b6137bd`, `93648b9`
+
+- [x] `R26-P1-04` Add a generation-bound Copy Diagnostics action to the preview
+  error panel. Its sealed Core-created JSON schema contains only a stable error
+  code, lifecycle phase, correlation ID, application version, normalized format,
+  and coarse size bucket; it accepts no path, file-name, message, or title input
+  and is bounded to 1024 characters. Format and size facts continue to originate
+  in the Rust-first `FileProbe`, while WinUI only binds the current error and
+  performs the user-requested clipboard write.
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore --maxcpucount:1` (351 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore --maxcpucount:1` (0 warnings, 0 errors)
+  - Verification: `pwsh -NoProfile -File tools/test-preview-error-diagnostics-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-supervised-host-error-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/guard-stale-callbacks.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-preview-window-focus.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 480 keys)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Architecture guard: all repository checks passed before the known isolated
+    MSBuild fixture stopped because local SDK `10.0.302` is unavailable
+    (`10.0.303` and `10.0.400` are installed).
+  - Commits: `2347bdf`, `c20646e`, `ab3002b`
 
 - [x] Preflight the current user's installed MSIX identity and version before
   certificate trust, UAC, application shutdown, or registration. Older packages
