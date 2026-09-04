@@ -449,6 +449,21 @@ the release-only `release:` prefix while this queue is in progress.
         blocked only by its isolated pinned-SDK `10.0.302` fixture
         (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `a7a9d67`
+    - [x] `R26-P1-07d-15` Move the legacy, cancelable, and target-sized path
+      image decode exports into the 130-line `ffi/static_image.rs` adapter.
+      Preserve all three C ABI signatures, nested panic containment, bounded
+      UTF-8 validation, cancellation mapping, the 28-byte raster header, and
+      negative required-size negotiation while adding oversized-path coverage
+      for every wrapper and removing their definitions from `lib.rs`.
+      - Verification: Rust fmt, Clippy, workspace tests (342 passed, 1 ignored),
+        FFI safety (85 files, 60 raw-pointer exports), lint-scope (85 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 1 minute 09 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `26bb0c0`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
