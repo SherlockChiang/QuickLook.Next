@@ -23,12 +23,18 @@ remaining work below stays ordered by risk and user-visible impact.
     MSBuild fixture blocker because this machine lacks pinned SDK `10.0.302`.
   - Commit: `9b54ae1`
 
-- [ ] `R26-UX-02` Make preview-window ownership and z-order an explicit policy:
+- [x] `R26-UX-02` Make preview-window ownership and z-order an explicit policy:
   standard mode raises only within the ordinary window band, optional always-on-top
   mode is deliberate and reversible, initial Space-open retains immediate keyboard
   focus, and an optional focus-loss close waits for transient activation changes and
   never closes behind app-owned settings or modal UI. Expose the two preferences in
   all three locales and cover the pure policy plus the Win32 wiring guard.
+  - Verification: 23 focused focus/window-policy tests and all 331 Core tests passed;
+    the WinUI App Release build completed with zero warnings and errors; localization,
+    preview-window focus, and performance-bounds guards passed. The full architecture
+    script passed every repository guard before reaching the known isolated MSBuild
+    fixture blocker because this machine lacks pinned SDK `10.0.302`.
+  - Commit: `7239ad2`
 
 ## Microsoft Store 1.0.0 launch queue
 
