@@ -416,6 +416,23 @@ the release-only `release:` prefix while this queue is in progress.
         blocked only by its isolated pinned-SDK `10.0.302` fixture
         (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `977a6c0`
+    - [x] `R26-P1-07d-13` Complete the path-preview FFI family by moving the
+      remaining Office and image-metadata path exports into the 256-line
+      `native/quicklook_next_native/src/ffi/path_preview.rs` adapter. Move its
+      focused tests into a 138-line child module, add oversized-path coverage
+      for both new exports, remove the duplicate root cancellation test, and
+      stop re-exporting `write_json_out` through the composition root. Preserve
+      all twelve C ABI signatures, panic boundaries, cancellation behavior,
+      bounded UTF-8 validation, renderer routing, and output-buffer semantics.
+      - Verification: Rust fmt, Clippy, workspace tests (340 passed, 1 ignored),
+        FFI safety (81 files, 60 raw-pointer exports), lint-scope (81 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 1 minute 13 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `9100ccc`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
