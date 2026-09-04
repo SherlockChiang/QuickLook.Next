@@ -34,9 +34,7 @@ pub(crate) use ffi::archive_entry::{
     ql_extract_archive_entry_to_output_handle,
 };
 // Keep shared FFI helpers available to the remaining crate-local adapters.
-pub(crate) use ffi::common::{
-    ffi_boundary, ffi_void_boundary, utf8_arg, write_json_out, write_v2_out,
-};
+pub(crate) use ffi::common::{ffi_boundary, ffi_void_boundary, utf8_arg, write_v2_out};
 // Keep stable ABI discovery available to crate-local tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::contract::{ql_abi_version, ql_capabilities, ql_probe};
@@ -72,8 +70,9 @@ pub(crate) use ffi::handle_structured::{
 #[allow(unused_imports)]
 pub(crate) use ffi::path_preview::{
     ql_preview_archive, ql_preview_ebook, ql_preview_ebook_cancelable, ql_preview_executable,
-    ql_preview_executable_cancelable, ql_preview_info, ql_preview_text, ql_preview_text_cancelable,
-    ql_preview_torrent, ql_preview_torrent_cancelable,
+    ql_preview_executable_cancelable, ql_preview_image_metadata, ql_preview_info,
+    ql_preview_office, ql_preview_text, ql_preview_text_cancelable, ql_preview_torrent,
+    ql_preview_torrent_cancelable,
 };
 // Keep the moved route symbols available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
@@ -3469,33 +3468,6 @@ mod tests {
     }
 
     #[test]
-    fn simple_preview_exports_honor_cancellation_before_file_access() {
-        let path = b"missing.file";
-        let mut output = [0u8; 16];
-        let calls = [
-            ql_preview_text_cancelable,
-            ql_preview_ebook_cancelable,
-            ql_preview_executable_cancelable,
-            ql_preview_torrent_cancelable,
-        ];
-
-        for call in calls {
-            assert_eq!(
-                unsafe {
-                    call(
-                        path.as_ptr(),
-                        path.len(),
-                        output.as_mut_ptr(),
-                        output.len(),
-                        Some(always_cancel),
-                    )
-                },
-                -3
-            );
-        }
-    }
-
-    #[test]
     fn animation_exports_honor_cancellation_before_file_access() {
         let path = b"missing.gif";
         let mut output = [0u8; 16];
@@ -4579,51 +4551,6 @@ fn json_escape(s: &str) -> String {
         }
     }
     out
-}
-
-/// Render an Office document preview. OOXML/ODF paths are parsed in Rust; legacy OLE formats fall back to info.
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_office(
-    path_utf8: *const u8,
-    path_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-            return 0;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let json = preview::render_office(path, cancel_cb);
-        write_json_out(&json, out_buf, out_cap)
-    })
-}
-
-/// Render bounded Rust-native image metadata. Returns JSON length, 0 on failure/no metadata.
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_image_metadata(
-    path_utf8: *const u8,
-    path_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-) -> i32 {
-    ffi_boundary(|| {
-        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-            return 0;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let json = preview::render_image_metadata(path);
-        write_json_out(&json, out_buf, out_cap)
-    })
 }
 
 #[cfg(test)]

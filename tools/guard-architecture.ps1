@@ -1286,6 +1286,15 @@ if (Test-Path $parserHostProgram) {
         $nativePathPreviewText = ""
         Add-Failure "Missing Rust FFI path-preview source: $nativePathPreviewPath"
     }
+    $nativePathPreviewTestsPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/path_preview/tests.rs"
+    if (Test-Path -LiteralPath $nativePathPreviewTestsPath -PathType Leaf) {
+        $nativePathPreviewTestsText = Get-Content -LiteralPath $nativePathPreviewTestsPath -Raw
+    }
+    else {
+        $nativePathPreviewTestsText = ""
+        Add-Failure "Missing Rust FFI path-preview tests: $nativePathPreviewTestsPath"
+    }
     $panicBoundaryExemptions = @{
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
     }
@@ -1414,6 +1423,9 @@ if (Test-Path $parserHostProgram) {
     $pathPreviewAbiExports = [regex]::Matches(
         $nativePathPreviewText,
         '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+')
+    $pathPreviewNoMangleCount = [regex]::Matches(
+        $nativePathPreviewText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
     $expectedPathPreviewExports = @(
         "ql_preview_text",
         "ql_preview_text_cancelable",
@@ -1424,10 +1436,13 @@ if (Test-Path $parserHostProgram) {
         "ql_preview_ebook_cancelable",
         "ql_preview_torrent",
         "ql_preview_torrent_cancelable",
-        "ql_preview_archive")
+        "ql_preview_archive",
+        "ql_preview_office",
+        "ql_preview_image_metadata")
     if ($pathPreviewExports.Count -ne $expectedPathPreviewExports.Count -or
-        $pathPreviewAbiExports.Count -ne $expectedPathPreviewExports.Count) {
-        Add-Failure "ffi::path_preview must expose exactly ten unsafe C ABI exports"
+        $pathPreviewAbiExports.Count -ne $expectedPathPreviewExports.Count -or
+        $pathPreviewNoMangleCount -ne $expectedPathPreviewExports.Count) {
+        Add-Failure "ffi::path_preview must expose exactly twelve unsafe C ABI exports"
     }
     if ($nativePathPreviewText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
         $nativePathPreviewText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
@@ -1465,8 +1480,22 @@ if (Test-Path $parserHostProgram) {
         $nativePathPreviewText -notmatch '\b(?:ffi_boundary|optional_utf8_arg|utf8_arg|write_json_out)\b') {
         Add-Failure "ffi::path_preview lost its explicit bounded adapter dependencies"
     }
-    if (@(Get-Content -LiteralPath $nativePathPreviewPath).Count -gt 320) {
-        Add-Failure "The focused ffi::path_preview module grew beyond 320 lines"
+    if ($nativePathPreviewText -notmatch '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$' -or
+        $nativePathPreviewTestsText -notmatch
+            'fn\s+simple_preview_exports_honor_cancellation_before_file_access\s*\(' -or
+        $nativePathPreviewTestsText -notmatch
+            'fn\s+path_preview_exports_reject_invalid_pointer_contracts\s*\(' -or
+        $nativePathPreviewTestsText -notmatch
+            'fn\s+info_preview_treats_invalid_optional_kind_as_empty\s*\(' -or
+        $nativePathPreviewTestsText -notmatch
+            'fn\s+office_and_image_metadata_reject_invalid_paths_before_file_access\s*\(') {
+        Add-Failure "ffi::path_preview lost its focused child-module boundary tests"
+    }
+    if (@(Get-Content -LiteralPath $nativePathPreviewPath).Count -gt 280) {
+        Add-Failure "The focused ffi::path_preview module grew beyond 280 lines"
+    }
+    if (@(Get-Content -LiteralPath $nativePathPreviewTestsPath).Count -gt 160) {
+        Add-Failure "The focused ffi::path_preview tests grew beyond 160 lines"
     }
     # Highlight tokenization crosses the ABI with its own bounded adapter; scan that module
     # independently so the export keeps an explicit panic boundary and packet contract.

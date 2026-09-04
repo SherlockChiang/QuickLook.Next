@@ -18,6 +18,7 @@ $ffiHeroImageTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\h
 $ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
 $ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_structured.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
+$ffiPathPreviewTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview\tests.rs"
 $ffiRasterPacketPath = Join-Path $Root "native\quicklook_next_native\src\ffi\raster_packet.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $ffiThumbnailPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail.rs"
@@ -89,6 +90,7 @@ foreach ($path in @(
         $ffiHandlePreviewPath,
         $ffiHandleStructuredPath,
         $ffiPathPreviewPath,
+        $ffiPathPreviewTestsPath,
         $ffiRasterPacketPath,
         $ffiRoutingPath,
         $ffiThumbnailPath,
@@ -161,6 +163,7 @@ if ($failures.Count -eq 0) {
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
+    $ffiPathPreviewTestsText = Get-Content -LiteralPath $ffiPathPreviewTestsPath -Raw
     $ffiRasterPacketText = Get-Content -LiteralPath $ffiRasterPacketPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $ffiThumbnailText = Get-Content -LiteralPath $ffiThumbnailPath -Raw
@@ -297,7 +300,9 @@ if ($failures.Count -eq 0) {
         "ql_preview_ebook_cancelable",
         "ql_preview_torrent",
         "ql_preview_torrent_cancelable",
-        "ql_preview_archive")
+        "ql_preview_archive",
+        "ql_preview_office",
+        "ql_preview_image_metadata")
     $pathPreviewReExportMatch = [regex]::Match(
         $libText,
         '(?ms)^pub\(crate\)\s+use\s+ffi::path_preview::\{(?<items>.*?)\};')
@@ -314,7 +319,7 @@ if ($failures.Count -eq 0) {
         if ($pathPreviewReExportNames.Count -ne $expectedPathPreviewExports.Count -or
             @($pathPreviewReExportNames | Sort-Object -Unique).Count -ne $expectedPathPreviewExports.Count) {
             $failures.Add(
-                "lib.rs ffi::path_preview re-export must contain exactly ten unique preview exports.")
+                "lib.rs ffi::path_preview re-export must contain exactly twelve unique preview exports.")
         }
         foreach ($pathPreviewExport in $expectedPathPreviewExports) {
             if ($pathPreviewReExportNames -notcontains $pathPreviewExport) {
@@ -1108,7 +1113,7 @@ if ($failures.Count -eq 0) {
     if ($pathPreviewExports.Count -ne $expectedPathPreviewExports.Count -or
         $pathPreviewAbiExports.Count -ne $expectedPathPreviewExports.Count -or
         $pathPreviewNoMangleCount -ne $expectedPathPreviewExports.Count) {
-        $failures.Add("ffi::path_preview must expose exactly ten unsafe C ABI exports.")
+        $failures.Add("ffi::path_preview must expose exactly twelve unsafe C ABI exports.")
     }
     foreach ($pathPreviewExport in $expectedPathPreviewExports) {
         $pathPreviewPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
@@ -1150,17 +1155,26 @@ if ($failures.Count -eq 0) {
             $failures.Add("$pathPreviewName must contain panics before returning across the Rust FFI boundary")
         }
     }
+    if ($ffiPathPreviewText -notmatch '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$') {
+        $failures.Add("ffi::path_preview must keep focused tests in its child module.")
+    }
     foreach ($pathPreviewTest in @(
             'simple_preview_exports_honor_cancellation_before_file_access',
             'path_preview_exports_reject_invalid_pointer_contracts',
-            'info_preview_treats_invalid_optional_kind_as_empty')) {
-        if ($ffiPathPreviewText -notmatch "fn\s+$pathPreviewTest\s*\(") {
+            'info_preview_treats_invalid_optional_kind_as_empty',
+            'office_and_image_metadata_reject_invalid_paths_before_file_access')) {
+        if ($ffiPathPreviewTestsText -notmatch "fn\s+$pathPreviewTest\s*\(") {
             $failures.Add("ffi::path_preview lost focused test: $pathPreviewTest")
         }
     }
     $ffiPathPreviewLineCount = @(Get-Content -LiteralPath $ffiPathPreviewPath).Count
-    if ($ffiPathPreviewLineCount -gt 320) {
-        $failures.Add("The focused ffi::path_preview module grew beyond 320 lines: $ffiPathPreviewLineCount")
+    if ($ffiPathPreviewLineCount -gt 280) {
+        $failures.Add("The focused ffi::path_preview module grew beyond 280 lines: $ffiPathPreviewLineCount")
+    }
+    $ffiPathPreviewTestsLineCount = @(Get-Content -LiteralPath $ffiPathPreviewTestsPath).Count
+    if ($ffiPathPreviewTestsLineCount -gt 160) {
+        $failures.Add(
+            "The focused ffi::path_preview tests grew beyond 160 lines: $ffiPathPreviewTestsLineCount")
     }
 
     foreach ($forbidden in @(
