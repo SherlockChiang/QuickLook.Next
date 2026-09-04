@@ -13,4 +13,5 @@ pub(crate) mod highlight;
 pub(crate) mod path_preview;
 pub(crate) mod raster_packet;
 pub(crate) mod routing;
+pub(crate) mod static_image;
 pub(crate) mod thumbnail;

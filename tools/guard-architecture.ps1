@@ -1232,6 +1232,15 @@ if (Test-Path $parserHostProgram) {
         $nativeFileProbeTestsText = ""
         Add-Failure "Missing Rust file-probe provider tests: $nativeFileProbeTestsPath"
     }
+    $nativeStaticImageFfiPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/static_image.rs"
+    if (Test-Path -LiteralPath $nativeStaticImageFfiPath -PathType Leaf) {
+        $nativeStaticImageFfiText = Get-Content -LiteralPath $nativeStaticImageFfiPath -Raw
+    }
+    else {
+        $nativeStaticImageFfiText = ""
+        Add-Failure "Missing Rust static-image FFI source: $nativeStaticImageFfiPath"
+    }
     $nativeContractPath = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
     if (Test-Path -LiteralPath $nativeContractPath -PathType Leaf) {
         $nativeContractText = Get-Content -LiteralPath $nativeContractPath -Raw
@@ -1639,6 +1648,79 @@ if (Test-Path $parserHostProgram) {
     }
     if (@(Get-Content -LiteralPath $nativeFileProbeTestsPath).Count -gt 180) {
         Add-Failure "The focused preview::file_probe tests grew beyond 180 lines"
+    }
+    # Keep the legacy/cancelable/sized path raster ABI together as a thin adapter over the
+    # existing bounded decoder. HANDLE raster output remains a separate follow-up boundary.
+    if ($nativeFfiModuleText -notmatch '(?m)^pub\(crate\) mod static_image;\s*$') {
+        Add-Failure "Rust path-based static-image decoding must remain in ffi::static_image"
+    }
+    $expectedStaticImagePathExports = @(
+        "ql_decode_image",
+        "ql_decode_image_cancelable",
+        "ql_decode_image_sized_cancelable")
+    $staticImagePathExports = [regex]::Matches(
+        $nativeStaticImageFfiText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $staticImagePathExportNames = @(
+        $staticImagePathExports | ForEach-Object { $_.Groups["name"].Value })
+    $staticImagePathNoMangleCount = [regex]::Matches(
+        $nativeStaticImageFfiText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($staticImagePathExports.Count -ne $expectedStaticImagePathExports.Count -or
+        $staticImagePathNoMangleCount -ne $expectedStaticImagePathExports.Count -or
+        @($staticImagePathExportNames | Sort-Object -Unique).Count -ne
+            $expectedStaticImagePathExports.Count -or
+        $nativeStaticImageFfiText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeStaticImageFfiText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeStaticImageFfiText -match
+            '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::static_image must expose exactly three unsafe path-based C ABI entry points"
+    }
+    foreach ($staticImagePathExport in $expectedStaticImagePathExports) {
+        if ($staticImagePathExportNames -notcontains $staticImagePathExport) {
+            Add-Failure "ffi::static_image lost expected export: $staticImagePathExport"
+        }
+        if ($nativeLibText -match
+            "(?m)^pub\s+unsafe\s+extern\s+`"C`"\s+fn\s+$staticImagePathExport\s*\(") {
+            Add-Failure "$staticImagePathExport must remain in ffi::static_image, not lib.rs"
+        }
+    }
+    $staticImagePathReExportMatch = [regex]::Match(
+        $nativeLibText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::static_image::\{(?<items>.*?)\};')
+    if (-not $staticImagePathReExportMatch.Success) {
+        Add-Failure "lib.rs must retain the crate-private ffi::static_image re-export block"
+    }
+    else {
+        $staticImagePathReExportNames = @(
+            [regex]::Matches(
+                $staticImagePathReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($staticImagePathReExportNames.Count -ne $expectedStaticImagePathExports.Count -or
+            @($staticImagePathReExportNames | Sort-Object -Unique).Count -ne
+                $expectedStaticImagePathExports.Count) {
+            Add-Failure "lib.rs ffi::static_image re-export must contain exactly three exports"
+        }
+        foreach ($staticImagePathExport in $expectedStaticImagePathExports) {
+            if ($staticImagePathReExportNames -notcontains $staticImagePathExport) {
+                Add-Failure "lib.rs ffi::static_image re-export lost: $staticImagePathExport"
+            }
+        }
+    }
+    if ($nativeStaticImageFfiText -notmatch
+            'ql_decode_image\([\s\S]*ffi_boundary\(\|\|\s*unsafe\s*\{\s*ql_decode_image_cancelable\(' -or
+        $nativeStaticImageFfiText -notmatch
+            'ql_decode_image_cancelable\([\s\S]*ffi_boundary\(\|\|\s*unsafe\s*\{[\s\S]*ql_decode_image_sized_cancelable\(' -or
+        $nativeStaticImageFfiText -notmatch
+            'ql_decode_image_sized_cancelable\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*decode_image_bgra\([\s\S]*cancel_requested\(cancel_cb\)[\s\S]*let total = 28 \+ bgra\.len\(\);[\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*total[\s\S]*copy_nonoverlapping\(' -or
+        $nativeStaticImageFfiText -notmatch
+            'fn\s+path_image_exports_reject_oversized_paths_before_dereference\s*\(') {
+        Add-Failure "ffi::static_image lost its wrapper, bounded path, cancellation, or packet-copy contract"
+    }
+    if (@(Get-Content -LiteralPath $nativeStaticImageFfiPath).Count -gt 150) {
+        Add-Failure "The focused ffi::static_image module grew beyond 150 lines"
     }
     # Highlight tokenization crosses the ABI with its own bounded adapter; scan that module
     # independently so the export keeps an explicit panic boundary and packet contract.

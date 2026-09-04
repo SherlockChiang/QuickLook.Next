@@ -22,6 +22,7 @@ $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path
 $ffiPathPreviewTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview\tests.rs"
 $ffiRasterPacketPath = Join-Path $Root "native\quicklook_next_native\src\ffi\raster_packet.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
+$ffiStaticImagePath = Join-Path $Root "native\quicklook_next_native\src\ffi\static_image.rs"
 $ffiThumbnailPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail.rs"
 $ffiThumbnailTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail\tests.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
@@ -97,6 +98,7 @@ foreach ($path in @(
         $ffiPathPreviewTestsPath,
         $ffiRasterPacketPath,
         $ffiRoutingPath,
+        $ffiStaticImagePath,
         $ffiThumbnailPath,
         $ffiThumbnailTestsPath,
         $win32ModulePath,
@@ -173,6 +175,7 @@ if ($failures.Count -eq 0) {
     $ffiPathPreviewTestsText = Get-Content -LiteralPath $ffiPathPreviewTestsPath -Raw
     $ffiRasterPacketText = Get-Content -LiteralPath $ffiRasterPacketPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
+    $ffiStaticImageText = Get-Content -LiteralPath $ffiStaticImagePath -Raw
     $ffiThumbnailText = Get-Content -LiteralPath $ffiThumbnailPath -Raw
     $ffiThumbnailTestsText = Get-Content -LiteralPath $ffiThumbnailTestsPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
@@ -257,6 +260,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod raster_packet;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod static_image;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod thumbnail;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
@@ -848,6 +852,76 @@ if ($failures.Count -eq 0) {
     if ($previewFileProbeTestsLineCount -gt 180) {
         $failures.Add(
             "The focused preview::file_probe tests grew beyond 180 lines: $previewFileProbeTestsLineCount")
+    }
+
+    $expectedStaticImagePathExports = @(
+        "ql_decode_image",
+        "ql_decode_image_cancelable",
+        "ql_decode_image_sized_cancelable")
+    $staticImagePathExports = [regex]::Matches(
+        $ffiStaticImageText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $staticImagePathExportNames = @(
+        $staticImagePathExports | ForEach-Object { $_.Groups["name"].Value })
+    $staticImagePathNoMangleCount = [regex]::Matches(
+        $ffiStaticImageText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($staticImagePathExports.Count -ne $expectedStaticImagePathExports.Count -or
+        $staticImagePathNoMangleCount -ne $expectedStaticImagePathExports.Count -or
+        $ffiStaticImageText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiStaticImageText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiStaticImageText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::static_image must expose exactly three unsafe path-based C ABI entry points.")
+    }
+    foreach ($staticImagePathExport in $expectedStaticImagePathExports) {
+        if ($staticImagePathExportNames -notcontains $staticImagePathExport) {
+            $failures.Add("ffi::static_image lost expected export: $staticImagePathExport")
+        }
+        if ($libText -match
+            "(?m)^pub\s+unsafe\s+extern\s+`"C`"\s+fn\s+$staticImagePathExport\s*\(") {
+            $failures.Add("$staticImagePathExport must remain in ffi::static_image, not lib.rs")
+        }
+    }
+    $staticImageReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::static_image::\{(?<items>.*?)\};')
+    if (-not $staticImageReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the crate-private ffi::static_image re-export block.")
+    }
+    else {
+        $staticImageReExportNames = @(
+            [regex]::Matches(
+                $staticImageReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($staticImageReExportNames.Count -ne $expectedStaticImagePathExports.Count -or
+            @($staticImageReExportNames | Sort-Object -Unique).Count -ne
+                $expectedStaticImagePathExports.Count) {
+            $failures.Add("lib.rs ffi::static_image re-export must contain exactly three exports.")
+        }
+        foreach ($staticImagePathExport in $expectedStaticImagePathExports) {
+            if ($staticImageReExportNames -notcontains $staticImagePathExport) {
+                $failures.Add("lib.rs ffi::static_image re-export lost: $staticImagePathExport")
+            }
+        }
+    }
+    if ($ffiStaticImageText -notmatch
+            'ql_decode_image\([\s\S]*ffi_boundary\(\|\|\s*unsafe\s*\{\s*ql_decode_image_cancelable\(' -or
+        $ffiStaticImageText -notmatch
+            'ql_decode_image_cancelable\([\s\S]*ffi_boundary\(\|\|\s*unsafe\s*\{[\s\S]*ql_decode_image_sized_cancelable\(' -or
+        $ffiStaticImageText -notmatch
+            'ql_decode_image_sized_cancelable\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*decode_image_bgra\([\s\S]*cancel_requested\(cancel_cb\)[\s\S]*let total = 28 \+ bgra\.len\(\);[\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*total[\s\S]*copy_nonoverlapping\(' -or
+        $ffiStaticImageText -notmatch
+            'fn\s+path_image_exports_reject_oversized_paths_before_dereference\s*\(') {
+        $failures.Add(
+            "ffi::static_image lost its wrapper, bounded path, cancellation, or packet-copy contract.")
+    }
+    $ffiStaticImageLineCount = @(Get-Content -LiteralPath $ffiStaticImagePath).Count
+    if ($ffiStaticImageLineCount -gt 150) {
+        $failures.Add(
+            "The focused ffi::static_image module grew beyond 150 lines: $ffiStaticImageLineCount")
     }
 
     $expectedHandlePreviewExports = @(
