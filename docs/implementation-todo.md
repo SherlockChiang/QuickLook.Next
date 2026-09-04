@@ -355,6 +355,33 @@ the release-only `release:` prefix while this queue is in progress.
         checks and remains blocked only by its isolated pinned-SDK `10.0.302`
         fixture (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `30a62d9`
+    - [x] `R26-P1-07d-9` Move checked Hero BGRA packet sizing and direct caller
+      buffer writes into `native/quicklook_next_native/src/ffi/raster_packet.rs`.
+      Keep exact geometry validation private, expose only the two crate-private
+      path/ABI-2 writers, distinguish internal layout failures from caller
+      capacity errors, and prevent aggregate packet allocation from returning.
+      - Verification: Rust fmt, Clippy, workspace tests (339 passed, 1 ignored),
+        FFI safety, lint-scope, module-boundary, performance-bounds, and
+        format-registry guards passed. The native Release DLL built through its
+        MSBuild contract in 1 minute 31 seconds; the architecture guard completed
+        all repository checks and remains blocked only by its isolated pinned-SDK
+        `10.0.302` fixture (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `83448fa`
+    - [x] `R26-P1-07d-10` Move all seven Office/package Hero path and HANDLE
+      exports into `native/quicklook_next_native/src/ffi/hero_image.rs`, with
+      cancellation tests in a focused child module. Preserve the exact C ABI,
+      panic, HANDLE-reopen, Office image-reference/dimension, and checked direct
+      caller-buffer contracts while leaving `lib.rs` as a compatibility
+      composition point.
+      - Verification: Rust fmt, Clippy, workspace tests (340 passed, 1 ignored),
+        FFI safety (76 files, 60 raw-pointer exports), lint-scope (76 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 1 minute 15 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `7a5636d`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
