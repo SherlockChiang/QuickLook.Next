@@ -9,6 +9,7 @@ $abiGeneratedPath = Join-Path $Root "native\quicklook_next_native\src\abi_genera
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
+$ffiDatabasePath = Join-Path $Root "native\quicklook_next_native\src\ffi\database.rs"
 $ffiHandleContainerPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_container.rs"
 $ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
 $ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_structured.rs"
@@ -72,6 +73,7 @@ foreach ($path in @(
         $ffiModulePath,
         $ffiCommonPath,
         $ffiContractPath,
+        $ffiDatabasePath,
         $ffiHandleContainerPath,
         $ffiHandlePreviewPath,
         $ffiHandleStructuredPath,
@@ -136,6 +138,7 @@ if ($failures.Count -eq 0) {
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
+    $ffiDatabaseText = Get-Content -LiteralPath $ffiDatabasePath -Raw
     $ffiHandleContainerText = Get-Content -LiteralPath $ffiHandleContainerPath -Raw
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
@@ -211,6 +214,7 @@ if ($failures.Count -eq 0) {
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod database;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_container;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_structured;\s*$' -or
@@ -386,6 +390,64 @@ if ($failures.Count -eq 0) {
     $ffiContractLineCount = @(Get-Content -LiteralPath $ffiContractPath).Count
     if ($ffiContractLineCount -gt 140) {
         $failures.Add("The focused ffi::contract module grew beyond 140 lines: $ffiContractLineCount")
+    }
+
+    $expectedDatabaseExports = @(
+        "ql_preview_database_cancelable",
+        "ql_preview_sqlite_handles")
+    $databaseReExportMatch = [regex]::Match(
+        $libText,
+        '(?m)^pub\(crate\) use ffi::database::\{ql_preview_database_cancelable,\s*ql_preview_sqlite_handles\};\s*$')
+    if (-not $databaseReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the exact crate-private ffi::database re-export block.")
+    }
+    if ($ffiDatabaseText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiDatabaseText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiDatabaseText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::database must use explicit imports and a thin unsafe C ABI surface.")
+    }
+    $databaseExports = [regex]::Matches(
+        $ffiDatabaseText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $databaseNoMangleCount = [regex]::Matches(
+        $ffiDatabaseText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($databaseExports.Count -ne $expectedDatabaseExports.Count -or
+        $databaseNoMangleCount -ne $expectedDatabaseExports.Count) {
+        $failures.Add("ffi::database must expose exactly two unsafe C ABI exports.")
+    }
+    foreach ($databaseExport in $expectedDatabaseExports) {
+        $databasePattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($databaseExport) + '\s*\('
+        if ($ffiDatabaseText -notmatch $databasePattern) {
+            $failures.Add("ffi::database lost expected export: $databaseExport")
+        }
+        if ($libText -match $databasePattern) {
+            $failures.Add(
+                "$databaseExport implementation must remain in ffi::database, not lib.rs.")
+        }
+    }
+    if ($ffiDatabaseText -notmatch 'ql_preview_database_cancelable\([\s\S]*ffi_boundary\(\|\|\s*\{' -or
+        $ffiDatabaseText -notmatch 'ql_preview_sqlite_handles\([\s\S]*ffi_boundary\(\|\|\s*unsafe' -or
+        $ffiDatabaseText -notmatch 'preview_handle_v2\([\s\S]*reopen_optional_handle\([\s\S]*preview::render_database_reader\(' -or
+        $ffiDatabaseText -notmatch 'MAX_DATABASE_HANDLE_BYTES' -or
+        $ffiDatabaseText -notmatch 'MAX_SQLITE_WAL_BYTES' -or
+        $ffiDatabaseText -notmatch 'MAX_SQLITE_SHM_BYTES') {
+        $failures.Add(
+            "ffi::database lost its path/handle panic boundaries or bounded SQLite companion routing.")
+    }
+    if ($libText -match '(?m)^fn\s+reopen_optional_handle\s*\(' -or
+        $ffiDatabaseText -notmatch '(?m)^fn\s+reopen_optional_handle\s*\(') {
+        $failures.Add("The optional SQLite HANDLE adapter must remain private to ffi::database.")
+    }
+    if ($ffiDatabaseText -notmatch 'fn\s+database_exports_cancel_before_file_access\s*\(') {
+        $failures.Add("ffi::database lost its pre-file-access cancellation test.")
+    }
+    $ffiDatabaseLineCount = @(Get-Content -LiteralPath $ffiDatabasePath).Count
+    if ($ffiDatabaseLineCount -gt 220) {
+        $failures.Add(
+            "The focused ffi::database module grew beyond 220 lines: $ffiDatabaseLineCount")
     }
 
     $expectedHandlePreviewExports = @(

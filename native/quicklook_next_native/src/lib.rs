@@ -34,6 +34,9 @@ pub(crate) use ffi::common::{
 // Keep stable ABI discovery available to crate-local tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::contract::{ql_abi_version, ql_capabilities, ql_probe};
+// Keep moved database preview exports available to crate-local tests and adapters.
+#[allow(unused_imports)]
+pub(crate) use ffi::database::{ql_preview_database_cancelable, ql_preview_sqlite_handles};
 // Keep moved container HANDLE preview exports available to crate-local tests.
 #[allow(unused_imports)]
 pub(crate) use ffi::handle_container::{
@@ -3517,29 +3520,6 @@ mod tests {
     }
 
     #[test]
-    fn database_preview_export_honors_cancellation_before_file_access() {
-        extern "C" fn cancelled() -> bool {
-            true
-        }
-        let path = b"Z:\\missing\\cancelled.db";
-        let mut out = vec![0u8; 1024];
-
-        let result = unsafe {
-            ql_preview_database_cancelable(
-                path.as_ptr(),
-                path.len(),
-                0,
-                0,
-                out.as_mut_ptr(),
-                out.len(),
-                Some(cancelled),
-            )
-        };
-
-        assert_eq!(result, 0);
-    }
-
-    #[test]
     fn archive_entry_export_honors_cancellation_before_file_access() {
         let archive = b"missing.zip";
         let entry = b"entry.txt";
@@ -5005,57 +4985,6 @@ pub unsafe extern "C" fn ql_preview_image_metadata(
     })
 }
 
-/// Render a bounded database metadata preview with cancellation support.
-#[doc = include_str!("ffi_pointer_safety.md")]
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_database_cancelable(
-    path_utf8: *const u8,
-    path_len: usize,
-    size: i64,
-    modified_unix: i64,
-    out_buf: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
-            return 0;
-        }
-        if cancel_requested(cancel_cb) {
-            return 0;
-        }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s,
-            None => return 0,
-        };
-        let json = preview::render_database_info(path, size, modified_unix, cancel_cb);
-        if cancel_requested(cancel_cb) || json.is_empty() {
-            return 0;
-        }
-        write_json_out(&json, out_buf, out_cap)
-    })
-}
-
-fn reopen_optional_handle(
-    source_handle: isize,
-    expected_length: u64,
-) -> std::result::Result<Option<fs::File>, i32> {
-    if source_handle == 0 {
-        return if expected_length == 0 {
-            Ok(None)
-        } else {
-            Err(QL_ERROR_INVALID_ARGUMENT)
-        };
-    }
-    native_input::reopen_borrowed_disk_file(source_handle, expected_length)
-        .map(Some)
-        .map_err(|error| match error {
-            native_input::NativeInputError::InvalidHandle => QL_ERROR_INVALID_HANDLE,
-            native_input::NativeInputError::Io => QL_ERROR_IO,
-            native_input::NativeInputError::LengthMismatch => QL_ERROR_LENGTH_MISMATCH,
-        })
-}
-
 /// Extract a useful embedded Office image from a borrowed Windows file handle.
 /// Output layout is `[width:u32 LE][height:u32 LE][premultiplied BGRA bytes]`.
 ///
@@ -5229,80 +5158,6 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
             return QL_ERROR_CANCELLED;
         }
         write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)
-    })
-}
-
-/// Render a bounded SQLite snapshot from borrowed main, WAL, and SHM Windows file handles.
-///
-/// `wal_handle` and `shm_handle` are independently optional. Absence is represented only by a
-/// `(0, 0)` handle/length pair; a nonzero handle with a zero length represents a present empty
-/// companion. The WAL is the only source used to update the visible database snapshot. SHM data is
-/// bounded diagnostic input and is never trusted for database correctness.
-///
-/// # Safety
-/// The pointer, buffer, lifetime, and ownership requirements are identical to
-/// `ql_preview_text_handle` and apply to every nonzero handle. The caller retains ownership of all
-/// handles. Rust reopens each one with an independent position and never resolves `logical_name` as
-/// a path.
-#[no_mangle]
-pub unsafe extern "C" fn ql_preview_sqlite_handles(
-    main_handle: isize,
-    main_expected_length: u64,
-    wal_handle: isize,
-    wal_expected_length: u64,
-    shm_handle: isize,
-    shm_expected_length: u64,
-    logical_name_utf8: *const u8,
-    logical_name_len: usize,
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        preview_handle_v2(
-            main_handle,
-            main_expected_length,
-            logical_name_utf8,
-            logical_name_len,
-            out_buf,
-            out_cap,
-            out_required,
-            cancel_cb,
-            |mut main, logical_name, _, modified_unix| {
-                if wal_handle == 0 && wal_expected_length != 0
-                    || shm_handle == 0 && shm_expected_length != 0
-                {
-                    return Err(QL_ERROR_INVALID_ARGUMENT);
-                }
-                if main_expected_length > preview::MAX_DATABASE_HANDLE_BYTES
-                    || wal_expected_length > preview::MAX_SQLITE_WAL_BYTES
-                    || shm_expected_length > preview::MAX_SQLITE_SHM_BYTES
-                {
-                    return Err(QL_ERROR_LIMIT_EXCEEDED);
-                }
-                let mut wal = reopen_optional_handle(wal_handle, wal_expected_length)?;
-                let mut shm = reopen_optional_handle(shm_handle, shm_expected_length)?;
-                let wal_reader = wal.as_mut().map(|file| file as &mut dyn Read);
-                let shm_reader = shm.as_mut().map(|file| file as &mut dyn Read);
-                preview::render_database_reader(
-                    &mut main,
-                    main_expected_length,
-                    preview::DatabaseCompanionReader {
-                        reader: wal_reader,
-                        length: wal_expected_length,
-                    },
-                    preview::DatabaseCompanionReader {
-                        reader: shm_reader,
-                        length: shm_expected_length,
-                    },
-                    logical_name,
-                    modified_unix,
-                    cancel_cb,
-                )
-                .map_err(reader_preview_status)
-            },
-        )
     })
 }
 

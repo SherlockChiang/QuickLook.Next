@@ -1201,6 +1201,14 @@ if (Test-Path $parserHostProgram) {
         $nativeHandleStructuredText = ""
         Add-Failure "Missing Rust structured HANDLE preview source: $nativeHandleStructuredPath"
     }
+    $nativeDatabaseFfiPath = Join-Path $Root "native/quicklook_next_native/src/ffi/database.rs"
+    if (Test-Path -LiteralPath $nativeDatabaseFfiPath -PathType Leaf) {
+        $nativeDatabaseFfiText = Get-Content -LiteralPath $nativeDatabaseFfiPath -Raw
+    }
+    else {
+        $nativeDatabaseFfiText = ""
+        Add-Failure "Missing Rust database FFI source: $nativeDatabaseFfiPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1673,25 +1681,71 @@ if (Test-Path $parserHostProgram) {
         Add-Failure "The focused ffi::handle_container module grew beyond 260 lines"
     }
 
-    foreach ($entryPoint in @("ql_preview_sqlite_handles")) {
-        $signature = "pub unsafe extern `"C`" fn $entryPoint("
-        $entryStart = $nativeLibText.IndexOf($signature, [StringComparison]::Ordinal)
-        $entryEnd = if ($entryStart -ge 0) {
-            $nextExport = $nativeLibText.IndexOf(
-                "#[no_mangle]", $entryStart + $signature.Length, [StringComparison]::Ordinal)
-            if ($nextExport -ge 0) { $nextExport } else { $nativeLibText.Length }
-        } else {
+    # Database path compatibility and multi-HANDLE SQLite adapters share one focused FFI module.
+    $expectedDatabaseFfiExports = @(
+        "ql_preview_database_cancelable",
+        "ql_preview_sqlite_handles")
+    $databaseFfiExports = [regex]::Matches(
+        $nativeDatabaseFfiText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($databaseFfiExports.Count -ne $expectedDatabaseFfiExports.Count -or
+        $nativeDatabaseFfiText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeDatabaseFfiText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeDatabaseFfiText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::database must expose exactly two unsafe C ABI entry points"
+    }
+    foreach ($databaseFfiName in $expectedDatabaseFfiExports) {
+        $databaseFfiSignature = "pub unsafe extern `"C`" fn $databaseFfiName("
+        $databaseFfiStart = $nativeDatabaseFfiText.IndexOf(
+            $databaseFfiSignature,
+            [StringComparison]::Ordinal)
+        $databaseFfiEnd = if ($databaseFfiStart -ge 0) {
+            $nextDatabaseFfiExport = $nativeDatabaseFfiText.IndexOf(
+                "#[no_mangle]",
+                $databaseFfiStart + $databaseFfiSignature.Length,
+                [StringComparison]::Ordinal)
+            if ($nextDatabaseFfiExport -ge 0) {
+                $nextDatabaseFfiExport
+            }
+            else {
+                $nativeDatabaseFfiText.Length
+            }
+        }
+        else {
             -1
         }
-        $entryBody = if ($entryStart -ge 0 -and $entryEnd -gt $entryStart) {
-            $nativeLibText.Substring($entryStart, $entryEnd - $entryStart)
-        } else {
+        $databaseFfiBody = if ($databaseFfiStart -ge 0 -and
+            $databaseFfiEnd -gt $databaseFfiStart) {
+            $nativeDatabaseFfiText.Substring(
+                $databaseFfiStart,
+                $databaseFfiEnd - $databaseFfiStart)
+        }
+        else {
             ""
         }
-        if ($entryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
-            $entryBody -notmatch 'preview_handle_v2\(') {
-            Add-Failure "$entryPoint must contain panics and use the shared ABI 2 HANDLE contract"
+        if ($databaseFfiBody -notmatch 'ffi_boundary\(\|\|') {
+            Add-Failure "$databaseFfiName must contain panics at the focused Rust FFI boundary"
         }
+        if ($nativeLibText -match [regex]::Escape($databaseFfiSignature)) {
+            Add-Failure "$databaseFfiName must remain in ffi::database, not lib.rs"
+        }
+        if ($databaseFfiName -eq "ql_preview_sqlite_handles" -and
+            ($databaseFfiBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+                $databaseFfiBody -notmatch 'preview_handle_v2\(' -or
+                $databaseFfiBody -notmatch 'reopen_optional_handle\(' -or
+                $databaseFfiBody -notmatch 'preview::render_database_reader\(')) {
+            Add-Failure "ql_preview_sqlite_handles lost its shared HANDLE boundary or bounded companion routing"
+        }
+    }
+    if ($nativeLibText -notmatch '(?m)^pub\(crate\) use ffi::database::\{ql_preview_database_cancelable,\s*ql_preview_sqlite_handles\};\s*$' -or
+        $nativeDatabaseFfiText -notmatch 'fn\s+database_exports_cancel_before_file_access\s*\(' -or
+        $nativeDatabaseFfiText -notmatch 'MAX_DATABASE_HANDLE_BYTES' -or
+        $nativeDatabaseFfiText -notmatch 'MAX_SQLITE_WAL_BYTES' -or
+        $nativeDatabaseFfiText -notmatch 'MAX_SQLITE_SHM_BYTES') {
+        Add-Failure "ffi::database lost its re-export, cancellation test, or SQLite input bounds"
+    }
+    if (@(Get-Content -LiteralPath $nativeDatabaseFfiPath).Count -gt 220) {
+        Add-Failure "The focused ffi::database module grew beyond 220 lines"
     }
     foreach ($entryPoint in @(
         "ql_extract_office_image_handle",
