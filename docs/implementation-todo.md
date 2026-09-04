@@ -313,6 +313,19 @@ the release-only `release:` prefix while this queue is in progress.
         every repository check and remains blocked only when its isolated
         fixture requests the missing pinned SDK `10.0.302`.
       - Commit: `0f74542`
+    - [x] `R26-P1-07d-6` Move the text, executable, torrent, and mail HANDLE
+      preview exports into
+      `native/quicklook_next_native/src/ffi/handle_structured.rs`. Preserve the
+      shared ABI 2 HANDLE/output boundary, exact Rust reader routing, stable
+      error mapping, and pre-file-access cancellation behavior while keeping
+      the root module as a crate-private compatibility composition point.
+      - Verification: Rust fmt, Clippy, workspace tests (338 passed, 1 ignored),
+        FFI safety (70 files, 60 raw-pointer exports), lint-scope,
+        module-boundary, and performance-bounds guards passed. The native
+        Release DLL built through its MSBuild contract with installed SDK
+        `10.0.400`; the architecture guard completed all repository checks and
+        remains blocked only by its isolated missing-SDK-`10.0.302` fixture.
+      - Commit: `7ff6b38`
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
