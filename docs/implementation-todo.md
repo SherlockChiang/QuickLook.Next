@@ -117,7 +117,7 @@ the release-only `release:` prefix while this queue is in progress.
 - [x] `R26-P1-02` Resolve the text-search contract drift between the presenter,
   keyboard routing, documentation, and performance guard without restoring the
   old wheel-intercepting flyout.
-- [ ] `R26-P1-03` Add explicit CloudProgress, PDF per-page failure, empty, and
+- [x] `R26-P1-03` Add explicit CloudProgress, PDF per-page failure, empty, and
   partial-result states, including Office represented/total/limit metadata.
   - [x] `R26-P1-03a` Surface bounded cloud hydration as an explicit visible
     determinate/indeterminate progress state with generation-safe cleanup and
@@ -129,6 +129,9 @@ the release-only `release:` prefix while this queue is in progress.
   - [x] `R26-P1-03c` Surface defensive PDF empty state plus document-level
     partial and total render-failure summaries. Successful page retries restore
     the aggregate state, while Office represented/total/limit remains open.
+  - [x] `R26-P1-03d` Preserve bounded Office represented/total/limit metadata
+    from Rust through ParserHost and show localized slides, sheets, or
+    approximate-page coverage within the WinUI 16-page presentation limit.
 - [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
   phase, correlation ID, version, format, and size bucket but no local path.
 
@@ -442,6 +445,24 @@ Completed entries move here with the verification commands and commit hash.
     MSBuild fixture stopped because local SDK `10.0.302` is unavailable
     (`10.0.303` and `10.0.400` are installed).
   - Commit: `7604c02`
+
+- [x] `R26-P1-03d` Preserve Office represented-page, total-page, and parser-limit
+  metadata from the Rust-first DOCX, XLSX, and PPTX paths through ParserHost.
+  The thin WinUI presenter defensively combines that metadata with its existing
+  16-page materialization bound, reports localized slide, sheet, or approximate
+  page coverage in a stable non-interactive accessible panel, and clears stale
+  state when the preview changes.
+  - Verification: `cargo test --workspace --locked --manifest-path native/Cargo.toml` (335 passed, 1 ignored)
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-build --no-restore --maxcpucount:1` (340 passed)
+  - Verification: focused ParserHost Office integration tests (2 passed)
+  - Verification: `pwsh -NoProfile -File tools/test-office-coverage-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 478 keys)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
+  - Architecture guard: all repository checks passed before the known isolated
+    MSBuild fixture stopped because local SDK `10.0.302` is unavailable
+    (`10.0.303` and `10.0.400` are installed).
+  - Commits: `4807928`, `b6137bd`, `93648b9`
 
 - [x] Preflight the current user's installed MSIX identity and version before
   certificate trust, UAC, application shutdown, or registration. Older packages
