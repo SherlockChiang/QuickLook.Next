@@ -11,11 +11,17 @@ remaining work below stays ordered by risk and user-visible impact.
 
 ## September 2026 interaction queue
 
-- [ ] `R26-UX-01` Make focused previews support repeatable keyboard page navigation:
+- [x] `R26-UX-01` Make focused previews support repeatable keyboard page navigation:
   PDF arrow/Page Up/Page Down input moves by whole pages, image Left/Right input
   advances through neighboring files, modifier chords retain zoom/pan/control
   ownership, and rapid image repeats navigate from the pending path instead of
   reopening the same sibling.
+  - Verification: 320 Core tests passed; the focused navigation/session subset
+    passed 24 tests; the WinUI App Release build completed with zero warnings
+    and errors; performance-bounds and all feature-relevant architecture guards
+    passed. The full architecture script reached only the known isolated
+    MSBuild fixture blocker because this machine lacks pinned SDK `10.0.302`.
+  - Commit: `9b54ae1`
 
 ## Microsoft Store 1.0.0 launch queue
 
