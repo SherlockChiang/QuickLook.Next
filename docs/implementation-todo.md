@@ -23,6 +23,13 @@ remaining work below stays ordered by risk and user-visible impact.
     MSBuild fixture blocker because this machine lacks pinned SDK `10.0.302`.
   - Commit: `9b54ae1`
 
+- [ ] `R26-UX-02` Make preview-window ownership and z-order an explicit policy:
+  standard mode raises only within the ordinary window band, optional always-on-top
+  mode is deliberate and reversible, initial Space-open retains immediate keyboard
+  focus, and an optional focus-loss close waits for transient activation changes and
+  never closes behind app-owned settings or modal UI. Expose the two preferences in
+  all three locales and cover the pure policy plus the Win32 wiring guard.
+
 ## Microsoft Store 1.0.0 launch queue
 
 This queue keeps Store onboarding separate from the signed GitHub sideload
