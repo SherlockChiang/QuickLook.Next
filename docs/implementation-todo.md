@@ -398,6 +398,24 @@ the release-only `release:` prefix while this queue is in progress.
         check and remains blocked only by its isolated pinned-SDK `10.0.302`
         fixture (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `bb170f1`
+    - [x] `R26-P1-07d-12` Move all four archive-entry path, source-HANDLE, and
+      caller-output-HANDLE exports into the 272-line
+      `native/quicklook_next_native/src/ffi/archive_entry.rs` adapter, with
+      focused pre-file-access cancellation coverage in a 27-line child test
+      module. Preserve the exact C ABI, panic containment, bounded UTF-8 entry
+      names, independent HANDLE reopening, temp-extraction cleanup, v2 output
+      negotiation, caller-output capacity and zeroing, streaming writes, and
+      final-length validation while keeping only crate-private compatibility
+      re-exports in `lib.rs`.
+      - Verification: Rust fmt, Clippy, workspace tests (340 passed, 1 ignored),
+        FFI safety (80 files, 60 raw-pointer exports), lint-scope (80 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 1 minute 09 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `977a6c0`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
