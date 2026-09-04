@@ -36,13 +36,22 @@ remaining work below stays ordered by risk and user-visible impact.
     fixture blocker because this machine lacks pinned SDK `10.0.302`.
   - Commit: `7239ad2`
 
-- [ ] `R26-UX-03` Add lazy, bounded PDF text search and copy without delaying
+- [x] `R26-UX-03` Add lazy, bounded PDF text search and copy without delaying
   first-page rendering. Rust owns PDF text extraction, page mapping, truncation,
   cancellation, and malformed/encrypted-document handling inside the supervised
   ParserHost boundary; WinUI owns the search bar, match navigation, page jumps,
   and clipboard commands. Initial delivery may copy a match or one page's
   extracted text, but must not imply coordinate-accurate selection that the
   raster preview does not provide.
+  - Verification: 4 focused Rust PDF-text tests and 5 focused controller/protocol
+    tests passed; all 336 Core tests passed serially; the WinUI App Release build
+    completed with zero warnings and errors; localization, PDF text-search,
+    performance-bounds, HANDLE/FFI, module-boundary, focus, dialog, and other
+    repository guards passed. The full architecture script reached only the known
+    isolated MSBuild fixture blocker because this machine lacks pinned SDK
+    `10.0.302` (installed SDKs are `10.0.303` and `10.0.400`).
+  - Commits: Rust extraction `fe4f770`; ParserHost transport `1826d47`; lazy
+    WinUI search, page navigation, and copy `fb1f8e0`.
 
 ## Microsoft Store 1.0.0 launch queue
 
