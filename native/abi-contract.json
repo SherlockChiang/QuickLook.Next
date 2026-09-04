@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "nativeAbiVersion": 3,
+  "features": [
+    { "rust": "QL_FEATURE_HANDLE_TEXT", "csharp": "HandleText", "bit": 0 },
+    { "rust": "QL_FEATURE_HANDLE_EXECUTABLE", "csharp": "HandleExecutable", "bit": 1 },
+    { "rust": "QL_FEATURE_HANDLE_TORRENT", "csharp": "HandleTorrent", "bit": 2 },
+    { "rust": "QL_FEATURE_HANDLE_SQLITE_SNAPSHOT", "csharp": "HandleSqliteSnapshot", "bit": 3 },
+    { "rust": "QL_FEATURE_HANDLE_ARCHIVE", "csharp": "HandleArchive", "bit": 4 },
+    { "rust": "QL_FEATURE_HANDLE_OFFICE", "csharp": "HandleOffice", "bit": 5 },
+    { "rust": "QL_FEATURE_HANDLE_EBOOK", "csharp": "HandleEbook", "bit": 6 },
+    { "rust": "QL_FEATURE_HANDLE_ARCHIVE_ENTRY", "csharp": "HandleArchiveEntry", "bit": 7 },
+    { "rust": "QL_FEATURE_HANDLE_STATIC_IMAGE", "csharp": "HandleStaticImage", "bit": 8 },
+    { "rust": "QL_FEATURE_HANDLE_SVG", "csharp": "HandleSvg", "bit": 9 },
+    { "rust": "QL_FEATURE_HANDLE_GIF", "csharp": "HandleGif", "bit": 10 },
+    { "rust": "QL_FEATURE_HANDLE_PACKAGE", "csharp": "HandlePackage", "bit": 11 },
+    { "rust": "QL_FEATURE_HANDLE_PACKAGE_ICON", "csharp": "HandlePackageIcon", "bit": 12 },
+    { "rust": "QL_FEATURE_HANDLE_PROBE", "csharp": "HandleProbe", "bit": 13 },
+    { "rust": "QL_FEATURE_HANDLE_RASTER_IMAGE", "csharp": "HandleRasterImage", "bit": 14 },
+    { "rust": "QL_FEATURE_HANDLE_ANIMATION", "csharp": "HandleAnimation", "bit": 15 },
+    { "rust": "QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE", "csharp": "HandleOfficeLayoutImage", "bit": 16 },
+    { "rust": "QL_FEATURE_HANDLE_IMAGE_WAVEFORM", "csharp": "HandleImageWaveform", "bit": 17 },
+    { "rust": "QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT", "csharp": "HandleArchiveEntryOutput", "bit": 18 },
+    { "rust": "QL_FEATURE_HANDLE_IMAGE_METADATA", "csharp": "HandleImageMetadata", "bit": 19 },
+    { "rust": "QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT", "csharp": "DirectGifAnimationOutput", "bit": 20 },
+    { "rust": "QL_FEATURE_HANDLE_MAIL", "csharp": "HandleMail", "bit": 21 },
+    { "rust": "QL_FEATURE_HANDLE_PDF_TEXT", "csharp": "HandlePdfText", "bit": 22 }
+  ],
+  "statuses": [
+    { "rust": "QL_OK", "csharp": "StatusOk", "value": 0 },
+    { "rust": "QL_ERROR_INVALID_ARGUMENT", "csharp": "StatusInvalidArgument", "value": -1 },
+    { "rust": "QL_ERROR_BUFFER_TOO_SMALL", "csharp": "StatusBufferTooSmall", "value": -2 },
+    { "rust": "QL_ERROR_CANCELLED", "csharp": "StatusCancelled", "value": -3 },
+    { "rust": "QL_ERROR_MALFORMED", "csharp": "StatusMalformed", "value": -4 },
+    { "rust": "QL_ERROR_IO", "csharp": "StatusIo", "value": -5 },
+    { "rust": "QL_ERROR_INVALID_HANDLE", "csharp": "StatusInvalidHandle", "value": -6 },
+    { "rust": "QL_ERROR_LENGTH_MISMATCH", "csharp": "StatusLengthMismatch", "value": -7 },
+    { "rust": "QL_ERROR_INTERNAL", "csharp": "StatusInternal", "value": -8 },
+    { "rust": "QL_ERROR_LIMIT_EXCEEDED", "csharp": "StatusLimitExceeded", "value": -9 }
+  ]
+}

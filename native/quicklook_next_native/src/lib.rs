@@ -25,6 +25,8 @@ mod preview;
 mod rar_listing;
 mod win32;
 
+include!("abi_generated.rs");
+
 // Keep shared FFI helpers available to the remaining crate-local adapters.
 pub(crate) use ffi::common::{
     ffi_boundary, ffi_void_boundary, owned_utf8_arg, utf8_arg, write_json_out, write_v2_out,
@@ -170,41 +172,6 @@ const MAX_HIGHLIGHT_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_LOGICAL_NAME_BYTES: usize = 4 * 255;
 const MAX_OFFICE_IMAGE_REF_BYTES: usize = 2048;
 const MAX_ARCHIVE_ENTRY_NAME_BYTES: usize = u16::MAX as usize;
-const QL_NATIVE_ABI_VERSION: u32 = 3;
-const QL_FEATURE_HANDLE_TEXT: u64 = 1 << 0;
-const QL_FEATURE_HANDLE_EXECUTABLE: u64 = 1 << 1;
-const QL_FEATURE_HANDLE_TORRENT: u64 = 1 << 2;
-const QL_FEATURE_HANDLE_SQLITE_SNAPSHOT: u64 = 1 << 3;
-const QL_FEATURE_HANDLE_ARCHIVE: u64 = 1 << 4;
-const QL_FEATURE_HANDLE_OFFICE: u64 = 1 << 5;
-const QL_FEATURE_HANDLE_EBOOK: u64 = 1 << 6;
-const QL_FEATURE_HANDLE_ARCHIVE_ENTRY: u64 = 1 << 7;
-const QL_FEATURE_HANDLE_STATIC_IMAGE: u64 = 1 << 8;
-const QL_FEATURE_HANDLE_SVG: u64 = 1 << 9;
-const QL_FEATURE_HANDLE_GIF: u64 = 1 << 10;
-const QL_FEATURE_HANDLE_PACKAGE: u64 = 1 << 11;
-const QL_FEATURE_HANDLE_PACKAGE_ICON: u64 = 1 << 12;
-const QL_FEATURE_HANDLE_PROBE: u64 = 1 << 13;
-const QL_FEATURE_HANDLE_RASTER_IMAGE: u64 = 1 << 14;
-const QL_FEATURE_HANDLE_ANIMATION: u64 = 1 << 15;
-const QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE: u64 = 1 << 16;
-const QL_FEATURE_HANDLE_IMAGE_WAVEFORM: u64 = 1 << 17;
-const QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT: u64 = 1 << 18;
-const QL_FEATURE_HANDLE_IMAGE_METADATA: u64 = 1 << 19;
-const QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT: u64 = 1 << 20;
-const QL_FEATURE_HANDLE_MAIL: u64 = 1 << 21;
-const QL_FEATURE_HANDLE_PDF_TEXT: u64 = 1 << 22;
-
-const QL_OK: i32 = 0;
-const QL_ERROR_INVALID_ARGUMENT: i32 = -1;
-const QL_ERROR_BUFFER_TOO_SMALL: i32 = -2;
-const QL_ERROR_CANCELLED: i32 = -3;
-const QL_ERROR_MALFORMED: i32 = -4;
-const QL_ERROR_IO: i32 = -5;
-const QL_ERROR_INVALID_HANDLE: i32 = -6;
-const QL_ERROR_LENGTH_MISMATCH: i32 = -7;
-const QL_ERROR_INTERNAL: i32 = -8;
-const QL_ERROR_LIMIT_EXCEEDED: i32 = -9;
 
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES: u64 = 896 * 1024 * 1024;

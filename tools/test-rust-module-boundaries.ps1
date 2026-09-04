@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
+$abiGeneratedPath = Join-Path $Root "native\quicklook_next_native\src\abi_generated.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
@@ -67,6 +68,7 @@ $failures = [Collections.Generic.List[string]]::new()
 
 foreach ($path in @(
         $libPath,
+        $abiGeneratedPath,
         $ffiModulePath,
         $ffiCommonPath,
         $ffiContractPath,
@@ -130,6 +132,7 @@ foreach ($path in @(
 
 if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
+    $abiGeneratedText = Get-Content -LiteralPath $abiGeneratedPath -Raw
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
@@ -189,6 +192,20 @@ if ($failures.Count -eq 0) {
     if ($libText -notmatch '(?m)^mod win32;\s*$' -or
         $win32ModuleText -notmatch '(?m)^pub\(crate\) mod shell_thumbnail;\s*$') {
         $failures.Add("lib.rs must compose the explicit win32::shell_thumbnail module.")
+    }
+
+    if ($libText -notmatch '(?m)^include!\("abi_generated\.rs"\);\s*$' -or
+        $libText -match '(?m)^const\s+QL_(?:NATIVE_ABI_VERSION|FEATURE_|OK|ERROR_)' -or
+        $abiGeneratedText -notmatch '(?m)^const\s+QL_NATIVE_ABI_VERSION:\s*u32\s*=\s*3;\s*$' -or
+        ([regex]::Matches($abiGeneratedText, '(?m)^const\s+QL_FEATURE_[A-Z0-9_]+:\s*u64\s*=')).Count -ne 23 -or
+        ([regex]::Matches($abiGeneratedText, '(?m)^const\s+QL_(?:OK|ERROR_[A-Z0-9_]+):\s*i32\s*=')).Count -ne 10 -or
+        $abiGeneratedText -match '#\[no_mangle\]' -or
+        $abiGeneratedText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"') {
+        $failures.Add(
+            "lib.rs must include the bounded generated ABI constants without handwritten duplicates or exports.")
+    }
+    if (@(Get-Content -LiteralPath $abiGeneratedPath).Count -gt 60) {
+        $failures.Add("The generated Rust ABI constant file grew beyond 60 lines.")
     }
 
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or

@@ -10,11 +10,13 @@ function Require-Pattern([string]$path, [string]$pattern, [string]$message) {
 }
 
 $abi = [int]$registry.nativeAbiVersion
-$nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
-Require-Pattern $nativeLibrary "QL_NATIVE_ABI_VERSION:\s*u32\s*=\s*$abi" `
+$nativeAbi = Join-Path $Root "native/quicklook_next_native/src/abi_generated.rs"
+Require-Pattern $nativeAbi "QL_NATIVE_ABI_VERSION:\s*u32\s*=\s*$abi" `
     "Rust native ABI does not match format-registry.json."
-Require-Pattern (Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.cs") "Version\s*=\s*$abi" `
+Require-Pattern (Join-Path $Root "src/QuickLook.Next.Core/NativeAbi.Generated.cs") "Version\s*=\s*$abi" `
     "Managed native ABI does not match format-registry.json."
+
+$nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 
 $nativeText = Get-Content -LiteralPath $nativeLibrary -Raw
 foreach ($kind in $registry.probeKinds) {
