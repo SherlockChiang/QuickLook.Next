@@ -299,6 +299,20 @@ the release-only `release:` prefix while this queue is in progress.
         repository checks and remains blocked only by the isolated pinned SDK
         `10.0.302` fixture (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `bb37035`
+    - [x] `R26-P1-07d-5` Move the shared ABI 2 HANDLE reopen, logical-name,
+      output-buffer, and reader-status boundary plus the file probe, PDF text,
+      and image-metadata HANDLE exports into
+      `native/quicklook_next_native/src/ffi/handle_preview.rs`. Keep later
+      HANDLE adapters on the same crate-private helpers and preserve the exact
+      source ownership, cancellation, panic, and caller-buffer contracts.
+      - Verification: Rust fmt, Clippy, workspace tests (337 passed, 1 ignored),
+        FFI safety (69 files, 60 raw-pointer exports), lint-scope,
+        module-boundary, and performance-bounds guards passed. The native
+        Release DLL also built successfully through its MSBuild contract with
+        installed SDK `10.0.400`; the in-repository architecture run completed
+        every repository check and remains blocked only when its isolated
+        fixture requests the missing pinned SDK `10.0.302`.
+      - Commit: `0f74542`
   - [ ] `R26-P1-07e` Generate Rust ABI constants and C# declarations from one
     reviewed schema, and fail the architecture guard when generated files drift.
 - [ ] `R26-P1-08` Add decoded-byte budgets, target-size image decode, single-decode
