@@ -126,6 +126,9 @@ the release-only `release:` prefix while this queue is in progress.
     timeouts inside the affected page, reject late surfaces, and clear visual
     and accessible state on success, release, and reopen. PDF empty/partial and
     Office represented/total/limit states remain open.
+  - [x] `R26-P1-03c` Surface defensive PDF empty state plus document-level
+    partial and total render-failure summaries. Successful page retries restore
+    the aggregate state, while Office represented/total/limit remains open.
 - [ ] `R26-P1-04` Add a redacted Copy Diagnostics action with a stable error code,
   phase, correlation ID, version, format, and size bucket but no local path.
 
@@ -421,6 +424,24 @@ Completed entries move here with the verification commands and commit hash.
   - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 451 keys)
   - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore` (0 warnings, 0 errors)
   - Commit: `0691d49`
+
+- [x] `R26-P1-03c` Preserve untrusted zero-page PDF results as an explicit empty
+  state instead of fabricating page one, and summarize current-document partial
+  or total page render failures in a stable, non-interactive, accessible panel.
+  Failed-page accounting is bounded by the advertised page count, survives
+  surface eviction, clears on close/reopen, and recovers after a successful
+  page retry. Office represented/total/limit state remains open under the parent
+  item.
+  - Verification: `pwsh -NoProfile -File tools/test-pdf-document-state-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-pdf-page-failure-ui.ps1`
+  - Verification: `pwsh -NoProfile -File tools/test-localization.ps1` (3 locales, 475 keys)
+  - Verification: `pwsh -NoProfile -File tools/guard-performance-bounds.ps1`
+  - Verification: `dotnet test tests/QuickLook.Next.Core.Tests/QuickLook.Next.Core.Tests.csproj -c Release --no-restore --maxcpucount:1` (338 passed)
+  - Verification: `dotnet build src/QuickLook.Next.App/QuickLook.Next.App.csproj -c Release --no-restore --maxcpucount:1` (0 warnings, 0 errors)
+  - Architecture guard: all repository checks passed before the known isolated
+    MSBuild fixture stopped because local SDK `10.0.302` is unavailable
+    (`10.0.303` and `10.0.400` are installed).
+  - Commit: `7604c02`
 
 - [x] Preflight the current user's installed MSIX identity and version before
   certificate trust, UAC, application shutdown, or registration. Older packages
