@@ -340,6 +340,21 @@ the release-only `release:` prefix while this queue is in progress.
         repository checks and remains blocked only by its isolated
         missing-SDK-`10.0.302` fixture.
       - Commit: `542d00e`
+    - [x] `R26-P1-07d-8` Move the legacy path database preview and multi-HANDLE
+      SQLite snapshot export into the 184-line
+      `native/quicklook_next_native/src/ffi/database.rs` module. Keep the
+      optional WAL/SHM reopen adapter private to that family, preserve exact
+      HANDLE/output/error semantics and parser bounds, and add focused
+      pre-file-access cancellation plus module/architecture guards.
+      - Verification: Rust fmt, Clippy, workspace tests (339 passed, 1 ignored),
+        FFI safety (73 files, 60 raw-pointer exports), lint-scope (73 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract with SDK `10.0.400` in
+        2 minutes 21 seconds; the architecture guard completed all repository
+        checks and remains blocked only by its isolated pinned-SDK `10.0.302`
+        fixture (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `30a62d9`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
