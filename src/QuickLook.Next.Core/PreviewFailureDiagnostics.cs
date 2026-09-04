@@ -3,14 +3,34 @@ using System.Text.RegularExpressions;
 
 namespace QuickLook.Next.Core;
 
-public readonly record struct PreviewFailureDiagnostic(
-    int SchemaVersion,
-    string ErrorCode,
-    string Phase,
-    long CorrelationId,
-    string Version,
-    string Format,
-    string SizeBucket);
+public sealed record PreviewFailureDiagnostic
+{
+    internal PreviewFailureDiagnostic(
+        int schemaVersion,
+        string errorCode,
+        string phase,
+        long correlationId,
+        string version,
+        string format,
+        string sizeBucket)
+    {
+        SchemaVersion = schemaVersion;
+        ErrorCode = errorCode;
+        Phase = phase;
+        CorrelationId = correlationId;
+        Version = version;
+        Format = format;
+        SizeBucket = sizeBucket;
+    }
+
+    public int SchemaVersion { get; }
+    public string ErrorCode { get; }
+    public string Phase { get; }
+    public long CorrelationId { get; }
+    public string Version { get; }
+    public string Format { get; }
+    public string SizeBucket { get; }
+}
 
 public static partial class PreviewFailureDiagnostics
 {
@@ -39,6 +59,7 @@ public static partial class PreviewFailureDiagnostics
 
     public static string Serialize(PreviewFailureDiagnostic diagnostic)
     {
+        ArgumentNullException.ThrowIfNull(diagnostic);
         string payload = JsonSerializer.Serialize(
             new
             {
