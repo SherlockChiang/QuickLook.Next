@@ -433,6 +433,22 @@ the release-only `release:` prefix while this queue is in progress.
         blocked only by its isolated pinned-SDK `10.0.302` fixture
         (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `9100ccc`
+    - [x] `R26-P1-07d-14` Move the cached path probe into the 52-line
+      `ffi/file_probe.rs` adapter and the shared path/HANDLE implementation into
+      the 335-line `preview/file_probe.rs` provider, with its eight classifier
+      and cache tests in a 148-line child module. Preserve the exact C ABI,
+      bounded UTF-8 and caller-buffer contract, 64-byte prefix, 500-entry
+      metadata cache, kind classification, animation metadata, and borrowed
+      HANDLE behavior while removing probe/cache/JSON helpers from `lib.rs`.
+      - Verification: Rust fmt, Clippy, workspace tests (341 passed, 1 ignored),
+        FFI safety (84 files, 60 raw-pointer exports), lint-scope (84 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 1 minute 13 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `a7a9d67`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
