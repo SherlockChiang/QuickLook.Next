@@ -18,6 +18,8 @@ $ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
 $ffiRasterPacketPath = Join-Path $Root "native\quicklook_next_native\src\ffi\raster_packet.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
+$ffiThumbnailPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail.rs"
+$ffiThumbnailTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail\tests.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
@@ -85,6 +87,8 @@ foreach ($path in @(
         $ffiPathPreviewPath,
         $ffiRasterPacketPath,
         $ffiRoutingPath,
+        $ffiThumbnailPath,
+        $ffiThumbnailTestsPath,
         $win32ModulePath,
         $shellThumbnailPath,
         $previewPath,
@@ -153,6 +157,8 @@ if ($failures.Count -eq 0) {
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
     $ffiRasterPacketText = Get-Content -LiteralPath $ffiRasterPacketPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
+    $ffiThumbnailText = Get-Content -LiteralPath $ffiThumbnailPath -Raw
+    $ffiThumbnailTestsText = Get-Content -LiteralPath $ffiThumbnailTestsPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
@@ -231,6 +237,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod raster_packet;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod thumbnail;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
         $failures.Add(
@@ -363,11 +370,9 @@ if ($failures.Count -eq 0) {
         $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
     }
 
-    $rasterPacketReExportMatch = [regex]::Match(
-        $libText,
-        '(?m)^pub\(crate\) use ffi::raster_packet::write_raster_packet;\s*$')
-    if (-not $rasterPacketReExportMatch.Success) {
-        $failures.Add("lib.rs must retain the crate-private path raster writer re-export.")
+    if ($libText -match '(?m)^pub\(crate\) use ffi::raster_packet::') {
+        $failures.Add(
+            "ffi::raster_packet writers must be consumed directly by focused sibling modules.")
     }
     if ($ffiRasterPacketText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
         $ffiRasterPacketText -match '#\[no_mangle\]' -or
@@ -1090,20 +1095,65 @@ if ($failures.Count -eq 0) {
     if ($shellText -match '#\[no_mangle\]' -or
         $shellText -match 'pub\s+(?:unsafe\s+)?extern\s+"C"') {
         $failures.Add(
-            "The Win32 Shell module must not export a C ABI; lib.rs owns the thin FFI surface.")
+            "The Win32 Shell module must not export a C ABI; ffi::thumbnail owns the thin surface.")
     }
 
+    $expectedThumbnailExports = @(
+        "ql_get_thumbnail",
+        "ql_get_thumbnail_cancelable",
+        "ql_get_thumbnail_cancelable_with_flags")
     $thumbnailExports = [regex]::Matches(
-        $libText,
-        '(?m)^pub unsafe extern "C" fn ql_get_thumbnail(?:_cancelable(?:_with_flags)?)?\(')
-    if ($thumbnailExports.Count -ne 3 -or
-        $libText -notmatch 'win32::shell_thumbnail::request\(' -or
-        $libText -notmatch 'ThumbnailError::InvalidFlags' -or
-        $libText -notmatch 'ThumbnailError::LimitExceeded' -or
-        $libText -notmatch 'ThumbnailError::Cancelled' -or
-        $libText -notmatch 'ThumbnailError::Unavailable') {
+        $ffiThumbnailText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $thumbnailNoMangleCount = [regex]::Matches(
+        $ffiThumbnailText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($thumbnailExports.Count -ne $expectedThumbnailExports.Count -or
+        $thumbnailNoMangleCount -ne $expectedThumbnailExports.Count -or
+        $ffiThumbnailText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiThumbnailText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiThumbnailText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
         $failures.Add(
-            "The three Shell thumbnail exports must remain thin typed-error adapters.")
+            "ffi::thumbnail must expose exactly three unsafe C ABI entry points.")
+    }
+    foreach ($thumbnailExport in $expectedThumbnailExports) {
+        $thumbnailPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($thumbnailExport) + '\s*\('
+        if ($ffiThumbnailText -notmatch $thumbnailPattern) {
+            $failures.Add("ffi::thumbnail lost expected export: $thumbnailExport")
+        }
+        if ($libText -match $thumbnailPattern) {
+            $failures.Add(
+                "$thumbnailExport implementation must remain in ffi::thumbnail, not lib.rs.")
+        }
+    }
+    if ($ffiThumbnailText -notmatch
+            'ql_get_thumbnail_cancelable_with_flags\(path_utf8, path_len, size, 0, out, out_cap, None\)' -or
+        $ffiThumbnailText -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+        $ffiThumbnailText -notmatch 'utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)' -or
+        $ffiThumbnailText -notmatch 'win32::shell_thumbnail::request\(' -or
+        $ffiThumbnailText -notmatch 'ThumbnailError::InvalidFlags' -or
+        $ffiThumbnailText -notmatch 'ThumbnailError::LimitExceeded' -or
+        $ffiThumbnailText -notmatch 'ThumbnailError::Cancelled' -or
+        $ffiThumbnailText -notmatch 'ThumbnailError::Unavailable' -or
+        $ffiThumbnailText -notmatch 'write_raster_packet\(') {
+        $failures.Add(
+            "The three Shell thumbnail exports must remain panic-bounded typed-error adapters.")
+    }
+    if ($ffiThumbnailTestsText -notmatch
+        'fn\s+thumbnail_export_rejects_oversized_request_before_shell_dispatch\s*\(') {
+        $failures.Add("ffi::thumbnail lost its pre-dispatch request-bound regression test.")
+    }
+    $ffiThumbnailLineCount = @(Get-Content -LiteralPath $ffiThumbnailPath).Count
+    if ($ffiThumbnailLineCount -gt 140) {
+        $failures.Add(
+            "The focused ffi::thumbnail module grew beyond 140 lines: $ffiThumbnailLineCount")
+    }
+    $ffiThumbnailTestsLineCount = @(Get-Content -LiteralPath $ffiThumbnailTestsPath).Count
+    if ($ffiThumbnailTestsLineCount -gt 60) {
+        $failures.Add(
+            "The focused ffi::thumbnail tests grew beyond 60 lines: $ffiThumbnailTestsLineCount")
     }
 
     $shellLineCount = @(Get-Content -LiteralPath $shellThumbnailPath).Count

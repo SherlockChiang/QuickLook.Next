@@ -1234,6 +1234,23 @@ if (Test-Path $parserHostProgram) {
         $nativeRasterPacketText = ""
         Add-Failure "Missing Rust raster packet source: $nativeRasterPacketPath"
     }
+    $nativeThumbnailFfiPath = Join-Path $Root "native/quicklook_next_native/src/ffi/thumbnail.rs"
+    if (Test-Path -LiteralPath $nativeThumbnailFfiPath -PathType Leaf) {
+        $nativeThumbnailFfiText = Get-Content -LiteralPath $nativeThumbnailFfiPath -Raw
+    }
+    else {
+        $nativeThumbnailFfiText = ""
+        Add-Failure "Missing Rust Shell thumbnail FFI source: $nativeThumbnailFfiPath"
+    }
+    $nativeThumbnailFfiTestsPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/thumbnail/tests.rs"
+    if (Test-Path -LiteralPath $nativeThumbnailFfiTestsPath -PathType Leaf) {
+        $nativeThumbnailFfiTestsText = Get-Content -LiteralPath $nativeThumbnailFfiTestsPath -Raw
+    }
+    else {
+        $nativeThumbnailFfiTestsText = ""
+        Add-Failure "Missing Rust Shell thumbnail FFI tests: $nativeThumbnailFfiTestsPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1890,6 +1907,57 @@ if (Test-Path $parserHostProgram) {
     if (@(Get-Content -LiteralPath $nativeHeroImageTestsPath).Count -gt 120) {
         Add-Failure "The focused ffi::hero_image tests grew beyond 120 lines"
     }
+    $expectedThumbnailFfiExports = @(
+        "ql_get_thumbnail",
+        "ql_get_thumbnail_cancelable",
+        "ql_get_thumbnail_cancelable_with_flags")
+    $thumbnailFfiExports = [regex]::Matches(
+        $nativeThumbnailFfiText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $thumbnailFfiNoMangleCount = [regex]::Matches(
+        $nativeThumbnailFfiText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($thumbnailFfiExports.Count -ne $expectedThumbnailFfiExports.Count -or
+        $thumbnailFfiNoMangleCount -ne $expectedThumbnailFfiExports.Count -or
+        $nativeThumbnailFfiText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeThumbnailFfiText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeThumbnailFfiText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::thumbnail must expose exactly three unsafe C ABI entry points"
+    }
+    foreach ($thumbnailFfiName in $expectedThumbnailFfiExports) {
+        $thumbnailFfiSignature = "pub unsafe extern `"C`" fn $thumbnailFfiName("
+        if ($nativeThumbnailFfiText.IndexOf(
+                $thumbnailFfiSignature,
+                [StringComparison]::Ordinal) -lt 0) {
+            Add-Failure "ffi::thumbnail lost expected export: $thumbnailFfiName"
+        }
+        if ($nativeLibText -match [regex]::Escape($thumbnailFfiSignature)) {
+            Add-Failure "$thumbnailFfiName must remain in ffi::thumbnail, not lib.rs"
+        }
+    }
+    if ($nativeThumbnailFfiText -notmatch
+            'ql_get_thumbnail_cancelable_with_flags\(path_utf8, path_len, size, 0, out, out_cap, None\)' -or
+        $nativeThumbnailFfiText -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
+        $nativeThumbnailFfiText -notmatch 'utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)' -or
+        $nativeThumbnailFfiText -notmatch 'win32::shell_thumbnail::request\(' -or
+        $nativeThumbnailFfiText -notmatch 'ThumbnailError::InvalidFlags' -or
+        $nativeThumbnailFfiText -notmatch 'ThumbnailError::LimitExceeded' -or
+        $nativeThumbnailFfiText -notmatch 'ThumbnailError::Cancelled' -or
+        $nativeThumbnailFfiText -notmatch 'ThumbnailError::Unavailable' -or
+        $nativeThumbnailFfiText -notmatch 'write_raster_packet\(') {
+        Add-Failure "ffi::thumbnail lost its panic, path, typed-error, or checked packet boundary"
+    }
+    if ($nativeThumbnailFfiTestsText -notmatch
+        'fn\s+thumbnail_export_rejects_oversized_request_before_shell_dispatch\s*\(') {
+        Add-Failure "ffi::thumbnail lost its pre-dispatch request-bound regression test"
+    }
+    if (@(Get-Content -LiteralPath $nativeThumbnailFfiPath).Count -gt 140) {
+        Add-Failure "The focused ffi::thumbnail module grew beyond 140 lines"
+    }
+    if (@(Get-Content -LiteralPath $nativeThumbnailFfiTestsPath).Count -gt 60) {
+        Add-Failure "The focused ffi::thumbnail tests grew beyond 60 lines"
+    }
     $rasterPacketExports = [regex]::Matches(
         $nativeRasterPacketText,
         '(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
@@ -1901,7 +1969,7 @@ if (Test-Path $parserHostProgram) {
         $nativeRasterPacketText -notmatch 'pub\(crate\)\s+unsafe\s+fn\s+write_raster_packet_v2\([\s\S]*QL_ERROR_INTERNAL' -or
         $nativeRasterPacketText -notmatch 'fn\s+checked_raster_writer_writes_exact_packet_and_rejects_bad_layout\s*\(' -or
         $nativeLibText -match '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:checked_raster_packet_length|write_checked_raster_packet|write_raster_packet|write_raster_packet_v2)\s*\(' -or
-        $nativeLibText -notmatch '(?m)^pub\(crate\) use ffi::raster_packet::write_raster_packet;\s*$') {
+        $nativeLibText -match '(?m)^pub\(crate\) use ffi::raster_packet::') {
         Add-Failure "Checked Hero raster packet writers must remain bounded and private to ffi::raster_packet"
     }
     if (@(Get-Content -LiteralPath $nativeRasterPacketPath).Count -gt 180) {

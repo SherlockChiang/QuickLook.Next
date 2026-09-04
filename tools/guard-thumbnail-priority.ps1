@@ -17,7 +17,7 @@ $appRoot = Join-Path $Root "src/QuickLook.Next.App"
 $mainWindowPath = Join-Path $appRoot "MainWindow.xaml.cs"
 $sidecarPath = Join-Path $appRoot "ImageSidecarController.cs"
 $schedulerPath = Join-Path $appRoot "NativeThumbnailScheduler.cs"
-$nativeFfiPath = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+$nativeFfiPath = Join-Path $Root "native/quicklook_next_native/src/ffi/thumbnail.rs"
 $nativeShellPath = Join-Path (
     $Root) "native/quicklook_next_native/src/win32/shell_thumbnail.rs"
 

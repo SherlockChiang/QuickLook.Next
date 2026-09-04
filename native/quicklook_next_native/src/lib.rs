@@ -69,8 +69,6 @@ pub(crate) use ffi::path_preview::{
     ql_preview_executable_cancelable, ql_preview_info, ql_preview_text, ql_preview_text_cancelable,
     ql_preview_torrent, ql_preview_torrent_cancelable,
 };
-// Keep the checked raster packet writer available to the remaining root adapters.
-pub(crate) use ffi::raster_packet::write_raster_packet;
 // Keep the moved route symbols available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::routing::{ql_is_archive, ql_is_text, ql_preview_folder};
@@ -3551,26 +3549,6 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_export_rejects_oversized_request_before_shell_dispatch() {
-        let path = b"missing.file";
-        let mut output = [0u8; 16];
-        assert_eq!(
-            unsafe {
-                ql_get_thumbnail_cancelable_with_flags(
-                    path.as_ptr(),
-                    path.len(),
-                    513,
-                    0,
-                    output.as_mut_ptr(),
-                    output.len(),
-                    None,
-                )
-            },
-            QL_ERROR_LIMIT_EXCEEDED
-        );
-    }
-
-    #[test]
     fn ffi_accepts_multibyte_windows_path_sized_strings() {
         let value = "界".repeat(12_000);
         assert!(value.len() > 32 * 1024);
@@ -4601,91 +4579,6 @@ mod tests {
         output.extend_from_slice(&jpeg[2..]);
         output
     }
-}
-
-// ── Shell thumbnail (fallback preview for any file type) ───────────────────────────────────────
-// Ask the Windows thumbnail cache (the same images Explorer shows) via IShellItemImageFactory, and
-// return them as top-down premultiplied-ish BGRA. Output layout: [w:u32 LE][h:u32 LE][BGRA bytes].
-
-/// Get a shell thumbnail for `path` at roughly `size` px. Returns total bytes written, or `-needed`.
-///
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn ql_get_thumbnail(
-    path_utf8: *const u8,
-    path_len: usize,
-    size: i32,
-    out: *mut u8,
-    out_cap: usize,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
-    })
-}
-
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
-#[no_mangle]
-pub unsafe extern "C" fn ql_get_thumbnail_cancelable(
-    path_utf8: *const u8,
-    path_len: usize,
-    size: i32,
-    out: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| unsafe {
-        ql_get_thumbnail_cancelable_with_flags(
-            path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
-        )
-    })
-}
-
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
-#[no_mangle]
-pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
-    path_utf8: *const u8,
-    path_len: usize,
-    size: i32,
-    flags: u32,
-    out: *mut u8,
-    out_cap: usize,
-    cancel_cb: Option<CancelCallback>,
-) -> i32 {
-    ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
-            Some(s) => s.to_string(),
-            None => return -1,
-        };
-
-        let (width, height, bgra) =
-            match win32::shell_thumbnail::request(path, size, flags, cancel_cb) {
-                Ok(thumbnail) => thumbnail,
-                Err(win32::shell_thumbnail::ThumbnailError::InvalidFlags) => {
-                    return QL_ERROR_INVALID_ARGUMENT
-                }
-                Err(win32::shell_thumbnail::ThumbnailError::LimitExceeded) => {
-                    return QL_ERROR_LIMIT_EXCEEDED
-                }
-                Err(win32::shell_thumbnail::ThumbnailError::Cancelled) => {
-                    return QL_ERROR_CANCELLED
-                }
-                Err(win32::shell_thumbnail::ThumbnailError::Unavailable) => {
-                    return QL_ERROR_BUFFER_TOO_SMALL
-                }
-            };
-        write_raster_packet(width, height, &bgra, out, out_cap)
-    })
 }
 
 fn json_escape(s: &str) -> String {
