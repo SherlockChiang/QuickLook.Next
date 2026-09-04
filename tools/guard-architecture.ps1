@@ -1161,6 +1161,25 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -match '(?m)^const\s+QL_(?:NATIVE_ABI_VERSION|FEATURE_|OK|ERROR_)') {
         Add-Failure "lib.rs must include generated ABI constants and retain no handwritten ABI declarations"
     }
+    $nativeArchiveEntryFfiPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/archive_entry.rs"
+    if (Test-Path -LiteralPath $nativeArchiveEntryFfiPath -PathType Leaf) {
+        $nativeArchiveEntryFfiText = Get-Content -LiteralPath $nativeArchiveEntryFfiPath -Raw
+    }
+    else {
+        $nativeArchiveEntryFfiText = ""
+        Add-Failure "Missing Rust archive entry FFI source: $nativeArchiveEntryFfiPath"
+    }
+    $nativeArchiveEntryFfiTestsPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/archive_entry/tests.rs"
+    if (Test-Path -LiteralPath $nativeArchiveEntryFfiTestsPath -PathType Leaf) {
+        $nativeArchiveEntryFfiTestsText =
+            Get-Content -LiteralPath $nativeArchiveEntryFfiTestsPath -Raw
+    }
+    else {
+        $nativeArchiveEntryFfiTestsText = ""
+        Add-Failure "Missing Rust archive entry FFI tests: $nativeArchiveEntryFfiTestsPath"
+    }
     $nativeCommonPath = Join-Path $Root "native/quicklook_next_native/src/ffi/common.rs"
     if (Test-Path -LiteralPath $nativeCommonPath -PathType Leaf) {
         $nativeCommonText = Get-Content -LiteralPath $nativeCommonPath -Raw
@@ -1979,29 +1998,92 @@ if (Test-Path $parserHostProgram) {
         $nativeLibText -notmatch 'Err\(AnimationPacketError::Internal\)\s*=>\s*return\s+QL_ERROR_INTERNAL') {
         Add-Failure "Native animation packet writers must distinguish internal layout failures from output limits"
     }
-    $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle('
-    $archiveEntryStart = $nativeLibText.IndexOf($archiveEntrySignature, [StringComparison]::Ordinal)
-    $archiveEntryEnd = if ($archiveEntryStart -ge 0) {
-        $nextExport = $nativeLibText.IndexOf(
-            "#[no_mangle]", $archiveEntryStart + $archiveEntrySignature.Length, [StringComparison]::Ordinal)
-        if ($nextExport -ge 0) { $nextExport } else { $nativeLibText.Length }
-    } else {
-        -1
+    $expectedArchiveEntryFfiExports = @(
+        "ql_extract_archive_entry",
+        "ql_extract_archive_entry_cancelable",
+        "ql_extract_archive_entry_handle",
+        "ql_extract_archive_entry_to_output_handle")
+    $archiveEntryFfiExports = [regex]::Matches(
+        $nativeArchiveEntryFfiText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $archiveEntryFfiNoMangleCount = [regex]::Matches(
+        $nativeArchiveEntryFfiText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($archiveEntryFfiExports.Count -ne $expectedArchiveEntryFfiExports.Count -or
+        $archiveEntryFfiNoMangleCount -ne $expectedArchiveEntryFfiExports.Count -or
+        $nativeArchiveEntryFfiText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeArchiveEntryFfiText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $nativeArchiveEntryFfiText -match
+            '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::archive_entry must expose exactly four unsafe C ABI entry points"
     }
-    $archiveEntryBody = if ($archiveEntryStart -ge 0 -and $archiveEntryEnd -gt $archiveEntryStart) {
-        $nativeLibText.Substring($archiveEntryStart, $archiveEntryEnd - $archiveEntryStart)
-    } else {
-        ""
+    $archiveEntryReExportMatch = [regex]::Match(
+        $nativeLibText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::archive_entry::\{(?<items>.*?)\};')
+    if (-not $archiveEntryReExportMatch.Success) {
+        Add-Failure "lib.rs must retain the crate-private ffi::archive_entry re-export block"
     }
-    if ($archiveEntryBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
-        $archiveEntryBody -notmatch 'reopen_handle_input_v2\(' -or
-        $archiveEntryBody -notmatch 'reopen_borrowed_disk_file_for_output\(output_handle,\s*0\)' -or
-        $archiveEntryBody -notmatch 'extract_archive_entry_to_writer_reader\(' -or
-        $archiveEntryBody -notmatch 'output_capacity' -or
-        $archiveEntryBody -notmatch 'output\.metadata\(\)[\s\S]*metadata\.len\(\)\s*==\s*written' -or
-        $archiveEntryBody -notmatch '\*out_written\s*=\s*written' -or
-        $archiveEntryBody -notmatch 'QL_OK') {
-        Add-Failure "ql_extract_archive_entry_to_output_handle must contain panics and stream into the validated caller output HANDLE"
+    else {
+        $archiveEntryReExportNames = @(
+            [regex]::Matches(
+                $archiveEntryReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($archiveEntryReExportNames.Count -ne $expectedArchiveEntryFfiExports.Count -or
+            @($archiveEntryReExportNames | Sort-Object -Unique).Count -ne
+                $expectedArchiveEntryFfiExports.Count) {
+            Add-Failure "lib.rs ffi::archive_entry re-export must contain exactly four unique exports"
+        }
+        foreach ($archiveEntryFfiName in $expectedArchiveEntryFfiExports) {
+            if ($archiveEntryReExportNames -notcontains $archiveEntryFfiName) {
+                Add-Failure "lib.rs ffi::archive_entry re-export lost: $archiveEntryFfiName"
+            }
+        }
+    }
+    foreach ($archiveEntryFfiName in $expectedArchiveEntryFfiExports) {
+        $archiveEntryFfiSignature = "pub unsafe extern `"C`" fn $archiveEntryFfiName("
+        if ($nativeArchiveEntryFfiText.IndexOf(
+                $archiveEntryFfiSignature,
+                [StringComparison]::Ordinal) -lt 0) {
+            Add-Failure "ffi::archive_entry lost expected export: $archiveEntryFfiName"
+        }
+        if ($nativeLibText -match [regex]::Escape($archiveEntryFfiSignature)) {
+            Add-Failure "$archiveEntryFfiName must remain in ffi::archive_entry, not lib.rs"
+        }
+    }
+    if ($nativeArchiveEntryFfiText -notmatch
+            'ql_extract_archive_entry\([\s\S]*ffi_boundary\(\|\|\s*\{[\s\S]*utf8_arg\([\s\S]*MAX_FFI_STRING_BYTES[\s\S]*extract_archive_entry_to_temp\([\s\S]*write_json_out\(' -or
+        $nativeArchiveEntryFfiText -notmatch
+            'ql_extract_archive_entry_cancelable\([\s\S]*ffi_boundary\(\|\|\s*\{[\s\S]*cancel_requested\(cancel_cb\)[\s\S]*utf8_arg\([\s\S]*extract_archive_entry_to_temp\([\s\S]*write_json_out\(') {
+        Add-Failure "Archive entry path exports lost panic containment, bounded UTF-8, temp extraction, or checked output"
+    }
+    if ($nativeArchiveEntryFfiText -notmatch
+            'ql_extract_archive_entry_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*\*out_required\s*=\s*0[\s\S]*MAX_ARCHIVE_ENTRY_NAME_BYTES[\s\S]*reopen_handle_input_v2\([\s\S]*extract_archive_entry_to_temp_reader\([\s\S]*discard_archive_extract_path\([\s\S]*write_v2_out\(') {
+        Add-Failure "Archive entry temp HANDLE export lost validation, entry bounds, cleanup, or v2 output negotiation"
+    }
+    if ($nativeArchiveEntryFfiText -notmatch
+            'ql_extract_archive_entry_to_output_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_written\.is_null\(\)[\s\S]*\*out_written\s*=\s*0[\s\S]*source_handle\s*==\s*output_handle[\s\S]*output_capacity\s*>\s*preview::MAX_ARCHIVE_EXTRACT_BYTES[\s\S]*MAX_ARCHIVE_ENTRY_NAME_BYTES[\s\S]*reopen_handle_input_v2\([\s\S]*reopen_borrowed_disk_file_for_output\(output_handle,\s*0\)[\s\S]*output\.set_len\(0\)[\s\S]*extract_archive_entry_to_writer_reader\([\s\S]*metadata\.len\(\)\s*==\s*written[\s\S]*\*out_written\s*=\s*written[\s\S]*QL_OK') {
+        Add-Failure "Archive entry output HANDLE export lost capacity, independent reopen, zeroing, streaming, or final-length validation"
+    }
+    if ($nativeLibText -match '(?m)^const\s+MAX_ARCHIVE_ENTRY_NAME_BYTES' -or
+        $nativeArchiveEntryFfiText -notmatch
+            '(?m)^const\s+MAX_ARCHIVE_ENTRY_NAME_BYTES:\s*usize\s*=\s*u16::MAX as usize;\s*$') {
+        Add-Failure "The archive entry-name bound must remain private to ffi::archive_entry"
+    }
+    if ($nativeArchiveEntryFfiTestsText -notmatch
+            'fn\s+archive_entry_export_honors_cancellation_before_file_access\s*\(' -or
+        $nativeLibText -notmatch
+            'fn\s+archive_entry_output_handle_streams_without_moving_caller_positions\s*\(' -or
+        $nativeLibText -notmatch
+            'fn\s+archive_entry_output_handle_rejects_invalid_outputs_limits_and_cancellation\s*\(') {
+        Add-Failure "Archive entry FFI lost pre-access cancellation or caller-HANDLE integration coverage"
+    }
+    if (@(Get-Content -LiteralPath $nativeArchiveEntryFfiPath).Count -gt 320) {
+        Add-Failure "The focused ffi::archive_entry module grew beyond 320 lines"
+    }
+    if (@(Get-Content -LiteralPath $nativeArchiveEntryFfiTestsPath).Count -gt 80) {
+        Add-Failure "The focused ffi::archive_entry tests grew beyond 80 lines"
     }
     $nativePreviewPath = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
     $nativePreviewText = Get-Content -LiteralPath $nativePreviewPath -Raw

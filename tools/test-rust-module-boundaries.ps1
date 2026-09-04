@@ -7,6 +7,8 @@ $ErrorActionPreference = "Stop"
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $abiGeneratedPath = Join-Path $Root "native\quicklook_next_native\src\abi_generated.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
+$ffiArchiveEntryPath = Join-Path $Root "native\quicklook_next_native\src\ffi\archive_entry.rs"
+$ffiArchiveEntryTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\archive_entry\tests.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiDatabasePath = Join-Path $Root "native\quicklook_next_native\src\ffi\database.rs"
@@ -76,6 +78,8 @@ foreach ($path in @(
         $libPath,
         $abiGeneratedPath,
         $ffiModulePath,
+        $ffiArchiveEntryPath,
+        $ffiArchiveEntryTestsPath,
         $ffiCommonPath,
         $ffiContractPath,
         $ffiDatabasePath,
@@ -146,6 +150,8 @@ if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
     $abiGeneratedText = Get-Content -LiteralPath $abiGeneratedPath -Raw
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
+    $ffiArchiveEntryText = Get-Content -LiteralPath $ffiArchiveEntryPath -Raw
+    $ffiArchiveEntryTestsText = Get-Content -LiteralPath $ffiArchiveEntryTestsPath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiDatabaseText = Get-Content -LiteralPath $ffiDatabasePath -Raw
@@ -227,6 +233,7 @@ if ($failures.Count -eq 0) {
     }
 
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod archive_entry;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod database;\s*$' -or
@@ -368,6 +375,101 @@ if ($failures.Count -eq 0) {
     $ffiCommonLineCount = @(Get-Content -LiteralPath $ffiCommonPath).Count
     if ($ffiCommonLineCount -gt 240) {
         $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
+    }
+
+    $expectedArchiveEntryExports = @(
+        "ql_extract_archive_entry",
+        "ql_extract_archive_entry_cancelable",
+        "ql_extract_archive_entry_handle",
+        "ql_extract_archive_entry_to_output_handle")
+    $archiveEntryReExportMatch = [regex]::Match(
+        $libText,
+        '(?ms)^pub\(crate\)\s+use\s+ffi::archive_entry::\{(?<items>.*?)\};')
+    if (-not $archiveEntryReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the crate-private ffi::archive_entry re-export block.")
+    }
+    else {
+        $archiveEntryReExportNames = @(
+            [regex]::Matches(
+                $archiveEntryReExportMatch.Groups["items"].Value,
+                '\b[A-Za-z_][A-Za-z0-9_]*\b') |
+                ForEach-Object { $_.Value })
+        if ($archiveEntryReExportNames.Count -ne $expectedArchiveEntryExports.Count -or
+            @($archiveEntryReExportNames | Sort-Object -Unique).Count -ne
+                $expectedArchiveEntryExports.Count) {
+            $failures.Add(
+                "lib.rs ffi::archive_entry re-export must contain exactly four unique exports.")
+        }
+        foreach ($archiveEntryExport in $expectedArchiveEntryExports) {
+            if ($archiveEntryReExportNames -notcontains $archiveEntryExport) {
+                $failures.Add(
+                    "lib.rs ffi::archive_entry re-export lost expected symbol: $archiveEntryExport")
+            }
+        }
+    }
+    if ($ffiArchiveEntryText -match
+            '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiArchiveEntryText -match '(?m)^\s*pub\s+(?!unsafe\s+extern\s+"C")' -or
+        $ffiArchiveEntryText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::archive_entry must use explicit imports and expose only its unsafe C ABI surface.")
+    }
+    $archiveEntryExports = [regex]::Matches(
+        $ffiArchiveEntryText,
+        '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $archiveEntryNoMangleCount = [regex]::Matches(
+        $ffiArchiveEntryText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($archiveEntryExports.Count -ne $expectedArchiveEntryExports.Count -or
+        $archiveEntryNoMangleCount -ne $expectedArchiveEntryExports.Count) {
+        $failures.Add("ffi::archive_entry must expose exactly four unsafe C ABI exports.")
+    }
+    foreach ($archiveEntryExport in $expectedArchiveEntryExports) {
+        $archiveEntryPattern = '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($archiveEntryExport) + '\s*\('
+        if ($ffiArchiveEntryText -notmatch $archiveEntryPattern) {
+            $failures.Add("ffi::archive_entry lost expected export: $archiveEntryExport")
+        }
+        if ($libText -match $archiveEntryPattern) {
+            $failures.Add(
+                "$archiveEntryExport implementation must remain in ffi::archive_entry, not lib.rs.")
+        }
+    }
+    if ($ffiArchiveEntryText -notmatch
+            'ql_extract_archive_entry\([\s\S]*ffi_boundary\(\|\|\s*\{[\s\S]*utf8_arg\([\s\S]*extract_archive_entry_to_temp\([\s\S]*write_json_out\(' -or
+        $ffiArchiveEntryText -notmatch
+            'ql_extract_archive_entry_cancelable\([\s\S]*cancel_requested\(cancel_cb\)[\s\S]*extract_archive_entry_to_temp\([\s\S]*write_json_out\(' -or
+        $ffiArchiveEntryText -notmatch
+            'ql_extract_archive_entry_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*MAX_ARCHIVE_ENTRY_NAME_BYTES[\s\S]*reopen_handle_input_v2\([\s\S]*extract_archive_entry_to_temp_reader\([\s\S]*discard_archive_extract_path\([\s\S]*write_v2_out\(' -or
+        $ffiArchiveEntryText -notmatch
+            'ql_extract_archive_entry_to_output_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*MAX_ARCHIVE_EXTRACT_BYTES[\s\S]*reopen_handle_input_v2\([\s\S]*reopen_borrowed_disk_file_for_output\(output_handle,\s*0\)[\s\S]*extract_archive_entry_to_writer_reader\([\s\S]*metadata\.len\(\)\s*==\s*written[\s\S]*\*out_written\s*=\s*written') {
+        $failures.Add(
+            "ffi::archive_entry lost a path, HANDLE, cleanup, capacity, or caller-output contract.")
+    }
+    if ($libText -match '(?m)^const\s+MAX_ARCHIVE_ENTRY_NAME_BYTES' -or
+        $ffiArchiveEntryText -notmatch
+            '(?m)^const\s+MAX_ARCHIVE_ENTRY_NAME_BYTES:\s*usize\s*=\s*u16::MAX as usize;\s*$') {
+        $failures.Add(
+            "The archive entry-name bound must remain private to ffi::archive_entry.")
+    }
+    if ($ffiArchiveEntryTestsText -notmatch
+            'fn\s+archive_entry_export_honors_cancellation_before_file_access\s*\(' -or
+        $libText -notmatch
+            'fn\s+archive_entry_output_handle_streams_without_moving_caller_positions\s*\(' -or
+        $libText -notmatch
+            'fn\s+archive_entry_output_handle_rejects_invalid_outputs_limits_and_cancellation\s*\(') {
+        $failures.Add(
+            "Archive entry FFI lost pre-access cancellation or caller-HANDLE integration coverage.")
+    }
+    $ffiArchiveEntryLineCount = @(Get-Content -LiteralPath $ffiArchiveEntryPath).Count
+    if ($ffiArchiveEntryLineCount -gt 320) {
+        $failures.Add(
+            "The focused ffi::archive_entry module grew beyond 320 lines: $ffiArchiveEntryLineCount")
+    }
+    $ffiArchiveEntryTestsLineCount = @(Get-Content -LiteralPath $ffiArchiveEntryTestsPath).Count
+    if ($ffiArchiveEntryTestsLineCount -gt 80) {
+        $failures.Add(
+            "The focused ffi::archive_entry tests grew beyond 80 lines: $ffiArchiveEntryTestsLineCount")
     }
 
     if ($libText -match '(?m)^pub\(crate\) use ffi::raster_packet::') {
