@@ -1072,4 +1072,6 @@
   <data name="OfficeSlideCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 張投影片中的 {0:N0} 張（預覽上限 {2:N0} 張）。</value></data>
   <data name="OfficeSheetCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 個工作表中的 {0:N0} 個（預覽上限 {2:N0} 個）。</value></data>
   <data name="OfficePageCoverageFormat" xml:space="preserve"><value>正在顯示 {1:N0} 個近似頁面中的 {0:N0} 個（預覽上限 {2:N0} 個）。</value></data>
+  <data name="CopyDiagnostics" xml:space="preserve"><value>複製診斷資訊</value></data>
+  <data name="DiagnosticsCopied" xml:space="preserve"><value>診斷資訊已複製。</value></data>
 </root>

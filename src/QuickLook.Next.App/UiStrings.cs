@@ -35,6 +35,8 @@ internal static class UiStrings
     public static string ImageDecodeFailedTitle => Get(nameof(ImageDecodeFailedTitle));
     public static string ImageDecodeFailedMessage => Get(nameof(ImageDecodeFailedMessage));
     public static string RetryPreview => Get(nameof(RetryPreview));
+    public static string CopyDiagnostics => Get(nameof(CopyDiagnostics));
+    public static string DiagnosticsCopied => Get(nameof(DiagnosticsCopied));
     public static string PathCopied => Get(nameof(PathCopied));
     public static string FileCopied => Get(nameof(FileCopied));
     public static string NoExifData => Get(nameof(NoExifData));

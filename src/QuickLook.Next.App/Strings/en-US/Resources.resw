@@ -642,4 +642,6 @@
   <data name="OfficeSlideCoverageFormat" xml:space="preserve"><value>Showing {0:N0} of {1:N0} slides (preview limit {2:N0}).</value></data>
   <data name="OfficeSheetCoverageFormat" xml:space="preserve"><value>Showing {0:N0} of {1:N0} sheets (preview limit {2:N0}).</value></data>
   <data name="OfficePageCoverageFormat" xml:space="preserve"><value>Showing {0:N0} of {1:N0} approximate pages (preview limit {2:N0}).</value></data>
+  <data name="CopyDiagnostics" xml:space="preserve"><value>Copy diagnostics</value></data>
+  <data name="DiagnosticsCopied" xml:space="preserve"><value>Diagnostics copied.</value></data>
 </root>

@@ -2315,6 +2315,10 @@ $officeCoverageUiTest = Join-Path $PSScriptRoot "test-office-coverage-ui.ps1"
 Invoke-CheckedScript -Path $officeCoverageUiTest -Arguments @{ Root = $Root } `
     -FailureMessage "Office coverage UI guard failed"
 
+$previewErrorDiagnosticsUiTest = Join-Path $PSScriptRoot "test-preview-error-diagnostics-ui.ps1"
+Invoke-CheckedScript -Path $previewErrorDiagnosticsUiTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Preview error diagnostics UI guard failed"
+
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
 Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "MSIX version tests failed"

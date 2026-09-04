@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
@@ -132,7 +131,7 @@ public sealed partial class SettingsWindow : Window
         RestartInfo.Message = UiStrings.SettingsRestartMessage;
         AboutHeading.Text = UiStrings.SettingsAbout;
         AboutDescription.Text = UiStrings.SettingsAboutDescription;
-        VersionText.Text = UiStrings.Format(UiStrings.SettingsVersionFormat, GetVersion());
+        VersionText.Text = UiStrings.Format(UiStrings.SettingsVersionFormat, ApplicationVersion.Current);
         ProjectSourceText.Text = UiStrings.SettingsProjectSource;
         HelpButtonText.Text = UiStrings.SettingsHelpShortcuts;
         GitHubButtonText.Text = UiStrings.SettingsOpenGitHub;
@@ -389,13 +388,6 @@ public sealed partial class SettingsWindow : Window
         RestartInfo.IsOpen = true;
     }
 
-    private static string GetVersion()
-        => Assembly.GetExecutingAssembly()
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion.Split('+')[0]
-            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)
-            ?? "0.0.0";
-
     private void OnGitHubClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl);
     private void OnReleasesClick(object sender, RoutedEventArgs e) => OpenUrl(RepositoryUrl + "/releases");
     private void OnHelpClick(object sender, RoutedEventArgs e) => WelcomeWindow.Show(_resolveIconPath);
@@ -436,7 +428,7 @@ public sealed partial class SettingsWindow : Window
         try
         {
             UpdateMetadata metadata = await UpdateChecker.CheckAsync(CancellationToken.None);
-            if (!ReleaseVersion.TryParse(GetVersion(), out ReleaseVersion? installed))
+            if (!ReleaseVersion.TryParse(ApplicationVersion.Current, out ReleaseVersion? installed))
                 throw new FormatException("Invalid installed version.");
             int comparison = installed!.CompareTo(metadata.Version);
             UpdateInfo.Severity = InfoBarSeverity.Success;
@@ -444,7 +436,7 @@ public sealed partial class SettingsWindow : Window
             {
                 UpdateInfo.Severity = InfoBarSeverity.Informational;
                 UpdateInfo.Title = UiStrings.UpdateAvailableTitle;
-                UpdateInfo.Message = UiStrings.Format(UiStrings.UpdateAvailableMessageFormat, metadata.VersionText, GetVersion());
+                UpdateInfo.Message = UiStrings.Format(UiStrings.UpdateAvailableMessageFormat, metadata.VersionText, ApplicationVersion.Current);
             }
             else if (comparison == 0)
             {
@@ -499,7 +491,7 @@ public sealed partial class SettingsWindow : Window
         {
             var picker = new FileSavePicker
             {
-                SuggestedFileName = $"QuickLook-Next-Diagnostics-{GetVersion()}-{DateTime.UtcNow:yyyyMMdd}",
+                SuggestedFileName = $"QuickLook-Next-Diagnostics-{ApplicationVersion.Current}-{DateTime.UtcNow:yyyyMMdd}",
             };
             picker.FileTypeChoices.Add(UiStrings.DiagnosticsZipType, [".zip"]);
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
@@ -510,7 +502,7 @@ public sealed partial class SettingsWindow : Window
             DiagnosticsKnownLogs logs = DiagnosticsLogInventory.InspectKnownLogs();
             var snapshot = new DiagnosticsSnapshot
             {
-                ApplicationVersion = GetVersion(),
+                ApplicationVersion = ApplicationVersion.Current,
                 ProcessArchitecture = RuntimeInformation.ProcessArchitecture,
                 IsPackaged = IsPackaged(),
                 FrameworkVersion = Environment.Version,

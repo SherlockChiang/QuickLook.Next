@@ -1,9 +1,20 @@
+using QuickLook.Next.Core;
 using Xunit;
 
 namespace QuickLook.Next.App;
 
 public sealed class PreviewSessionTests
 {
+    private static readonly PreviewFailureDiagnostic Diagnostics = PreviewFailureDiagnostics.Create(
+        PreviewErrorCodes.ContentFailed,
+        "route-selected",
+        7,
+        "0.3.7",
+        "text",
+        null,
+        null,
+        42);
+
     [Fact]
     public void FirstOpenFailureBindsActionsToThePendingPath()
     {
@@ -12,8 +23,9 @@ public sealed class PreviewSessionTests
 
         Assert.Null(session.CurrentPath);
         Assert.Equal("B.txt", session.ActivePath);
-        Assert.True(session.TryBindError(snapshot, canRetry: true, out PreviewErrorContext context));
+        Assert.True(session.TryBindError(snapshot, canRetry: true, Diagnostics, out PreviewErrorContext context));
         Assert.Equal("B.txt", context.Path);
+        Assert.Equal(Diagnostics, context.Diagnostics);
         Assert.Equal("B.txt", session.ErrorActionPath);
         Assert.True(session.IsCurrentError(context));
     }
@@ -27,7 +39,7 @@ public sealed class PreviewSessionTests
 
         Assert.Equal("A.txt", session.CurrentPath);
         Assert.Equal("B.txt", session.PendingPath);
-        Assert.True(session.TryBindError(snapshot, canRetry: true, out _));
+        Assert.True(session.TryBindError(snapshot, canRetry: true, Diagnostics, out _));
         Assert.Equal("B.txt", session.ErrorActionPath);
         Assert.False(session.TryGetActiveSnapshot("A.txt", out _));
     }
@@ -39,8 +51,8 @@ public sealed class PreviewSessionTests
         PreviewSessionSnapshot oldSnapshot = session.Begin("A.txt", PreviewNavigationSource.ExplorerOpen);
         PreviewSessionSnapshot currentSnapshot = session.Begin("B.txt", PreviewNavigationSource.ExplorerSwitch);
 
-        Assert.True(session.TryBindError(currentSnapshot, canRetry: false, out PreviewErrorContext current));
-        Assert.False(session.TryBindError(oldSnapshot, canRetry: true, out _));
+        Assert.True(session.TryBindError(currentSnapshot, canRetry: false, Diagnostics, out PreviewErrorContext current));
+        Assert.False(session.TryBindError(oldSnapshot, canRetry: true, Diagnostics, out _));
         Assert.True(session.IsCurrentError(current));
         Assert.Equal("B.txt", session.ErrorActionPath);
     }
@@ -50,13 +62,13 @@ public sealed class PreviewSessionTests
     {
         var session = new PreviewSession();
         PreviewSessionSnapshot oldSnapshot = session.Begin("same.txt", PreviewNavigationSource.ExplorerOpen);
-        Assert.True(session.TryBindError(oldSnapshot, canRetry: true, out PreviewErrorContext oldContext));
+        Assert.True(session.TryBindError(oldSnapshot, canRetry: true, Diagnostics, out PreviewErrorContext oldContext));
 
         PreviewSessionSnapshot currentSnapshot = session.Begin("same.txt", PreviewNavigationSource.WindowNavigation);
 
-        Assert.False(session.TryBindError(oldSnapshot, canRetry: true, out _));
+        Assert.False(session.TryBindError(oldSnapshot, canRetry: true, Diagnostics, out _));
         Assert.False(session.IsCurrentError(oldContext));
-        Assert.True(session.TryBindError(currentSnapshot, canRetry: false, out _));
+        Assert.True(session.TryBindError(currentSnapshot, canRetry: false, Diagnostics, out _));
     }
 
     [Fact]
@@ -64,7 +76,7 @@ public sealed class PreviewSessionTests
     {
         var session = new PreviewSession();
         PreviewSessionSnapshot snapshot = session.Begin("B.txt", PreviewNavigationSource.WindowNavigation);
-        Assert.True(session.TryBindError(snapshot, canRetry: true, out PreviewErrorContext context));
+        Assert.True(session.TryBindError(snapshot, canRetry: true, Diagnostics, out PreviewErrorContext context));
 
         session.CommitPath("B.txt");
 
@@ -77,7 +89,7 @@ public sealed class PreviewSessionTests
     {
         var session = new PreviewSession();
         PreviewSessionSnapshot snapshot = session.Begin("B.txt", PreviewNavigationSource.WindowNavigation);
-        Assert.True(session.TryBindError(snapshot, canRetry: true, out PreviewErrorContext context));
+        Assert.True(session.TryBindError(snapshot, canRetry: true, Diagnostics, out PreviewErrorContext context));
 
         session.BeginClose();
         Assert.Null(session.ErrorContext);
@@ -85,7 +97,7 @@ public sealed class PreviewSessionTests
         Assert.False(session.IsCurrentError(context));
 
         snapshot = session.Begin("C.txt", PreviewNavigationSource.WindowNavigation);
-        Assert.True(session.TryBindError(snapshot, canRetry: false, out _));
+        Assert.True(session.TryBindError(snapshot, canRetry: false, Diagnostics, out _));
         session.Clear();
         Assert.Null(session.ErrorContext);
         Assert.Null(session.ErrorActionPath);

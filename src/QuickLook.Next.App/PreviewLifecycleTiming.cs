@@ -25,12 +25,14 @@ internal sealed class PreviewLifecycleTiming
 
     public long CorrelationId { get; }
     public int Generation { get; }
+    public string CurrentPhase { get; private set; } = "unknown";
     public bool IsTerminal => _terminal;
 
     public void Mark(string phase, string? detail = null)
     {
         if (_terminal)
             return;
+        CurrentPhase = phase;
         long now = Stopwatch.GetTimestamp();
         double delta = Stopwatch.GetElapsedTime(_lastMark, now).TotalMilliseconds;
         double total = Stopwatch.GetElapsedTime(_started, now).TotalMilliseconds;

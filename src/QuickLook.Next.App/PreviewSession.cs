@@ -1,3 +1,5 @@
+using QuickLook.Next.Core;
+
 namespace QuickLook.Next.App;
 
 internal enum PreviewNavigationSource
@@ -8,7 +10,10 @@ internal enum PreviewNavigationSource
 }
 
 internal readonly record struct PreviewSessionSnapshot(int Generation, CancellationToken Token, string Path, PreviewNavigationSource Source);
-internal readonly record struct PreviewErrorContext(PreviewSessionSnapshot Snapshot, bool CanRetry)
+internal readonly record struct PreviewErrorContext(
+    PreviewSessionSnapshot Snapshot,
+    bool CanRetry,
+    PreviewFailureDiagnostic Diagnostics)
 {
     public string Path => Snapshot.Path;
 }
@@ -99,6 +104,7 @@ internal sealed class PreviewSession
     public bool TryBindError(
         PreviewSessionSnapshot snapshot,
         bool canRetry,
+        PreviewFailureDiagnostic diagnostics,
         out PreviewErrorContext context)
     {
         context = default;
@@ -109,7 +115,7 @@ internal sealed class PreviewSession
             return false;
         }
 
-        context = new PreviewErrorContext(snapshot, canRetry);
+        context = new PreviewErrorContext(snapshot, canRetry, diagnostics);
         _errorContext = context;
         return true;
     }

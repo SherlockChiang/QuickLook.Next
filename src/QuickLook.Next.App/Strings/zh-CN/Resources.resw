@@ -482,4 +482,6 @@
   <data name="OfficeSlideCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 张幻灯片中的 {0:N0} 张（预览上限 {2:N0} 张）。</value></data>
   <data name="OfficeSheetCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 个工作表中的 {0:N0} 个（预览上限 {2:N0} 个）。</value></data>
   <data name="OfficePageCoverageFormat" xml:space="preserve"><value>正在显示 {1:N0} 个近似页面中的 {0:N0} 个（预览上限 {2:N0} 个）。</value></data>
+  <data name="CopyDiagnostics" xml:space="preserve"><value>复制诊断信息</value></data>
+  <data name="DiagnosticsCopied" xml:space="preserve"><value>诊断信息已复制。</value></data>
 </root>
