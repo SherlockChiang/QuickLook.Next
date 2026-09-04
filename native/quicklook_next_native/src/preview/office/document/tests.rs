@@ -4,8 +4,8 @@ use zip::ZipArchive;
 
 use super::super::super::OfficeReadError;
 use super::{
-    docx_header_footer_entries, extract_docx_header_footer_text, extract_wordprocessing_text,
-    OfficeContext,
+    build_docx_layout, docx_header_footer_entries, extract_docx_header_footer_text,
+    extract_wordprocessing_text, OfficeContext,
 };
 
 extern "C" fn always_cancel() -> bool {
@@ -14,6 +14,29 @@ extern "C" fn always_cancel() -> bool {
 
 fn test_office_context() -> OfficeContext {
     OfficeContext::new(None)
+}
+
+#[test]
+fn docx_layout_reports_represented_total_and_limit_counts() {
+    let mut cursor = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()))
+        .finish()
+        .expect("empty ZIP bytes");
+    cursor.set_position(0);
+    let mut zip = ZipArchive::new(cursor).expect("empty ZIP archive");
+    let body = (0..70)
+        .map(|index| format!("{index:02} {}", "x".repeat(420)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut context = test_office_context();
+
+    let layout = build_docx_layout(&mut context, &mut zip, &body, &[])
+        .expect("DOCX layout")
+        .expect("document pages");
+
+    assert_eq!(layout.pages.len(), 8);
+    assert_eq!(layout.represented_page_count, 8);
+    assert!(layout.total_page_count > layout.represented_page_count);
+    assert_eq!(layout.page_limit, 8);
 }
 
 #[test]

@@ -1673,8 +1673,11 @@ if (Test-Path $parserHostProgram) {
     $nativeOfficeTypesText = Get-Content -LiteralPath $nativeOfficeTypesPath -Raw
     if ($nativeOfficeTypesText -notmatch 'image_ref:\s*Option<String>' -or
         $nativeOfficeTypesText -notmatch 'image_byte_length:\s*Option<u64>' -or
+        $nativeOfficeTypesText -notmatch 'represented_page_count:\s*usize' -or
+        $nativeOfficeTypesText -notmatch 'total_page_count:\s*usize' -or
+        $nativeOfficeTypesText -notmatch 'page_limit:\s*usize' -or
         $nativeOfficeTypesText -match 'image_base64') {
-        Add-Failure "Current Rust Office layout JSON must contain image refs and lengths, never inline Base64 payloads"
+        Add-Failure "Current Rust Office layout JSON must contain bounded coverage metadata plus image refs and lengths, never inline Base64 payloads"
     }
     if ($nativeLibText -notmatch 'Path::new\(&logical_name\)[\s\S]*?\.file_name\(\)' -or
         $nativeLibText -match 'fs::File::open\(\s*&?\s*logical_name\b') {

@@ -24,6 +24,44 @@ fn test_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 #[test]
+fn ppt_layout_reports_represented_total_and_limit_counts() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+    writer
+        .start_file(
+            "ppt/presentation.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .expect("presentation part");
+    writer
+        .write_all(br#"<p:presentation xmlns:p="p"/>"#)
+        .expect("presentation xml");
+    for slide_index in 1..=31 {
+        writer
+            .start_file(
+                format!("ppt/slides/slide{slide_index}.xml"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("slide part");
+        writer
+            .write_all(br#"<p:sld xmlns:p="p"/>"#)
+            .expect("slide xml");
+    }
+    let mut cursor = writer.finish().expect("PPTX bytes");
+    cursor.set_position(0);
+    let mut zip = ZipArchive::new(cursor).expect("PPTX archive");
+    let mut context = test_office_context();
+
+    let layout = build_pptx_layout(&mut context, &mut zip)
+        .expect("PPTX layout")
+        .expect("presentation pages");
+
+    assert_eq!(layout.pages.len(), 30);
+    assert_eq!(layout.represented_page_count, 30);
+    assert_eq!(layout.total_page_count, 31);
+    assert_eq!(layout.page_limit, 30);
+}
+
+#[test]
 fn ppt_text_extraction_preserves_paragraphs_tabs_and_breaks() {
     let context = test_office_context();
     let text = extract_ppt_text(

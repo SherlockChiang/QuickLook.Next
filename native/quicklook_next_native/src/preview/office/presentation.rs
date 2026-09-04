@@ -15,6 +15,7 @@ use super::super::{
     OfficeContext, OfficeLayoutDto, OfficeLayoutItemDto, OfficePageDto, OfficeResult,
     MAX_OFFICE_LAYOUT_IMAGES, OFFICE_EMUS_PER_DIP,
 };
+use super::count_numbered_parts;
 use super::image::{append_office_media_summary, office_media_entries};
 use super::layout::{
     image_item_from_relationship, parse_relationships, part_base_dir, rels_path_for_part,
@@ -110,6 +111,7 @@ fn build_pptx_layout<R: Read + Seek>(
     context: &mut OfficeContext,
     zip: &mut ZipArchive<R>,
 ) -> OfficeResult<Option<OfficeLayoutDto>> {
+    let total_page_count = count_numbered_parts(context, zip, "ppt/slides/", "slide")?;
     let presentation_xml =
         read_office_zip_text(context, zip, "ppt/presentation.xml", 4 * 1024 * 1024)?;
     let (slide_width, slide_height) = presentation_xml
@@ -195,10 +197,14 @@ fn build_pptx_layout<R: Read + Seek>(
         return Ok(None);
     }
 
+    let represented_page_count = pages.len();
     Ok(Some(OfficeLayoutDto {
         layout_kind: "presentation".to_string(),
         width: slide_width,
         height: slide_height,
+        represented_page_count,
+        total_page_count: total_page_count.max(represented_page_count),
+        page_limit: MAX_OFFICE_SLIDES,
         pages,
     }))
 }

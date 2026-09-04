@@ -1103,6 +1103,7 @@ if ($failures.Count -eq 0) {
             'fn docx_paragraph_prefix\(',
             'fn docx_numbered_paragraph_prefix\(',
             'context\.check_xml_event\(event_count\)',
+            'const MAX_OFFICE_DOCUMENT_PAGES: usize = 8;',
             'entries\.truncate\(8\)',
             'MAX_OFFICE_LAYOUT_IMAGES\.min\(6\)')) {
         if ($officeDocumentText -notmatch $requiredDocument) {
@@ -1116,7 +1117,8 @@ if ($failures.Count -eq 0) {
             'fn docx_text_extraction_formats_table_rows\(',
             'fn docx_text_extraction_marks_page_and_section_breaks\(',
             'fn docx_text_extraction_marks_numbered_paragraphs_as_list_items\(',
-            'fn docx_header_footer_entries_extract_text\(')) {
+            'fn docx_header_footer_entries_extract_text\(',
+            'fn docx_layout_reports_represented_total_and_limit_counts\(')) {
         if ($officeDocumentTestsText -notmatch $requiredDocumentTest) {
             $failures.Add("Document tests lost text/layout/cancellation coverage: $requiredDocumentTest")
         }
@@ -1152,7 +1154,8 @@ if ($failures.Count -eq 0) {
             'fn ppt_vertical_title_is_retained_without_explicit_geometry\(',
             'fn ppt_fallback_prefers_large_top_text_over_header_subtitle_and_footer\(',
             'fn ppt_slide_summary_removes_one_multiline_title_occurrence\(',
-            'fn ppt_slide_title_uses_top_text_box_when_no_title_placeholder_exists\(')) {
+            'fn ppt_slide_title_uses_top_text_box_when_no_title_placeholder_exists\(',
+            'fn ppt_layout_reports_represented_total_and_limit_counts\(')) {
         if ($officePresentationTestsText -notmatch $requiredPresentationTest) {
             $failures.Add("Presentation tests lost layout/title/cancellation coverage: $requiredPresentationTest")
         }
@@ -1188,7 +1191,8 @@ if ($failures.Count -eq 0) {
             'fn xlsx_style_number_formats_include_custom_and_builtin_formats\(',
             'fn xlsx_styles_include_fill_colors\(',
             'fn xlsx_shared_strings_and_worksheet_rows_resolve_cells\(',
-            'fn xlsx_drawing_anchor_resolves_image_reference_and_geometry\(')) {
+            'fn xlsx_drawing_anchor_resolves_image_reference_and_geometry\(',
+            'fn xlsx_layout_reports_represented_total_and_limit_counts\(')) {
         if ($officeWorkbookTestsText -notmatch $requiredWorkbookTest) {
             $failures.Add("Workbook tests lost XLSX layout/parser coverage: $requiredWorkbookTest")
         }

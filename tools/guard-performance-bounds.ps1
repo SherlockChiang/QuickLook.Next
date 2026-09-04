@@ -59,6 +59,7 @@ $nativeMediaMp4Tests = Join-Path $Root "native/quicklook_next_native/src/preview
 $nativeDatabase = Join-Path $Root "native/quicklook_next_native/src/preview/database/mod.rs"
 $nativeDatabaseWal = Join-Path $Root "native/quicklook_next_native/src/preview/database/wal.rs"
 $nativeDatabaseSqlite = Join-Path $Root "native/quicklook_next_native/src/preview/database/sqlite.rs"
+$nativeOffice = Join-Path $Root "native/quicklook_next_native/src/preview/office/mod.rs"
 $nativeOfficeDocument = Join-Path $Root "native/quicklook_next_native/src/preview/office/document.rs"
 $nativeOfficeDocumentTests = Join-Path $Root "native/quicklook_next_native/src/preview/office/document/tests.rs"
 $nativeOfficeImage = Join-Path $Root "native/quicklook_next_native/src/preview/office/image.rs"
@@ -649,6 +650,8 @@ Require-TextPattern $nativeOfficeText 'MAX_OFFICE_TEXT_CHARS:\s*usize\s*=\s*96\s
     "Office output must retain its 96 KiB text, 16 MiB media, and 18-image budgets."
 Require-TextPattern $nativeOfficeText 'const MAX_OFFICE_SLIDES:\s*usize\s*=\s*30[\s\S]*const MAX_PPT_SLIDE_TITLE_CHARS:\s*usize\s*=\s*160' `
     "Office presentation parsing must retain a 30-slide and 160-character title budget."
+Require-Pattern $nativeOffice 'fn\s+count_numbered_parts<R:\s*Read\s*\+\s*Seek>[\s\S]*BTreeSet[\s\S]*zip\.len\(\)\.min\(MAX_OFFICE_ZIP_ENTRIES\)[\s\S]*context\.check_cancelled\(\)' `
+    "Office total slide/sheet discovery must remain metadata-only, cancellation-aware, deduplicated, and ZIP-entry bounded."
 Require-TextPattern $nativeOfficeText 'fn build_pptx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*let\s+mut\s+image_budget\s*=\s*MAX_OFFICE_LAYOUT_IMAGES' `
     "PPT layout parsing must retain the shared 18-image budget."
 Require-TextPattern $nativeOfficeText 'fn parse_ppt_slide_items<R:\s*Read\s*\+\s*Seek>[\s\S]*event_count\s*\+=\s*1[\s\S]*context\.check_xml_event\(event_count\)' `
@@ -657,7 +660,7 @@ Require-TextPattern $nativeOfficeText 'fn cache_ppt_slide_layout_placeholders<R:
     "PPT layout placeholders must remain cached to avoid repeated decompression."
 Require-Pattern $nativeOfficePresentationTests 'ppt_layout_inherits_title_type_and_geometry_from_master_once[\s\S]*shared layout/master parts must only consume the decompression budget once' `
     "PPT tests must retain the shared layout/master decompression-budget regression."
-Require-TextPattern $nativeOfficeText 'fn build_docx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*paragraph\.chars\(\)\.take\(420\)[\s\S]*pages\.len\(\)\s*>=\s*8[\s\S]*MAX_OFFICE_LAYOUT_IMAGES\.min\(6\)[\s\S]*media_entries\.iter\(\)\.take\(6\)' `
+Require-TextPattern $nativeOfficeText 'const MAX_OFFICE_DOCUMENT_PAGES:\s*usize\s*=\s*8[\s\S]*fn build_docx_layout<R:\s*Read\s*\+\s*Seek>[\s\S]*paragraph\.chars\(\)\.take\(420\)[\s\S]*page_index\s*<=\s*MAX_OFFICE_DOCUMENT_PAGES[\s\S]*MAX_OFFICE_LAYOUT_IMAGES\.min\(6\)[\s\S]*media_entries\.iter\(\)\.take\(6\)' `
     "DOCX layout must retain bounded paragraph, page, and embedded-image retention."
 Require-TextPattern $nativeOfficeText 'fn docx_header_footer_entries<R:\s*Read\s*\+\s*Seek>[\s\S]*zip\.len\(\)\.min\(MAX_OFFICE_ZIP_ENTRIES\)[\s\S]*entry\.size\(\)\s*>\s*1024\s*\*\s*1024[\s\S]*entries\.truncate\(8\)' `
     "DOCX header/footer discovery must retain ZIP, part-size, and entry-count bounds."

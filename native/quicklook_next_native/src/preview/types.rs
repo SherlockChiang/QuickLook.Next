@@ -27,6 +27,9 @@ pub(super) struct OfficeLayoutDto {
     pub(super) layout_kind: String,
     pub(super) width: f64,
     pub(super) height: f64,
+    pub(super) represented_page_count: usize,
+    pub(super) total_page_count: usize,
+    pub(super) page_limit: usize,
     pub(super) pages: Vec<OfficePageDto>,
 }
 

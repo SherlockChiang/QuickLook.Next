@@ -18,6 +18,8 @@ use super::image::{
     read_office_layout_image_reference,
 };
 
+const MAX_OFFICE_DOCUMENT_PAGES: usize = 8;
+
 pub(in crate::preview) fn render_docx<R: Read + Seek>(
     path: &str,
     zip: &mut ZipArchive<R>,
@@ -99,6 +101,7 @@ fn build_docx_layout<R: Read + Seek>(
     let mut items = Vec::new();
     let mut page_index = 1usize;
     let mut y = margin;
+    let mut has_layout_content = false;
 
     for paragraph in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let clipped = paragraph.chars().take(420).collect::<String>();
@@ -107,37 +110,38 @@ fn build_docx_layout<R: Read + Seek>(
             .clamp(1.0, 5.0);
         let height = 24.0 * line_count + 10.0;
         if y + height > page_height - margin {
-            push_docx_page(&mut pages, page_index, page_width, page_height, items);
+            if page_index <= MAX_OFFICE_DOCUMENT_PAGES && !items.is_empty() {
+                push_docx_page(&mut pages, page_index, page_width, page_height, items);
+            }
             page_index += 1;
             items = Vec::new();
             y = margin;
         }
 
-        items.push(OfficeLayoutItemDto {
-            kind: "text".to_string(),
-            x: margin,
-            y,
-            width: page_width - margin * 2.0,
-            height,
-            z_index: items.len(),
-            text: Some(clipped),
-            shape: None,
-            placeholder_type: None,
-            bold: false,
-            italic: false,
-            font_size: None,
-            fill_color: None,
-            stroke_color: None,
-            image_name: None,
-            mime_type: None,
-            image_ref: None,
-            image_byte_length: None,
-        });
-        y += height + 6.0;
-
-        if pages.len() >= 8 {
-            break;
+        has_layout_content = true;
+        if page_index <= MAX_OFFICE_DOCUMENT_PAGES {
+            items.push(OfficeLayoutItemDto {
+                kind: "text".to_string(),
+                x: margin,
+                y,
+                width: page_width - margin * 2.0,
+                height,
+                z_index: items.len(),
+                text: Some(clipped),
+                shape: None,
+                placeholder_type: None,
+                bold: false,
+                italic: false,
+                font_size: None,
+                fill_color: None,
+                stroke_color: None,
+                image_name: None,
+                mime_type: None,
+                image_ref: None,
+                image_byte_length: None,
+            });
         }
+        y += height + 6.0;
     }
 
     let mut image_budget = MAX_OFFICE_LAYOUT_IMAGES.min(6);
@@ -145,60 +149,68 @@ fn build_docx_layout<R: Read + Seek>(
         if image_budget == 0 {
             break;
         }
-        if y + 180.0 > page_height - margin {
-            push_docx_page(&mut pages, page_index, page_width, page_height, items);
-            page_index += 1;
-            items = Vec::new();
-            y = margin;
-        }
         let Some((image_ref, image_byte_length)) =
             read_office_layout_image_reference(context, zip, entry, "word/media/")?
         else {
             continue;
         };
+        if y + 180.0 > page_height - margin {
+            if page_index <= MAX_OFFICE_DOCUMENT_PAGES && !items.is_empty() {
+                push_docx_page(&mut pages, page_index, page_width, page_height, items);
+            }
+            page_index += 1;
+            items = Vec::new();
+            y = margin;
+        }
         let lower = image_ref.to_ascii_lowercase();
         image_budget = image_budget.saturating_sub(1);
-        items.push(OfficeLayoutItemDto {
-            kind: "image".to_string(),
-            x: margin,
-            y,
-            width: 260.0,
-            height: 170.0,
-            z_index: items.len(),
-            text: None,
-            shape: None,
-            placeholder_type: None,
-            bold: false,
-            italic: false,
-            font_size: None,
-            fill_color: None,
-            stroke_color: None,
-            image_name: Some(
-                image_ref
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(image_ref.as_str())
-                    .to_string(),
-            ),
-            mime_type: image_mime_type(&lower).map(str::to_string),
-            image_ref: Some(image_ref),
-            image_byte_length: Some(image_byte_length),
-        });
+        has_layout_content = true;
+        if page_index <= MAX_OFFICE_DOCUMENT_PAGES {
+            items.push(OfficeLayoutItemDto {
+                kind: "image".to_string(),
+                x: margin,
+                y,
+                width: 260.0,
+                height: 170.0,
+                z_index: items.len(),
+                text: None,
+                shape: None,
+                placeholder_type: None,
+                bold: false,
+                italic: false,
+                font_size: None,
+                fill_color: None,
+                stroke_color: None,
+                image_name: Some(
+                    image_ref
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(image_ref.as_str())
+                        .to_string(),
+                ),
+                mime_type: image_mime_type(&lower).map(str::to_string),
+                image_ref: Some(image_ref),
+                image_byte_length: Some(image_byte_length),
+            });
+        }
         y += 188.0;
     }
 
-    if !items.is_empty() || pages.is_empty() {
+    if !has_layout_content {
+        return Ok(None);
+    }
+    if page_index <= MAX_OFFICE_DOCUMENT_PAGES && !items.is_empty() {
         push_docx_page(&mut pages, page_index, page_width, page_height, items);
     }
 
-    if pages.iter().all(|page| page.items.is_empty()) {
-        return Ok(None);
-    }
-
+    let represented_page_count = pages.len();
     Ok(Some(OfficeLayoutDto {
         layout_kind: "document".to_string(),
         width: page_width,
         height: page_height,
+        represented_page_count,
+        total_page_count: page_index.max(represented_page_count),
+        page_limit: MAX_OFFICE_DOCUMENT_PAGES,
         pages,
     }))
 }

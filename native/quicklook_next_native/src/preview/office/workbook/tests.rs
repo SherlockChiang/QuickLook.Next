@@ -4,8 +4,9 @@ use zip::ZipArchive;
 
 use super::super::super::OfficeContext;
 use super::{
-    parse_shared_strings, parse_worksheet_rows, parse_xlsx_drawing_items, parse_xlsx_freeze_pane,
-    parse_xlsx_merge_regions, parse_xlsx_style_number_formats, parse_xlsx_styles, XlsxSheetMetrics,
+    build_xlsx_layout, parse_shared_strings, parse_worksheet_rows, parse_xlsx_drawing_items,
+    parse_xlsx_freeze_pane, parse_xlsx_merge_regions, parse_xlsx_style_number_formats,
+    parse_xlsx_styles, XlsxSheetMetrics,
 };
 
 fn test_office_context() -> OfficeContext {
@@ -21,6 +22,40 @@ fn test_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
         writer.write_all(bytes).expect("write ZIP entry");
     }
     writer.finish().expect("finish ZIP").into_inner()
+}
+
+#[test]
+fn xlsx_layout_reports_represented_total_and_limit_counts() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+    for sheet_index in 1..=7 {
+        writer
+            .start_file(
+                format!("xl/worksheets/sheet{sheet_index}.xml"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("worksheet part");
+        writer
+            .write_all(
+                format!(
+                    r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{sheet_index}</t></is></c></row></sheetData></worksheet>"#
+                )
+                .as_bytes(),
+            )
+            .expect("worksheet xml");
+    }
+    let mut cursor = writer.finish().expect("XLSX bytes");
+    cursor.set_position(0);
+    let mut zip = ZipArchive::new(cursor).expect("XLSX archive");
+    let mut context = test_office_context();
+
+    let layout = build_xlsx_layout(&mut context, &mut zip, &[])
+        .expect("XLSX layout")
+        .expect("workbook pages");
+
+    assert_eq!(layout.pages.len(), 6);
+    assert_eq!(layout.represented_page_count, 6);
+    assert_eq!(layout.total_page_count, 7);
+    assert_eq!(layout.page_limit, 6);
 }
 
 #[test]
