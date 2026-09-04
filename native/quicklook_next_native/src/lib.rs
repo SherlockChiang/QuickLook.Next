@@ -29,6 +29,9 @@ mod win32;
 pub(crate) use ffi::common::{
     ffi_boundary, ffi_void_boundary, owned_utf8_arg, utf8_arg, write_json_out, write_v2_out,
 };
+// Keep stable ABI discovery available to crate-local tests and adapters.
+#[allow(unused_imports)]
+pub(crate) use ffi::contract::{ql_abi_version, ql_capabilities, ql_probe};
 // Keep the moved path-preview symbols available to crate-local tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::path_preview::{
@@ -185,37 +188,6 @@ const QL_ERROR_LENGTH_MISMATCH: i32 = -7;
 const QL_ERROR_INTERNAL: i32 = -8;
 const QL_ERROR_LIMIT_EXCEEDED: i32 = -9;
 
-#[no_mangle]
-pub extern "C" fn ql_abi_version() -> u32 {
-    QL_NATIVE_ABI_VERSION
-}
-
-#[no_mangle]
-pub extern "C" fn ql_capabilities() -> u64 {
-    QL_FEATURE_HANDLE_TEXT
-        | QL_FEATURE_HANDLE_EXECUTABLE
-        | QL_FEATURE_HANDLE_TORRENT
-        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
-        | QL_FEATURE_HANDLE_ARCHIVE
-        | QL_FEATURE_HANDLE_OFFICE
-        | QL_FEATURE_HANDLE_EBOOK
-        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY
-        | QL_FEATURE_HANDLE_STATIC_IMAGE
-        | QL_FEATURE_HANDLE_SVG
-        | QL_FEATURE_HANDLE_GIF
-        | QL_FEATURE_HANDLE_PACKAGE
-        | QL_FEATURE_HANDLE_PACKAGE_ICON
-        | QL_FEATURE_HANDLE_PROBE
-        | QL_FEATURE_HANDLE_RASTER_IMAGE
-        | QL_FEATURE_HANDLE_ANIMATION
-        | QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE
-        | QL_FEATURE_HANDLE_IMAGE_WAVEFORM
-        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT
-        | QL_FEATURE_HANDLE_IMAGE_METADATA
-        | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT
-        | QL_FEATURE_HANDLE_MAIL
-        | QL_FEATURE_HANDLE_PDF_TEXT
-}
 const MAX_NATIVE_IMAGE_DECODE_PIXELS: u64 = 48_000_000;
 const MAX_NATIVE_IMAGE_DECODE_PEAK_BYTES: u64 = 896 * 1024 * 1024;
 const MAX_ANIMATED_SOURCE_PIXELS: u64 = 16_000_000;
@@ -232,12 +204,6 @@ fn emit(msg: &str) {
         wide.push(0);
         unsafe { cb(wide.as_ptr()) };
     }
-}
-
-/// Trivial probe — confirms the cdylib loads and the C ABI works.
-#[no_mangle]
-pub extern "C" fn ql_probe(a: i32, b: i32) -> i32 {
-    ffi_boundary(|| a + b)
 }
 
 /// Register the managed callback (a function pointer obtained from a kept-alive delegate).
@@ -6145,35 +6111,6 @@ pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle(
         *out_written = written;
         QL_OK
     })
-}
-
-#[test]
-fn native_abi_version_is_stable() {
-    assert_eq!(ql_abi_version(), 3);
-    let required = QL_FEATURE_HANDLE_TEXT
-        | QL_FEATURE_HANDLE_EXECUTABLE
-        | QL_FEATURE_HANDLE_TORRENT
-        | QL_FEATURE_HANDLE_SQLITE_SNAPSHOT
-        | QL_FEATURE_HANDLE_ARCHIVE
-        | QL_FEATURE_HANDLE_OFFICE
-        | QL_FEATURE_HANDLE_EBOOK
-        | QL_FEATURE_HANDLE_ARCHIVE_ENTRY;
-    let required = required | QL_FEATURE_HANDLE_STATIC_IMAGE;
-    let required = required | QL_FEATURE_HANDLE_SVG;
-    let required = required | QL_FEATURE_HANDLE_GIF;
-    let required = required | QL_FEATURE_HANDLE_PACKAGE;
-    let required = required | QL_FEATURE_HANDLE_PACKAGE_ICON;
-    let required = required | QL_FEATURE_HANDLE_PROBE;
-    let required = required | QL_FEATURE_HANDLE_RASTER_IMAGE;
-    let required = required | QL_FEATURE_HANDLE_ANIMATION;
-    let required = required | QL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE;
-    let required = required | QL_FEATURE_HANDLE_IMAGE_WAVEFORM;
-    let required = required | QL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT;
-    let required = required | QL_FEATURE_HANDLE_IMAGE_METADATA;
-    let required = required | QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT;
-    let required = required | QL_FEATURE_HANDLE_MAIL;
-    let required = required | QL_FEATURE_HANDLE_PDF_TEXT;
-    assert_eq!(ql_capabilities() & required, required);
 }
 
 #[cfg(test)]

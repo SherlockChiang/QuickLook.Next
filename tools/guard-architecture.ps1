@@ -1145,6 +1145,14 @@ if (Test-Path $parserHostProgram) {
         $nativeCommonText = ""
         Add-Failure "Missing Rust FFI common source: $nativeCommonPath"
     }
+    $nativeContractPath = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
+    if (Test-Path -LiteralPath $nativeContractPath -PathType Leaf) {
+        $nativeContractText = Get-Content -LiteralPath $nativeContractPath -Raw
+    }
+    else {
+        $nativeContractText = ""
+        Add-Failure "Missing Rust FFI contract source: $nativeContractPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1162,8 +1170,6 @@ if (Test-Path $parserHostProgram) {
         Add-Failure "Missing Rust FFI path-preview source: $nativePathPreviewPath"
     }
     $panicBoundaryExemptions = @{
-        "ql_abi_version" = '\{\s*QL_NATIVE_ABI_VERSION\s*\}'
-        "ql_capabilities" = '\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}'
         "ql_set_callback" = '\{\s*if\s+let\s+Ok\(mut\s+slot\)\s*=\s*CALLBACK\.lock\(\)[\s\S]*\*slot\s*=\s*cb;[\s\S]*\}'
     }
     $voidBoundaryExports = @("ql_get_selection", "ql_set_preview_visible")
@@ -1202,6 +1208,48 @@ if (Test-Path $parserHostProgram) {
         if ($entryBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
             Add-Failure "$entryPoint must contain panics before returning across the Rust FFI boundary"
         }
+    }
+
+    # Stable ABI discovery and the smoke-test export live together; scan them independently so
+    # constant getters stay mechanically infallible and the arithmetic probe retains containment.
+    $contractExports = [regex]::Matches(
+        $nativeContractText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $expectedContractExports = @("ql_abi_version", "ql_capabilities", "ql_probe")
+    if ($contractExports.Count -ne $expectedContractExports.Count -or
+        $nativeContractText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeContractText -match '(?m)^\s*pub\s+(?!(?:unsafe\s+)?extern\s+"C")' -or
+        $nativeContractText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        Add-Failure "ffi::contract must expose exactly three stable C ABI entry points and no other public surface"
+    }
+    foreach ($contractName in $expectedContractExports) {
+        $contractPattern = '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($contractName) + '\s*\('
+        if ($nativeContractText -notmatch $contractPattern) {
+            Add-Failure "ffi::contract lost expected export: $contractName"
+        }
+        if ($nativeLibText -match $contractPattern) {
+            Add-Failure "$contractName must remain in ffi::contract, not lib.rs"
+        }
+    }
+    $abiVersionBody = [regex]::Match(
+        $nativeContractText,
+        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_abi_version\(\)\s*->\s*u32\s*(?<body>\{.*?\})').Groups["body"].Value
+    $capabilityContractBody = [regex]::Match(
+        $nativeContractText,
+        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_capabilities\(\)\s*->\s*u64\s*(?<body>\{.*?\})').Groups["body"].Value
+    $probeContractBody = [regex]::Match(
+        $nativeContractText,
+        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*(?<body>\{.*?\})').Groups["body"].Value
+    if ($abiVersionBody -notmatch '^\{\s*QL_NATIVE_ABI_VERSION\s*\}$' -or
+        $capabilityContractBody -notmatch '^\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}$' -or
+        $abiVersionBody -match '\b(?:unwrap|expect)\s*\(|panic!\s*\(|thread::spawn|Vec::|String::|format!\s*\(' -or
+        $capabilityContractBody -match '\b(?:unwrap|expect)\s*\(|panic!\s*\(|thread::spawn|Vec::|String::|format!\s*\(' -or
+        $probeContractBody -notmatch '^\{\s*ffi_boundary\(\|\|\s*a\s*\+\s*b\)\s*\}$') {
+        Add-Failure "ffi::contract discovery getters must remain infallible and ql_probe must retain its panic boundary"
+    }
+    if (@(Get-Content -LiteralPath $nativeContractPath).Count -gt 140) {
+        Add-Failure "The focused ffi::contract module grew beyond 140 lines"
     }
 
     # FFI route adapters live in a focused module; scan that file independently so an export
@@ -1617,7 +1665,7 @@ if (Test-Path $parserHostProgram) {
     }
 
     $capabilitiesBody = [regex]::Match(
-        $nativeLibText,
+        $nativeContractText,
         'pub extern "C" fn ql_capabilities\(\)\s*->\s*u64\s*\{[\s\S]*?\}').Value
     if ($nativeLibText -notmatch 'QL_FEATURE_HANDLE_SQLITE_SNAPSHOT:\s*u64\s*=\s*1\s*<<\s*3' -or
         $nativeLibText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE:\s*u64\s*=\s*1\s*<<\s*4' -or

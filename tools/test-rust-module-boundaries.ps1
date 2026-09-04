@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
+$ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
@@ -65,6 +66,7 @@ foreach ($path in @(
         $libPath,
         $ffiModulePath,
         $ffiCommonPath,
+        $ffiContractPath,
         $ffiPathPreviewPath,
         $ffiRoutingPath,
         $win32ModulePath,
@@ -124,6 +126,7 @@ if ($failures.Count -eq 0) {
     $libText = Get-Content -LiteralPath $libPath -Raw
     $ffiModuleText = Get-Content -LiteralPath $ffiModulePath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
+    $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
@@ -181,11 +184,13 @@ if ($failures.Count -eq 0) {
 
     if ($libText -notmatch '(?m)^mod ffi;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod common;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod contract;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
+        $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
         $failures.Add(
-            "lib.rs must compose ffi::common/ffi::path_preview/ffi::routing and retain crate-private re-exports.")
+            "lib.rs must compose the focused FFI modules and retain crate-private re-exports.")
     }
 
     if ($previewText -notmatch '(?m)^mod pdf_text;\s*$' -or
@@ -312,6 +317,46 @@ if ($failures.Count -eq 0) {
     $ffiCommonLineCount = @(Get-Content -LiteralPath $ffiCommonPath).Count
     if ($ffiCommonLineCount -gt 240) {
         $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
+    }
+
+    $expectedContractExports = @("ql_abi_version", "ql_capabilities", "ql_probe")
+    if ($ffiContractText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiContractText -match '(?m)^\s*pub\s+(?!(?:unsafe\s+)?extern\s+"C")' -or
+        $ffiContractText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
+        $failures.Add(
+            "ffi::contract must use explicit imports and expose only its stable C ABI surface.")
+    }
+    $contractExports = [regex]::Matches(
+        $ffiContractText,
+        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    $contractNoMangleCount = [regex]::Matches(
+        $ffiContractText,
+        '(?m)^\s*#\[no_mangle\]\s*$').Count
+    if ($contractExports.Count -ne $expectedContractExports.Count -or
+        $contractNoMangleCount -ne $expectedContractExports.Count) {
+        $failures.Add("ffi::contract must expose exactly three stable C ABI entry points.")
+    }
+    foreach ($contractExport in $expectedContractExports) {
+        $contractPattern = '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+' +
+            [regex]::Escape($contractExport) + '\s*\('
+        if ($ffiContractText -notmatch $contractPattern) {
+            $failures.Add("ffi::contract lost expected export: $contractExport")
+        }
+        if ($libText -match $contractPattern) {
+            $failures.Add("$contractExport implementation must remain in ffi::contract, not lib.rs.")
+        }
+    }
+    if ($ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_abi_version\(\)\s*->\s*u32\s*\{\s*QL_NATIVE_ABI_VERSION\s*\}' -or
+        $ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_capabilities\(\)\s*->\s*u64\s*\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}' -or
+        $ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*\{\s*ffi_boundary\(\|\|\s*a\s*\+\s*b\)\s*\}') {
+        $failures.Add("ffi::contract lost its infallible discovery or panic-bounded probe contract.")
+    }
+    if ($ffiContractText -notmatch 'fn\s+native_abi_version_is_stable\s*\(') {
+        $failures.Add("ffi::contract lost its stable ABI capability regression test.")
+    }
+    $ffiContractLineCount = @(Get-Content -LiteralPath $ffiContractPath).Count
+    if ($ffiContractLineCount -gt 140) {
+        $failures.Add("The focused ffi::contract module grew beyond 140 lines: $ffiContractLineCount")
     }
 
     if ($ffiRoutingText -notmatch '(?m)^use\s+super::common::\{' -or

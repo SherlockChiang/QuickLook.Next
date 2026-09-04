@@ -29,6 +29,7 @@ Require-Pattern $pipeChannel 'MaxControlLineChars\s*=\s*4\s*\*\s*1024\s*\*\s*102
     "Control-channel messages must remain capped at 4 MiB."
 
 $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
+$nativeContract = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
 $nativeBounded = Join-Path $Root "native/quicklook_next_native/src/preview/bounded.rs"
 $nativeBoundedTests = Join-Path $Root "native/quicklook_next_native/src/preview/bounded/tests.rs"
@@ -228,8 +229,10 @@ Require-Pattern $nativeAnimationPacketDecoder 'TryDecodeHandleAsync\([\s\S]*exte
     "Exact-size GIF HANDLE output must be capability-gated with the stable ABI 3 HANDLE fallback."
 Require-Pattern $nativeAnimationPacketDecoder 'TryDecodeAsync\([\s\S]*"\.gif"\s*=>\s*ql_decode_gif_frames_sized_cancelable[\s\S]*normalizedExtension\s*==\s*"\.gif"[\s\S]*SupportsDirectGifAnimationOutput[\s\S]*DecodeGifDirect\([\s\S]*Decode\(call!' `
     "Exact-size GIF path output must be capability-gated with the stable ABI 3 path fallback."
-Require-Pattern $nativeLibrary 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20[\s\S]*ql_capabilities\(\)[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT' `
+Require-Pattern $nativeLibrary 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20' `
     "The additive direct GIF output ABI must retain optional capability bit 20."
+Require-Pattern $nativeContract 'ql_capabilities\(\)[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT' `
+    "The stable capability export must advertise direct GIF output support."
 Require-Pattern $nativeLibrary 'write_animation_frames_direct\([\s\S]*cancel_cb:\s*Option<CancelCallback>[\s\S]*for\s*\(delay_ms,\s*bgra\)\s*in\s*frames[\s\S]*cancel_requested\(cancel_cb\)[\s\S]*copy_from_slice\(bgra\)' `
     "Direct GIF packet copies must remain cancellable between bounded frames."
 Require-Pattern $nativeLibrary 'IMAGE_WAVEFORM_WIDTH:\s*u32\s*=\s*192[\s\S]*IMAGE_WAVEFORM_HEIGHT:\s*u32\s*=\s*96[\s\S]*IMAGE_WAVEFORM_SAMPLE_LIMIT:\s*f64\s*=\s*1_000_000\.0' `
