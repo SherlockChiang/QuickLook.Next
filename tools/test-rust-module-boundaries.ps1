@@ -14,6 +14,7 @@ $ffiHandleContainerPath = Join-Path $Root "native\quicklook_next_native\src\ffi\
 $ffiHandlePreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_preview.rs"
 $ffiHandleStructuredPath = Join-Path $Root "native\quicklook_next_native\src\ffi\handle_structured.rs"
 $ffiPathPreviewPath = Join-Path $Root "native\quicklook_next_native\src\ffi\path_preview.rs"
+$ffiRasterPacketPath = Join-Path $Root "native\quicklook_next_native\src\ffi\raster_packet.rs"
 $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
@@ -78,6 +79,7 @@ foreach ($path in @(
         $ffiHandlePreviewPath,
         $ffiHandleStructuredPath,
         $ffiPathPreviewPath,
+        $ffiRasterPacketPath,
         $ffiRoutingPath,
         $win32ModulePath,
         $shellThumbnailPath,
@@ -143,6 +145,7 @@ if ($failures.Count -eq 0) {
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
+    $ffiRasterPacketText = Get-Content -LiteralPath $ffiRasterPacketPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
@@ -219,6 +222,7 @@ if ($failures.Count -eq 0) {
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_preview;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod handle_structured;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod path_preview;\s*$' -or
+        $ffiModuleText -notmatch '(?m)^pub\(crate\) mod raster_packet;\s*$' -or
         $ffiModuleText -notmatch '(?m)^pub\(crate\) mod routing;\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::contract::\{ql_abi_version,\s*ql_capabilities,\s*ql_probe\};\s*$' -or
         $libText -notmatch '(?m)^pub\(crate\) use ffi::routing::\{ql_is_archive,\s*ql_is_text,\s*ql_preview_folder\};\s*$') {
@@ -350,6 +354,44 @@ if ($failures.Count -eq 0) {
     $ffiCommonLineCount = @(Get-Content -LiteralPath $ffiCommonPath).Count
     if ($ffiCommonLineCount -gt 240) {
         $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
+    }
+
+    $rasterPacketReExportMatch = [regex]::Match(
+        $libText,
+        '(?m)^pub\(crate\) use ffi::raster_packet::\{write_raster_packet,\s*write_raster_packet_v2\};\s*$')
+    if (-not $rasterPacketReExportMatch.Success) {
+        $failures.Add("lib.rs must retain the exact crate-private ffi::raster_packet re-export block.")
+    }
+    if ($ffiRasterPacketText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $ffiRasterPacketText -match '#\[no_mangle\]' -or
+        $ffiRasterPacketText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"' -or
+        $ffiRasterPacketText -match '(?m)^pub\s+') {
+        $failures.Add(
+            "ffi::raster_packet must use explicit imports and expose no C ABI or bare public surface.")
+    }
+    $rasterPacketExports = [regex]::Matches(
+        $ffiRasterPacketText,
+        '(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($rasterPacketExports.Count -ne 2) {
+        $failures.Add("ffi::raster_packet must expose exactly two crate-private packet writers.")
+    }
+    foreach ($rasterPacketWriter in @("write_raster_packet", "write_raster_packet_v2")) {
+        if ($ffiRasterPacketText -notmatch
+            "(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+$rasterPacketWriter\s*\(") {
+            $failures.Add("ffi::raster_packet lost shared writer: $rasterPacketWriter")
+        }
+    }
+    if ($ffiRasterPacketText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
+        $ffiRasterPacketText -notmatch 'write_raster_packet_v2\([\s\S]*QL_ERROR_BUFFER_TOO_SMALL[\s\S]*QL_ERROR_INVALID_ARGUMENT[\s\S]*QL_OK' -or
+        $ffiRasterPacketText -notmatch 'fn\s+checked_raster_writer_writes_exact_packet_and_rejects_bad_layout\s*\(' -or
+        $libText -match '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:checked_raster_packet_length|write_checked_raster_packet|write_raster_packet|write_raster_packet_v2)\s*\(') {
+        $failures.Add(
+            "ffi::raster_packet lost exact BGRA geometry, status semantics, focused tests, or root isolation.")
+    }
+    $ffiRasterPacketLineCount = @(Get-Content -LiteralPath $ffiRasterPacketPath).Count
+    if ($ffiRasterPacketLineCount -gt 180) {
+        $failures.Add(
+            "The focused ffi::raster_packet module grew beyond 180 lines: $ffiRasterPacketLineCount")
     }
 
     $expectedContractExports = @("ql_abi_version", "ql_capabilities", "ql_probe")

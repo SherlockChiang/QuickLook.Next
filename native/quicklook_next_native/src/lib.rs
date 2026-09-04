@@ -62,6 +62,8 @@ pub(crate) use ffi::path_preview::{
     ql_preview_executable_cancelable, ql_preview_info, ql_preview_text, ql_preview_text_cancelable,
     ql_preview_torrent, ql_preview_torrent_cancelable,
 };
+// Keep checked raster packet writers available to the remaining root adapters.
+pub(crate) use ffi::raster_packet::{write_raster_packet, write_raster_packet_v2};
 // Keep the moved route symbols available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
 pub(crate) use ffi::routing::{ql_is_archive, ql_is_text, ql_preview_folder};
@@ -3802,47 +3804,6 @@ mod tests {
     }
 
     #[test]
-    fn checked_raster_writer_writes_exact_packet_and_rejects_bad_layout() {
-        let bgra = [3u8, 2, 1, 255, 30, 20, 10, 128];
-        let mut packet = [0u8; 16];
-        let mut required = 0usize;
-
-        assert_eq!(
-            unsafe {
-                write_raster_packet_v2(
-                    2,
-                    1,
-                    &bgra,
-                    packet.as_mut_ptr(),
-                    packet.len(),
-                    &mut required,
-                )
-            },
-            QL_OK
-        );
-        assert_eq!(required, packet.len());
-        assert_eq!(&packet[..4], &2u32.to_le_bytes());
-        assert_eq!(&packet[4..8], &1u32.to_le_bytes());
-        assert_eq!(&packet[8..], &bgra);
-
-        required = usize::MAX;
-        assert_eq!(
-            unsafe {
-                write_raster_packet_v2(
-                    2,
-                    1,
-                    &bgra[..4],
-                    packet.as_mut_ptr(),
-                    packet.len(),
-                    &mut required,
-                )
-            },
-            QL_ERROR_INTERNAL
-        );
-        assert_eq!(required, 0);
-    }
-
-    #[test]
     fn animation_packet_distinguishes_internal_layout_from_output_limit() {
         let bad_frame = vec![(20, vec![0u8; 3])];
         let mut output = [0u8; 32];
@@ -4743,79 +4704,6 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
             };
         write_raster_packet(width, height, &bgra, out, out_cap)
     })
-}
-
-fn checked_raster_packet_length(width: u32, height: u32, bgra_len: usize) -> Option<usize> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let expected_bgra_len = usize::try_from(width)
-        .ok()?
-        .checked_mul(usize::try_from(height).ok()?)?
-        .checked_mul(4)?;
-    if bgra_len != expected_bgra_len {
-        return None;
-    }
-    8usize.checked_add(expected_bgra_len)
-}
-
-fn write_checked_raster_packet(width: u32, height: u32, bgra: &[u8], output: &mut [u8]) -> bool {
-    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
-        return false;
-    };
-    if output.len() != total {
-        return false;
-    }
-    output[..4].copy_from_slice(&width.to_le_bytes());
-    output[4..8].copy_from_slice(&height.to_le_bytes());
-    output[8..].copy_from_slice(bgra);
-    true
-}
-
-fn write_raster_packet(width: u32, height: u32, bgra: &[u8], out: *mut u8, out_cap: usize) -> i32 {
-    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
-        return -2;
-    };
-    if total > i32::MAX as usize {
-        return -2;
-    }
-    if out.is_null() || out_cap < total {
-        return -(total as i32);
-    }
-    let output = unsafe { std::slice::from_raw_parts_mut(out, total) };
-    if !write_checked_raster_packet(width, height, bgra, output) {
-        return -2;
-    }
-    total as i32
-}
-
-/// # Safety
-/// `out_required` must be writable. When the output buffer is large enough, `out_buf` must be
-/// writable for `out_cap` bytes and must not overlap `bgra`.
-unsafe fn write_raster_packet_v2(
-    width: u32,
-    height: u32,
-    bgra: &[u8],
-    out_buf: *mut u8,
-    out_cap: usize,
-    out_required: *mut usize,
-) -> i32 {
-    unsafe { *out_required = 0 };
-    let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
-        return QL_ERROR_INTERNAL;
-    };
-    unsafe { *out_required = total };
-    if out_cap < total {
-        return QL_ERROR_BUFFER_TOO_SMALL;
-    }
-    if out_buf.is_null() {
-        return QL_ERROR_INVALID_ARGUMENT;
-    }
-    let output = unsafe { std::slice::from_raw_parts_mut(out_buf, total) };
-    if !write_checked_raster_packet(width, height, bgra, output) {
-        return QL_ERROR_INTERNAL;
-    }
-    QL_OK
 }
 
 /// Extract the most likely app/package icon from ZIP-based packages (MSIX/AppX/APK/APKS/AAB).

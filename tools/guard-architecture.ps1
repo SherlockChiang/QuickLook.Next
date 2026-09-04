@@ -1209,6 +1209,14 @@ if (Test-Path $parserHostProgram) {
         $nativeDatabaseFfiText = ""
         Add-Failure "Missing Rust database FFI source: $nativeDatabaseFfiPath"
     }
+    $nativeRasterPacketPath = Join-Path $Root "native/quicklook_next_native/src/ffi/raster_packet.rs"
+    if (Test-Path -LiteralPath $nativeRasterPacketPath -PathType Leaf) {
+        $nativeRasterPacketText = Get-Content -LiteralPath $nativeRasterPacketPath -Raw
+    }
+    else {
+        $nativeRasterPacketText = ""
+        Add-Failure "Missing Rust raster packet source: $nativeRasterPacketPath"
+    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1773,11 +1781,26 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "$entryPoint must write checked raster bytes directly into the caller section without an aggregate packet Vec"
         }
     }
-    if ($nativeLibText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
-        $nativeLibText -notmatch 'fn\s+write_raster_packet_v2\([\s\S]*QL_ERROR_INTERNAL' -or
-        $nativeLibText -notmatch 'enum\s+AnimationPacketError\s*\{[\s\S]*Internal,[\s\S]*LimitExceeded' -or
+    $rasterPacketExports = [regex]::Matches(
+        $nativeRasterPacketText,
+        '(?m)^pub\(crate\)\s+(?:unsafe\s+)?fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
+    if ($rasterPacketExports.Count -ne 2 -or
+        $nativeRasterPacketText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeRasterPacketText -match '#\[no_mangle\]' -or
+        $nativeRasterPacketText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"' -or
+        $nativeRasterPacketText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
+        $nativeRasterPacketText -notmatch 'pub\(crate\)\s+unsafe\s+fn\s+write_raster_packet_v2\([\s\S]*QL_ERROR_INTERNAL' -or
+        $nativeRasterPacketText -notmatch 'fn\s+checked_raster_writer_writes_exact_packet_and_rejects_bad_layout\s*\(' -or
+        $nativeLibText -match '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:checked_raster_packet_length|write_checked_raster_packet|write_raster_packet|write_raster_packet_v2)\s*\(' -or
+        $nativeLibText -notmatch '(?m)^pub\(crate\) use ffi::raster_packet::\{write_raster_packet,\s*write_raster_packet_v2\};\s*$') {
+        Add-Failure "Checked Hero raster packet writers must remain bounded and private to ffi::raster_packet"
+    }
+    if (@(Get-Content -LiteralPath $nativeRasterPacketPath).Count -gt 180) {
+        Add-Failure "The focused ffi::raster_packet module grew beyond 180 lines"
+    }
+    if ($nativeLibText -notmatch 'enum\s+AnimationPacketError\s*\{[\s\S]*Internal,[\s\S]*LimitExceeded' -or
         $nativeLibText -notmatch 'Err\(AnimationPacketError::Internal\)\s*=>\s*return\s+QL_ERROR_INTERNAL') {
-        Add-Failure "Native animation and Hero packet writers must distinguish internal layout failures and validate exact BGRA geometry"
+        Add-Failure "Native animation packet writers must distinguish internal layout failures from output limits"
     }
     $archiveEntrySignature = 'pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle('
     $archiveEntryStart = $nativeLibText.IndexOf($archiveEntrySignature, [StringComparison]::Ordinal)
