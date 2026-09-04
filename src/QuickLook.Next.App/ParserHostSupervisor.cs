@@ -14,6 +14,7 @@ namespace QuickLook.Next.App;
 internal sealed class ParserHostSupervisor
 {
     private static readonly TimeSpan PreviewTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PdfTextTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan HostConnectTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ResourceTelemetryInterval = TimeSpan.FromMinutes(1);
     private readonly string _hostExePath;
@@ -529,6 +530,77 @@ internal sealed class ParserHostSupervisor
         }
     }
 
+    public async Task<PdfTextDocument?> ExtractPdfTextAsync(
+        Microsoft.Win32.SafeHandles.SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        CancellationToken cancellationToken)
+    {
+        if (sourceLength is < 0 or > NativeAbi.MaxPdfTextInputBytes)
+            throw new ArgumentOutOfRangeException(nameof(sourceLength));
+        if (sourceHandle.IsInvalid || sourceHandle.IsClosed)
+            throw new ArgumentException("A valid pinned PDF handle is required.", nameof(sourceHandle));
+        if (!Path.GetExtension(logicalPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("A PDF logical name is required.", nameof(logicalPath));
+
+        PipeChannel channel = _channel ?? throw new InvalidOperationException("ParserHost not connected");
+        Process host = _host ?? throw new InvalidOperationException("ParserHost process is unavailable");
+        int generation = _generation;
+        var (requestId, completion) = _pending.Begin(PdfTextTimeout);
+        _ = StopOnTimeoutAsync(completion, requestId);
+        long remoteHandle;
+        try
+        {
+            remoteHandle = WindowsHandleTransfer.DuplicateFileToProcess(sourceHandle, host.SafeHandle);
+        }
+        catch
+        {
+            _pending.Cancel(requestId);
+            throw;
+        }
+
+        Task sendTask = SendPdfTextOpenAsync(
+            channel,
+            generation,
+            new PdfTextOpenHandle(requestId, remoteHandle, sourceLength, logicalPath));
+        RegisterHandleOpenSend(requestId, sendTask);
+        try
+        {
+            await sendTask;
+            ControlMessage response = await completion.WaitAsync(cancellationToken);
+            return response is PdfTextReady ready && generation == _generation
+                ? ready.Document
+                : null;
+        }
+        finally
+        {
+            bool cancelledPending = _pending.Cancel(requestId);
+            if (cancelledPending && generation == _generation)
+            {
+                try { await channel.SendAsync(new PdfTextClose(requestId)); }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
+                RecycleHost("PDF text extraction canceled");
+            }
+        }
+    }
+
+    private async Task SendPdfTextOpenAsync(
+        PipeChannel channel,
+        int generation,
+        PdfTextOpenHandle open)
+    {
+        try
+        {
+            await channel.SendAsync(open);
+        }
+        catch (Exception ex)
+        {
+            _pending.TryComplete(open.RequestId, new PreviewError(open.RequestId, ex.Message));
+            if (generation == _generation)
+                RecycleHost("PDF text HANDLE request could not be delivered");
+        }
+    }
+
     public async Task<NativeRasterImage?> ExtractOfficeImageAsync(
         string parentPreviewRequestId,
         string imageRef,
@@ -631,6 +703,9 @@ internal sealed class ParserHostSupervisor
                         _pending.TryComplete(extracted.RequestId, extracted);
                         break;
                     case OfficeImageReady ready:
+                        _pending.TryComplete(ready.RequestId, ready);
+                        break;
+                    case PdfTextReady ready:
                         _pending.TryComplete(ready.RequestId, ready);
                         break;
                 }

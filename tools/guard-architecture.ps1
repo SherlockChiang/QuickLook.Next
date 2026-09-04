@@ -432,6 +432,33 @@ if (Test-Path $protocolPath) {
         $imageMetadataReadyContract -match '\b(?:Path|FileHandle|SourceHandle)\b') {
         Add-Failure "Image metadata IPC must be a path-free child request bound to an exact retained raster parent"
     }
+    if ($protocolText -notmatch 'JsonDerivedType\(typeof\(PdfTextOpenHandle\),\s*"pdf\.text\.open\.handle"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(PdfTextReady\),\s*"pdf\.text\.ready"\)' -or
+        $protocolText -notmatch 'JsonDerivedType\(typeof\(PdfTextClose\),\s*"pdf\.text\.close"\)' -or
+        $protocolText -notmatch 'record\s+PdfTextOpenHandle\(\s*string\s+RequestId,\s*long\s+SourceHandle,\s*long\s+SourceLength,\s*string\s+LogicalPath\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+PdfTextReady\(\s*string\s+RequestId,\s*PdfTextDocument\s+Document\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+PdfTextClose\(string RequestId\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+PdfTextDocument\(\s*string\s+Status,\s*int\s+PageCount,\s*PdfTextPage\[\]\s+Pages,\s*bool\s+Truncated,\s*int\s+FailedPages\);' -or
+        $protocolText -notmatch 'record\s+PdfTextPage\(int PageIndex,\s*string Text,\s*bool Truncated\);') {
+        Add-Failure "PDF text IPC must keep its exact HANDLE-open, bounded result, and close contracts"
+    }
+}
+
+$pdfTextJsonPath = Join-Path $Root "src/QuickLook.Next.Core/PdfTextJson.cs"
+if (Test-Path $pdfTextJsonPath) {
+    $pdfTextJson = Get-Content -LiteralPath $pdfTextJsonPath -Raw
+    if ($pdfTextJson -notmatch 'MaxPages\s*=\s*2_048' -or
+        $pdfTextJson -notmatch 'MaxSourcePages\s*=\s*250_000' -or
+        $pdfTextJson -notmatch 'MaxPageTextBytes\s*=\s*64\s*\*\s*1024' -or
+        $pdfTextJson -notmatch 'MaxTotalTextBytes\s*=\s*1024\s*\*\s*1024' -or
+        $pdfTextJson -notmatch 'Encoding\.UTF8\.GetByteCount\(page\.Text\)' -or
+        $pdfTextJson -notmatch 'page\.PageIndex\s*<=\s*lastPageIndex' -or
+        $pdfTextJson -notmatch 'totalBytes\s*>\s*MaxTotalTextBytes\s*-\s*pageBytes') {
+        Add-Failure "Managed PDF text validation must retain ordered pages and the Rust-side page/text byte budgets"
+    }
+}
+else {
+    Add-Failure "Managed PDF text validation is missing"
 }
 
 $contractsPath = Join-Path $Root "src/QuickLook.Next.Contracts/Contracts.cs"
@@ -485,6 +512,20 @@ if (Test-Path $parserSupervisor) {
     if ($parserSupervisorText -notmatch 'BeginOpenSqliteHandles\(' -or
         $parserSupervisorText -notmatch 'new PreviewOpenSqliteHandles\(') {
         Add-Failure "ParserHostSupervisor must send SQLite snapshots through the dedicated handle message"
+    }
+    $pdfTextExtractMethod = [regex]::Match(
+        $parserSupervisorText,
+        'public\s+async\s+Task<PdfTextDocument\?>\s+ExtractPdfTextAsync\([\s\S]*?(?=\r?\n\s*private\s+async\s+Task\s+SendPdfTextOpenAsync)').Value
+    if ($parserSupervisorText -notmatch 'PdfTextTimeout\s*=\s*TimeSpan\.FromSeconds\(8\)' -or
+        $pdfTextExtractMethod -notmatch '_pending\.Begin\(PdfTextTimeout\)' -or
+        $pdfTextExtractMethod -notmatch 'DuplicateFileToProcess\(sourceHandle,\s*host\.SafeHandle\)' -or
+        $pdfTextExtractMethod -notmatch 'new\s+PdfTextOpenHandle\(requestId,\s*remoteHandle,\s*sourceLength,\s*logicalPath\)' -or
+        $pdfTextExtractMethod -notmatch 'RegisterHandleOpenSend\(requestId,\s*sendTask\)' -or
+        $pdfTextExtractMethod -notmatch 'completion\.WaitAsync\(cancellationToken\)' -or
+        $pdfTextExtractMethod -notmatch 'generation\s*==\s*_generation' -or
+        $pdfTextExtractMethod -notmatch 'finally[\s\S]*_pending\.Cancel\(requestId\)[\s\S]*PdfTextClose\(requestId\)[\s\S]*RecycleHost\("PDF text extraction canceled"\)' -or
+        $parserSupervisorText -notmatch 'catch\s*\(TimeoutException\)[\s\S]{0,500}RecycleHost\(') {
+        Add-Failure "Lazy PDF text extraction must duplicate the exact HANDLE, remain generation/deadline bound, and recycle on cancellation or timeout"
     }
     $heroExtractMethod = [regex]::Match(
         $parserSupervisorText,
@@ -714,6 +755,33 @@ if (Test-Path $parserHostProgram) {
         $sqliteCaseText -match 'Path\.(Combine|GetFullPath)') {
         Add-Failure "ParserHost SQLite HANDLE previews must not create an input anchor or resolve a companion path"
     }
+    $pdfTextCaseMatch = [regex]::Match(
+        $parserHostProgramText,
+        'case\s+PdfTextOpenHandle\s+open:\s*[\s\S]*?(?=\r?\n\s*case\s+PdfTextClose)')
+    $pdfTextCaseText = if ($pdfTextCaseMatch.Success) { $pdfTextCaseMatch.Value } else { "" }
+    $pdfTextTakeHandle = $pdfTextCaseText.IndexOf(
+        "pdfTextHandle = WindowsHandleTransfer.TakeLocalFileHandle(",
+        [StringComparison]::Ordinal)
+    $pdfTextValidation = $pdfTextCaseText.IndexOf(
+        "if (!IsValidRequestId(open.RequestId)",
+        [StringComparison]::Ordinal)
+    $pdfTextTask = $pdfTextCaseText.IndexOf("_ = Task.Run(async () =>", [StringComparison]::Ordinal)
+    $pdfTextOwnedScope = $pdfTextCaseText.IndexOf(
+        "using var ownedPdfTextHandle = pdfTextHandle;",
+        [StringComparison]::Ordinal)
+    if ($pdfTextTakeHandle -lt 0 -or
+        $pdfTextValidation -le $pdfTextTakeHandle -or
+        $pdfTextTask -le $pdfTextValidation -or
+        $pdfTextOwnedScope -le $pdfTextTask -or
+        $pdfTextCaseText -notmatch 'pdfTextHandle\.Dispose\(\)' -or
+        $pdfTextCaseText -notmatch 'requests\.TryAdd\(open\.RequestId,\s*pdfTextCts\)' -or
+        $pdfTextCaseText -notmatch 'ParserNativePreview\.TryExtractPdfTextHandle\(' -or
+        $pdfTextCaseText -notmatch 'PdfTextJson\.TryParse\(' -or
+        $pdfTextCaseText -notmatch 'new\s+PdfTextReady\(open\.RequestId,\s*document!\)' -or
+        $parserHostProgramText -notmatch 'case\s+PdfTextClose\s+close\s+when\s+IsValidRequestId\(close\.RequestId\):\s*Cancel\(close\.RequestId\);' -or
+        $pdfTextCaseText -match 'File\.(?:Open|OpenRead|ReadAll)|Directory\.|Path\.(?:Combine|GetFullPath)') {
+        Add-Failure "ParserHost PDF text requests must adopt the transferred HANDLE before validation and stay path-free through bounded Rust parsing"
+    }
     $handleCaseStart = $parserHostProgramText.IndexOf("case PreviewOpenHandle open", [StringComparison]::Ordinal)
     $handleCaseEnd = if ($handleCaseStart -ge 0) {
         $sqliteCaseStart = $parserHostProgramText.IndexOf(
@@ -889,6 +957,10 @@ if (Test-Path $parserHostProgram) {
     }
     if ($parserNativePreviewText -notmatch '\[DllImport\(Dll,\s*CallingConvention\s*=\s*CallingConvention\.Cdecl\)\]\s*private\s+static\s+extern\s+int\s+ql_preview_mail_handle\(\s*nint\s+sourceHandle,\s*ulong\s+expectedLength,\s*byte\[\]\s+logicalNameUtf8,\s*nuint\s+logicalNameLen,\s*byte\[\]\s+outBuf,\s*nuint\s+outCap,\s*out\s+nuint\s+outRequired,\s*NativeCancelCallback\?\s+cancelCb\s*\);') {
         Add-Failure "ParserHost Outlook mail HANDLE routing must retain the exact native P/Invoke contract"
+    }
+    if ($parserNativePreviewText -notmatch '\[DllImport\(Dll,\s*CallingConvention\s*=\s*CallingConvention\.Cdecl\)\]\s*private\s+static\s+extern\s+int\s+ql_extract_pdf_text_handle\(\s*nint\s+sourceHandle,\s*ulong\s+expectedLength,\s*byte\[\]\s+logicalNameUtf8,\s*nuint\s+logicalNameLen,\s*byte\[\]\s+outBuf,\s*nuint\s+outCap,\s*out\s+nuint\s+outRequired,\s*NativeCancelCallback\?\s+cancelCb\s*\);' -or
+        $parserNativePreviewText -notmatch 'TryExtractPdfTextHandle\([\s\S]*?TryHandleJson\(\s*ql_extract_pdf_text_handle,[\s\S]*?NativeAbi\.MaxPdfTextInputBytes') {
+        Add-Failure "ParserHost PDF text extraction must retain the exact bounded native HANDLE P/Invoke contract"
     }
     $pathPreviewMethod = [regex]::Match(
         $parserNativePreviewText,

@@ -262,6 +262,67 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Pdf_text_json_accepts_only_bounded_ordered_page_models()
+    {
+        const string valid = """
+            {"status":"ready","pageCount":2,"pages":[{"pageIndex":0,"text":"Alpha","truncated":false},{"pageIndex":1,"text":"Beta","truncated":false}],"truncated":false,"failedPages":0}
+            """;
+        Assert.True(PdfTextJson.TryParse(valid, out PdfTextDocument? document, out string? error), error);
+        Assert.NotNull(document);
+        Assert.Equal(2, document.PageCount);
+        Assert.Equal("Beta", document.Pages[1].Text);
+
+        const string duplicatePage = """
+            {"status":"ready","pageCount":2,"pages":[{"pageIndex":0,"text":"Alpha","truncated":false},{"pageIndex":0,"text":"Beta","truncated":false}],"truncated":false,"failedPages":0}
+            """;
+        Assert.False(PdfTextJson.TryParse(duplicatePage, out _, out _));
+
+        string oversized = "{\"status\":\"ready\",\"pageCount\":1,\"pages\":[{\"pageIndex\":0,\"text\":\""
+            + new string('x', PdfTextJson.MaxPageTextBytes + 1)
+            + "\",\"truncated\":false}],\"truncated\":false,\"failedPages\":0}";
+        Assert.False(PdfTextJson.TryParse(oversized, out _, out _));
+
+        string documentJson = System.Text.Json.JsonSerializer.Serialize(
+            new PdfTextDocument(
+                "ready",
+                17,
+                Enumerable.Range(0, 17)
+                    .Select(index => new PdfTextPage(
+                        index,
+                        new string('x', PdfTextJson.MaxPageTextBytes),
+                        false))
+                    .ToArray(),
+                false,
+                0),
+            ProtocolJson.Options);
+        Assert.False(PdfTextJson.TryParse(documentJson, out _, out _));
+    }
+
+    [Fact]
+    public void Pdf_text_protocol_round_trips_handle_and_result_messages()
+    {
+        var open = new PdfTextOpenHandle("a".PadLeft(32, 'a'), 42, 128, "report.pdf");
+        ControlMessage parsedOpen = ProtocolJson.Deserialize(ProtocolJson.Serialize(open));
+        Assert.Equal(open, Assert.IsType<PdfTextOpenHandle>(parsedOpen));
+
+        var ready = new PdfTextReady(
+            "b".PadLeft(32, 'b'),
+            new PdfTextDocument(
+                "ready",
+                1,
+                [new PdfTextPage(0, "needle", false)],
+                false,
+                0));
+        ControlMessage parsedReady = ProtocolJson.Deserialize(ProtocolJson.Serialize(ready));
+        PdfTextReady roundTrip = Assert.IsType<PdfTextReady>(parsedReady);
+        Assert.Equal("needle", roundTrip.Document.Pages[0].Text);
+
+        var close = new PdfTextClose("d".PadLeft(32, 'd'));
+        ControlMessage parsedClose = ProtocolJson.Deserialize(ProtocolJson.Serialize(close));
+        Assert.Equal(close, Assert.IsType<PdfTextClose>(parsedClose));
+    }
+
+    [Fact]
     public void Office_image_abi_bounds_control_and_pixel_payloads()
     {
         Assert.Equal(2048, NativeAbi.MaxOfficeImageRefUtf8Bytes);

@@ -32,6 +32,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewPageOpen), "preview.page.open")]
 [JsonDerivedType(typeof(PreviewPageClose), "preview.page.close")]
 [JsonDerivedType(typeof(PreviewPageError), "preview.page.error")]
+[JsonDerivedType(typeof(PdfTextOpenHandle), "pdf.text.open.handle")]
+[JsonDerivedType(typeof(PdfTextReady), "pdf.text.ready")]
+[JsonDerivedType(typeof(PdfTextClose), "pdf.text.close")]
 [JsonDerivedType(typeof(PreviewClose), "preview.close")]
 [JsonDerivedType(typeof(ArchiveEntryExtract), "archive.entry.extract")]
 [JsonDerivedType(typeof(ArchiveEntryExtracted), "archive.entry.extracted")]
@@ -175,6 +178,29 @@ public sealed record PreviewPageClose(string RequestId, int PageIndex, long Page
 /// <summary>Host → App: one requested page failed before publishing a surface.</summary>
 public sealed record PreviewPageError(
     string RequestId, int PageIndex, long PageGeneration, bool TimedOut, string Message) : ControlMessage;
+
+/// <summary>
+/// App → ParserHost: lazily extract bounded text from the exact PDF object duplicated into the
+/// host. The receiving host adopts SourceHandle before validating the remaining fields.
+/// </summary>
+public sealed record PdfTextOpenHandle(
+    string RequestId, long SourceHandle, long SourceLength, string LogicalPath) : ControlMessage;
+
+/// <summary>ParserHost → App: bounded page-mapped PDF text suitable for search and copy.</summary>
+public sealed record PdfTextReady(
+    string RequestId, PdfTextDocument Document) : ControlMessage;
+
+/// <summary>App → ParserHost: cancel an in-flight PDF text extraction.</summary>
+public sealed record PdfTextClose(string RequestId) : ControlMessage;
+
+public sealed record PdfTextDocument(
+    string Status,
+    int PageCount,
+    PdfTextPage[] Pages,
+    bool Truncated,
+    int FailedPages);
+
+public sealed record PdfTextPage(int PageIndex, string Text, bool Truncated);
 
 /// <summary>App → Host: tear down a preview.</summary>
 public sealed record PreviewClose(string RequestId) : ControlMessage;

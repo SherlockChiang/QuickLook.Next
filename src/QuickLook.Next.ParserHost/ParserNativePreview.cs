@@ -135,6 +135,17 @@ internal static class ParserNativePreview
         NativeCancelCallback? cancelCb);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int ql_extract_pdf_text_handle(
+        nint sourceHandle,
+        ulong expectedLength,
+        byte[] logicalNameUtf8,
+        nuint logicalNameLen,
+        byte[] outBuf,
+        nuint outCap,
+        out nuint outRequired,
+        NativeCancelCallback? cancelCb);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     private static extern int ql_preview_sqlite_handles(
         nint mainHandle,
         ulong mainExpectedLength,
@@ -357,10 +368,40 @@ internal static class ParserNativePreview
         long maxSourceLength = kind.Equals("archive", StringComparison.OrdinalIgnoreCase)
             ? NativeAbi.MaxArchiveHandleInputBytes
             : NativeAbi.MaxParserHandleInputBytes;
-        if (handleCall is null
-            || sourceLength < 0
-            || sourceHandle.IsInvalid
-            || sourceHandle.IsClosed)
+        if (handleCall is null)
+            return (NativeAbi.StatusInvalidArgument, null);
+
+        return TryHandleJson(
+            handleCall,
+            sourceHandle,
+            sourceLength,
+            logicalPath,
+            maxSourceLength,
+            cancellationToken);
+    }
+
+    public static (int Status, string? Json) TryExtractPdfTextHandle(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        CancellationToken cancellationToken)
+        => TryHandleJson(
+            ql_extract_pdf_text_handle,
+            sourceHandle,
+            sourceLength,
+            logicalPath,
+            NativeAbi.MaxPdfTextInputBytes,
+            cancellationToken);
+
+    private static (int Status, string? Json) TryHandleJson(
+        NativeHandlePreviewCall handleCall,
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        long maxSourceLength,
+        CancellationToken cancellationToken)
+    {
+        if (sourceLength < 0 || sourceHandle.IsInvalid || sourceHandle.IsClosed)
             return (NativeAbi.StatusInvalidArgument, null);
         if (sourceLength > maxSourceLength)
             return (NativeAbi.StatusLimitExceeded, null);

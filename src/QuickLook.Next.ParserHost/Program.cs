@@ -476,6 +476,92 @@ while (true)
             });
             break;
 
+        case PdfTextOpenHandle open:
+            Microsoft.Win32.SafeHandles.SafeFileHandle pdfTextHandle;
+            try
+            {
+                pdfTextHandle = WindowsHandleTransfer.TakeLocalFileHandle(
+                    open.SourceHandle,
+                    open.SourceLength);
+            }
+            catch (Exception ex)
+            {
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid PDF text HANDLE request");
+                break;
+            }
+            if (!IsValidRequestId(open.RequestId)
+                || open.SourceLength is < 0 or > NativeAbi.MaxPdfTextInputBytes
+                || string.IsNullOrWhiteSpace(open.LogicalPath)
+                || !Path.GetExtension(open.LogicalPath).Equals(".pdf", StringComparison.OrdinalIgnoreCase)
+                || requests.ContainsKey(open.RequestId))
+            {
+                pdfTextHandle.Dispose();
+                if (IsValidRequestId(open.RequestId))
+                    await channel.SendAsync(new PreviewError(open.RequestId, "Invalid PDF text request."));
+                else
+                    DiagLog.Write("ParserHost", "rejected invalid PDF text request");
+                break;
+            }
+            var pdfTextCts = new CancellationTokenSource();
+            if (!requests.TryAdd(open.RequestId, pdfTextCts))
+            {
+                pdfTextHandle.Dispose();
+                pdfTextCts.Dispose();
+                await channel.SendAsync(new PreviewError(open.RequestId, "Duplicate request ID."));
+                break;
+            }
+            _ = Task.Run(async () =>
+            {
+                using var ownedPdfTextHandle = pdfTextHandle;
+                try
+                {
+                    var result = ParserNativePreview.TryExtractPdfTextHandle(
+                        ownedPdfTextHandle,
+                        open.SourceLength,
+                        open.LogicalPath,
+                        pdfTextCts.Token);
+                    pdfTextCts.Token.ThrowIfCancellationRequested();
+                    if (result.Status != NativeAbi.StatusOk || result.Json is null)
+                    {
+                        await channel.SendAsync(new PreviewError(
+                            open.RequestId,
+                            ParserNativePreview.DescribeHandleFailure(result.Status)));
+                    }
+                    else if (!PdfTextJson.TryParse(
+                        result.Json,
+                        out PdfTextDocument? document,
+                        out string? error))
+                    {
+                        await channel.SendAsync(new PreviewError(
+                            open.RequestId,
+                            error ?? "Native PDF text parser returned no result."));
+                    }
+                    else
+                    {
+                        await channel.SendAsync(new PdfTextReady(open.RequestId, document!));
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    DiagLog.Write("ParserHost", $"PDF text extraction failed request={open.RequestId}: {ex}");
+                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                }
+                finally
+                {
+                    if (requests.TryRemove(open.RequestId, out var current))
+                        current.Dispose();
+                }
+            });
+            break;
+
+        case PdfTextClose close when IsValidRequestId(close.RequestId):
+            Cancel(close.RequestId);
+            break;
+
         case PreviewClose close when IsValidRequestId(close.RequestId):
             Cancel(close.RequestId);
             await CloseOfficeImagesForParentAsync(close.RequestId);
