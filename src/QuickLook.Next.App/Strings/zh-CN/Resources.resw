@@ -476,4 +476,7 @@
   <data name="PdfCopyPageText" xml:space="preserve"><value>复制当前页文本</value></data>
   <data name="PdfPageTextCopied" xml:space="preserve"><value>已复制页面文本</value></data>
   <data name="PdfPageTextUnavailable" xml:space="preserve"><value>当前页没有可搜索文本。</value></data>
+  <data name="PdfDocumentEmptyStatus" xml:space="preserve"><value>此 PDF 不包含可预览的页面。</value></data>
+  <data name="PdfDocumentPartialStatusFormat" xml:space="preserve"><value>共有 {1:N0} 页，其中 {0:N0} 页无法渲染。</value></data>
+  <data name="PdfDocumentFailedStatus" xml:space="preserve"><value>无法渲染此 PDF 的任何页面。</value></data>
 </root>

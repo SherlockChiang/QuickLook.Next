@@ -636,4 +636,7 @@
   <data name="PdfCopyPageText" xml:space="preserve"><value>Copy current page text</value></data>
   <data name="PdfPageTextCopied" xml:space="preserve"><value>Page text copied</value></data>
   <data name="PdfPageTextUnavailable" xml:space="preserve"><value>This page has no searchable text.</value></data>
+  <data name="PdfDocumentEmptyStatus" xml:space="preserve"><value>This PDF contains no previewable pages.</value></data>
+  <data name="PdfDocumentPartialStatusFormat" xml:space="preserve"><value>{0:N0} of {1:N0} PDF pages could not be rendered.</value></data>
+  <data name="PdfDocumentFailedStatus" xml:space="preserve"><value>No PDF pages could be rendered.</value></data>
 </root>

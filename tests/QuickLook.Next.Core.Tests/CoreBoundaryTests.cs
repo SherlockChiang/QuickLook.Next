@@ -406,6 +406,37 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Pdf_document_state_policy_distinguishes_empty_partial_and_failed_results()
+    {
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.Empty, 0, 0),
+            PdfDocumentStatePolicy.Evaluate(0, 0));
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.None, 0, 5),
+            PdfDocumentStatePolicy.Evaluate(5, 0));
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.Partial, 2, 5),
+            PdfDocumentStatePolicy.Evaluate(5, 2));
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.Failed, 5, 5),
+            PdfDocumentStatePolicy.Evaluate(5, 5));
+    }
+
+    [Fact]
+    public void Pdf_document_state_policy_bounds_untrusted_counts()
+    {
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.Empty, 0, 0),
+            PdfDocumentStatePolicy.Evaluate(-1, 4));
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.None, 0, 3),
+            PdfDocumentStatePolicy.Evaluate(3, -2));
+        Assert.Equal(
+            new PdfDocumentNotice(PdfDocumentNoticeKind.Failed, 3, 3),
+            PdfDocumentStatePolicy.Evaluate(3, 20));
+    }
+
+    [Fact]
     public void Office_image_abi_bounds_control_and_pixel_payloads()
     {
         Assert.Equal(2048, NativeAbi.MaxOfficeImageRefUtf8Bytes);

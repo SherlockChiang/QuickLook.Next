@@ -30,6 +30,8 @@
              Link="AppModel\PreviewWindowPolicy.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PdfTextController.cs"
              Link="AppModel\PdfTextController.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\PdfDocumentStatePolicy.cs"
+             Link="AppModel\PdfDocumentStatePolicy.cs" />
   </ItemGroup>
   <Target Name="StageSupervisedHostCrashProbe" AfterTargets="Build">
     <Error Condition="!Exists('$(SupervisedHostCrashProbeOutput)QuickLook.Next.SupervisedHostCrashProbe.exe')"

@@ -2298,6 +2298,10 @@ $pdfPageFailureUiTest = Join-Path $PSScriptRoot "test-pdf-page-failure-ui.ps1"
 Invoke-CheckedScript -Path $pdfPageFailureUiTest -Arguments @{ Root = $Root } `
     -FailureMessage "PDF page-failure UI guard failed"
 
+$pdfDocumentStateUiTest = Join-Path $PSScriptRoot "test-pdf-document-state-ui.ps1"
+Invoke-CheckedScript -Path $pdfDocumentStateUiTest -Arguments @{ Root = $Root } `
+    -FailureMessage "PDF document-state UI guard failed"
+
 $packMsixVersionTest = Join-Path $PSScriptRoot "test-pack-msix-version.ps1"
 Invoke-CheckedScript -Path $packMsixVersionTest -Arguments @{ Root = $Root } `
     -FailureMessage "MSIX version tests failed"

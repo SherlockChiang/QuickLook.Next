@@ -263,6 +263,7 @@ public sealed partial class MainWindow : Window
             PdfScrollViewer,
             PdfPagerBar,
             PdfSearchBar,
+            PdfDocumentStatePanel,
             TextPreviewContainer,
             TablePreviewContainer,
             OfficeScrollViewer,
@@ -336,6 +337,8 @@ public sealed partial class MainWindow : Window
             PreviousPdfPageButton,
             NextPdfPageButton,
             PdfPageIndicatorText,
+            PdfDocumentStatePanel,
+            PdfDocumentStateText,
             DispatcherQueue,
             () => _compositor,
             () => _supervisor);

@@ -61,6 +61,9 @@ internal static class UiStrings
     public static string PageCountFormat => Get(nameof(PageCountFormat));
     public static string PdfPageTimedOutStatusFormat => Get(nameof(PdfPageTimedOutStatusFormat));
     public static string PdfPageFailedStatusFormat => Get(nameof(PdfPageFailedStatusFormat));
+    public static string PdfDocumentEmptyStatus => Get(nameof(PdfDocumentEmptyStatus));
+    public static string PdfDocumentPartialStatusFormat => Get(nameof(PdfDocumentPartialStatusFormat));
+    public static string PdfDocumentFailedStatus => Get(nameof(PdfDocumentFailedStatus));
 
     public static string TrayShowPreview => Get(nameof(TrayShowPreview));
     public static string TraySettings => Get(nameof(TraySettings));

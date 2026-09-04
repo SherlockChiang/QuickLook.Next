@@ -10,6 +10,7 @@ internal sealed class PreviewPanelController
     private readonly FrameworkElement _pdfScrollViewer;
     private readonly FrameworkElement _pdfPagerBar;
     private readonly FrameworkElement _pdfSearchBar;
+    private readonly FrameworkElement _pdfDocumentStatePanel;
     private readonly FrameworkElement _textPreviewContainer;
     private readonly FrameworkElement _tableScrollViewer;
     private readonly FrameworkElement _officeScrollViewer;
@@ -27,6 +28,7 @@ internal sealed class PreviewPanelController
         FrameworkElement pdfScrollViewer,
         FrameworkElement pdfPagerBar,
         FrameworkElement pdfSearchBar,
+        FrameworkElement pdfDocumentStatePanel,
         FrameworkElement textPreviewContainer,
         FrameworkElement tableScrollViewer,
         FrameworkElement officeScrollViewer,
@@ -43,6 +45,7 @@ internal sealed class PreviewPanelController
         _pdfScrollViewer = pdfScrollViewer;
         _pdfPagerBar = pdfPagerBar;
         _pdfSearchBar = pdfSearchBar;
+        _pdfDocumentStatePanel = pdfDocumentStatePanel;
         _textPreviewContainer = textPreviewContainer;
         _tableScrollViewer = tableScrollViewer;
         _officeScrollViewer = officeScrollViewer;
@@ -62,6 +65,7 @@ internal sealed class PreviewPanelController
         _pdfScrollViewer.Visibility = Visibility.Collapsed;
         _pdfPagerBar.Visibility = Visibility.Collapsed;
         _pdfSearchBar.Visibility = Visibility.Collapsed;
+        _pdfDocumentStatePanel.Visibility = Visibility.Collapsed;
         _textPreviewContainer.Visibility = Visibility.Collapsed;
         _tableScrollViewer.Visibility = Visibility.Collapsed;
         _officeScrollViewer.Visibility = Visibility.Collapsed;

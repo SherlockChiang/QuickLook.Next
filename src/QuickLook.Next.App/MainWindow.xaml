@@ -236,6 +236,24 @@
                             Padding="0,16,0,16"
                             Spacing="16" />
             </ScrollViewer>
+            <Border x:Name="PdfDocumentStatePanel"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="24,72,24,0"
+                    Padding="12,8"
+                    IsHitTestVisible="False"
+                    Background="{ThemeResource PreviewFloatingSurfaceBrush}"
+                    BorderBrush="{ThemeResource PreviewSurfaceBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                <TextBlock x:Name="PdfDocumentStateText"
+                           MaxWidth="440"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           AutomationProperties.LiveSetting="Polite" />
+            </Border>
             <Border x:Name="PdfPagerBar"
                     x:Uid="PdfPagerBar"
                     Visibility="Collapsed"

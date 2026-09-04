@@ -40,6 +40,8 @@ internal sealed class PdfPreviewPresenter
     private readonly Button _previousButton;
     private readonly Button _nextButton;
     private readonly TextBlock _pageIndicator;
+    private readonly Border _documentStatePanel;
+    private readonly TextBlock _documentStateText;
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<Compositor?> _compositorProvider;
     private readonly Func<RasterHostSupervisor?> _supervisorProvider;
@@ -49,6 +51,7 @@ internal sealed class PdfPreviewPresenter
     private readonly Dictionary<int, PdfPageState> _pageStates = new();
     private readonly Dictionary<int, long> _pageGenerations = new();
     private readonly Dictionary<int, long> _pageLastTouched = new();
+    private readonly HashSet<int> _failedPages = new();
 
     private string? _requestId;
     private double _scale = 1.0;
@@ -69,6 +72,8 @@ internal sealed class PdfPreviewPresenter
         Button previousButton,
         Button nextButton,
         TextBlock pageIndicator,
+        Border documentStatePanel,
+        TextBlock documentStateText,
         DispatcherQueue dispatcherQueue,
         Func<Compositor?> compositorProvider,
         Func<RasterHostSupervisor?> supervisorProvider)
@@ -79,6 +84,8 @@ internal sealed class PdfPreviewPresenter
         _previousButton = previousButton;
         _nextButton = nextButton;
         _pageIndicator = pageIndicator;
+        _documentStatePanel = documentStatePanel;
+        _documentStateText = documentStateText;
         _dispatcherQueue = dispatcherQueue;
         _compositorProvider = compositorProvider;
         _supervisorProvider = supervisorProvider;
@@ -94,7 +101,24 @@ internal sealed class PdfPreviewPresenter
         _currentPageIndex = 0;
         int version = _renderVersion;
 
-        _pageCount = Math.Max(1, ready.PageCount);
+        _pageCount = Math.Max(0, ready.PageCount);
+        if (_pageCount == 0)
+        {
+            // Host responses are untrusted; Windows.Data.Pdf normally rejects zero-page inputs
+            // before RasterHost can publish a ready result, but the App must not invent page one.
+            _pageDisplayWidths = [];
+            _pageDisplayHeights = [];
+            _pageTopOffsets = [];
+            _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
+            _pagerBar.Visibility = Visibility.Collapsed;
+            UpdatePager();
+            UpdateDocumentState();
+            return new PdfPreviewResult(
+                UiStrings.PdfDocumentEmptyStatus,
+                Math.Min(maxContent.Width, 640),
+                Math.Min(maxContent.Height, 420));
+        }
+
         double pageWidth = Math.Max(1, ready.PageWidth > 0 ? ready.PageWidth : ready.PreferredWidth);
         double pageHeight = Math.Max(1, ready.PageHeight > 0 ? ready.PageHeight : ready.PreferredHeight);
         PdfPageGeometry[]? geometries = ready.PdfPageGeometries;
@@ -130,6 +154,7 @@ internal sealed class PdfPreviewPresenter
         _scrollViewer.ChangeView(null, 0, null, disableAnimation: true);
         _pagerBar.Visibility = _pageCount > 1 ? Visibility.Visible : Visibility.Collapsed;
         UpdatePager();
+        UpdateDocumentState();
         Task.Delay(100).ContinueWith(_ => _dispatcherQueue.TryEnqueue(() =>
         {
             if (version == _renderVersion)
@@ -168,14 +193,15 @@ internal sealed class PdfPreviewPresenter
         if (hr < 0 || compSurface is null)
         {
             error = $"pdf page failed 0x{hr:X8}";
-            SetPageState(surface.PageIndex, PdfPageState.Failed);
-            ShowPageFailure(pageHost, surface.PageIndex, timedOut: false);
+            MarkPageFailed(pageHost, surface.PageIndex, timedOut: false);
             return false;
         }
 
         TouchPage(surface.PageIndex);
         SetPageState(surface.PageIndex, PdfPageState.Rendered);
+        _failedPages.Remove(surface.PageIndex);
         ClearPageVisualState(pageHost);
+        UpdateDocumentState();
 
         var brush = compositor.CreateSurfaceBrush(compSurface);
         brush.Stretch = CompositionStretch.Fill;
@@ -197,8 +223,7 @@ internal sealed class PdfPreviewPresenter
             || !_pageHosts.TryGetValue(error.PageIndex, out Border? pageHost))
             return false;
 
-        SetPageState(error.PageIndex, PdfPageState.Failed);
-        ShowPageFailure(pageHost, error.PageIndex, error.TimedOut);
+        MarkPageFailed(pageHost, error.PageIndex, error.TimedOut);
         return true;
     }
 
@@ -275,6 +300,7 @@ internal sealed class PdfPreviewPresenter
         _pageStates.Clear();
         _pageGenerations.Clear();
         _pageLastTouched.Clear();
+        _failedPages.Clear();
         _touchTick = 0;
         _currentPageIndex = 0;
         _pageCount = 0;
@@ -286,6 +312,7 @@ internal sealed class PdfPreviewPresenter
         _renderVersion++;
         _pagerBar.Visibility = Visibility.Collapsed;
         UpdatePager();
+        UpdateDocumentState();
     }
 
     private bool ScrollToPage(int pageIndex)
@@ -511,6 +538,43 @@ internal sealed class PdfPreviewPresenter
     private void SetPageState(int pageIndex, PdfPageState state)
     {
         _pageStates[pageIndex] = state;
+    }
+
+    private void MarkPageFailed(Border host, int pageIndex, bool timedOut)
+    {
+        SetPageState(pageIndex, PdfPageState.Failed);
+        _failedPages.Add(pageIndex);
+        ShowPageFailure(host, pageIndex, timedOut);
+        UpdateDocumentState();
+    }
+
+    private void UpdateDocumentState()
+    {
+        PdfDocumentNotice state = _requestId is null
+            ? new(PdfDocumentNoticeKind.None, 0, 0)
+            : PdfDocumentStatePolicy.Evaluate(_pageCount, _failedPages.Count);
+        string message = state.Kind switch
+        {
+            PdfDocumentNoticeKind.Empty => UiStrings.PdfDocumentEmptyStatus,
+            PdfDocumentNoticeKind.Partial => UiStrings.Format(
+                UiStrings.PdfDocumentPartialStatusFormat,
+                state.FailedPages,
+                state.PageCount),
+            PdfDocumentNoticeKind.Failed => UiStrings.PdfDocumentFailedStatus,
+            _ => "",
+        };
+        _documentStateText.Text = message;
+        AutomationProperties.SetName(_documentStateText, message);
+        AutomationProperties.SetHelpText(_documentStatePanel, message);
+        _documentStatePanel.VerticalAlignment = state.Kind == PdfDocumentNoticeKind.Empty
+            ? VerticalAlignment.Center
+            : VerticalAlignment.Top;
+        _documentStatePanel.Margin = state.Kind == PdfDocumentNoticeKind.Empty
+            ? new Thickness(24)
+            : new Thickness(24, 72, 24, 0);
+        _documentStatePanel.Visibility = string.IsNullOrEmpty(message)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private static void ShowPageFailure(Border host, int pageIndex, bool timedOut)
