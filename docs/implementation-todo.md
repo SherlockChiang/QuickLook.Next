@@ -31,9 +31,15 @@ gate pass. Standalone checks retain their separately recorded results.
     - Verified 2026-09-05: official SHA-512-checked SDK installed under ignored
       `artifacts/tools`, session-scoped selection returns `10.0.302`, and
       Rust/Cargo report `1.96.0`. See `docs/verification-baseline.md`.
-  - [ ] `E26-01b` Run locked restore, formatting, Rust checks/tests, native
+  - [x] `E26-01b` Run locked restore, formatting, Rust checks/tests, native
     MSBuild, full Release solution build/tests, and all architecture gates.
     Record passed, failed, and not-run steps separately; fix in-scope failures.
+    - Verified source: `8c3d732`, `tools/release.ps1 -SkipPackage`, exit 0.
+      Rust 343/1 plus explicit external-corpus smoke; Core 351, ParserHost 45,
+      RasterHost 29, ShellBroker 13 passed; solution build 0 warnings/errors.
+      Full architecture, restricted-host launch, and system image smoke passed
+      (JXL unavailable under optional-codec policy). No new package or manual
+      acceptance is claimed. Detailed limits/log hash: `docs/verification-baseline.md`.
   - [ ] `E26-01c` Reconcile reviewer and Store status documents with verified
     code/release evidence. Separate historical candidates from current state;
     do not infer Partner Center certification or installation-test results.

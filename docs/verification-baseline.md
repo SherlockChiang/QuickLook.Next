@@ -38,11 +38,47 @@ SDK. Do not relax the repository's SDK lock to conceal a missing toolchain.
 
 ## Current Baseline
 
-- Toolchain availability: passed.
-- Full Release sequence: pending; retain logs and exact source SHA when run.
-- Full architecture sequence: pending; older runs stopped at the SDK fixture.
-- Product package installation and visual acceptance: not run in this queue.
-- Remote integration and Store submission: not performed in this queue.
+On 2026-09-05, `tools/release.ps1 -SkipPackage` completed with exit code 0 at
+source `8c3d732b62f3cecda627b9befe3629e3865b693d`, `VERSION=1.0.1`, using the
+pinned local SDK above. No product source changed during the run.
+
+| Check | Result |
+|---|---|
+| Locked restore, Rust formatting, Clippy | Passed |
+| .NET format verification | Exit 0; workspace-load warnings were reported |
+| Rust workspace tests | 343 passed, 1 ignored external-corpus test |
+| Native Release MSBuild contract | Passed; existing output was up to date |
+| Release solution build | Passed, 0 warnings/errors, 22.56 seconds |
+| Core tests | 351 passed |
+| ParserHost / RasterHost / ShellBroker integration | 45 / 29 / 13 passed |
+| Full architecture sequence, including MSBuild fixture | Passed |
+| MSIX/Store version, package-structure, update-script guards | Passed; no installation implied |
+| Restricted-host launch smoke | Passed |
+| External native image corpus | Explicit ignored-test invocation passed; 10 samples checked |
+| System image corpus | Passed under optional-codec policy; decoded 4/5, JXL unavailable |
+| Title-bar inset structural guard | Passed; manual visual matrix not run |
+| New MSIX packaging, WACK, install/update/uninstall, Narrator | Not run |
+| Remote CI, publication, Store certification | Not performed |
+
+The local transcript is `artifacts/validation-e26-01-8c3d732-full.log`, SHA-256:
+
+```text
+338812beee5473a28a97f401f9252b2b141b557b6ec10091f1ad8213c175e675
+```
+
+The generated payload proof was retained as
+`artifacts/validation-e26-01-8c3d732-proof.json`; it binds the build outputs to
+the source above, not a later documentation commit. Packaging must check the
+current commit and payload hashes again. The sequence inspected the pre-existing
+`dist` directory; it did not assemble a new package from this build. Distribution
+acceptance therefore remains `E26-01d`, even though the no-package sequence passed.
+
+The initial sandboxed attempt stopped at NuGet configuration access, before
+.NET formatting, Clippy, tests, and builds. Its separate transcript is
+`artifacts/validation-e26-01-8c3d732.log`. The successful run used approved
+unsandboxed access for dependency restore and host-process tests. Fault-injection
+tests intentionally catch errors in the transcript; their reported pass/fail and
+the sequence exit code determine their outcome.
 
 In the older blocked architecture sequence, MSIX version/update checks, Store
 packaging checks, restricted-host launch, real image corpus checks, and title-bar
