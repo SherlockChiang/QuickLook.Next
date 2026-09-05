@@ -464,6 +464,22 @@ the release-only `release:` prefix while this queue is in progress.
         blocked only by its isolated pinned-SDK `10.0.302` fixture
         (`10.0.303`/`10.0.400` are installed locally).
       - Commit: `26bb0c0`
+    - [x] `R26-P1-07d-16` Move the static raster and additive waveform HANDLE
+      exports plus checked waveform packet writing into the 418-line
+      `ffi/static_image/handle.rs` child module. Preserve the shared HANDLE
+      reopen and logical-name boundary, 256 MiB input cap, SVG read budget,
+      header-only raster preflight, cancellation ordering, exact v2 output
+      negotiation, and bounded 192-by-96 RGB density packet while removing the
+      final root-level `write_v2_out` compatibility re-export.
+      - Verification: Rust fmt, Clippy, workspace tests (343 passed, 1 ignored),
+        FFI safety (86 files, 60 raw-pointer exports), lint-scope (86 files,
+        20 scoped ABI exemptions), module-boundary, performance-bounds,
+        format-registry, and generated-ABI drift guards passed. The native
+        Release DLL built through its MSBuild contract in 3 minutes 29 seconds;
+        the architecture guard completed every repository check and remains
+        blocked only by its isolated pinned-SDK `10.0.302` fixture
+        (`10.0.303`/`10.0.400` are installed locally).
+      - Commit: `a515a40`
   - [x] `R26-P1-07e` Generate the ABI version, 23 capability bits, and ten
     stable HANDLE status values for Rust and C# from the reviewed
     `native/abi-contract.json` schema. Keep aggregate managed policy and P/Invoke
