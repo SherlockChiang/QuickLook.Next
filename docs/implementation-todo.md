@@ -9,6 +9,60 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## September 2026 evidence-first execution queue
+
+This is the active execution order after the review of `a4b8d25`. It supersedes
+the ordering, but not the outstanding requirements, of the historical queues
+below. Preserve Rust-first ownership and existing resource/security bounds.
+Keep each change independently reviewable, record evidence against an exact
+commit, and commit implementation and its completion record separately. Do not
+push, publish, install a product candidate, or change signing credentials without
+the owner's authorization. Never stage `.mimosa/`.
+
+Historical verification correction: architecture runs that stopped at the
+missing-SDK MSBuild fixture did not execute the remaining MSIX/Store, restricted
+host, image corpus, and title-bar checks. Earlier wording such as "every
+repository check" refers only to checks reached before that failure, not a full
+gate pass. Standalone checks retain their separately recorded results.
+
+- [ ] `E26-01` Establish a reproducible verification and delivery baseline.
+  - [ ] `E26-01a` Make pinned SDK `10.0.302` available without relaxing
+    `global.json`; verify the selected Rust and .NET toolchains.
+  - [ ] `E26-01b` Run locked restore, formatting, Rust checks/tests, native
+    MSBuild, full Release solution build/tests, and all architecture gates.
+    Record passed, failed, and not-run steps separately; fix in-scope failures.
+  - [ ] `E26-01c` Reconcile reviewer and Store status documents with verified
+    code/release evidence. Separate historical candidates from current state;
+    do not infer Partner Center certification or installation-test results.
+  - [ ] `E26-01d` Validate local packaging and preserve the tested-payload proof.
+    Record the exact source/version/artifact identity. Product installation,
+    Store acquisition, remote integration PR, and publication need owner approval.
+- [ ] `E26-02` Establish measurable preview and build performance baselines.
+  Reuse lifecycle timing and host tests; record cold/warm first paint and
+  cancellation p50/p95, sample counts, private bytes, HANDLE counts, and recovery
+  time for a fixed mixed-format corpus. Measure clean, incremental, and no-change
+  builds separately. Set budgets from repeatable evidence, not one build timing.
+- [ ] `E26-03` Improve input responsiveness using the measured baseline.
+  Separate Explorer selection COM work from the Rust hook message pump, bound
+  and coalesce queued work, and preserve generation/cancellation ownership.
+  Cover first Space-open, rapid arrows, close-before-completion, focus loss,
+  app-owned dialogs, and deliberate always-on-top behavior.
+- [ ] `E26-04` Reduce measured image and retained-resource costs.
+  Prioritize the static HANDLE packet's intermediate BGRA copy, then codec
+  target-size decode and cancellation where measurements justify them. Extend
+  mixed-format close/reopen recovery coverage and make animation truncation
+  explicit. Preserve byte/pixel/color/orientation and caller-buffer contracts.
+- [ ] `E26-05` Refactor only at demonstrated ownership or testability boundaries.
+  Extract decoder/animation and App lifecycle responsibilities as needed by the
+  work above; consolidate duplicate guards with fault-injection coverage and
+  add targeted property/fuzz tests. Do not use file length as a completion metric.
+- [ ] `E26-06` Complete UI and two-channel release acceptance.
+  Retain packaged DPI/locale/theme/high-contrast/Narrator evidence and each
+  channel's install/update/uninstall results. Derive both packages from one
+  source version while preserving separate identities and recording actual
+  certification/publication state. Defer full Office fidelity, GPU animation,
+  new plugin systems, and broad crate splits unless measured needs justify them.
+
 ## September 2026 interaction queue
 
 - [x] `R26-UX-01` Make focused previews support repeatable keyboard page navigation:
