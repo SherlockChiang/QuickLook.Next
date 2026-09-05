@@ -26,8 +26,11 @@ repository check" refers only to checks reached before that failure, not a full
 gate pass. Standalone checks retain their separately recorded results.
 
 - [ ] `E26-01` Establish a reproducible verification and delivery baseline.
-  - [ ] `E26-01a` Make pinned SDK `10.0.302` available without relaxing
+  - [x] `E26-01a` Make pinned SDK `10.0.302` available without relaxing
     `global.json`; verify the selected Rust and .NET toolchains.
+    - Verified 2026-09-05: official SHA-512-checked SDK installed under ignored
+      `artifacts/tools`, session-scoped selection returns `10.0.302`, and
+      Rust/Cargo report `1.96.0`. See `docs/verification-baseline.md`.
   - [ ] `E26-01b` Run locked restore, formatting, Rust checks/tests, native
     MSBuild, full Release solution build/tests, and all architecture gates.
     Record passed, failed, and not-run steps separately; fix in-scope failures.
