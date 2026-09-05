@@ -3,8 +3,10 @@
 This document captures the next practical optimization targets after the
 Rust-first rewrite work. Items are ordered by user-visible impact and fit with
 the current architecture boundary. The newer product-level PRD is
-`docs/prd-next-preview-optimization.md`; use that document for priority and
-acceptance criteria.
+`docs/prd-next-preview-optimization.md` provides product context. The active
+execution order is the September evidence-first queue in
+`docs/implementation-todo.md`; use `docs/verification-baseline.md` for current
+validation evidence instead of inferring completion from this historical list.
 
 ## Completed Foundation
 

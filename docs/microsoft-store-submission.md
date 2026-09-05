@@ -1,4 +1,4 @@
-# Microsoft Store submission plan
+# Microsoft Store submission and evidence
 
 This repository has two intentionally separate Windows distribution channels:
 
@@ -9,6 +9,33 @@ This repository has two intentionally separate Windows distribution channels:
 
 The split is required by the Store package rules and prevents a Store identity
 change from breaking existing sideload upgrades.
+
+## Status Reconciled On 2026-09-05
+
+- The owner confirmed initial `1.0.0.0` x64 Store certification; both tracked
+  READMEs record that result. The initial launch is no longer an unsubmitted draft.
+- GitHub latest is [`v1.0.1`](https://github.com/SherlockChiang/QuickLook.Next/releases/tag/v1.0.1),
+  published on 2026-09-01 from `a64b60cc56c703d22b358392102dc9d32db67499`.
+- The [`1.0.1.0` Store candidate run](https://github.com/SherlockChiang/QuickLook.Next/actions/runs/33403260965)
+  succeeded on 2026-08-31 from that same commit. Its local manifest records
+  `sourceVersion=1.0.1`, `storeVersion=1.0.1.0`, the Store identity below, x64,
+  and an unsigned upload candidate. Local MSIX/upload hashes were rechecked:
+
+```text
+MSIX SHA-256:       edfdc3058f51e136207f55229198a066902eccce45d1ae2461d3d3179571f7a0
+MSIXUPLOAD SHA-256: f90608c57c5899e8e24b073893ef4e57106d5c5d8c7494c3cab9677fe35f24d8
+```
+
+Partner Center was not inspected in this reconciliation. Candidate generation
+does not establish the `1.0.1.0` submission's current certification or customer
+availability. Store-signed installation/upgrade evidence and packaged visual
+acceptance remain separate from the initial owner-confirmed certification.
+Later local commits are not included in either artifact above.
+
+The active delivery queue is `E26-01`/`E26-06` in `implementation-todo.md`.
+`verification-baseline.md` records the newer local no-package validation, not a
+Store update. The first-candidate and listing sections below retain historical
+evidence; unchecked evidence tasks must not be inferred complete from a build.
 
 ## Confirmed Microsoft requirements
 
@@ -61,20 +88,21 @@ Publisher:         CN=QuickLook Next Development
 PublisherDisplayName: QuickLook Next
 ```
 
-Never replace those sideload values with the Store identity. The Store launch
-version is now deliberately `1.0.0.0`, generated from the repository's
-semantic `VERSION=1.0.0`; the existing GitHub latest release remains `0.3.7`
-with its signed sideload identity and update metadata. Future GitHub releases
-can continue from the monotonic `1.0.0` semantic line.
+Never replace those sideload values with the Store identity. The historical
+Store launch used `1.0.0.0`; the verified subsequent candidate uses `1.0.1.0`
+from `VERSION=1.0.1`, matching the GitHub release's semantic version. Future
+candidates must derive from one monotonic source version and retain each
+channel's identity. Record source SHA and package hash as well as version:
+unreleased local changes can still carry the same `VERSION` until release prep.
 
 ## Identity and package checklist
 
-Before building the first candidate, keep these exact values in the Store-only
+Before building each candidate, keep these exact values in the Store-only
 configuration and review the remaining submission inputs:
 
 - package identity name, publisher subject, and publisher display name (recorded
   above and supplied through repository variables);
-- Store version (`1.0.0.0`, generated from `VERSION=1.0.0`);
+- Store version (generated from that candidate's `VERSION`);
 - supported architecture(s) and minimum Windows build;
 - Store listing languages and support URL;
 - privacy-policy URL and contact address;
@@ -112,8 +140,11 @@ anchored in the Sigstore Rekor transparency log. The ordinary CI run
 [`32035883651`](https://github.com/SherlockChiang/QuickLook.Next/actions/runs/32035883651)
 also passed its release checks, dependency audits, and website build.
 
-No candidate was installed or uploaded to Partner Center. WACK and clean
-install/update/uninstall testing therefore remain mandatory before submission.
+At the time of the first-candidate build record, no candidate had been installed
+or uploaded to Partner Center. This is historical, not the current submission
+state; initial certification was subsequently owner-confirmed as recorded above.
+WACK and clean install/update/uninstall evidence must still be retained for each
+release candidate instead of inferred from successful certification.
 Because the candidate is intentionally unsigned for Microsoft to re-sign, it
 is not itself a valid local AppX installation/update subject. Those tests must
 use a Store-signed flight/acquisition package after Partner Center processing,
@@ -121,7 +152,7 @@ or a separately produced test-signed copy whose identity and certificate are
 clearly kept out of the submission artifact. Never add the sideload signature
 to the Store candidate.
 
-## Listing readiness checklist
+## Historical Listing Checklist And Outstanding Evidence
 
 - [x] Draft English, Simplified Chinese, and Traditional Chinese descriptions.
 - [x] Draft short descriptions and feature highlights.
@@ -137,5 +168,6 @@ to the Store candidate.
   selected for the first listing.
 - [ ] Record Store-signed clean-install, update, rollback, and uninstall tests.
 
-No Partner Center submission or product reservation is performed by the local
-build until the identity values and account access are confirmed.
+The local build does not submit to Partner Center or reserve a product.
+Future submissions require explicit owner confirmation after candidate and
+listing review; successful local packaging must not be described as publication.

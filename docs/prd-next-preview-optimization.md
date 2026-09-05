@@ -1,5 +1,10 @@
 # PRD: Next Preview Optimization
 
+Execution status: the September evidence-first queue in `implementation-todo.md`
+owns the current order. This PRD retains product goals, not a claim that its
+historical capability gaps are all still open. See `verification-baseline.md`
+for the exact currently validated source and remaining acceptance boundaries.
+
 ## Summary
 
 QuickLook.Next has completed the recent Rust-first Office and metadata preview

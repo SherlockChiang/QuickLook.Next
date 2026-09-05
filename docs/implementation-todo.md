@@ -116,11 +116,14 @@ gate pass. Standalone checks retain their separately recorded results.
   - Commits: Rust extraction `fe4f770`; ParserHost transport `1826d47`; lazy
     WinUI search, page navigation, and copy `fb1f8e0`.
 
-## Microsoft Store 1.0.0 launch queue
+## Historical Microsoft Store Launch And Remaining Evidence
 
 This queue keeps Store onboarding separate from the signed GitHub sideload
-channel. Detailed identities, hashes, and test boundaries are recorded in
-`docs/microsoft-store-submission.md`.
+channel. Initial `1.0.0.0` certification was owner-confirmed and is recorded in
+both READMEs; the verified later `1.0.1.0` candidate is not proof of its current
+certification state. Detailed identities, hashes, and test boundaries are
+recorded in `docs/microsoft-store-submission.md`. Retain outstanding evidence
+through `E26-06`; do not recreate an initial submission that already completed.
 
 - [x] `STORE-01` Reserve the Store product and record its exact package identity
   without changing the sideload manifest identity.
@@ -128,19 +131,19 @@ channel. Detailed identities, hashes, and test boundaries are recorded in
   pass the Store packaging, architecture, workflow, and dependency guards.
 - [x] `STORE-03` Draft the English, Simplified Chinese, and Traditional Chinese
   listings, field limits, IARC factual basis, and certification notes.
-- [ ] `STORE-04` Create or update the Partner Center draft: upload the existing
-  `.msixupload`, export the live listing CSV, import the three locale drafts,
-  choose the category, and complete the live IARC questionnaire. Do not submit
-  for certification or enable automatic public publishing without explicit
-  owner confirmation.
+- [x] `STORE-04` Complete the initial Partner Center submission fields and
+  package upload. The owner-confirmed `1.0.0.0` certification and tracked README
+  status establish the initial submission; they do not establish retained CSV,
+  screenshots, or test evidence for a later candidate.
 - [ ] `STORE-05` Obtain a Store-signed private-flight/acquisition package and,
   with explicit install approval, record WACK plus clean install, update,
   rollback, uninstall, crash-dialog, and first-launch evidence in an isolated
   Windows test environment.
 - [ ] `STORE-06` Capture final-candidate Store screenshots, review the optional
   300 x 300 tile icon/promotional assets, and verify every listing locale.
-- [ ] `STORE-07` Review the complete Partner Center diff and certification hold;
-  submit only after a separate explicit owner confirmation.
+- [x] `STORE-07` Record owner-confirmed initial `1.0.0.0` x64 certification.
+  Future submission and automatic-publication choices still require separate
+  owner confirmation; the current `1.0.1.0` certification state is not inferred.
 
 ## 2026-08-04 review execution queue
 
@@ -582,7 +585,7 @@ the release-only `release:` prefix while this queue is in progress.
 
 ### Repository and delivery governance
 
-- [ ] `R26-P1-11` Route the local 0.3.5 stack through an integration branch and PR
+- [ ] `R26-P1-11` Route the unreleased local stack through an integration branch and PR
   after release blockers pass; require CI checks, admin enforcement, resolved
   conversations, and an approval-protected release environment before publishing.
 - [ ] `R26-P2-01` Normalize signed annotated release tags, enable dependency

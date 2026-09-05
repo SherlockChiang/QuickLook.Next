@@ -4,6 +4,24 @@ This note is a reviewer-facing status page. It records what has already been
 hardened, how to verify it locally, and which limitations are intentionally
 left visible instead of hidden behind vague TODOs.
 
+## Current Verification And Priority
+
+The active order is the September evidence-first queue in
+[`implementation-todo.md`](implementation-todo.md). The complete local
+`tools/release.ps1 -SkipPackage` sequence passed on 2026-09-05 at `8c3d732`
+using pinned SDK `10.0.302`: Rust 343/1 plus explicit external-corpus smoke,
+Core 351, ParserHost 45, RasterHost 29, and ShellBroker 13 tests. The full
+architecture sequence, including the previously blocked MSBuild fixture,
+restricted-host launch, and image corpus checks, completed successfully.
+See [`verification-baseline.md`](verification-baseline.md) for the exact SHA,
+log hash, optional JXL limitation, and checks not performed.
+
+That is a local source/build baseline, not a new signed package, manual UI
+acceptance, remote CI pass, or Store certification. Published `v1.0.1` and the
+latest verified remote CI remain at `a64b60c`; subsequent local changes are not
+released. Measure input/first-paint/cancellation latency and resource recovery
+before resuming broad module extraction or adding format fidelity.
+
 ## Fixed And Hardened
 
 - Rust-first preview path: text, folders, archives, packages, mail, certificates,
@@ -13,8 +31,11 @@ left visible instead of hidden behind vague TODOs.
   helpers, folder listing, Text/Markdown/CSV/TSV, JPEG/PNG/GIF/WebP/TIFF image metadata,
   GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode,
   MIME/mail plus seek-based Outlook CFB, EPUB/FB2 ebook parsing, media, archive, Office, package,
-  and database families now live in focused submodules with their own tests. The remaining
-  binary-info families continue through narrow explicit routes.
+  and database families now live in focused submodules with their own tests. CHM, dump, and ELF
+  have focused modules as well. Most path/HANDLE FFI families are isolated, including static
+  image and waveform HANDLE adapters; animation ABI, decode implementation, and Explorer/hook
+  ownership still share the native root. ABI constants are generated from one schema, while
+  C ABI signatures and managed declarations remain handwritten.
 - Syntax-highlight tokenization lives in the native layer: `ql_highlight_spans` returns bounded
   UTF-16-offset token spans for the managed text presenter to slice, with caps on input bytes and
   span count, and the App degrades to plain rendering if the native call is unavailable.
@@ -227,23 +248,30 @@ rg -n "read_to_end\(&mut bytes\)" native\quicklook_next_native\src\preview.rs na
 
 The tray popup search should only hit `src/QuickLook.Next.App/TrayIconManager.cs`.
 
-The remaining `read_to_end` calls in `preview.rs` should be limited to:
+The shared bounded-reader helpers now live in `preview/bounded.rs`. Its
+`read_to_end` calls are limited to:
 
-- `read_file_prefix`, which reads through `take(max_bytes)`.
+- `read_reader_prefix`, which reads through `take(max_bytes)`.
 - `read_limited_to_end`, which reads through `take(max_size + 1)` and rejects
   payloads over the cap.
 
 ## Known Remaining Work
 
-- Continue splitting the large native preview module by bounded format family. Common DTOs, folder,
-  Text/Markdown/CSV/TSV, image metadata, animation classification, Torrent, executable/PE/CLR, and
-  ebook parsing are separated; archive, Office, package, database, and mixed info/media remain.
+- Complete the evidence-first delivery baseline, then measure the input-to-first-paint path and
+  mixed-format close/reopen resource recovery. Existing focused host leak tests are not a full
+  packaged App performance baseline.
+- Explorer selection COM queries still execute on the Rust hook message pump. Separate ownership,
+  bound queued work, and preserve close/generation priority before treating input latency as solved.
+- Archive, Office, package, database, and media parser families are already separated. Further
+  extraction should target the remaining decode/animation/Win32 ownership or App lifecycle
+  boundaries when it improves testability, not just reduce root-file line counts. Consolidate
+  duplicated structural guards without weakening their contracts.
 - The final animated-frame upload still copies from the retained CPU section into
   `WriteableBitmap.PixelBuffer`. A future direct GPU shared-surface renderer is optional and should
   be justified by profiling before adding cross-process D3D synchronization.
 - Expand the allowlisted Property Handler field mapping only when a concrete Windows metadata gap is
   demonstrated; keep every supplement inside RasterHost and HANDLE-stream based.
-- Continue improving Office approximate layout fidelity. This is intentionally
+- Keep Office approximate layout in maintenance mode. This is intentionally
   not a full Office rendering engine: PPT/XLSX should prioritize slide/sheet
   layout, text positions, table/cell geometry, relationships, and embedded
   images. Full style parity, macros, animations, formula recalculation, and
@@ -268,9 +296,9 @@ The remaining `read_to_end` calls in `preview.rs` should be limited to:
   without returning to unbounded GPU surface retention.
 - Continue Shell icon coverage for virtual archive entries if a stable file type
   icon can be resolved without pretending the virtual item is a real path.
-- Deep professional parsers remain intentionally staged: full MediaInfo tracks,
-  CHM topic extraction, Outlook MSG property streams, and database schema
-  browsing should only be added with bounded parsers and no WebView fallback.
+- Existing bounded MP4/media summaries, Outlook MSG property streams, and SQLite schema/row
+  samples should not be confused with full professional-format engines. Broader extraction,
+  including CHM topics, requires a concrete preview need and explicit bounds; no WebView fallback.
 - Continue the HANDLE ABI migration only after each reader accepts a bounded `Read` or `Read + Seek`
   input. SQLite snapshots, archive listing/entry extraction, and ebooks now have explicit HANDLE
   boundaries. Office main/layout and follow-up hero extraction now share one retained HANDLE source;
