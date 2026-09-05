@@ -32,6 +32,8 @@ $nativeLibrary = Join-Path $Root "native/quicklook_next_native/src/lib.rs"
 $nativeAbiGenerated = Join-Path $Root "native/quicklook_next_native/src/abi_generated.rs"
 $nativeContract = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
 $nativeHeroImageFfi = Join-Path $Root "native/quicklook_next_native/src/ffi/hero_image.rs"
+$nativeStaticImageHandle =
+    Join-Path $Root "native/quicklook_next_native/src/ffi/static_image/handle.rs"
 $nativePreview = Join-Path $Root "native/quicklook_next_native/src/preview.rs"
 $nativeBounded = Join-Path $Root "native/quicklook_next_native/src/preview/bounded.rs"
 $nativeBoundedTests = Join-Path $Root "native/quicklook_next_native/src/preview/bounded/tests.rs"
@@ -168,7 +170,7 @@ Require-Pattern $nativeLibrary 'fn native_image_decode_peak_budget_accepts_48mp_
     "Static native image decoded-byte budget must retain boundary, over-budget, and overflow regressions."
 Require-Pattern $nativeLibrary 'fn preflight_native_image_packet_length<[\s\S]*validate_handle_image_dimensions[\s\S]*\} else \{\s*None\s*\};\s*reader\.seek\(SeekFrom::Start\(0\)\)[\s\S]*Some\(5\.\.=8\)[\s\S]*native_image_target_dimensions[\s\S]*checked_native_image_packet_length[\s\S]*width\.checked_mul\(height\)\?\.checked_mul\(4\)[\s\S]*fixed_bytes\.checked_add\(raster_bytes\)' `
     "Static raster HANDLE output sizing must remain checked, orientation-aware, and header-only."
-Require-Pattern $nativeLibrary 'preflight_native_image_packet_length\([\s\S]*if cancel_requested\(cancel_cb\)[\s\S]*\*out_required = required[\s\S]*if required > out_cap[\s\S]*decode_image_bgra_reader\([\s\S]*preflight_native_image_packet_length\([\s\S]*if cancel_requested\(cancel_cb\)[\s\S]*\*out_required = required[\s\S]*if required > out_cap[\s\S]*decode_image_bgra_reader_with_waveform\(' `
+Require-Pattern $nativeStaticImageHandle 'preflight_native_image_packet_length\([\s\S]*if cancel_requested\(cancel_cb\)[\s\S]*\*out_required = required[\s\S]*if required > out_cap[\s\S]*decode_image_bgra_reader\([\s\S]*preflight_native_image_packet_length\([\s\S]*if cancel_requested\(cancel_cb\)[\s\S]*\*out_required = required[\s\S]*if required > out_cap[\s\S]*decode_image_bgra_reader_with_waveform\(' `
     "Static raster HANDLE calls must reject undersized plain and waveform outputs before full decode."
 Require-Pattern $nativeLibrary 'fn raster_image_handle_sizes_output_before_full_pixel_decode\(\)[\s\S]*truncated_bmp[\s\S]*required > 8 \* 1024 \* 1024[\s\S]*waveform_required[\s\S]*QL_ERROR_MALFORMED' `
     "Static raster HANDLE sizing must retain a header-only regression above the managed initial buffer."
@@ -176,7 +178,7 @@ Require-Pattern $nativeLibrary 'fn native_image_packet_length_checks_plain_wavef
     "Static raster HANDLE preflight must retain checked overflow and JPEG orientation coverage."
 Require-Pattern $nativeLibrary 'cancel_static_image_after_preflight\(\)[\s\S]*fn raster_image_handle_sizes_output_before_full_pixel_decode\(\)[\s\S]*Some\(cancel_static_image_after_preflight\)[\s\S]*QL_ERROR_CANCELLED[\s\S]*assert_eq!\(cancelled_required, 0\)' `
     "Static raster HANDLE preflight cancellation must win before required bytes are published."
-Require-Pattern $nativeLibrary 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
+Require-Pattern $nativeStaticImageHandle 'expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024' `
     "Static HANDLE image inputs must remain capped at 256 MiB."
 Require-Pattern $nativeShellThumbnail 'sender:\s*mpsc::SyncSender<ThumbnailRequest>[\s\S]*self\.sender\.try_send\(request\)[\s\S]*mpsc::sync_channel::<ThumbnailRequest>\(1\)' `
     "Shell thumbnail STA dispatch must retain a capacity-one non-blocking request queue."

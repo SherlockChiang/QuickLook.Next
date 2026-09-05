@@ -1,7 +1,11 @@
 //! Path-based static-image decode C ABI adapters.
 
+mod handle;
+
 use super::common::{ffi_boundary, utf8_arg};
 use crate::{cancel_requested, decode_image_bgra, CancelCallback, MAX_FFI_STRING_BYTES};
+
+pub(crate) use handle::{ql_decode_image_handle, ql_decode_image_with_waveform_handle};
 
 /// # Safety
 ///
