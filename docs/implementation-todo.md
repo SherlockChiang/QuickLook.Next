@@ -40,9 +40,13 @@ gate pass. Standalone checks retain their separately recorded results.
       Full architecture, restricted-host launch, and system image smoke passed
       (JXL unavailable under optional-codec policy). No new package or manual
       acceptance is claimed. Detailed limits/log hash: `docs/verification-baseline.md`.
-  - [ ] `E26-01c` Reconcile reviewer and Store status documents with verified
+  - [x] `E26-01c` Reconcile reviewer and Store status documents with verified
     code/release evidence. Separate historical candidates from current state;
     do not infer Partner Center certification or installation-test results.
+    - Commit: `f036c54`. Architecture guidance tests and whitespace checks
+      passed. GitHub `v1.0.1`, Store candidate run `33403260965`, and both
+      locally retained Store package hashes were verified against `a64b60c`;
+      current Partner Center certification was explicitly not inferred.
   - [ ] `E26-01d` Validate local packaging and preserve the tested-payload proof.
     Record the exact source/version/artifact identity. Product installation,
     Store acquisition, remote integration PR, and publication need owner approval.
