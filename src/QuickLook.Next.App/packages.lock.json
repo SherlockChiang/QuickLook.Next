@@ -4,9 +4,9 @@
     "net10.0-windows10.0.19041": {
       "Microsoft.Windows.SDK.BuildTools": {
         "type": "Direct",
-        "requested": "[10.0.28000.2526, )",
-        "resolved": "10.0.28000.2526",
-        "contentHash": "voeXXRC5EKuvnUCkPxkEhCbNuv/FM1RzjCQ3lj58Ju5AlVzh/9Lg+a7hqy57mh/00BH/9YNZCJRUjIZJrzTJ4w=="
+        "requested": "[10.0.28000.2705, )",
+        "resolved": "10.0.28000.2705",
+        "contentHash": "TZQ96xtu7+fyFsyJCgj6Hazru0H8G1kiE1CeZLGpsqT4xKQmkxWu9yRuxYLeHJECjqEHN7duZUTcdbt8zlQ8OQ=="
       },
       "Microsoft.WindowsAppSDK": {
         "type": "Direct",
@@ -134,7 +134,7 @@
       "quicklook.next.core": {
         "type": "Project",
         "dependencies": {
-          "QuickLook.Next.Contracts": "[0.1.0, )"
+          "QuickLook.Next.Contracts": "[1.0.1, )"
         }
       }
     },
