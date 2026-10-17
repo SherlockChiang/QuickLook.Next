@@ -126,7 +126,7 @@ Get-Content "$($zip.FullName).sha256"
 <details>
 <summary><strong>从源码构建</strong></summary>
 
-需要 Windows x64 和 Desktop C++/MSVC 工具链、[`global.json`](global.json) 指定的 .NET SDK，以及 [`rust-toolchain.toml`](native/rust-toolchain.toml) 指定的 Rust MSVC 工具链。
+需要 Windows x64 和 Desktop C++/MSVC 工具链、[`global.json`](global.json) 指定的 .NET SDK，以及 [`rust-toolchain.toml`](rust-toolchain.toml) 指定的 Rust MSVC 工具链。
 
 ```powershell
 .\build.ps1                       # 同步 VERSION 并执行 Release 构建

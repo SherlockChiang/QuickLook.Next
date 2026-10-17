@@ -6,7 +6,8 @@ left visible instead of hidden behind vague TODOs.
 
 ## Current Verification And Priority
 
-The active order is the September evidence-first queue in
+The active order is the October external-review follow-up, followed by the
+remaining September evidence-first queue in
 [`implementation-todo.md`](implementation-todo.md). The complete local
 `tools/release.ps1 -SkipPackage` sequence passed on 2026-09-05 at `8c3d732`
 using pinned SDK `10.0.302`: Rust 343/1 plus explicit external-corpus smoke,
@@ -22,11 +23,42 @@ latest verified remote CI remain at `a64b60c`; subsequent local changes are not
 released. Measure input/first-paint/cancellation latency and resource recovery
 before resuming broad module extraction or adding format fidelity.
 
+The September 2026 HDR follow-up adds deterministic PQ/scRGB selection,
+generation-tagged display refresh, HLG SDR fallback, and bounded hdr decision
+diagnostics. See [hdr-validation-matrix.md](hdr-validation-matrix.md).
+Release build/Core/RasterHost focused verification passed; physical HDR-panel
+and visual-golden acceptance remain pending. An earlier run failed to create
+the restricted token (CreateRestrictedToken, Win32 87). The full local architecture
+sequence and restricted-host launch smoke passed on 2026-10-12; that earlier
+failure remains historical evidence rather than a current verified blocker.
+
 ## Fixed And Hardened
 
 - Rust-first preview path: text, folders, archives, packages, mail, certificates,
   executables, torrents, and lightweight Office previews are handled by the
   native layer rather than the legacy .NET plugin pipeline.
+- ParserHost targets `net10.0-windows` for its Win32/FFI transport, without
+  Windows SDK or CsWinRT projection dependencies. Its output/test/release paths
+  use that framework independently of App/RasterHost. The current non-PDB host
+  payload is 24.23 MiB smaller; stale-output selection and restricted-host
+  launch are covered. See `O26-04` and `verification-baseline.md` for evidence.
+- Ordinary native CI tests include bounded reader properties for ZIP,
+  Torrent/bencode, CFB/MSG and SQLite/WAL. Synthetic valid/mutated inputs check
+  fragmented reads, typed length rejection, cancellation during actual I/O,
+  fresh previews after cancellation and bounded JSON. Positive properties check
+  extraction capacity, names/sizes, UTF-16 subjects and committed WAL pages.
+  See CONTRIBUTING.md for seeds, budgets, replay and extended runs. Broader
+  coverage-guided fuzzing and sanitizer execution remain open under `R26-P1-10`.
+- The native crate compiler-enforces explicit unsafe operations and Clippy safety
+  explanations across root, FFI, Win32 and tests, while preview modules forbid
+  unsafe code. Raw-pointer packet writers and retained callback registration
+  require unsafe Rust callers with alignment, disjointness and lifetime contracts.
+  Compiler fixtures accept a documented call and reject five invalid uses of the
+  actual attributes/writer modules. COM workers own thread-affine initialization;
+  cached interfaces drop before the apartment on normal and unwinding exits.
+  Managed intent callbacks contain exceptions; empty legacy output returns before
+  copying to a null pointer. These checks do not establish foreign pointer
+  provenance or eliminate the remaining fuzz/sanitizer work.
 - The native preview implementation is being split by bounded format family: shared DTO/common
   helpers, folder listing, Text/Markdown/CSV/TSV, JPEG/PNG/GIF/WebP/TIFF image metadata,
   GIF/WebP/APNG animation classification, Torrent/bencode, executable/PE/CLR/AuthentiCode,
@@ -34,8 +66,38 @@ before resuming broad module extraction or adding format fidelity.
   and database families now live in focused submodules with their own tests. CHM, dump, and ELF
   have focused modules as well. Most path/HANDLE FFI families are isolated, including static
   image and waveform HANDLE adapters; animation ABI, decode implementation, and Explorer/hook
-  ownership still share the native root. ABI constants are generated from one schema, while
-  C ABI signatures and managed declarations remain handwritten.
+  ownership still share the native root. Schema v2 generates ABI constants and
+  compile-time checks for all 68 project C exports and three callback types.
+  Version/capability getters are constant-evaluated and runtime-tested against
+  exact schema values. Function implementations and managed declarations remain
+  handwritten. Schema bindings cover 67 P/Invokes in seven owners across App,
+  ParserHost, RasterHost and ShellBroker, plus eight unmanaged callback
+  definitions. Release metadata is checked without loading target assemblies,
+  including fixed-arity exact-name Cdecl imports, PreserveSig, byte-array In/In-Out and
+  scalar Out directions, native-sized types and one-byte callback bool returns.
+  Eight raw callback parameter positions have explicit delegate mappings;
+  these verify declaration compatibility, not the actual pointer value/lifetime.
+  Shared raw-pointer adapter behavior is checked by an executable probe over the
+  real `ffi::common`, `ffi::raster_packet`, `ffi::file_probe`,
+  `ffi::thumbnail`, and `ffi::path_preview` modules, including canaries,
+  status/length semantics, packet bytes, path errors, text classification,
+  thumbnail typed errors/cancellation, and panic containment. Observable
+  substitutes check all twelve path exports, argument/renderer forwarding,
+  pre/post-render cancellation, optional kind fallback and panic recovery;
+  actual format parsers remain independently covered by Rust workspace tests.
+  The shared/path gates require 93 compiled mutations to fail, and the HANDLE
+  boundary gate adds 26 compiled mutations (119 total across the current FFI
+  behavior fixtures). The former helper
+  test-name/line-budget, file-probe and thumbnail test-name, and path-preview
+  test-name/child-test-line-budget and HANDLE test-name/line-budget checks were
+  removed after coverage was added; independent
+  implementation bounds remain where applicable. Path-preview unit tests,
+  module ownership and first-statement panic-boundary rules are retained.
+  Wider source-guard migration remains `O26-06c`.
+  The built win-x64 DLL export table is inspected without loading the DLL,
+  including an explicit separate inventory of 19 incidental qcms 0.3.0 symbols.
+  They are not supported QuickLook ABI entry points; unknown, missing, forwarded,
+  unnamed exports or ordinal aliases fail the guard. PE names alone do not prove signatures.
 - Syntax-highlight tokenization lives in the native layer: `ql_highlight_spans` returns bounded
   UTF-16-offset token spans for the managed text presenter to slice, with caps on input bytes and
   span count, and the App degrades to plain rendering if the native call is unavailable.
@@ -292,8 +354,10 @@ The shared bounded-reader helpers now live in `preview/bounded.rs`. Its
   - Large image decode should keep checking the native cancellation callback
     around codec, resize, color-conversion, and final-copy boundaries.
 - PDF surface caching intentionally keeps the visible range plus at most five
-  offscreen page surfaces. Continue improving request coalescing and cancellation
-  without returning to unbounded GPU surface retention.
+  offscreen page surfaces. Presenter viewport events are coalesced on the UI
+  dispatcher, generations reject stale results, and RasterHost cancels older
+  in-flight generations for the same request/page before starting a newer one;
+  continue improving coalescing without returning to unbounded GPU retention.
 - Continue Shell icon coverage for virtual archive entries if a stable file type
   icon can be resolved without pretending the virtual item is a real path.
 - Existing bounded MP4/media summaries, Outlook MSG property streams, and SQLite schema/row

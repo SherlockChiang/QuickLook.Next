@@ -9,6 +9,197 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## October 2026 external review follow-up
+
+This queue incorporates the 2026-10-12 static review of the external report.
+It precedes the remaining implementation items below. Keep working-tree changes
+reviewable; source edits do not authorize remote publication or destructive cleanup.
+
+- [x] `O26-01` Consolidate host path lookup and exclude sibling Debug fallback
+  from Release. Preserve deployed/flat layouts and lazy startup failure handling;
+  verify all three host kinds in both build configurations.
+  - Verified 2026-10-12 in the working tree based on `65843d0`: all three App
+    wrappers use the Core resolver; deployed subfolders precede flat outputs,
+    and sibling Debug fallback is compiled only in Debug. Missing hosts retain
+    lazy launch failure handling so unrelated previews and hooks can initialize.
+    Resolver tests passed 14/14 in both Release and Debug; Core Release passed
+    390/390; Release solution/native MSBuild build had 0 warnings/errors.
+- [x] `O26-02` Correct FFI helper unsafe/lifetime contracts and caller obligations;
+  compiler-enforce zero unsafe in pure preview modules. Stage broader lint changes
+  with evidence instead of blanket allowances.
+  - Verified 2026-10-12: all seven raw-pointer helpers require unsafe callers
+    and document storage/lifetime obligations; borrowed inputs reject lengths
+    above `isize::MAX` before access. FFI modules deny implicit unsafe operations;
+    preview modules forbid unsafe code. Rust tests passed 351 with 1 ignored,
+    fmt/check/Clippy passed, and exported C ABI/packet layouts are unchanged.
+    Broader crate/root/Win32 lint enforcement was completed in `O26-02b` below.
+- [x] `O26-03` Move ZIP encoding/encryption-only features out of normal builds;
+  verify encrypted listing and compare Release dependencies/output size.
+  - Verified 2026-10-12 in the working tree based on `65843d0`: ZIP AES/Zopfli
+    features are dev-only; normal/build feature trees exclude both and no longer
+    contain `pbkdf2` or `zopfli`. No lockfile change was needed. Native Release
+    MSBuild passed; DLL size fell from 8,749,568 to 8,683,008 bytes (65 KiB).
+    Three synthetic AES128/AES256/ZipCrypto fixtures pass through the actual
+    staged Release DLL: encrypted listing, refused extraction, empty caller
+    output and HANDLE release. ParserHost passed 48/48; Rust passed 351/1 ignored;
+    Release build, fmt/Clippy and full architecture checks passed.
+    RasterHost initially passed 52/53, then 1/1 focused and 53/53 full reruns;
+    the unexplained HANDLE-budget failure is retained under `E26-04` below.
+- [x] `O26-04` Remove the unused Windows SDK runtime from ParserHost; update
+  target framework consumers and check platform analyzers, host tests and payload.
+  - Verified 2026-10-12 in the working tree based on `65843d0`: ParserHost and
+    its integration tests target `net10.0-windows` without WinRT projections.
+    Debug lookup, test staging, restricted-host smoke and release enumeration
+    use the new output path. Regenerated only the two affected lockfiles;
+    full solution locked restore passed without package upgrades.
+    ParserHost's non-PDB release payload fell from 34,611,674 to 9,204,508 bytes
+    (24.23 MiB saved); SDK/WinRT DLLs and deps are absent. A stale-framework
+    fixture verifies the release helper selects current output.
+    Release build passed with 0 warnings/errors; Core 390, ParserHost 49,
+    RasterHost 53 and ShellBroker 13 passed; Debug path tests passed 14/14.
+    Changed C# format and full architecture/restricted-host checks passed.
+- [x] `O26-05` Add bounded fuzz/property coverage to selected reader parsers.
+  - Verified 2026-10-12 in the working tree based on `65843d0`: 11 dev-only
+    properties cover ZIP, Torrent/bencode, CFB/MSG and SQLite/WAL, including
+    synthetic valid/mutated inputs, fragmented reads, bounded JSON/I/O,
+    typed length failures, pre-cancellation and cancellation during actual reads
+    followed by fresh previews. Default fixed-seed cases and a second-seed
+    22,528-case expanded run passed. Seeds, shrinking and replay are documented
+    in CONTRIBUTING.md; broader fuzz/sanitizer coverage remains `R26-P1-10`.
+    Five dev-only lockfile additions, no package upgrades; normal/build graph
+    excludes them, audit passed, and Release DLL remains 8,683,008 bytes.
+    Rust passed 362/1 ignored, fmt/Clippy passed, Release build had 0 warnings/
+    errors; Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13 passed.
+    Full architecture/restricted-host checks and 10-image native corpus passed;
+    system corpus decoded 4/5 with optional JXL unavailable. Historical
+    RasterHost HANDLE-budget uncertainty remains under `E26-04`.
+- [x] `O26-02b` Extend unsafe-operation and unsafe-block documentation enforcement
+  to remaining crate/root/Win32 code in focused steps; retain scoped ABI exceptions
+  and verify each caller contract rather than enabling blanket allowances.
+  - Verified 2026-10-12 in the working tree based on `65843d0`: crate-wide
+    unsafe-operation/documentation lints pass without new unsafe exemptions;
+    preview forbids unsafe, and 21 scoped ABI argument-count exceptions remain.
+    Raw-pointer raster/animation writers and retained callback registration
+    require unsafe callers with explicit storage/lifetime contracts. Empty
+    legacy output avoids null zero-length copies; managed callbacks contain
+    exceptions. Thread-affine COM guards balance S_OK/S_FALSE, preserve MTA on
+    rejected STA initialization, and release caches before apartment teardown.
+    Compiler fixtures pass 1 valid case and reject 5 invalid cases. Rust passed
+    365/1 ignored; fmt/check/Clippy passed, and the ignored 10-image corpus passed
+    separately. Final Release build had 0 warnings/errors; Core 390, ParserHost
+    49, RasterHost 53 and ShellBroker 13 passed against the final staged DLL.
+    Full architecture/restricted-host checks passed; system corpus decoded 4/5
+    with optional JXL unavailable. Initial lint, common-module line-budget and
+    panic-boundary regex failures remain recorded in verification-baseline.md;
+    the original line limit was retained. Historical HANDLE-budget uncertainty
+    remains under `E26-04`; broader guard/schema replacement remains `O26-06`.
+- [ ] `O26-06` Incrementally replace structural regex/line-count guards with
+  compiler and behavior checks; extend ABI schema before checking DLL exports.
+  - [x] `O26-06a` Extend schema v2 to all 68 project C exports and three
+    callback types. Compile generated signatures and exact constant discovery
+    values, runtime-test discovery, and inspect the built win-x64 PE export table
+    without loading it. Keep qcms 0.3.0's 19 incidental symbols in a separate
+    exact inventory. Replace duplicated discovery signature/body/count and
+    140-line guards only after these checks cover the same ABI invariants.
+    - Verified 2026-10-12 in the working tree based on `65843d0`: schema
+      fixtures accept one valid inventory and reject 22 malformed variants;
+      compiler fixtures accept one valid set and reject 9 signature/discovery
+      mutations at generated assertions. PE fixtures accept one synthetic DLL
+      and reject 17 malformed variants. The rebuilt DLL matches all 87 exact
+      names; native/staged ParserHost hashes match. Rust 366/1 ignored,
+      fmt/check/Clippy, Core 390, ParserHost 49, RasterHost 53, ShellBroker 13 and
+      full architecture `-SkipDist` passed; Release had 0 warnings/errors.
+      Initial unmodeled qcms export, script syntax and fixture-visibility
+      failures remain recorded. Broader replacement stays open below; `E26-04`
+      and physical HDR/performance acceptance are not closed by these results.
+  - [x] `O26-06b` Check handwritten managed declarations/marshalling against
+    the schema with compiled-metadata and negative compiler fixtures. Keep raw
+    callback pointer declarations in an explicit reviewed mapping.
+    - Verified 2026-10-12 in the working tree based on `65843d0`: Release
+      metadata matches 67 P/Invokes in seven owners across four assemblies and
+      eight unmanaged callbacks, without loading target assemblies. All imports
+      specify exact-name Cdecl; arrays have explicit In/In-Out directions.
+      Eight raw callback positions have reviewed mappings, not lifetime proofs.
+      Schema fixtures pass 1 valid/34 rejections; managed compiler fixtures pass
+      1 valid/28 rejections, including variable arguments. Replaced the two
+      duplicated mail/PDF declaration regexes while retaining bounded routing.
+      Rust 366/1 ignored, fmt/check/Clippy, Core 390, ParserHost 49, RasterHost 53,
+      ShellBroker 13 and final architecture `-SkipDist` passed. Release had
+      0 warnings/errors; native/staged DLL hashes are unchanged and match.
+      Initial declaration, fixture, formatting, API allowlist and variable-arity
+      failures remain recorded. `O26-06c`, parent `O26-06` and `E26-04` stay open.
+  - [ ] `O26-06c` Migrate remaining duplicated source-shape/test-name rules to
+    focused compiler/behavior fixtures without losing panic, cancellation,
+    ownership and resource limits. Retain rules until equivalent checks exist.
+    - [x] `O26-06c.1` Replace the shared `ffi::common` and
+      `ffi::raster_packet` helper test-name/line-budget checks with an executable
+      behavior fixture. It links the real modules, checks output canaries,
+      required lengths, status codes, UTF-8/null/length limits and panic
+      containment, then compiles 29 deliberate mutations and requires each to
+      fail its expected behavior case. Module ownership/export-shape checks
+      remain. The final architecture `-SkipDist` guard passed with the new
+      behavior check; remaining format-family source-shape rules stay open.
+    - [x] `O26-06c.2` Replace the `ffi::file_probe` pointer/output test-name
+      rule with the same executable behavior harness. It links the real path
+      probe and classifier, exercises oversized and missing paths, required
+      JSON length negotiation, short-output canaries, UTF-8 payloads and the
+      text classification path, then compiles 35 deliberate mutations across
+      all three adapters and requires the expected behavior failure. The
+      module-boundary guard still owns the C ABI shape and provider isolation;
+      the final focused boundary and behavior checks passed on 2026-10-13.
+    - [x] `O26-06c.3` Replace the `ffi::thumbnail` pre-dispatch test-name
+      rule with the executable behavior harness. It links the real thumbnail
+      adapters and raster packet writer against a bounded Shell request
+      provider, checks all three exports, invalid UTF-8/lengths, flags, size
+      limits, cancellation and unavailable mappings, output canaries and exact
+      packet bytes, then compiles 41 deliberate mutations. The adapter's C ABI
+      shape, typed error mapping and independent implementation bound remain
+      guarded; focused boundary and behavior checks passed on 2026-10-13.
+    - [x] `O26-06c.4` Replace the duplicated `ffi::path_preview` test-name
+      and child-test line-budget rules with behavior over all twelve real
+      exports. Observable renderer substitutes check exact dispatch/arguments,
+      null/UTF-8/length limits, optional-kind fallback, canaries and size
+      negotiation, pre/post-render cancellation, panic containment and fresh
+      recovery. Keep real-provider unit tests and the ownership/panic policies;
+      require each focused export mutation to compile before behavior rejection.
+      - Verified 2026-10-14 in the working tree based on `65843d0`: the
+        executable fixture passes 18 groups and rejects all 93 compiled
+        mutations (52 new per-export path mutations). Removed only duplicate
+        test-name/child-test-line-budget rules; four real-provider unit tests
+        remain. Rust 364/1 ignored, fmt/Clippy, PowerShell syntax and final full
+        architecture `-SkipDist` passed. A stale staged ParserHost DLL was
+        detected and restaged through the pinned SDK Release solution build
+        (0 warnings/errors); native and all four App/Host copies now match
+        `96FA9C35...`. Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13
+        passed against that output. Native corpus 10/10; system corpus 4/5
+        with optional JXL unavailable. Logs and hash evidence are retained
+        under `artifacts/o26-06c4-20261014-*`; parent `O26-06c` stays open.
+    - [x] `O26-06c.5` Replace the `ffi::handle_preview` null-output test-name
+      and line-budget checks with a compiled behavior fixture. It links the
+      real HANDLE adapter, `native_input`, bounded file probing, cancellation
+      and typed reader-status mapping; exercises independent Win32 reopen
+      ownership, rename/decoy resistance, output negotiation/canaries,
+      logical-name and native error validation, cancellation, panic recovery
+      and handle-count cleanup. It compiles 26 deliberate mutations and
+      requires each to fail its expected behavior group, including a
+      second-poll cancellation case that distinguishes the outer preview
+      check from the inner reopen check. Focused module-boundary and behavior
+      checks passed on 2026-10-18; the duplicated two test-name and 300-line
+      rules were removed while export ownership, panic-boundary and security
+      invariants remain guarded. Format-family migrations remain open.
+- [ ] `O26-07` Extract demonstrated lifecycle/ownership components and consolidate
+  shared supervisor primitives with failure and transfer cleanup coverage.
+- [ ] `O26-08` Centralize format facts and migrate linked App policies into a
+  tested non-WinUI assembly; keep routing and codec capability distinct.
+- [ ] `O26-09` Isolate smoke/test entrypoints without losing release-boundary
+  verification; migrate critical Win32 signatures where generated APIs fit.
+- [ ] `O26-10` Add ordinary CI dependency/tool caching and evaluate parallel jobs
+  while retaining the existing vulnerability and release gates.
+- [ ] `O26-11` Archive historical TODO evidence and align all three locale
+  requirements. Keep current open items and verification limitations visible.
+- [ ] `O26-12` Review delivery/backup and SDK rollout policy. Do not infer current
+  remote CI state from stale tracking refs; retain actual HDR/performance acceptance.
+
 ## September 2026 evidence-first execution queue
 
 This is the active execution order after the review of `a4b8d25`. It supersedes
@@ -55,16 +246,102 @@ gate pass. Standalone checks retain their separately recorded results.
   cancellation p50/p95, sample counts, private bytes, HANDLE counts, and recovery
   time for a fixed mixed-format corpus. Measure clean, incremental, and no-change
   builds separately. Set budgets from repeatable evidence, not one build timing.
+  - [x] Add tools/measure-preview-baseline.ps1 to extract lifecycle first-paint
+    samples, explicit local cancellation marks, terminal outcomes, and ParserHost
+    resource percentiles without inferring missing data.
+  - [x] Add tools/measure-build-baseline.ps1 and collect separate clean,
+    incremental, and no-change Release timings. The preview corpus and true
+    host-drain cancellation samples remain open until a repeatable desktop run
+    is available.
 - [ ] `E26-03` Improve input responsiveness using the measured baseline.
   Separate Explorer selection COM work from the Rust hook message pump, bound
   and coalesce queued work, and preserve generation/cancellation ownership.
   Cover first Space-open, rapid arrows, close-before-completion, focus loss,
   app-owned dialogs, and deliberate always-on-top behavior.
+  - [x] Move Explorer selection COM reads to a dedicated STA worker with a
+    one-item bounded request channel; the hook pump now only classifies input,
+    arms/cancels its timer, and posts bounded work. Close-generation tokens drop
+    queued stale OPEN/SWITCH requests.
+  - [ ] Add/collect the mixed input-flow latency corpus and host-drain
+    cancellation evidence before setting a numeric responsiveness budget.
 - [ ] `E26-04` Reduce measured image and retained-resource costs.
   Prioritize the static HANDLE packet's intermediate BGRA copy, then codec
   target-size decode and cancellation where measurements justify them. Extend
   mixed-format close/reopen recovery coverage and make animation truncation
   explicit. Preserve byte/pixel/color/orientation and caller-buffer contracts.
+  - [ ] Diagnose sporadic RasterHost repeat-preview HANDLE-budget failures without
+    increasing the budget. On 2026-10-12 the first full run measured 478 baseline
+    peak and 493 measured peak against a growth budget of 12; focused 1/1 and
+    complete 53/53 reruns passed without code changes. The cause is unconfirmed.
+  - [x] Remove the temporary Rust packet allocation for static HANDLE images;
+    the native writer now emits the fixed header and decoded BGRA directly into
+    the caller buffer. ABI layout and bounded output checks are unchanged.
+  - [x] Make animation truncation explicit in the existing 12-byte packet header:
+    the frame-count high bit is validated by the updated RasterHost/App and
+    surfaced in the preview status. Updated readers accept legacy packets;
+    older readers do not accept flagged packets. Native packet tests cover the flag.
+  - [x] Expose native image decode/resize/convert timings and output bytes for
+    both path and HANDLE routes; `measure-preview-baseline.ps1 -RasterLog`
+    records these stages without treating missing samples as evidence. System
+    decoder rows now carry `timingSource=none` and `na` stage values; a measured
+    native zero remains a numeric sample.
+  - [x] Add a fixture-based extractor regression test covering mixed system/native
+    rows, percentile interpolation, lifecycle cancellation, output-byte counts,
+    missing inputs, and malformed/legacy rows. Both PowerShell 7 and Windows
+    PowerShell 5.1 passed seven fixture scenarios; the architecture guard runs it.
+    Timing sufficiency counts only measured native rows. BGRA output bytes are
+    distinct from total retained memory and HDR payload bytes.
+    Full architecture validation with `-SkipDist` passed on 2026-10-07 after
+    aligning the packet-writer guards and adding the zh-TW truncation resource.
+  - [x] Re-run the C# diagnostics/packet tests and format verification with
+    testhost/MSBuild pipe access available. On 2026-10-07 Core passed 376/376,
+    RasterHost passed 43/43, and format verification exited 0 with workspace
+    load warnings. This resolves the earlier sandbox/approval-service blockage.
+  - [x] Avoid decoding an extra GIF pixel frame solely to detect truncation by
+    using the existing decoder's frame-header query. WebP/APNG lookahead now
+    propagates decoder errors and checks cancellation after advancing. Tests
+    cover 119/120/121 frames, malformed lookahead, and lookahead cancellation;
+    the Rust workspace passed 349 tests with 1 ignored external-corpus test.
+  - [x] Cover PNG/ICO/JPEG/BMP close/reopen transitions in one RasterHost process.
+    The regression runs three mixed-format rounds (12 previews), requires the
+    exact source to remain pinned while active and become writable after close,
+    checks surface/ready/waveform request IDs, and injects the previous request's
+    close after each new open. Four independent focused runs passed on 2026-10-07;
+    Release test-project build and changed-file format verification passed.
+  - [x] Extend mixed static-image coverage with open/close/reopen before consuming
+    any output. The replacement uses a distinct duplicated HANDLE to the same
+    file; any already-queued canceled output is drained and its surface released
+    without satisfying the replacement's completion. Both modes passed four
+    focused runs (8 cases). This does not prove cancellation preceded host
+    surface production or measure worker-drain p95.
+  - [x] Verify deterministic cancellation during actual native decoder reads for
+    PNG/GIF/APNG. A test reader triggers cancellation after successful read 1
+    and read 3, asserts no further reads, and requires a fresh decode of the same
+    bytes to succeed. Rust workspace: 350 passed, 1 ignored; Clippy, formatting,
+    module-boundary and whitespace checks passed. This covers reader boundaries,
+    not codec CPU loops, OS decode, or measured host-drain latency.
+  - [x] Extend actual-read cancellation/recovery coverage to animated WebP.
+    The same read-1/read-3 assertions pass against the checked-in animated corpus;
+    the Rust workspace remains at 350 passed and 1 ignored.
+  - [x] Forward cancellation into Windows image file lookup/open, decoder
+    creation, and pixel extraction via WinRT `AsTask(cancellationToken)` in both
+    SDR and HDR routes. Keep post-await checks and scoped stream ownership.
+  - [x] Verify Windows pre-cancellation/ownership recovery for both SDR/HDR
+    entry points: the caller HANDLE stays valid and pins the exact source,
+    a fresh decode succeeds despite a nonexistent logical path, and closing
+    the caller HANDLE restores write access. Both focused cases passed.
+  - [x] Cover static PNG/GIF/WebP/APNG transitions in one RasterHost process.
+    Six cases exercise two animation opens bracketed by three static opens,
+    with either child-first close or parent-driven child cleanup. Source writes
+    recover after close; remote frame sections close while client mappings stay
+    readable; stale parent/child closes do not disrupt replacement requests.
+    RasterHost integration suite passed 53/53; Release test-project build and
+    changed-file format verification passed on 2026-10-07.
+  - [ ] Extend deterministic in-flight OS codec coverage, PDF handoffs, and
+    measured worker-drain cancellation latency. Pre-cancel coverage alone does
+    not establish an OS codec's interruption or drain-time bound.
+  - [ ] Measure the copy reduction and continue with target-size decode or
+    animation-resource work only when the corpus shows a material cost.
 - [ ] `E26-05` Refactor only at demonstrated ownership or testability boundaries.
   Extract decoder/animation and App lifecycle responsibilities as needed by the
   work above; consolidate duplicate guards with fault-injection coverage and
@@ -77,6 +354,67 @@ gate pass. Standalone checks retain their separately recorded results.
   new plugin systems, and broad crate splits unless measured needs justify them.
 
 ## September 2026 interaction queue
+
+## September 2026 HDR image queue
+
+HDR support is intentionally staged behind the existing SDR path. Detecting an
+HDR monitor alone is not sufficient: source transfer metadata, a linear/FP16
+surface, and an explicit fallback are all required before enabling HDR output.
+
+- [x] `R26-HDR-01` Add display capability detection and an injectable policy.
+  Select SDR for standard-dynamic-range displays and for SDR sources even when
+  the display is HDR-capable. Re-evaluate when the window moves displays or
+  `AdvancedColorInfoChanged` fires; preserve zoom, pan, and scroll state.
+  - `HdrDisplayCapabilityTracker` observes `DisplayInformation`, window moves,
+    and `AdvancedColorInfoChanged`; it fails closed to `Unknown`. A debounced
+    refresh request re-renders the retained image HANDLE and keeps the existing
+    zoom/pan surface state. No hardware HDR result is claimed without a real panel.
+  - Verification: Release App build passed with 0 warnings/errors; Core 374/374,
+    RasterHost 38/38; physical HDR panel validation remains open.
+- [x] `R26-HDR-02` Extend the preview-surface contract with stable format and
+  color-space identifiers, validate the producer/consumer pairing, and keep
+  old SDR messages wire-compatible.
+  - Initial implementation: `PreviewSurfaceFormats` and `IsHdr` are optional,
+    legacy-compatible fields; App presenters reject unknown or inconsistent
+    format/flag pairs before adopting a shared HANDLE.
+  - Verification: Core 374/374, including HDR policy, serialization, and stale
+    refresh-generation tests; RasterHost 38/38.
+- [x] `R26-HDR-03` Add a DXGI `R16G16B16A16_FLOAT` scRGB composition path with
+  `CheckColorSpaceSupport`/`SetColorSpace1` validation and safe SDR fallback.
+  Keep transfer ownership, resource caps, stale-generation rejection, and
+  teardown behavior identical to the current BGRA8 path.
+  - RasterHost probes FP16 scRGB support, uploads premultiplied linear FP16
+    pixels, validates the format/flag pairing in App, and falls back to BGRA8 on
+    any capability, upload, or surface-attach failure. Refreshes reuse the
+    retained HANDLE and reject stale generations.
+  - Verification: Release solution build 0 warnings/errors; Core 374/374;
+    RasterHost 38/38.
+- [x] `R26-HDR-04` Preserve HDR source metadata (PQ/HLG transfer, BT.2020
+  primaries, ICC/profile and bit depth) through decoding. Do not treat every
+  10/16-bit image as HDR; unsupported codecs and missing metadata remain SDR.
+  - Initial implementation: `ImageMetadata` now carries optional transfer,
+    primaries, and completeness fields; both metadata merge paths preserve
+    them, and `HdrImagePolicy.FromMetadata` fails closed for incomplete data.
+    The Windows codec reader now recognizes the ISO-BMFF `nclx` colour
+    description plus HEVC `hvcC` and AV1 `av1C` bit-depth records within an
+    8 MiB bounded probe. It recognizes BT.2020 + PQ/HLG at 10 bits or above
+    as HDR source metadata; output selection currently enables FP16 only for
+    validated PQ, while HLG remains an explicit SDR fallback.
+  - The production path converts validated PQ sources to linear scRGB FP16 and
+    generates a bounded SDR fallback. HLG metadata is preserved but its transfer
+    conversion remains fail-closed to SDR until an OOTF/mastering-luminance
+    mapping is implemented.
+  - Verification: HDR metadata policy tests, PQ conversion tests, metadata
+    precedence, and ISO-BMFF parser tests pass; HLG output remains explicitly open.
+- [ ] `R26-HDR-05` Add an HDR corpus and device validation matrix: SDR monitor,
+  HDR monitor with SDR source, HDR monitor with PQ/HLG source, display move or
+  HDR-toggle re-render, FP16 unsupported fallback, and visual/golden checks.
+  Record the Windows version, GPU, panel mode, source hash, and observed
+  color-space path for each run.
+  - [x] Add the deterministic policy/conversion/refresh matrix and bounded
+    hdr decision diagnostics. See docs/hdr-validation-matrix.md.
+  - [ ] Run the physical SDR/HDR panel and visual/golden rows with licensed
+    PQ/HLG samples; no hardware result is claimed on the current machine.
 
 - [x] `R26-UX-01` Make focused previews support repeatable keyboard page navigation:
   PDF arrow/Page Up/Page Down input moves by whole pages, image Left/Right input
@@ -586,6 +924,10 @@ the release-only `release:` prefix while this queue is in progress.
     dispatch. Moving COM ownership off the hook pump remains open.
 - [ ] `R26-P1-10` Add fuzz/property targets and sanitizer coverage for archive,
   Office, TIFF/EXIF, SQLite, executable, media, and FFI packet boundaries.
+  - `O26-05` adds bounded reader properties for ZIP, Torrent/bencode, CFB/MSG
+    and SQLite/WAL. This broader item stays open for the remaining families,
+    coverage-guided fuzzing and sanitizer execution; property runs alone do not
+    establish those requirements.
 
 ### Repository and delivery governance
 
@@ -615,9 +957,9 @@ the release-only `release:` prefix while this queue is in progress.
   and APNG corpora. Preserve the 64 MiB section ceiling while measuring packet bytes,
   animation-ready latency, and first visible motion for those remaining formats.
 - [ ] Version the animation packet so a bounded spatial downsample can preserve a complete timeline
-  without changing the intended display size, and so any true frame-count truncation is explicit and
-  never loops a silent prefix. The current 64 MiB budget derives a frame limit from output pixels;
-  the same animation can therefore become partial at a larger window size or DPI.
+  without changing the intended display size. Frame-count truncation is now explicit through a
+  backward-compatible header sideband; the current 64 MiB budget still derives a frame limit from
+  output pixels, so the same animation can become partial at a larger window size or DPI.
 - [ ] Execute and retain the tracked custom-title-bar visual evidence matrix at compact width, across
   a live 100%-to-200% display move, in Simplified Chinese, and in Windows High Contrast. Dynamic
   system-inset layout, scale conversion, automated policy tests, and the evidence gate are complete;

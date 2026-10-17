@@ -16,9 +16,9 @@ For each opened request, the App accepts at most one typed host terminal:
 success or `PreviewError`. Client cancellation, timeout, disconnect, and process
 failure end the local await without pretending to be Host content errors. Page
 and follow-up operations use their own typed terminal messages and parent
-identity. A host error always carries the request ID; optional stable code and
-normalized format fields drive remediation. New logic must never branch on the
-human-readable host message.
+identity. A host error always carries the request ID; optional stable code,
+normalized format, and phase fields drive remediation and diagnostics. New logic
+must never branch on the human-readable host message.
 
 The App maps known codes and local failure kinds to localized, user-safe titles,
 messages, and an explicit retry policy. Unknown codes and host exception text
@@ -30,10 +30,14 @@ and path.
 Timeout, disconnect, crash, invalid protocol, and incomplete ownership transfer
 are supervisor failures: fail pending requests, reclaim or recycle the host, and
 keep Windows fault UI non-interactive. Wire additions are additive and bounded;
-unknown or late request IDs do not mutate current state. Most ParserHost errors
-still carry unstable exception text, so this decision does not claim that every
-wire message is path-free; such text is diagnostic-only and is never copied into
-recovery logic or shown directly by the App.
+unknown or late request IDs do not mutate current state. ParserHost, RasterHost,
+and ShellBroker send a fixed failure message for unexpected exceptions,
+malformed native JSON, and broker failures.
+The shared factory accepts no exception or message, bounds phase to 48 characters
+and format to 32 characters, and rejects paths and invalid metadata. Original
+exceptions stay in host logs. PDF page errors also use fixed messages. Legacy
+messages remain readable without the optional fields; their text is never copied
+into recovery logic or shown directly by the App.
 
 ## Consequences
 

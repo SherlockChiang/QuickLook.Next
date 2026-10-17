@@ -257,16 +257,38 @@ bit 21 HANDLE_MAIL (bounded RFC 5322/EML and seek-based Outlook MSG metadata)
 bit 22 HANDLE_PDF_TEXT (lazy bounded page-mapped text for PDF search and copy)
 ```
 
-The primitive cross-language ABI declarations have one reviewed source of truth:
-`native/abi-contract.json`. Run `tools/generate-native-abi.ps1` after changing the ABI version,
-capability bits, or stable HANDLE status values. It regenerates
+The cross-language ABI inventory has one reviewed source of truth:
+`native/abi-contract.json` (schema v2; native ABI remains version 3). Run
+`tools/generate-native-abi.ps1` after changing the version, capabilities, statuses,
+export signature or callback types. It regenerates
 `native/quicklook_next_native/src/abi_generated.rs` and
-`src/QuickLook.Next.Core/NativeAbi.Generated.cs`; these generated files must not be edited by hand.
+`src/QuickLook.Next.Core/NativeAbi.Generated.cs`, plus production-compiled Rust
+function-pointer checks in `abi_signatures_generated.rs`. Do not edit these files by hand.
+The checks cover all 68 project exports, three nullable callback types and exact
+constant-evaluated version/capability values. Discovery also has a runtime test.
 `tools/generate-native-abi.ps1 -Check` performs an exact-content comparison, and the architecture
-guard invokes that check before its other repository checks so schema/generated drift fails CI.
+guard runs malformed-schema/compiler fixtures and inspects the already built win-x64 DLL's
+PE export table without loading it. The DLL's 19 incidental qcms 0.3.0 symbols
+have a separate exact-name/locked-version inventory; they are not supported
+QuickLook ABI calls. Missing/extra names, forwarders, unnamed exports, ordinal
+aliases and non-executable export RVAs fail this check.
 Managed aggregate capability groups, resource limits, validation methods, and native P/Invoke
-signatures remain handwritten because they are policy or bindings rather than duplicated primitive
-constants.
+declarations remain handwritten. PE names cannot validate signature or marshalling.
+The schema's seven managed owners list the exact 67 imports and eight callback
+definitions in four Release assemblies. `tools/test-managed-native-abi.ps1`
+decodes compiled metadata without loading the assemblies/dependencies, checking
+fixed-arity exact-name Cdecl binding, PreserveSig, native-sized integer types, scalar Out
+slots, explicit byte-array input/In-Out directions and one-byte bool callbacks.
+Output In-Out also preserves initialized bytes if marshalling copies instead of
+pinning. SafeFileHandle remains an accepted HANDLE representation with CLR lifetime
+protection. Raw callback parameters have eight explicit positions tied to typed
+delegate metadata; neither this mapping nor metadata proves their actual address,
+rooting, aliasing or no-unwind behavior. Existing lifecycle/ownership and packet
+tests remain required. Compiler-built metadata fixtures exercise incompatible
+declarations without ever invoking their imports. The shared `ffi::common` and
+`ffi::raster_packet` helpers also have executable canary/status/panic probes and
+compiled mutation checks; their old test-name and line-budget guards were
+removed. Wider guard replacement remains `O26-06c`.
 
 The corresponding implemented entry points share the validated/reopened HANDLE adapter: `ql_preview_text_handle`,
 `ql_preview_executable_handle`, `ql_preview_torrent_handle`, `ql_preview_mail_handle`, `ql_preview_sqlite_handles`,

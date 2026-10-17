@@ -128,7 +128,7 @@ The package includes the required Windows App SDK runtime components. Optional i
 <details>
 <summary><strong>Build from source</strong></summary>
 
-You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected by [`global.json`](global.json), and the Rust MSVC toolchain selected by [`rust-toolchain.toml`](native/rust-toolchain.toml).
+You need Windows x64 with the Desktop C++/MSVC toolchain, the .NET SDK selected by [`global.json`](global.json), and the Rust MSVC toolchain selected by [`rust-toolchain.toml`](rust-toolchain.toml).
 
 ```powershell
 .\build.ps1                       # Sync VERSION and make a Release build
