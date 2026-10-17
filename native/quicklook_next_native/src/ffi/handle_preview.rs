@@ -26,6 +26,7 @@ pub(crate) unsafe fn reopen_handle_input_v2(
     if cancel_requested(cancel_cb) {
         return Err(QL_ERROR_CANCELLED);
     }
+    // SAFETY: The caller keeps the logical-name buffer readable and immutable until copying ends.
     let logical_name =
         unsafe { owned_utf8_arg(logical_name_utf8, logical_name_len, MAX_LOGICAL_NAME_BYTES) }
             .ok_or(QL_ERROR_INVALID_ARGUMENT)?;
@@ -57,10 +58,13 @@ pub(crate) unsafe fn reopen_handle_input_v2(
     Ok((file, logical_name, size, modified_unix))
 }
 
-#[allow(clippy::too_many_arguments)]
 // Each HANDLE preview owns its independently reopened file. Moving that file into the one-shot
 // renderer keeps path and HANDLE readers on the same `File` monomorphization without dynamic
 // dispatch; the original caller-owned HANDLE remains untouched.
+/// # Safety
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
+/// The caller must contain this function in `ffi_boundary`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn preview_handle_v2(
     source_handle: isize,
     expected_length: u64,
@@ -75,6 +79,7 @@ pub(crate) unsafe fn preview_handle_v2(
     if out_required.is_null() {
         return QL_ERROR_INVALID_ARGUMENT;
     }
+    // SAFETY: The caller supplies an aligned writable scalar, checked non-null above.
     unsafe { *out_required = 0 };
     if out_buf.is_null() && out_cap != 0 {
         return QL_ERROR_INVALID_ARGUMENT;
@@ -82,6 +87,7 @@ pub(crate) unsafe fn preview_handle_v2(
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
+    // SAFETY: The caller lends live input/HANDLE for this call; reopening creates an owned file.
     let (file, logical_name, size, modified_unix) = match unsafe {
         reopen_handle_input_v2(
             source_handle,
@@ -106,6 +112,7 @@ pub(crate) unsafe fn preview_handle_v2(
     if json.is_empty() {
         return QL_ERROR_INTERNAL;
     }
+    // SAFETY: Output/scalar ranges are exclusive and disjoint; JSON is separately Rust-owned.
     unsafe { write_v2_out(json.as_bytes(), out_buf, out_cap, out_required) }
 }
 
@@ -134,6 +141,7 @@ pub unsafe extern "C" fn ql_probe_file_handle(
     out_cap: usize,
     out_required: *mut usize,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -177,6 +185,7 @@ pub unsafe extern "C" fn ql_extract_pdf_text_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -212,6 +221,7 @@ pub unsafe extern "C" fn ql_preview_image_metadata_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -237,6 +247,7 @@ mod tests {
 
     #[test]
     fn handle_preview_rejects_null_required_before_handle_access() {
+        // SAFETY: Null required is rejected before any input/output pointer or HANDLE access.
         let status = unsafe {
             ql_probe_file_handle(
                 0,
@@ -254,6 +265,7 @@ mod tests {
     #[test]
     fn handle_preview_rejects_null_output_with_capacity() {
         let mut required = usize::MAX;
+        // SAFETY: required is aligned/writable; null output with capacity is rejected before I/O.
         let status = unsafe {
             preview_handle_v2(
                 0,

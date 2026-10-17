@@ -39,6 +39,9 @@
   <data name="PauseAnimation" xml:space="preserve">
     <value>暫停動畫</value>
   </data>
+  <data name="AnimationFramesTruncated" xml:space="preserve">
+    <value>為維持預覽穩定性，動畫影格已限制</value>
+  </data>
   <data name="ShowPreviewDetails" xml:space="preserve">
     <value>顯示預覽詳細資料</value>
   </data>

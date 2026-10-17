@@ -21,16 +21,21 @@ pub unsafe extern "C" fn ql_highlight_spans(
     out_cap: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let text = match optional_utf8_arg(text_utf8, text_len, crate::MAX_HIGHLIGHT_TEXT_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let text = match unsafe {
+            optional_utf8_arg(text_utf8, text_len, crate::MAX_HIGHLIGHT_TEXT_BYTES)
+        } {
             Some(text) => text,
             None => return 0,
         };
-        let language = match optional_utf8_arg(lang_utf8, lang_len, 64) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let language = match unsafe { optional_utf8_arg(lang_utf8, lang_len, 64) } {
             Some(language) => language,
             None => return 0,
         };
         let spans = highlight_spans(text, language);
-        write_bytes_out(&pack_spans(&spans), out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_bytes_out(&pack_spans(&spans), out_buf, out_cap) }
     })
 }
 
@@ -54,6 +59,7 @@ mod tests {
     fn export_rejects_invalid_arguments_without_writing() {
         let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
         assert_eq!(
+            // SAFETY: The oversized text is rejected before any dangling input/output is accessed.
             unsafe {
                 ql_highlight_spans(
                     dangling,
@@ -67,6 +73,7 @@ mod tests {
             0
         );
         assert_eq!(
+            // SAFETY: Null/nonzero text is rejected before the dangling language/output is accessed.
             unsafe { ql_highlight_spans(std::ptr::null(), 1, dangling, 3, dangling, 0) },
             0
         );
@@ -75,6 +82,7 @@ mod tests {
     #[test]
     fn empty_text_yields_the_zero_header_without_dereferencing() {
         let mut buffer = [0u8; 4];
+        // SAFETY: Null/zero inputs borrow no storage; buffer is live and exclusively writable.
         let written = unsafe {
             ql_highlight_spans(
                 std::ptr::null(),
@@ -113,6 +121,7 @@ mod tests {
         let text = b"fn main() {}";
         let language = b"rust";
         let mut small = [0u8; 8];
+        // SAFETY: Inputs remain readable and immutable; small is disjoint exclusive output.
         let required = unsafe {
             ql_highlight_spans(
                 text.as_ptr(),
@@ -127,6 +136,7 @@ mod tests {
         let required = -required as usize;
         assert!(required > small.len());
         let mut buffer = vec![0u8; required];
+        // SAFETY: Inputs remain live; the exact-size output is exclusive and disjoint from them.
         let written = unsafe {
             ql_highlight_spans(
                 text.as_ptr(),
@@ -149,6 +159,7 @@ mod tests {
         let bytes = text.as_bytes();
         let mut buffer = vec![0u8; 4 + 64 * 12];
         let language = b"rust";
+        // SAFETY: Both inputs remain immutable; buffer is separate, exclusively writable storage.
         let written = unsafe {
             ql_highlight_spans(
                 bytes.as_ptr(),

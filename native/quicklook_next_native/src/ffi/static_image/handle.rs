@@ -5,24 +5,25 @@ use std::path::Path;
 
 use image::ImageFormat;
 
-use super::super::common::{ffi_boundary, write_v2_out};
+use super::super::common::ffi_boundary;
 use super::super::handle_preview::reopen_handle_input_v2;
+use super::packet::{write_image_packet, ImagePacket};
 use crate::{
     cancel_requested, decode_image_bgra_reader, decode_image_bgra_reader_with_waveform,
     decode_svg_bgra_bytes, decode_svg_bgra_bytes_with_waveform,
-    preflight_native_image_packet_length, CancelCallback, IMAGE_PACKET_HEADER_BYTES,
-    IMAGE_WAVEFORM_DENSITY_BYTES, IMAGE_WAVEFORM_HEIGHT, IMAGE_WAVEFORM_PACKET_HEADER_BYTES,
-    IMAGE_WAVEFORM_WIDTH, MAX_IMAGE_RASTER_DIMENSION, MAX_IMAGE_WAVEFORM_PACKET_BYTES,
-    MAX_NATIVE_IMAGE_DECODE_PIXELS, MAX_SVG_INPUT_BYTES, QL_ERROR_BUFFER_TOO_SMALL,
-    QL_ERROR_CANCELLED, QL_ERROR_INTERNAL, QL_ERROR_INVALID_ARGUMENT, QL_ERROR_IO,
-    QL_ERROR_LENGTH_MISMATCH, QL_ERROR_LIMIT_EXCEEDED, QL_ERROR_MALFORMED, QL_OK,
+    preflight_native_image_packet_length, CancelCallback, IMAGE_WAVEFORM_DENSITY_BYTES,
+    IMAGE_WAVEFORM_HEIGHT, IMAGE_WAVEFORM_PACKET_HEADER_BYTES, IMAGE_WAVEFORM_WIDTH,
+    MAX_IMAGE_RASTER_DIMENSION, MAX_IMAGE_WAVEFORM_PACKET_BYTES, MAX_NATIVE_IMAGE_DECODE_PIXELS,
+    MAX_SVG_INPUT_BYTES, QL_ERROR_BUFFER_TOO_SMALL, QL_ERROR_CANCELLED, QL_ERROR_INTERNAL,
+    QL_ERROR_INVALID_ARGUMENT, QL_ERROR_IO, QL_ERROR_LENGTH_MISMATCH, QL_ERROR_LIMIT_EXCEEDED,
+    QL_ERROR_MALFORMED, QL_OK,
 };
 
 /// Decode a native-safe static image from a borrowed Windows file handle.
 /// Output layout matches `ql_decode_image_sized_cancelable`.
 ///
 /// # Safety
-/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_image_handle(
     source_handle: isize,
@@ -36,6 +37,7 @@ pub unsafe extern "C" fn ql_decode_image_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends a live input/HANDLE and disjoint exclusive output/scalar ranges.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -143,16 +145,21 @@ pub unsafe extern "C" fn ql_decode_image_handle(
                 }
             }
         };
-        let mut packet = Vec::with_capacity(IMAGE_PACKET_HEADER_BYTES + bgra.len());
-        packet.extend_from_slice(&width.to_le_bytes());
-        packet.extend_from_slice(&height.to_le_bytes());
-        packet.extend_from_slice(&original_width.to_le_bytes());
-        packet.extend_from_slice(&original_height.to_le_bytes());
-        packet.extend_from_slice(&decode_ms.to_le_bytes());
-        packet.extend_from_slice(&resize_ms.to_le_bytes());
-        packet.extend_from_slice(&convert_ms.to_le_bytes());
-        packet.extend_from_slice(&bgra);
-        write_v2_out(&packet, out_buf, out_cap, out_required)
+        write_image_packet(
+            ImagePacket {
+                width,
+                height,
+                original_width,
+                original_height,
+                decode_ms,
+                resize_ms,
+                convert_ms,
+                bgra: &bgra,
+            },
+            out_buf,
+            out_cap,
+            out_required,
+        )
     })
 }
 
@@ -164,7 +171,7 @@ pub unsafe extern "C" fn ql_decode_image_handle(
 /// then `w*h*4` premultiplied BGRA bytes, then planar row-major R/G/B density bytes.
 ///
 /// # Safety
-/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
     source_handle: isize,
@@ -178,6 +185,7 @@ pub unsafe extern "C" fn ql_decode_image_with_waveform_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends a live input/HANDLE and disjoint exclusive output/scalar ranges.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -318,6 +326,11 @@ struct ImageWaveformPacket<'a> {
     density: &'a [u8],
 }
 
+/// # Safety
+/// `out_required` must be non-null, aligned and exclusively writable for one `usize`.
+/// A sufficient `out_buf` must be exclusively writable for `out_cap` bytes in one live
+/// allocation, disjoint from packet data and the scalar. All storage must remain valid
+/// until return.
 unsafe fn write_image_waveform_packet(
     packet: ImageWaveformPacket<'_>,
     out_buf: *mut u8,
@@ -348,6 +361,7 @@ unsafe fn write_image_waveform_packet(
         _ => return QL_ERROR_LIMIT_EXCEEDED,
     };
 
+    // SAFETY: The caller supplies an aligned exclusive scalar, disjoint from output and packet.
     unsafe { *out_required = total };
     if total > out_cap {
         return QL_ERROR_BUFFER_TOO_SMALL;
@@ -369,10 +383,13 @@ unsafe fn write_image_waveform_packet(
         IMAGE_WAVEFORM_DENSITY_BYTES as u32,
     ];
     for (index, value) in header.into_iter().enumerate() {
+        // SAFETY: Each local word is live and disjoint from exclusive output; total covers fields.
         unsafe {
             std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), out_buf.add(index * 4), 4);
         }
     }
+    // SAFETY: Caller output is disjoint from both borrowed packet slices; the checked total
+    // covers the header, raster and density ranges, each copied exactly once.
     unsafe {
         std::ptr::copy_nonoverlapping(
             packet.bgra.as_ptr(),
@@ -397,6 +414,7 @@ mod tests {
     fn image_handle_exports_reject_null_required_before_handle_access() {
         for decode in [ql_decode_image_handle, ql_decode_image_with_waveform_handle] {
             assert_eq!(
+                // SAFETY: Null required is rejected before any other pointer or HANDLE access.
                 unsafe {
                     decode(
                         0,

@@ -11,7 +11,7 @@ public sealed class ShellBrokerProtocolTests
     private const string RequestId = "0123456789abcdef0123456789abcdef";
 
     [Fact]
-    public void Parses_ready_thumbnail_and_error_messages()
+    public void Parses_ready_thumbnail_and_stable_error_messages()
     {
         Assert.IsType<ShellBrokerReady>(ShellBrokerProtocol.Parse("READY"));
 
@@ -20,10 +20,12 @@ public sealed class ShellBrokerProtocolTests
         Assert.Equal((1234L, 4104L, 32, 32),
             (ready.FileHandle, ready.PacketLength, ready.Width, ready.Height));
 
-        string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes("provider failed"));
+        string payload = Convert.ToBase64String(Encoding.UTF8.GetBytes("C:\\private\\provider failed"));
         var error = Assert.IsType<PreviewError>(
             ShellBrokerProtocol.Parse($"ERROR\t{RequestId}\t{payload}"));
-        Assert.Equal("provider failed", error.Message);
+        Assert.Equal(ShellBrokerProtocol.StableErrorMessage, error.Message);
+        Assert.Equal(PreviewErrorCodes.ContentFailed, error.Code);
+        Assert.Equal("shell-broker", error.Phase);
     }
 
     [Theory]

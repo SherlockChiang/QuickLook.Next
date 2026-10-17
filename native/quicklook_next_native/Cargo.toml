@@ -12,11 +12,9 @@ crate-type = ["cdylib"]
 [dependencies]
 quick-xml = "0.41"
 zip = { version = "8.6", default-features = false, features = [
-    "aes-crypto",
     "bzip2",
     "deflate64",
     "deflate-flate2",
-    "deflate-zopfli",
     "lzma",
     "time",
     "xz",
@@ -57,3 +55,8 @@ features = [
 
 [dev-dependencies]
 png = "0.18"
+# Bounded, reproducible reader properties; no fork/timeout subprocess machinery.
+proptest = { version = "1.12", default-features = false, features = ["std"] }
+# Fixture writers need AES/Zopfli; production only inspects encryption metadata
+# and decodes DEFLATE through flate2. Resolver v2 keeps these out of normal builds.
+zip = { version = "8.6", default-features = false, features = ["aes-crypto", "deflate-zopfli"] }

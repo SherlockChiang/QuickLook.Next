@@ -14,9 +14,14 @@ internal sealed record NativeDecodedImage(
     int OriginalWidth,
     int OriginalHeight)
 {
-    public int DecodeMilliseconds { get; init; }
-    public int ResizeMilliseconds { get; init; }
-    public int ConvertMilliseconds { get; init; }
+    /// <summary>Optional premultiplied linear scRGB RGBA16F payload for an HDR surface.</summary>
+    public byte[]? Rgba16Float { get; init; }
+    /// <summary>Source facts used for HDR diagnostics and output selection.</summary>
+    public ImageColorProfileKind SourceProfile { get; init; }
+    public int SourceBitDepth { get; init; }
+    public bool SourceMetadataComplete { get; init; }
+    /// <summary>Native packet timings, or null when the decoder did not measure these stages.</summary>
+    public NativeImageStageTimings? NativeStageTimings { get; init; }
     public ImageWaveform? Waveform { get; init; }
 }
 
@@ -47,13 +52,13 @@ internal static class NativeImageDecoder
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern uint ql_abi_version();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern ulong ql_capabilities();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_decode_image(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_decode_image([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
 
     public static void EnsureCompatible()
     {
@@ -67,44 +72,44 @@ internal static class NativeImageDecoder
         _capabilities = capabilities;
     }
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_decode_image_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_decode_image_cancelable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, IntPtr cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_image_sized_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        uint targetWidth,
-        uint targetHeight,
-        byte[] outBuf,
-        nuint outCap,
-        IntPtr cancelCb);
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            uint targetWidth,
+            uint targetHeight,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            IntPtr cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_image_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        uint targetWidth,
-        uint targetHeight,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        IntPtr cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            uint targetWidth,
+            uint targetHeight,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            IntPtr cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_image_with_waveform_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        uint targetWidth,
-        uint targetHeight,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        IntPtr cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            uint targetWidth,
+            uint targetHeight,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            IntPtr cancelCb);
 
     public static bool UsesHandleInput(string logicalPath, QuickLook.Next.Contracts.FileProbe probe)
         => probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase)
@@ -311,7 +316,8 @@ internal static class NativeImageDecoder
         CancellationToken cancellationToken,
         uint targetWidth = 0,
         uint targetHeight = 0,
-        bool systemDecodeAlreadyFailed = false)
+        bool systemDecodeAlreadyFailed = false,
+        bool enableHdr = false)
     {
         if (IsTooLarge(path))
             return null;
@@ -321,7 +327,12 @@ internal static class NativeImageDecoder
         bool systemPreferred = ShouldPreferSystemDecoder(path);
         if (systemPreferred && !systemDecodeAlreadyFailed)
         {
-            NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight);
+            NativeDecodedImage? systemImage = await SystemImageDecoder.TryDecodeAsync(
+                path,
+                cancellationToken,
+                targetWidth,
+                targetHeight,
+                enableHdr);
             if (systemImage is not null)
                 return systemImage;
             DiagLog.Write("RasterHost", $"system image preferred decode failed; falling back to native path={path}");
@@ -361,7 +372,12 @@ internal static class NativeImageDecoder
         cancellationToken.ThrowIfCancellationRequested();
         return nativeImage ?? (systemDecodeAlreadyFailed
             ? null
-            : await SystemImageDecoder.TryDecodeAsync(path, cancellationToken, targetWidth, targetHeight));
+            : await SystemImageDecoder.TryDecodeAsync(
+                path,
+                cancellationToken,
+                targetWidth,
+                targetHeight,
+                enableHdr));
     }
 
     private static async Task<NativeDecodedImage?> DecodeOnGateAsync(
@@ -528,9 +544,7 @@ internal static class NativeImageDecoder
             (int)originalWidthRaw,
             (int)originalHeightRaw)
         {
-            DecodeMilliseconds = (int)decodeMsRaw,
-            ResizeMilliseconds = (int)resizeMsRaw,
-            ConvertMilliseconds = (int)convertMsRaw,
+            NativeStageTimings = new((int)decodeMsRaw, (int)resizeMsRaw, (int)convertMsRaw),
             Waveform = waveform,
         };
     }

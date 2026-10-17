@@ -9,6 +9,7 @@ public static class ShellBrokerProtocol
 {
     public const int MaxDimension = 512;
     public const int MaxErrorUtf8Bytes = 4096;
+    public const string StableErrorMessage = PreviewError.StableFailureMessage;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static ControlMessage Parse(string line)
@@ -42,7 +43,11 @@ public static class ShellBrokerProtocol
             }
             if (bytes.Length > MaxErrorUtf8Bytes)
                 throw new InvalidDataException("ShellBroker returned an oversized error payload.");
-            try { return new PreviewError(errorRequestId, StrictUtf8.GetString(bytes)); }
+            try
+            {
+                _ = StrictUtf8.GetString(bytes);
+                return PreviewError.InternalFailure(errorRequestId, "shell-broker");
+            }
             catch (DecoderFallbackException ex)
             {
                 throw new InvalidDataException("ShellBroker returned a non-UTF-8 error payload.", ex);

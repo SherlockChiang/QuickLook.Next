@@ -14,12 +14,12 @@ use crate::{
 };
 
 #[no_mangle]
-pub extern "C" fn ql_abi_version() -> u32 {
+pub const extern "C" fn ql_abi_version() -> u32 {
     QL_NATIVE_ABI_VERSION
 }
 
 #[no_mangle]
-pub extern "C" fn ql_capabilities() -> u64 {
+pub const extern "C" fn ql_capabilities() -> u64 {
     QL_FEATURE_HANDLE_TEXT
         | QL_FEATURE_HANDLE_EXECUTABLE
         | QL_FEATURE_HANDLE_TORRENT

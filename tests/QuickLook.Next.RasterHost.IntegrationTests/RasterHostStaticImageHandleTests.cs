@@ -11,6 +11,108 @@ namespace QuickLook.Next.RasterHost.IntegrationTests;
 
 public sealed class RasterHostStaticImageHandleTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Mixed_format_reopens_release_sources_and_ignore_previous_request_close(bool cancelBeforeReceiving)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        string pipeName = $"quicklook_next_raster_mixed_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-next-mixed-{Guid.NewGuid():N}.bin");
+        string logicalStem = Path.Combine(Path.GetTempPath(), $"missing-mixed-{Guid.NewGuid():N}");
+        (string Extension, byte[] Bytes)[] corpus =
+        [
+            ("png", Convert.FromBase64String(
+                "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=")),
+            ("ico", await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"), timeout.Token)),
+            ("jpg", await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.jpg"), timeout.Token)),
+            ("bmp", CreateOnePixelBmp()),
+        ];
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
+        try
+        {
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+            string? previousRequestId = null;
+            for (int round = 0; round < 3; round++)
+            {
+                foreach (var sample in corpus)
+                {
+                    await File.WriteAllBytesAsync(physicalPath, sample.Bytes, timeout.Token);
+                    string logicalPath = logicalStem + "." + sample.Extension;
+                    Assert.False(File.Exists(logicalPath));
+                    string requestId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+                    string? canceledRequestId = cancelBeforeReceiving
+                        ? RandomNumberGenerator.GetHexString(32).ToLowerInvariant()
+                        : null;
+                    var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+                    try
+                    {
+                        var probe = new FileProbe(logicalPath, "." + sample.Extension,
+                            sample.Bytes[..Math.Min(sample.Bytes.Length, 64)])
+                        {
+                            Kind = "image",
+                            Size = pinned.Length,
+                        };
+                        if (canceledRequestId is not null)
+                        {
+                            long canceledHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+                            await channel.SendAsync(new PreviewOpenHandle(
+                                canceledRequestId, canceledHandle, pinned.Length, logicalPath, probe)
+                            {
+                                TargetWidth = 64,
+                                TargetHeight = 64,
+                            }, timeout.Token);
+                            // Cancel without awaiting any preview output, then reopen the same
+                            // exact file object with a distinct request and receiver-owned HANDLE.
+                            await channel.SendAsync(new PreviewClose(canceledRequestId), timeout.Token);
+                        }
+                        long handle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+                        await channel.SendAsync(new PreviewOpenHandle(
+                            requestId, handle, pinned.Length, logicalPath, probe)
+                        {
+                            TargetWidth = 64,
+                            TargetHeight = 64,
+                        }, timeout.Token);
+                    }
+                    finally
+                    {
+                        pinned.Handle.Dispose();
+                    }
+
+                    // Pipe ordering places this stale close after the new open.
+                    if (previousRequestId is not null)
+                        await channel.SendAsync(new PreviewClose(previousRequestId), timeout.Token);
+                    await ReceiveStaticImagePreviewAsync(channel, host, requestId, timeout.Token, canceledRequestId);
+                    Assert.False(TryOverwriteFile(physicalPath));
+                    await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+                    await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+                    Assert.False(host.HasExited);
+                    previousRequestId = requestId;
+                }
+            }
+        }
+        finally
+        {
+            try { hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host); }
+            finally { try { File.Delete(physicalPath); } catch { } }
+        }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
+    }
+
     [Fact]
     public async Task Repeated_system_codec_previews_return_resources_after_idle_trim()
     {
@@ -772,6 +874,7 @@ public sealed class RasterHostStaticImageHandleTests
             Format = "PNG",
             Title = "native",
             Width = 10,
+            HdrTransferFunction = "PQ",
         };
         var propertyHandler = new ImageMetadata
         {
@@ -780,6 +883,7 @@ public sealed class RasterHostStaticImageHandleTests
             Width = 20,
             Height = 21,
             VerticalResolution = 72,
+            HdrColorPrimaries = "BT.2020",
         };
         var wic = new ImageMetadata
         {
@@ -788,6 +892,7 @@ public sealed class RasterHostStaticImageHandleTests
             Height = 31,
             HorizontalResolution = 96,
             VerticalResolution = 97,
+            HdrMetadataComplete = true,
         };
 
         ImageMetadata? merged = SystemImageMetadataReader.Merge(
@@ -801,6 +906,9 @@ public sealed class RasterHostStaticImageHandleTests
         Assert.Equal((uint)21, merged.Height);
         Assert.Equal(96, merged.HorizontalResolution);
         Assert.Equal(72, merged.VerticalResolution);
+        Assert.Equal("PQ", merged.HdrTransferFunction);
+        Assert.Equal("BT.2020", merged.HdrColorPrimaries);
+        Assert.True(merged.HdrMetadataComplete);
     }
 
     [Fact]
@@ -856,7 +964,8 @@ public sealed class RasterHostStaticImageHandleTests
         PipeChannel channel,
         Process host,
         string requestId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? canceledRequestId = null)
     {
         PreviewSurface? surface = null;
         PreviewReady? ready = null;
@@ -865,6 +974,21 @@ public sealed class RasterHostStaticImageHandleTests
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
                 ?? throw new EndOfStreamException("RasterHost closed before completing the parent image preview.");
+            // Output may have been queued before the host processed close. Dispose its transfer
+            // without letting it satisfy the replacement request's completion conditions.
+            if (canceledRequestId is not null)
+            {
+                switch (message)
+                {
+                    case PreviewSurface canceledSurface when canceledSurface.RequestId == canceledRequestId:
+                        await channel.SendAsync(new PreviewSurfaceRelease(canceledSurface.TransferId), cancellationToken);
+                        continue;
+                    case PreviewReady canceledReady when canceledReady.RequestId == canceledRequestId:
+                    case PreviewImageWaveform canceledWaveform when canceledWaveform.RequestId == canceledRequestId:
+                    case PreviewError canceledError when canceledError.RequestId == canceledRequestId:
+                        continue;
+                }
+            }
             if (message is PreviewError error)
                 throw new Xunit.Sdk.XunitException(error.Message);
             if (message is PreviewSurface receivedSurface)

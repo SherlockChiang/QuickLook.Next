@@ -7,9 +7,14 @@ use crate::{cancel_requested, preview, CancelCallback, QL_ERROR_CANCELLED, QL_ER
 /// Render text from a borrowed Windows file handle.
 ///
 /// # Safety
-/// `logical_name_utf8` must be readable for `logical_name_len` bytes. `out_required` must point to
-/// writable `usize` storage. When `out_buf` is non-null it must be writable for `out_cap` bytes and
-/// must not alias Rust-owned output storage. A non-invalid source handle must remain open and stable
+/// When accessed, `logical_name_utf8` must be readable and immutable for `logical_name_len` bytes in one live
+/// allocation. Non-null `out_required` must point to aligned, exclusively writable `usize` storage.
+/// When accessed, `out_buf` must contain `out_cap` initialized bytes in one live allocation and be
+/// exclusively writable.
+/// Output ranges must not overlap input ranges, each other, or Rust-owned output storage. All
+/// accessed storage and `cancel_cb` must remain valid for this call; the callback must not unwind.
+/// Invalid pointers are permitted only on documented paths that reject or avoid access to them.
+/// A non-invalid source handle must remain open and stable
 /// for the complete call. The caller retains ownership; Rust reopens the file with an independent
 /// position and never resolves `logical_name` as a path.
 #[no_mangle]
@@ -23,6 +28,7 @@ pub unsafe extern "C" fn ql_preview_text_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -65,6 +71,7 @@ pub unsafe extern "C" fn ql_preview_executable_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -105,6 +112,7 @@ pub unsafe extern "C" fn ql_preview_torrent_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -145,6 +153,7 @@ pub unsafe extern "C" fn ql_preview_mail_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -202,6 +211,7 @@ mod tests {
         ];
         for export in exports {
             let mut required = usize::MAX;
+            // SAFETY: required is aligned/writable; cancellation rejects null inputs before I/O.
             let status = unsafe {
                 export(
                     0,

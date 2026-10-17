@@ -1,16 +1,14 @@
 //! Path-based static-image decode C ABI adapters.
 
 mod handle;
+mod packet;
 
 use super::common::{ffi_boundary, utf8_arg};
 use crate::{cancel_requested, decode_image_bgra, CancelCallback, MAX_FFI_STRING_BYTES};
 
 pub(crate) use handle::{ql_decode_image_handle, ql_decode_image_with_waveform_handle};
 
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_image(
     path_utf8: *const u8,
@@ -18,14 +16,11 @@ pub unsafe extern "C" fn ql_decode_image(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards its caller's live input and exclusive writable output.
     ffi_boundary(|| unsafe { ql_decode_image_cancelable(path_utf8, path_len, out, out_cap, None) })
 }
 
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_image_cancelable(
     path_utf8: *const u8,
@@ -34,16 +29,13 @@ pub unsafe extern "C" fn ql_decode_image_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards its caller's live input/output and valid callback.
     ffi_boundary(|| unsafe {
         ql_decode_image_sized_cancelable(path_utf8, path_len, 0, 0, out, out_cap, cancel_cb)
     })
 }
 
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_image_sized_cancelable(
     path_utf8: *const u8,
@@ -55,7 +47,8 @@ pub unsafe extern "C" fn ql_decode_image_sized_cancelable(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(path) => path,
             None => return -1,
         };
@@ -82,6 +75,8 @@ pub unsafe extern "C" fn ql_decode_image_sized_cancelable(
             return -(total as i32);
         }
 
+        // SAFETY: The caller supplies exclusive output; total fits capacity, headers are stack
+        // arrays and bgra is separately owned, so each source is disjoint from the destination.
         unsafe {
             std::ptr::copy_nonoverlapping(width.to_le_bytes().as_ptr(), out, 4);
             std::ptr::copy_nonoverlapping(height.to_le_bytes().as_ptr(), out.add(4), 4);
@@ -107,16 +102,19 @@ mod tests {
         let path_len = MAX_FFI_STRING_BYTES + 1;
 
         assert_eq!(
+            // SAFETY: Oversized path length is rejected before accessing dangling input or output.
             unsafe { ql_decode_image(dangling, path_len, std::ptr::null_mut(), 0) },
             -1
         );
         assert_eq!(
+            // SAFETY: Oversized path length is rejected before accessing dangling input or output.
             unsafe {
                 ql_decode_image_cancelable(dangling, path_len, std::ptr::null_mut(), 0, None)
             },
             -1
         );
         assert_eq!(
+            // SAFETY: Oversized path length is rejected before accessing dangling input or output.
             unsafe {
                 ql_decode_image_sized_cancelable(
                     dangling,

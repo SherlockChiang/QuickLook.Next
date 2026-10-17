@@ -102,6 +102,10 @@ public sealed partial class MainWindow : Window
     private double _imageFilmstripDragStartOffset;
     private readonly UISettings _uiSettings = new();
     private readonly AccessibilitySettings _accessibilitySettings = new();
+    private readonly HdrDisplayCapabilityTracker _hdrDisplayCapability = new();
+    private bool _hdrDisplayTrackingAttached;
+    private CancellationTokenSource? _hdrDisplayRerenderCts;
+    private readonly ImageDisplayRefreshState _imageDisplayRefresh = new();
 
     private static readonly string[] ByteSizeFormatResourceKeys =
     [
@@ -428,13 +432,28 @@ public sealed partial class MainWindow : Window
             new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPreviewContentPointerWheelChanged),
             handledEventsToo: true);
         Activated += OnPreviewWindowActivated;
+        GetAppWindow().Changed += (_, args) =>
+        {
+            if (args.DidPositionChange && !_lifetimeCts.IsCancellationRequested)
+                RefreshHdrDisplayCapability();
+        };
         RootGrid.Loaded += (_, _) =>
         {
             if (RootGrid.XamlRoot is { } xamlRoot)
                 xamlRoot.Changed += OnXamlRootChanged;
+            if (!_hdrDisplayTrackingAttached)
+            {
+                _hdrDisplayCapability.CapabilityChanged += OnHdrDisplayCapabilityChanged;
+                _hdrDisplayTrackingAttached = true;
+            }
+            RefreshHdrDisplayCapability();
         };
         Closed += (_, _) =>
         {
+            _hdrDisplayRerenderCts?.Cancel();
+            _hdrDisplayRerenderCts?.Dispose();
+            _hdrDisplayRerenderCts = null;
+            _hdrDisplayCapability.Dispose();
             _lifetimeCts.Cancel();
             _uiWatchdog?.Dispose();
             _previewKeyboardHook?.Dispose();
@@ -477,6 +496,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
+            _supervisor.ImageRefreshFailed += OnImageRefreshFailed;
             _native.Start(OnNativeIntent);
             AppStartupTiming.Mark("native-hook-ready");
             StatusText.Text = UiStrings.Ready;
@@ -688,7 +708,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ClosePreviewImmediatelyAsync()
     {
-        _previewTiming?.Complete("closed");
+        _previewTiming?.Cancel("closed");
         CancelPreviewFrameCallbacks();
         _duplicateOpenCloseGuard.Clear();
         string? requestId = _previewSession.CurrentRequestId;
@@ -709,6 +729,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
+            _supervisor.ImageRefreshFailed += OnImageRefreshFailed;
         }
 
         await _supervisor.EnsureStartedAsync(cancellationToken);
@@ -813,7 +834,7 @@ public sealed partial class MainWindow : Window
         PreviewSessionSnapshot session = _previewSession.Begin(path, source);
         int generation = session.Generation;
         CancellationToken previewToken = session.Token;
-        _previewTiming?.Complete("superseded");
+        _previewTiming?.Cancel("superseded");
         _previewTiming = new PreviewLifecycleTiming(generation, source, path, receivedAt);
         using var previewTrace = DiagLog.TraceScope("App", $"preview path source={source} gen={generation} path={path}", 250);
         BeginPreviewTransition();
@@ -1081,6 +1102,8 @@ public sealed partial class MainWindow : Window
             }
 
             await EnsureRasterHostStartedAsync(previewToken);
+            _supervisor!.HdrDisplayEnabled =
+                _hdrDisplayCapability.Capability == DisplayColorCapability.HighDynamicRange;
             MarkPreviewPhase(generation, "route-selected", "route=raster-host");
             if (!IsPreviewGenerationCurrent(generation, previewToken)) return;
             var targetSize = GetRasterDecodeTargetSize();
@@ -1139,6 +1162,8 @@ public sealed partial class MainWindow : Window
             _requestHosts[requestId] = PreviewHostOwner.Raster;
             _previewSession.SetRequestId(requestId);
             _previewSession.CommitPath(path);
+            if (probe.Kind.Equals("image", StringComparison.OrdinalIgnoreCase) && !prepareAnimation)
+                _imageDisplayRefresh.Begin(requestId, _supervisor.HdrDisplayEnabled);
             DiagLog.Write("App", $"preview host open sent gen={generation}; request={requestId}");
             ControlMessage result = await completion.WaitAsync(previewToken);
             DiagLog.Write("App", $"preview host result gen={generation}; request={requestId}; type={result.GetType().Name}");
@@ -1578,10 +1603,107 @@ public sealed partial class MainWindow : Window
 
     private void OnXamlRootChanged(Microsoft.UI.Xaml.XamlRoot sender, Microsoft.UI.Xaml.XamlRootChangedEventArgs args)
     {
+        RefreshHdrDisplayCapability();
         _rasterPresenter?.UpdateLayout();
         _animatedImagePresenter?.ScheduleLayoutUpdate();
         if (_isRasterChromeEnabled)
             ApplyRasterChromeLayout();
+    }
+
+    private void RefreshHdrDisplayCapability()
+    {
+        try
+        {
+            _hdrDisplayCapability.Refresh(GetWindowId());
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "HDR display tracking refresh failed: " + ex.Message);
+        }
+    }
+
+    private void OnHdrDisplayCapabilityChanged(DisplayColorCapability capability)
+    {
+        void ApplyCapabilityChange()
+        {
+            bool enabled = capability == DisplayColorCapability.HighDynamicRange;
+            bool changed = _supervisor is not null && _supervisor.HdrDisplayEnabled != enabled;
+            if (_supervisor is not null)
+                _supervisor.HdrDisplayEnabled = enabled;
+            DiagLog.Write("App", $"display advanced-color capability={capability}; hdrEnabled={enabled}");
+            if (changed)
+                ScheduleHdrDisplayRerender();
+        }
+
+        if (DispatcherQueue.HasThreadAccess)
+            ApplyCapabilityChange();
+        else
+            DispatcherQueue.TryEnqueue(ApplyCapabilityChange);
+    }
+
+    private void ScheduleHdrDisplayRerender()
+    {
+        if (!_previewVisible
+            || _previewRevealPending
+            || PreviewRoot.Visibility != Visibility.Visible
+            || _supervisor?.ImageRefreshSupported != true
+            || _rasterPresenter?.HasSurface != true
+            || !string.Equals(_currentProbe?.Kind, "image", StringComparison.OrdinalIgnoreCase)
+            || _previewSession.CurrentRequestId is not { } requestId)
+        {
+            return;
+        }
+
+        _hdrDisplayRerenderCts?.Cancel();
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(CurrentPreviewToken, _lifetimeCts.Token);
+        _hdrDisplayRerenderCts = cts;
+        _ = RerenderCurrentImageForHdrAsync(requestId, cts);
+    }
+
+    private async Task RerenderCurrentImageForHdrAsync(
+        string requestId,
+        CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(100, cts.Token);
+            if (!_previewSession.IsCurrentRequest(requestId)
+                || !_previewVisible || _previewRevealPending
+                || PreviewRoot.Visibility != Visibility.Visible
+                || _supervisor is not { } supervisor)
+            {
+                return;
+            }
+
+            PreviewImageRefresh? refresh = _imageDisplayRefresh.Request(requestId, supervisor.HdrDisplayEnabled);
+            if (refresh is not null)
+                await supervisor.RefreshImageAsync(refresh, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "HDR display re-render failed: " + ex.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_hdrDisplayRerenderCts, cts))
+                _hdrDisplayRerenderCts = null;
+            cts.Dispose();
+        }
+    }
+
+    private void OnImageRefreshFailed(PreviewImageRefreshError error)
+    {
+        DiagLog.Write("App", $"image display refresh failed; request={error.RequestId}; generation={error.ImageGeneration}");
+        ReleaseImageRefresh(error.RequestId, error.ImageGeneration);
+    }
+
+    private void ReleaseImageRefresh(string requestId, long generation)
+    {
+        if (generation > 0 && _supervisor is { } supervisor)
+            _ = supervisor.CloseImageRefreshAsync(new PreviewImageRefreshClose(requestId, generation));
     }
 
     private static string BuildPreviewMetaLine(PreviewReady ready, string? path, FileProbe? probe)
@@ -1883,7 +2005,8 @@ public sealed partial class MainWindow : Window
                 UiStrings.Format(UiStrings.ImageCodecRequiredMessageFormat, ImageFormatDisplayName(format)),
                 canRetry: false,
                 diagnosticCode: diagnosticCode,
-                reportedFormat: error.Format);
+                reportedFormat: error.Format,
+                phase: error.Phase);
         }
         if (error.Code == PreviewErrorCodes.ImageDecodeFailed)
         {
@@ -1893,7 +2016,8 @@ public sealed partial class MainWindow : Window
                 UiStrings.ImageDecodeFailedMessage,
                 canRetry: false,
                 diagnosticCode: diagnosticCode,
-                reportedFormat: error.Format);
+                reportedFormat: error.Format,
+                phase: error.Phase);
         }
         return TryShowErrorPreview(
             session,
@@ -1901,7 +2025,8 @@ public sealed partial class MainWindow : Window
             UiStrings.PreviewContentFailedMessage,
             canRetry: false,
             diagnosticCode: diagnosticCode,
-            reportedFormat: error.Format);
+            reportedFormat: error.Format,
+            phase: error.Phase);
     }
 
     private static string ImageFormatDisplayName(string format)
@@ -2027,6 +2152,7 @@ public sealed partial class MainWindow : Window
             $"surface received request={surface.RequestId}; page={surface.PageIndex}; size={surface.Width}x{surface.Height}",
             50);
         bool handleConsumed = false;
+        bool refreshAccepted = false;
         try
         {
             EnsureCompositor();
@@ -2042,6 +2168,9 @@ public sealed partial class MainWindow : Window
             // null, so late surfaces for a just-closed request are dropped — never build a composition surface
             // from a handle whose swapchain the host may already be retiring.
             if (!_previewSession.IsCurrentRequest(surface.RequestId)) return;
+            if (surface.ImageGeneration != 0
+                && !_imageDisplayRefresh.CanAccept(surface, _supervisor?.HdrDisplayEnabled == true))
+                return;
 
             if (surface.PageIndex >= 0)
             {
@@ -2071,16 +2200,27 @@ public sealed partial class MainWindow : Window
             handleConsumed = true;
             if (!_rasterPresenter.AttachSurface(compositor, surface, out string? error))
             {
-                ShowSurfaceFailure(surface.RequestId, error ?? UiStrings.SurfaceFailed);
+                if (surface.ImageGeneration == 0)
+                    ShowSurfaceFailure(surface.RequestId, error ?? UiStrings.SurfaceFailed);
+                else
+                    DiagLog.Write("App", "image refresh surface attach failed: " + error);
                 return;
             }
+            if (surface.ImageGeneration > 0)
+            {
+                refreshAccepted = true;
+                if (_imageDisplayRefresh.Commit(surface) is { } previous)
+                    ReleaseImageRefresh(previous.RequestId, previous.ImageGeneration);
+            }
             attachWatch.Stop();
-            DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
+            DiagLog.Write("App", $"image surface attach {attachWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}; format={surface.Format}; hdr={surface.IsHdr}; generation={surface.ImageGeneration}");
             var layoutWatch = Stopwatch.StartNew();
             _rasterPresenter.UpdateLayout();
-            _imageWaveformPresenter?.Show(IsCurrentGifPreview() ? null : surface.Waveform);
+            if (surface.ImageGeneration == 0)
+                _imageWaveformPresenter?.Show(IsCurrentGifPreview() ? null : surface.Waveform);
             layoutWatch.Stop();
             DiagLog.Write("App", $"image presenter apply {layoutWatch.ElapsedMilliseconds}ms; size={surface.Width}x{surface.Height}");
+            ScheduleHdrDisplayRerender();
         }
         catch (Exception ex)
         {
@@ -2090,6 +2230,8 @@ public sealed partial class MainWindow : Window
         {
             if (!handleConsumed)
                 CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
+            if (!refreshAccepted)
+                ReleaseImageRefresh(surface.RequestId, surface.ImageGeneration);
         }
     }
 
@@ -2211,7 +2353,10 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() =>
         {
             if (_previewSession.IsCurrentRequest(ready.RequestId))
+            {
                 _rasterPresenter.UpdateLayout();
+                ScheduleHdrDisplayRerender();
+            }
         });
         ScheduleImageSidecarLoads(ready);
         return result.Status;
@@ -2256,7 +2401,9 @@ public sealed partial class MainWindow : Window
             ResizeWindowForContent(Math.Max(result.Width, MinRasterChromeContentWidth), result.Height, MaxImageWindowWidth, MaxImageWindowHeight);
             if (scheduleSidecars)
                 ScheduleImageSidecarLoads(ready);
-            return result.Status;
+            return frames.IsTruncated
+                ? $"{result.Status} - {UiStrings.Get("AnimationFramesTruncated")}"
+                : result.Status;
         }
         finally
         {
@@ -2508,6 +2655,8 @@ public sealed partial class MainWindow : Window
 
     private void ResetPreview()
     {
+        _hdrDisplayRerenderCts?.Cancel();
+        _imageDisplayRefresh.Clear();
         DiagLog.Write("App", $"preview reset; visible={_previewVisible}; request={_previewSession.CurrentRequestId}");
         ResetCloudProgressUi();
         ResetTextSearchUi();
@@ -4560,36 +4709,13 @@ public sealed partial class MainWindow : Window
     }
 
     private static string ResolveHostExePath()
-    {
-        // Deployed layout: RasterHost in a subfolder next to the App.
-        string rasterHost = System.IO.Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
-        if (System.IO.File.Exists(rasterHost)) return rasterHost;
-        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.RasterHost.exe");
-        if (System.IO.File.Exists(local)) return local;
-        // dev fallback: sibling project build output (…/src/QuickLook.Next.App/bin/<cfg>/<tfm>/<rid> → up 5 to src)
-        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
-            @"..\..\..\..\..\QuickLook.Next.RasterHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.RasterHost.exe"));
-    }
+        => HostExecutablePath.Resolve(PreviewHostKind.Raster, AppContext.BaseDirectory);
 
     private static string ResolveParserHostExePath()
-    {
-        string parserHost = System.IO.Path.Combine(AppContext.BaseDirectory, "ParserHost", "QuickLook.Next.ParserHost.exe");
-        if (System.IO.File.Exists(parserHost)) return parserHost;
-        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.ParserHost.exe");
-        if (System.IO.File.Exists(local)) return local;
-        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
-            @"..\..\..\..\..\QuickLook.Next.ParserHost\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ParserHost.exe"));
-    }
+        => HostExecutablePath.Resolve(PreviewHostKind.Parser, AppContext.BaseDirectory);
 
     private static string ResolveShellBrokerExePath()
-    {
-        string local = System.IO.Path.Combine(AppContext.BaseDirectory, "QuickLook.Next.ShellBroker.exe");
-        if (System.IO.File.Exists(local)) return local;
-        string broker = System.IO.Path.Combine(AppContext.BaseDirectory, "ShellBroker", "QuickLook.Next.ShellBroker.exe");
-        if (System.IO.File.Exists(broker)) return broker;
-        return System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory,
-            @"..\..\..\..\..\QuickLook.Next.ShellBroker\bin\Debug\net10.0-windows10.0.19041.0\win-x64\QuickLook.Next.ShellBroker.exe"));
-    }
+        => HostExecutablePath.Resolve(PreviewHostKind.ShellBroker, AppContext.BaseDirectory);
 
     private static bool IsParserHostPreview(FileProbe probe)
         => PreviewFormatPolicy.UsesParserHost(probe.Kind);

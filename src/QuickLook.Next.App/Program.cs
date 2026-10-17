@@ -76,14 +76,13 @@ public static class Program
         }
         if (args is ["--smoke-restricted-host-launch"])
         {
+            string? probeRoot = null;
             try
             {
-                string probeRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "RestrictedHostProbe", Guid.NewGuid().ToString("n"));
+                probeRoot = Path.Combine(Path.GetTempPath(), "QuickLookNext", "RestrictedHostProbe", Guid.NewGuid().ToString("n"));
                 string writableRoot = Path.Combine(probeRoot, "allowed");
                 string deniedRoot = Path.Combine(probeRoot, "denied");
-                string profileProbeRoot = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "QuickLookNext", "RestrictedHostDenied", Guid.NewGuid().ToString("n"));
+                string profileProbeRoot = Path.Combine(probeRoot, "profile-denied");
                 string pipeName = $"quicklook_next_restricted_probe_{Environment.ProcessId}_{Guid.NewGuid():N}";
                 Directory.CreateDirectory(writableRoot);
                 Directory.CreateDirectory(deniedRoot);
@@ -114,8 +113,6 @@ public static class Program
                     Environment.ExitCode = 3;
                 else if (Environment.ExitCode == 0)
                     Environment.ExitCode = child.ExitCode;
-                try { Directory.Delete(probeRoot, recursive: true); } catch { }
-                try { Directory.Delete(profileProbeRoot, recursive: true); } catch { }
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
@@ -146,6 +143,13 @@ public static class Program
             {
                 Console.Error.WriteLine(ex);
                 Environment.ExitCode = 21;
+            }
+            finally
+            {
+                if (probeRoot is not null)
+                {
+                    try { Directory.Delete(probeRoot, recursive: true); } catch { }
+                }
             }
             return;
         }

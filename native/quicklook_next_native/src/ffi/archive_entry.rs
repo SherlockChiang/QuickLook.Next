@@ -31,20 +31,24 @@ pub unsafe extern "C" fn ql_extract_archive_entry(
         {
             return 0;
         }
-        let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES)
-        {
-            Some(path) => path,
-            None => return 0,
-        };
-        let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-            Some(path) => path,
-            None => return 0,
-        };
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let archive_path =
+            match unsafe { utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) } {
+                Some(path) => path,
+                None => return 0,
+            };
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let entry_path =
+            match unsafe { utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) } {
+                Some(path) => path,
+                None => return 0,
+            };
         let Some(path) = preview::extract_archive_entry_to_temp(archive_path, entry_path, None)
         else {
             return 0;
         };
-        write_json_out(&path, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&path, out_buf, out_cap) }
     })
 }
 
@@ -70,15 +74,18 @@ pub unsafe extern "C" fn ql_extract_archive_entry_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let archive_path = match utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES)
-        {
-            Some(path) => path,
-            None => return 0,
-        };
-        let entry_path = match utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) {
-            Some(path) => path,
-            None => return 0,
-        };
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let archive_path =
+            match unsafe { utf8_arg(archive_path_utf8, archive_path_len, MAX_FFI_STRING_BYTES) } {
+                Some(path) => path,
+                None => return 0,
+            };
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let entry_path =
+            match unsafe { utf8_arg(entry_path_utf8, entry_path_len, MAX_FFI_STRING_BYTES) } {
+                Some(path) => path,
+                None => return 0,
+            };
         let Some(path) =
             preview::extract_archive_entry_to_temp(archive_path, entry_path, cancel_cb)
         else {
@@ -87,7 +94,8 @@ pub unsafe extern "C" fn ql_extract_archive_entry_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_json_out(&path, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&path, out_buf, out_cap) }
     })
 }
 
@@ -98,8 +106,9 @@ pub unsafe extern "C" fn ql_extract_archive_entry_cancelable(
 /// two-pass negotiation cannot leak temp roots.
 ///
 /// # Safety
-/// Both UTF-8 pointers must be readable for their declared lengths. `out_required` must be writable.
-/// When non-null, `out_buf` must be writable for `out_cap` bytes. The source handle must remain open
+/// Both UTF-8 pointers must satisfy the immutable input contract of `ql_preview_text_handle`
+/// for their declared lengths. Output/scalar alignment, exclusivity, disjointness and callback
+/// lifetime requirements also match that export. The source handle must remain open
 /// and stable for the complete call; ownership remains with the caller.
 #[no_mangle]
 pub unsafe extern "C" fn ql_extract_archive_entry_handle(
@@ -114,6 +123,8 @@ pub unsafe extern "C" fn ql_extract_archive_entry_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends live inputs/HANDLE and disjoint writable output/scalar storage.
+    // Entry/name strings are copied into owned values before extraction and output copying.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -177,8 +188,11 @@ pub unsafe extern "C" fn ql_extract_archive_entry_handle(
 /// `output_capacity` bytes, and reports the exact resulting length through `out_written`.
 ///
 /// # Safety
-/// Both UTF-8 pointers must be readable for their declared lengths and `out_written` must be
-/// writable. Both raw handles must remain valid for the complete call. Ownership stays with the
+/// Both UTF-8 pointers must remain readable and immutable for their declared lengths in live
+/// allocations. Non-null `out_written` must be aligned, exclusively writable for one `u64` and
+/// disjoint from the inputs. Accessed storage and callbacks must remain valid for the complete
+/// call; callbacks must not unwind. Null arguments are permitted only on rejection paths.
+/// Both raw handles must remain valid for the complete call. Ownership stays with the
 /// caller; Rust closes only its independently reopened handles.
 #[no_mangle]
 pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle(
@@ -193,6 +207,8 @@ pub unsafe extern "C" fn ql_extract_archive_entry_to_output_handle(
     out_written: *mut u64,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller keeps both HANDLEs/input strings live and lends an aligned exclusive
+    // out_written scalar; reopened files and copied strings have independent Rust ownership.
     ffi_boundary(|| unsafe {
         if out_written.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;

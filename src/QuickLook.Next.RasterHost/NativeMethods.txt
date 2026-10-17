@@ -5,6 +5,8 @@ IDXGIFactoryMedia
 IDXGIDevice
 IDXGIAdapter
 IDXGISwapChain1
+IDXGISwapChain3
+DXGI_COLOR_SPACE_TYPE
 ID3D11Device
 ID3D11DeviceContext
 ID3D11Resource

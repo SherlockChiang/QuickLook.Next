@@ -3,6 +3,8 @@
 //! These replace the equivalent .NET plugins with pure-Rust implementations callable directly
 //! from the App via C ABI, bypassing the .NET plugin pipeline entirely.
 
+#![forbid(unsafe_code)]
+
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -36,6 +38,9 @@ mod pdf_text;
 mod text;
 mod torrent;
 mod types;
+
+#[cfg(test)]
+mod reader_properties;
 
 pub(crate) use animation_probe::probe_image_animation_reader;
 #[cfg(test)]

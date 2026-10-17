@@ -22,7 +22,8 @@ internal sealed class NativeAnimationFrames : IDisposable
         int width,
         int height,
         SharedSectionView view,
-        NativeAnimationFrameDescriptor[] frames)
+        NativeAnimationFrameDescriptor[] frames,
+        bool isTruncated = false)
     {
         ArgumentNullException.ThrowIfNull(view);
         ArgumentNullException.ThrowIfNull(frames);
@@ -50,11 +51,13 @@ internal sealed class NativeAnimationFrames : IDisposable
         _frames = frames;
         _waveforms = new ImageWaveform?[frames.Length];
         _frameByteLength = frameByteLength;
+        IsTruncated = isTruncated;
     }
 
     public int Width { get; }
     public int Height { get; }
     public int FrameCount => _frames.Length;
+    public bool IsTruncated { get; }
 
     public int GetDelayMilliseconds(int index)
         => _frames[index].DelayMilliseconds;

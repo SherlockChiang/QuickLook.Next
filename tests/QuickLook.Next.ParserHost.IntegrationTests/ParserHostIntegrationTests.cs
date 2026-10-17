@@ -12,7 +12,7 @@ using Xunit;
 namespace QuickLook.Next.ParserHost.IntegrationTests;
 
 [Collection("ParserHost integration")]
-public sealed class ParserHostIntegrationTests
+public sealed partial class ParserHostIntegrationTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan TransferredHandleReleaseTimeout = TimeSpan.FromSeconds(20);
@@ -609,7 +609,9 @@ public sealed class ParserHostIntegrationTests
             PreviewError error = Assert.IsType<PreviewError>(
                 await channel.ReceiveAsync(timeout.Token));
             Assert.Equal(requestId, error.RequestId);
-            Assert.Contains("handle", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("Preview failed.", error.Message);
+            Assert.Equal(PreviewErrorCodes.ContentFailed, error.Code);
+            Assert.Equal("adopt-sqlite-handle", error.Phase);
             await WaitUntilAsync(
                 () => TryOverwriteFile(mainPath, "released after invalid tuple"),
                 timeout.Token);

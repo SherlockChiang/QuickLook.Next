@@ -10,6 +10,8 @@ internal static class NativeAnimationPacketDecoder
 {
     private const string Dll = "quicklook_next_native";
     private const int MaxPacketBytes = 64 * 1024 * 1024 + 12;
+    private const uint TruncatedFlag = 0x8000_0000;
+    private const uint FrameCountMask = 0x7fff_ffff;
     private const long MaxInputBytes = 256L * 1024 * 1024;
     private static readonly SemaphoreSlim DecodeGate = new(1, 1);
     private static CancellationToken _cancellationToken;
@@ -34,44 +36,44 @@ internal static class NativeAnimationPacketDecoder
         uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
         out nuint outRequired, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_gif_frames_sized_direct(
-        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
-        out nuint outRequired, AnimationOutputCallback outputCallback,
-        NativeCancelCallback cancelCallback);
+            [In] byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+            out nuint outRequired, AnimationOutputCallback outputCallback,
+            NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_gif_frames_sized_cancelable(
-        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
-        nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+            [In] byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+            nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_webp_frames_sized_cancelable(
-        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
-        nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+            [In] byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+            nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_png_frames_sized_cancelable(
-        byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
-        nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
+            [In] byte[] pathUtf8, nuint pathLen, uint targetWidth, uint targetHeight,
+            nint outBuf, nuint outCap, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_gif_frames_handle_direct(
-        nint sourceHandle, ulong expectedLength, byte[] logicalNameUtf8, nuint logicalNameLen,
-        uint targetWidth, uint targetHeight, out nuint outRequired,
-        AnimationOutputCallback outputCallback, NativeCancelCallback cancelCallback);
+            nint sourceHandle, ulong expectedLength, [In] byte[] logicalNameUtf8, nuint logicalNameLen,
+            uint targetWidth, uint targetHeight, out nuint outRequired,
+            AnimationOutputCallback outputCallback, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_gif_frames_handle(
-        nint sourceHandle, ulong expectedLength, byte[] logicalNameUtf8, nuint logicalNameLen,
-        uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
-        out nuint outRequired, NativeCancelCallback cancelCallback);
+            nint sourceHandle, ulong expectedLength, [In] byte[] logicalNameUtf8, nuint logicalNameLen,
+            uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
+            out nuint outRequired, NativeCancelCallback cancelCallback);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_decode_animation_frames_handle(
-        nint sourceHandle, ulong expectedLength, byte[] logicalNameUtf8, nuint logicalNameLen,
-        uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
-        out nuint outRequired, NativeCancelCallback cancelCallback);
+            nint sourceHandle, ulong expectedLength, [In] byte[] logicalNameUtf8, nuint logicalNameLen,
+            uint targetWidth, uint targetHeight, nint outBuf, nuint outCap,
+            out nuint outRequired, NativeCancelCallback cancelCallback);
 
     public static async Task<NativeAnimationPacket?> TryDecodeHandleAsync(
         SafeFileHandle sourceHandle,
@@ -272,7 +274,8 @@ internal static class NativeAnimationPacketDecoder
                 checked((int)required),
                 out int count,
                 out int width,
-                out int height))
+                out int height,
+                out bool truncated))
         {
             return null;
         }
@@ -283,7 +286,8 @@ internal static class NativeAnimationPacketDecoder
             checked((int)required),
             count,
             width,
-            height);
+            height,
+            truncated);
     }
 
     private static void ResetDirectOutput()
@@ -336,7 +340,8 @@ internal static class NativeAnimationPacketDecoder
                     length,
                     out int count,
                     out int width,
-                    out int height))
+                    out int height,
+                    out bool truncated))
                 {
                     return null;
                 }
@@ -346,7 +351,8 @@ internal static class NativeAnimationPacketDecoder
                     length,
                     count,
                     width,
-                    height);
+                    height,
+                    truncated);
                 section = null;
                 return packet;
             }
@@ -400,14 +406,16 @@ internal static class NativeAnimationPacketDecoder
                             checked((int)required),
                             out int count,
                             out int width,
-                            out int height))
+                            out int height,
+                            out bool truncated))
                     {
                         var packet = new NativeAnimationPacket(
                             section,
                             checked((int)required),
                             count,
                             width,
-                            height);
+                            height,
+                            truncated);
                         section = null;
                         return packet;
                     }
@@ -439,16 +447,20 @@ internal static class NativeAnimationPacketDecoder
         int length,
         out int count,
         out int width,
-        out int height)
+        out int height,
+        out bool truncated)
     {
         count = 0;
         width = 0;
         height = 0;
+        truncated = false;
         if (length <= 12 || length > MaxPacketBytes || length > packet.Length)
             return false;
         try
         {
-            count = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(packet));
+            uint rawCount = BinaryPrimitives.ReadUInt32LittleEndian(packet);
+            truncated = (rawCount & TruncatedFlag) != 0;
+            count = checked((int)(rawCount & FrameCountMask));
             width = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(packet[4..]));
             height = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(packet[8..]));
             int frameBytes = checked(width * height * 4);
@@ -471,13 +483,15 @@ internal sealed class NativeAnimationPacket(
     int packetLength,
     int frameCount,
     int width,
-    int height) : IDisposable
+    int height,
+    bool truncated) : IDisposable
 {
     public SharedSectionOwner Section { get; } = section;
     public int PacketLength { get; } = packetLength;
     public int FrameCount { get; } = frameCount;
     public int Width { get; } = width;
     public int Height { get; } = height;
+    public bool IsTruncated { get; } = truncated;
 
     public void Dispose() => Section.Dispose();
 }

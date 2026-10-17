@@ -29,7 +29,8 @@ pub unsafe extern "C" fn ql_preview_database_cancelable(
         if cancel_requested(cancel_cb) {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
@@ -37,7 +38,8 @@ pub unsafe extern "C" fn ql_preview_database_cancelable(
         if cancel_requested(cancel_cb) || json.is_empty() {
             return 0;
         }
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -88,6 +90,8 @@ pub unsafe extern "C" fn ql_preview_sqlite_handles(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends live file/companion HANDLEs and input, plus disjoint exclusive
+    // output/scalar storage. Readers own independently reopened files for this synchronous call.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             main_handle,
@@ -148,6 +152,7 @@ mod tests {
     fn database_exports_cancel_before_file_access() {
         let path = b"Z:\\missing\\cancelled.db";
         let mut path_output = [0u8; 16];
+        // SAFETY: Live path/output arrays are disjoint; cancellation returns before path access.
         let path_status = unsafe {
             ql_preview_database_cancelable(
                 path.as_ptr(),
@@ -162,6 +167,7 @@ mod tests {
         assert_eq!(path_status, 0);
 
         let mut required = usize::MAX;
+        // SAFETY: required is aligned and writable; cancellation rejects null inputs before access.
         let handle_status = unsafe {
             ql_preview_sqlite_handles(
                 0,

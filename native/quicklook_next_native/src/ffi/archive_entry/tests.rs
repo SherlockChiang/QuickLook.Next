@@ -11,6 +11,7 @@ fn archive_entry_export_honors_cancellation_before_file_access() {
     let mut output = [0u8; 16];
 
     assert_eq!(
+        // SAFETY: Both immutable input arrays and the disjoint writable output remain live.
         unsafe {
             ql_extract_archive_entry_cancelable(
                 archive.as_ptr(),

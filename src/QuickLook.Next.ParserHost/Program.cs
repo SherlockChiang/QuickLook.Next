@@ -143,7 +143,10 @@ while (true)
                     string? json = ParserNativePreview.TryPreview(kind, open.Path, open.Probe, cts.Token);
                     cts.Token.ThrowIfCancellationRequested();
                     if (!PreviewReadyJson.TryParse(open.RequestId, json ?? "", out PreviewReady? ready, out string? error))
-                        await channel.SendAsync(new PreviewError(open.RequestId, error ?? "Native parser returned no preview."));
+                    {
+                        DiagLog.Write("ParserHost", $"invalid native JSON request={open.RequestId}: {error}");
+                        await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "native-json", open.Probe.Extension));
+                    }
                     else
                         await channel.SendAsync(ready!);
                 }
@@ -151,7 +154,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"open failed request={open.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "open", open.Probe?.Extension)); } catch { }
                 }
                 finally
                 {
@@ -169,8 +172,9 @@ while (true)
             }
             catch (Exception ex)
             {
+                DiagLog.Write("ParserHost", $"handle adoption failed request={open.RequestId}: {ex}");
                 if (IsValidRequestId(open.RequestId))
-                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                    await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "adopt-handle"));
                 else
                     DiagLog.Write("ParserHost", "rejected invalid handle preview request");
                 break;
@@ -269,7 +273,10 @@ while (true)
                             await channel.SendAsync(new PreviewError(open.RequestId, failure));
                         }
                         else if (!PreviewReadyJson.TryParse(open.RequestId, handleResult.Json, out PreviewReady? handleReady, out string? handleError))
-                            await channel.SendAsync(new PreviewError(open.RequestId, handleError ?? "Native handle parser returned no preview."));
+                        {
+                            DiagLog.Write("ParserHost", $"invalid native HANDLE JSON request={open.RequestId}: {handleError}");
+                            await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "native-json", open.Probe.Extension));
+                        }
                         else
                         {
                             if (kind is "archive" or "ebook" or "office" or "package")
@@ -339,7 +346,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"handle open failed request={open.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "handle-open", open.Probe?.Extension)); } catch { }
                 }
                 finally
                 {
@@ -368,8 +375,9 @@ while (true)
             }
             catch (Exception ex)
             {
+                DiagLog.Write("ParserHost", $"SQLite handle adoption failed request={open.RequestId}: {ex}");
                 if (IsValidRequestId(open.RequestId))
-                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                    await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "adopt-sqlite-handle"));
                 else
                     DiagLog.Write("ParserHost", "rejected invalid SQLite handle preview request");
                 break;
@@ -453,9 +461,8 @@ while (true)
                         out PreviewReady? ready,
                         out string? error))
                     {
-                        await channel.SendAsync(new PreviewError(
-                            open.RequestId,
-                            error ?? "Native SQLite handle parser returned no preview."));
+                        DiagLog.Write("ParserHost", $"invalid native SQLite JSON request={open.RequestId}: {error}");
+                        await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "native-json", "sqlite"));
                     }
                     else
                     {
@@ -466,7 +473,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"SQLite handle open failed request={open.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "sqlite-open", open.Probe?.Extension)); } catch { }
                 }
                 finally
                 {
@@ -486,8 +493,9 @@ while (true)
             }
             catch (Exception ex)
             {
+                DiagLog.Write("ParserHost", $"PDF text HANDLE adoption failed request={open.RequestId}: {ex}");
                 if (IsValidRequestId(open.RequestId))
-                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                    await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "adopt-pdf-text"));
                 else
                     DiagLog.Write("ParserHost", "rejected invalid PDF text HANDLE request");
                 break;
@@ -535,9 +543,8 @@ while (true)
                         out PdfTextDocument? document,
                         out string? error))
                     {
-                        await channel.SendAsync(new PreviewError(
-                            open.RequestId,
-                            error ?? "Native PDF text parser returned no result."));
+                        DiagLog.Write("ParserHost", $"invalid native PDF text JSON request={open.RequestId}: {error}");
+                        await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "native-json", "pdf"));
                     }
                     else
                     {
@@ -548,7 +555,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"PDF text extraction failed request={open.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "pdf-text", ".pdf")); } catch { }
                 }
                 finally
                 {
@@ -578,8 +585,9 @@ while (true)
             }
             catch (Exception ex)
             {
+                DiagLog.Write("ParserHost", $"archive output HANDLE adoption failed request={extract.RequestId}: {ex}");
                 if (IsValidRequestId(extract.RequestId))
-                    await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message));
+                    await channel.SendAsync(PreviewError.InternalFailure(extract.RequestId, "adopt-archive-output"));
                 else
                     DiagLog.Write("ParserHost", "rejected invalid archive output HANDLE request");
                 break;
@@ -721,7 +729,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"archive entry extraction failed request={extract.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(extract.RequestId, "archive-entry")); } catch { }
                 }
                 finally
                 {
@@ -898,7 +906,7 @@ while (true)
                     DiagLog.Write(
                         "ParserHost",
                         $"Office image extraction failed request={open.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(open.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "office-image")); } catch { }
                 }
                 finally
                 {
@@ -1066,7 +1074,7 @@ while (true)
                 catch (Exception ex)
                 {
                     DiagLog.Write("ParserHost", $"hero raster extraction failed request={extract.RequestId}: {ex}");
-                    try { await channel.SendAsync(new PreviewError(extract.RequestId, ex.Message)); } catch { }
+                    try { await channel.SendAsync(PreviewError.InternalFailure(extract.RequestId, "hero-raster")); } catch { }
                 }
                 finally
                 {

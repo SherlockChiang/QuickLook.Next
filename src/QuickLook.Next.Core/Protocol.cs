@@ -22,6 +22,9 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewOpenSqliteHandles), "preview.open.sqlite-handles")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewImageWaveform), "preview.image.waveform")]
+[JsonDerivedType(typeof(PreviewImageRefresh), "preview.image.refresh")]
+[JsonDerivedType(typeof(PreviewImageRefreshClose), "preview.image.refresh.close")]
+[JsonDerivedType(typeof(PreviewImageRefreshError), "preview.image.refresh.error")]
 [JsonDerivedType(typeof(PreviewImageMetadataOpen), "preview.image.metadata.open")]
 [JsonDerivedType(typeof(PreviewImageMetadataReady), "preview.image.metadata.ready")]
 [JsonDerivedType(typeof(PreviewImageMetadataClose), "preview.image.metadata.close")]
@@ -60,7 +63,12 @@ public abstract record ControlMessage;
 public sealed record Hello(int AppProcessId, string SessionToken) : ControlMessage;
 
 /// <summary>Host → App once ready. AdapterLuid must match the App's compositor adapter for sharing.</summary>
-public sealed record HostReady(long AdapterLuid) : ControlMessage;
+public sealed record HostReady(long AdapterLuid) : ControlMessage
+{
+    /// <summary>Optional capability reported by newer RasterHost builds; absent means unsupported.</summary>
+    public bool HdrScRgbSurfaceSupported { get; init; }
+    public bool ImageRefreshSupported { get; init; }
+}
 
 /// <summary>ParserHost → App after the authenticated handshake completes.</summary>
 public sealed record ParserReady : ControlMessage;
@@ -74,6 +82,8 @@ public sealed record PreviewOpen(string RequestId, string Path, FileProbe Probe)
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
     public bool PrepareAnimation { get; init; }
+    /// <summary>True when the App window is currently on an HDR-capable display.</summary>
+    public bool HdrDisplayEnabled { get; init; }
 }
 
 /// <summary>App → preview host: open the exact read-only file object duplicated into the host.</summary>
@@ -83,6 +93,8 @@ public sealed record PreviewOpenHandle(
     public uint TargetWidth { get; init; }
     public uint TargetHeight { get; init; }
     public bool PrepareAnimation { get; init; }
+    /// <summary>True when the App window is currently on an HDR-capable display.</summary>
+    public bool HdrDisplayEnabled { get; init; }
 }
 
 /// <summary>
@@ -110,7 +122,23 @@ public sealed record PreviewSurface(
 {
     public string TransferId { get; init; } = "";
     public ImageWaveform? Waveform { get; init; }
+
+    /// <summary>
+    /// True only for a producer-validated FP16 scRGB surface. Older peers omit
+    /// this field and remain SDR-compatible.
+    /// </summary>
+    public bool? IsHdr { get; init; }
+    /// <summary>Zero for the initial image; positive for a display-policy refresh.</summary>
+    public long ImageGeneration { get; init; }
 }
+
+/// <summary>Re-render a retained image HANDLE without reopening its logical path.</summary>
+public sealed record PreviewImageRefresh(string RequestId, long ImageGeneration, bool HdrDisplayEnabled) : ControlMessage;
+
+/// <summary>Cancel/release one refresh after its surface is discarded or replaced.</summary>
+public sealed record PreviewImageRefreshClose(string RequestId, long ImageGeneration) : ControlMessage;
+
+public sealed record PreviewImageRefreshError(string RequestId, long ImageGeneration) : ControlMessage;
 
 /// <summary>Bounded RGB density scope derived from decoded pixels; channels are planar and row-major.</summary>
 public sealed record ImageWaveform(int Width, int Height, byte[] RgbDensity);
@@ -162,8 +190,22 @@ public readonly record struct PdfPageGeometry(double Width, double Height);
 /// <summary>Host → App: terminal failure for a RequestId.</summary>
 public sealed record PreviewError(string RequestId, string Message) : ControlMessage
 {
+    public const string StableFailureMessage = "Preview failed.";
+
     public string? Code { get; init; }
     public string? Format { get; init; }
+    public string? Phase { get; init; }
+
+    public static PreviewError InternalFailure(
+        string requestId,
+        string phase,
+        string? format = null)
+        => new(requestId, StableFailureMessage)
+        {
+            Code = PreviewErrorCodes.ContentFailed,
+            Format = PreviewFailureDiagnostics.NormalizeFormat(format),
+            Phase = PreviewFailureDiagnostics.NormalizePhase(phase),
+        };
 }
 
 /// <summary>App → Host: the preview region resized; host reallocates and emits a fresh PreviewSurface.</summary>
@@ -282,7 +324,14 @@ public sealed record PreviewAnimationFramesOpen(
 /// The App duplicates a read-only section handle and acknowledges consumption with close.
 /// </summary>
 public sealed record PreviewAnimationFramesReady(
-    string RequestId, string PreviewRequestId, long SectionHandle, int FrameCount, int Width, int Height, long PacketLength) : ControlMessage;
+    string RequestId,
+    string PreviewRequestId,
+    long SectionHandle,
+    int FrameCount,
+    int Width,
+    int Height,
+    long PacketLength,
+    bool IsTruncated = false) : ControlMessage;
 
 /// <summary>App → RasterHost: release an animation section after consumption.</summary>
 public sealed record PreviewAnimationFramesClose(string RequestId) : ControlMessage;

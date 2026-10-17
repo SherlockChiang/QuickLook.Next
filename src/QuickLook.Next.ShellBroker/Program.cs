@@ -22,6 +22,8 @@ catch (Exception ex)
     try { File.WriteAllText(Path.Combine(writableRoot, "startup-failure.txt"), ex.ToString()); } catch { }
     return;
 }
+DiagLog.InitInDirectory(writableRoot, "shell-broker.log");
+DiagLog.Write("ShellBroker", $"start pid={Environment.ProcessId} pipe={pipeName}");
 using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None);
 try { pipe.Connect(5000); }
 catch (Exception ex)
@@ -67,7 +69,7 @@ try
                     if (activeRequest is not null)
                     {
                         request.Dispose();
-                        channel.SendError(requestId, "ShellBroker already has an active request.");
+                        channel.SendError(requestId);
                         break;
                     }
                     activeRequest = request;
@@ -79,7 +81,7 @@ try
                     byte[]? packet = NativeThumbnail.TryGetPacket(path, size, request.Cancellation.Token);
                     if (packet is null)
                     {
-                        channel.SendError(requestId, "Shell thumbnail provider returned no image.");
+                        channel.SendError(requestId);
                         request.HandoffGate.Release();
                         break;
                     }
@@ -95,7 +97,8 @@ try
                 }
                 catch (Exception ex)
                 {
-                    try { channel.SendError(requestId, ex.Message); } catch { }
+                    DiagLog.Write("ShellBroker", $"thumbnail request failed request={requestId}: {ex}");
+                    try { channel.SendError(requestId); } catch { }
                 }
                 finally
                 {
@@ -203,8 +206,8 @@ sealed class BrokerChannel(Stream stream) : IDisposable
         lock (_writeLock) _writer.WriteLine(line);
     }
 
-    public void SendError(string requestId, string message)
-        => Send($"ERROR\t{requestId}\t{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(message))}");
+    public void SendError(string requestId)
+        => Send($"ERROR\t{requestId}\t{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(ShellBrokerProtocol.StableErrorMessage))}");
 
     public void Dispose()
     {

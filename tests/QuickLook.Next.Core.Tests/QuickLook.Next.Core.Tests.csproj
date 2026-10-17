@@ -20,6 +20,8 @@
   <ItemGroup>
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewSession.cs"
              Link="AppModel\PreviewSession.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\ImageDisplayRefreshState.cs"
+             Link="AppModel\ImageDisplayRefreshState.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewLifecycleTiming.cs"
              Link="AppModel\PreviewLifecycleTiming.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\SyntaxHighlighter.cs"
@@ -34,6 +36,8 @@
              Link="AppModel\PdfTextController.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PdfDocumentStatePolicy.cs"
              Link="AppModel\PdfDocumentStatePolicy.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\PdfViewportUpdateScheduler.cs"
+             Link="AppModel\PdfViewportUpdateScheduler.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\OfficeCoveragePolicy.cs"
              Link="AppModel\OfficeCoveragePolicy.cs" />
   </ItemGroup>

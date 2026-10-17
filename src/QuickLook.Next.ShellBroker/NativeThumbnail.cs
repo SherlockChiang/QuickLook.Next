@@ -18,9 +18,9 @@ internal static class NativeThumbnail
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_get_thumbnail_cancelable_with_flags(
-        byte[] pathUtf8, nuint pathLen, int size, uint flags, byte[] outBuf, nuint outCap, IntPtr cancelCb);
+            [In] byte[] pathUtf8, nuint pathLen, int size, uint flags, [In, Out] byte[] outBuf, nuint outCap, IntPtr cancelCb);
 
     public static byte[]? TryGetPacket(string path, int size, CancellationToken cancellationToken)
     {

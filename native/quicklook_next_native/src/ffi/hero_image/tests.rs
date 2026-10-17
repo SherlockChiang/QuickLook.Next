@@ -20,6 +20,7 @@ fn hero_exports_cancel_before_file_access() {
 
     for call in calls {
         assert_eq!(
+            // SAFETY: path and exclusive output are disjoint live arrays; cancellation avoids I/O.
             unsafe {
                 call(
                     path.as_ptr(),
@@ -41,6 +42,7 @@ fn handle_hero_exports_cancel_before_handle_access() {
         ql_extract_office_image_handle,
         ql_extract_package_icon_handle,
     ] {
+        // SAFETY: required is aligned/writable; cancellation rejects null inputs before access.
         let status = unsafe {
             call(
                 0,
@@ -58,6 +60,7 @@ fn handle_hero_exports_cancel_before_handle_access() {
         required = usize::MAX;
     }
 
+    // SAFETY: required is aligned/writable; cancellation rejects null inputs before access.
     let layout_status = unsafe {
         ql_extract_office_layout_image_handle(
             0,

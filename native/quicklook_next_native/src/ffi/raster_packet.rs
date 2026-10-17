@@ -29,7 +29,11 @@ fn write_checked_raster_packet(width: u32, height: u32, bgra: &[u8], output: &mu
     true
 }
 
-pub(crate) fn write_raster_packet(
+/// # Safety
+/// A sufficient, non-null output must contain initialized bytes in one live allocation,
+/// be exclusively writable for `out_cap` bytes
+/// and must not overlap `bgra` for the duration of this call.
+pub(crate) unsafe fn write_raster_packet(
     width: u32,
     height: u32,
     bgra: &[u8],
@@ -45,6 +49,7 @@ pub(crate) fn write_raster_packet(
     if out.is_null() || out_cap < total {
         return -(total as i32);
     }
+    // SAFETY: The caller supplies exclusive, non-overlapping output and total fits its capacity.
     let output = unsafe { std::slice::from_raw_parts_mut(out, total) };
     if !write_checked_raster_packet(width, height, bgra, output) {
         return -2;
@@ -53,8 +58,10 @@ pub(crate) fn write_raster_packet(
 }
 
 /// # Safety
-/// `out_required` must be writable. When the output buffer is large enough, `out_buf` must be
-/// writable for `out_cap` bytes and must not overlap `bgra`.
+/// `out_required` must be non-null, aligned and exclusively writable for one `usize`.
+/// When the output buffer is large enough, `out_buf` must be exclusively writable
+/// for `out_cap` initialized bytes in one live allocation. Both output ranges must be disjoint
+/// from each other and `bgra`, and remain valid for this call.
 pub(crate) unsafe fn write_raster_packet_v2(
     width: u32,
     height: u32,
@@ -63,10 +70,12 @@ pub(crate) unsafe fn write_raster_packet_v2(
     out_cap: usize,
     out_required: *mut usize,
 ) -> i32 {
+    // SAFETY: The caller supplies an aligned, exclusively writable scalar.
     unsafe { *out_required = 0 };
     let Some(total) = checked_raster_packet_length(width, height, bgra.len()) else {
         return QL_ERROR_INTERNAL;
     };
+    // SAFETY: The same scalar remains writable and disjoint from output and bgra.
     unsafe { *out_required = total };
     if out_cap < total {
         return QL_ERROR_BUFFER_TOO_SMALL;
@@ -74,6 +83,7 @@ pub(crate) unsafe fn write_raster_packet_v2(
     if out_buf.is_null() {
         return QL_ERROR_INVALID_ARGUMENT;
     }
+    // SAFETY: The caller guarantees exclusive output disjoint from bgra/scalar; total fits capacity.
     let output = unsafe { std::slice::from_raw_parts_mut(out_buf, total) };
     if !write_checked_raster_packet(width, height, bgra, output) {
         return QL_ERROR_INTERNAL;
@@ -93,6 +103,7 @@ mod tests {
         let mut required = 0usize;
 
         assert_eq!(
+            // SAFETY: packet/required are disjoint exclusive storage, separate from the bgra array.
             unsafe {
                 write_raster_packet_v2(
                     2,
@@ -112,6 +123,7 @@ mod tests {
 
         required = usize::MAX;
         assert_eq!(
+            // SAFETY: Buffers/scalar remain disjoint and live; invalid layout returns before copying.
             unsafe {
                 write_raster_packet_v2(
                     2,

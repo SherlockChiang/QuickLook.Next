@@ -45,6 +45,7 @@ internal sealed class PdfPreviewPresenter
     private readonly DispatcherQueue _dispatcherQueue;
     private readonly Func<Compositor?> _compositorProvider;
     private readonly Func<RasterHostSupervisor?> _supervisorProvider;
+    private readonly PdfViewportUpdateScheduler _viewportUpdates;
 
     private readonly Dictionary<int, Border> _pageHosts = new();
     private readonly HashSet<int> _requestedPages = new();
@@ -89,9 +90,12 @@ internal sealed class PdfPreviewPresenter
         _dispatcherQueue = dispatcherQueue;
         _compositorProvider = compositorProvider;
         _supervisorProvider = supervisorProvider;
+        _viewportUpdates = new PdfViewportUpdateScheduler(
+            callback => _dispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () => callback()),
+            RequestVisiblePages);
         _pagesPanel.Spacing = 0;
-        _scrollViewer.ViewChanged += (_, _) => RequestVisiblePages();
-        _scrollViewer.SizeChanged += (_, _) => RequestVisiblePages();
+        _scrollViewer.ViewChanged += (_, _) => QueueVisiblePageRequest();
+        _scrollViewer.SizeChanged += (_, _) => QueueVisiblePageRequest();
     }
 
     public PdfPreviewResult Render(string requestId, PreviewReady ready, (double Width, double Height) maxContent)
@@ -169,6 +173,15 @@ internal sealed class PdfPreviewPresenter
     public bool AttachSurface(PreviewSurface surface, out string? error)
     {
         error = null;
+        if (!PreviewSurfaceFormats.IsKnown(surface.Format)
+            || (surface.IsHdr is { } declaredHdr
+                && declaredHdr != PreviewSurfaceFormats.IsHdr(surface.Format)))
+        {
+            CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
+            error = "surface format is unsupported or inconsistent";
+            return false;
+        }
+
         Compositor? compositor = _compositorProvider();
         if (compositor is null || !_pageHosts.TryGetValue(surface.PageIndex, out var pageHost))
         {
@@ -229,6 +242,7 @@ internal sealed class PdfPreviewPresenter
 
     public void RequestVisiblePages()
     {
+        _viewportUpdates.Reset();
         RasterHostSupervisor? supervisor = _supervisorProvider();
         if (supervisor is null || _requestId is null || _scrollViewer.Visibility != Visibility.Visible)
             return;
@@ -286,6 +300,7 @@ internal sealed class PdfPreviewPresenter
 
     public void Clear()
     {
+        _viewportUpdates.Reset();
         string? requestId = _requestId;
         RasterHostSupervisor? supervisor = requestId is null ? null : _supervisorProvider();
         foreach (int pageIndex in _requestedPages.ToArray())
@@ -325,6 +340,12 @@ internal sealed class PdfPreviewPresenter
         _scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: false);
         RequestVisiblePages();
         return true;
+    }
+
+    private void QueueVisiblePageRequest()
+    {
+        if (_requestId is not null)
+            _viewportUpdates.Queue();
     }
 
     private void SetCurrentPage(int pageIndex)

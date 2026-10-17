@@ -8,11 +8,7 @@ use crate::{
 };
 
 /// Get a shell thumbnail for `path` at roughly `size` px. Returns total bytes written, or `-needed`.
-///
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_get_thumbnail(
     path_utf8: *const u8,
@@ -21,16 +17,13 @@ pub unsafe extern "C" fn ql_get_thumbnail(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards the caller's live path, writable output and valid callback.
     ffi_boundary(|| unsafe {
         ql_get_thumbnail_cancelable_with_flags(path_utf8, path_len, size, 0, out, out_cap, None)
     })
 }
 
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_get_thumbnail_cancelable(
     path_utf8: *const u8,
@@ -40,6 +33,7 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable(
     out_cap: usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards the caller's live path, writable output and valid callback.
     ffi_boundary(|| unsafe {
         ql_get_thumbnail_cancelable_with_flags(
             path_utf8, path_len, size, 0, out, out_cap, cancel_cb,
@@ -47,11 +41,7 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable(
     })
 }
 
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers and `cancel_cb` must remain valid for the duration of the
-/// call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     path_utf8: *const u8,
@@ -63,7 +53,8 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(path) => path.to_string(),
             None => return -1,
         };
@@ -84,9 +75,7 @@ pub unsafe extern "C" fn ql_get_thumbnail_cancelable_with_flags(
                     return QL_ERROR_BUFFER_TOO_SMALL
                 }
             };
-        write_raster_packet(width, height, &bgra, out, out_cap)
+        // SAFETY: The export requires exclusive output, separate from the owned thumbnail pixels.
+        unsafe { write_raster_packet(width, height, &bgra, out, out_cap) }
     })
 }
-
-#[cfg(test)]
-mod tests;

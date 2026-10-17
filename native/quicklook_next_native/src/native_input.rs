@@ -29,12 +29,16 @@ pub fn reopen_borrowed_disk_file(
 
     let source = HANDLE(raw_handle as RawHandle);
     let mut source_length = 0i64;
-    if unsafe { GetFileType(source) } != FILE_TYPE_DISK
-        || unsafe { GetFileSizeEx(source, &mut source_length) }.is_err()
-        || source_length < 0
-    {
+    // SAFETY: Win32 validates the raw value; neither API adopts it. The size output is local.
+    let source_is_disk = unsafe { GetFileType(source) } == FILE_TYPE_DISK;
+    let valid_source = source_is_disk && {
+        // SAFETY: source_length is a live writable i64; Win32 rejects invalid handles.
+        unsafe { GetFileSizeEx(source, &mut source_length) }.is_ok()
+    };
+    if !valid_source || source_length < 0 {
         return Err(NativeInputError::InvalidHandle);
     }
+    // SAFETY: Win32 validates source and returns a distinct owned handle; no pointer is retained.
     let reopened = unsafe {
         ReOpenFile(
             source,
@@ -73,16 +77,20 @@ pub fn reopen_borrowed_disk_file_for_output(
 
     let source = HANDLE(raw_handle as RawHandle);
     let mut source_length = 0i64;
-    if unsafe { GetFileType(source) } != FILE_TYPE_DISK
-        || unsafe { GetFileSizeEx(source, &mut source_length) }.is_err()
-        || source_length < 0
-    {
+    // SAFETY: This query validates the raw value without adopting caller ownership.
+    let source_is_disk = unsafe { GetFileType(source) } == FILE_TYPE_DISK;
+    let valid_source = source_is_disk && {
+        // SAFETY: source_length is a live writable i64; Win32 rejects invalid handles.
+        unsafe { GetFileSizeEx(source, &mut source_length) }.is_ok()
+    };
+    if !valid_source || source_length < 0 {
         return Err(NativeInputError::InvalidHandle);
     }
     if source_length as u64 != expected_initial_length {
         return Err(NativeInputError::LengthMismatch);
     }
 
+    // SAFETY: ReOpenFile validates source and creates a separately owned writable handle.
     let reopened = unsafe {
         ReOpenFile(
             source,

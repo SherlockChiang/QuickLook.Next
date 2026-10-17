@@ -21,6 +21,7 @@ fn simple_preview_exports_honor_cancellation_before_file_access() {
     ];
 
     for call in calls {
+        // SAFETY: path/output are disjoint live arrays and the callback has static lifetime.
         let result = unsafe {
             call(
                 path.as_ptr(),
@@ -32,6 +33,7 @@ fn simple_preview_exports_honor_cancellation_before_file_access() {
         };
         assert_eq!(result, -3);
     }
+    // SAFETY: path/output are disjoint live arrays and the callback has static lifetime.
     let archive_result = unsafe {
         ql_preview_archive(
             path.as_ptr(),
@@ -51,12 +53,14 @@ fn path_preview_exports_reject_invalid_pointer_contracts() {
     let mut output = [0u8; 16];
 
     assert_eq!(
+        // SAFETY: The live path is never accessed because the null output is rejected first.
         unsafe {
             ql_preview_text_cancelable(path.as_ptr(), path.len(), std::ptr::null_mut(), 0, None)
         },
         0
     );
     assert_eq!(
+        // SAFETY: The oversized path length is rejected before access to the dangling pointer.
         unsafe {
             ql_preview_text_cancelable(
                 dangling,
@@ -69,6 +73,7 @@ fn path_preview_exports_reject_invalid_pointer_contracts() {
         0
     );
     assert_eq!(
+        // SAFETY: The oversized path is rejected before either dangling input can be accessed.
         unsafe {
             ql_preview_info(
                 dangling,
@@ -89,6 +94,7 @@ fn path_preview_exports_reject_invalid_pointer_contracts() {
 fn info_preview_treats_invalid_optional_kind_as_empty() {
     let path = b"missing.file";
     let mut output = [0u8; 512];
+    // SAFETY: path/output are disjoint live arrays; the invalid null kind is never dereferenced.
     let written = unsafe {
         ql_preview_info(
             path.as_ptr(),
@@ -113,6 +119,7 @@ fn office_and_image_metadata_reject_invalid_paths_before_file_access() {
     let mut output = [0u8; 16];
 
     assert_eq!(
+        // SAFETY: The oversized path is rejected before the dangling input is accessed.
         unsafe {
             ql_preview_office(
                 dangling,
@@ -125,6 +132,7 @@ fn office_and_image_metadata_reject_invalid_paths_before_file_access() {
         0
     );
     assert_eq!(
+        // SAFETY: The oversized path is rejected before the dangling input is accessed.
         unsafe {
             ql_preview_image_metadata(
                 dangling,

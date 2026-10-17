@@ -182,6 +182,12 @@ public sealed record ImageMetadata
     public ushort? Sharpness { get; init; }
     public ushort? GainControl { get; init; }
     public ushort? ColorSpace { get; init; }
+    /// <summary>HDR transfer function when explicitly identified by the codec/profile (PQ or HLG).</summary>
+    public string? HdrTransferFunction { get; init; }
+    /// <summary>HDR color primaries when explicitly identified by the codec/profile (normally BT.2020).</summary>
+    public string? HdrColorPrimaries { get; init; }
+    /// <summary>True only when transfer, primaries, and bit depth were all validated by the decoder.</summary>
+    public bool? HdrMetadataComplete { get; init; }
     public string? ExifVersion { get; init; }
     public string? CameraSerial { get; init; }
     public string? LensSerial { get; init; }

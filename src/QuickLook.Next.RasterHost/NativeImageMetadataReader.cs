@@ -25,16 +25,16 @@ internal static class NativeImageMetadataReader
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_image_metadata_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback cancelCb);
 
     public static async Task<NativeImageMetadataResult> TryReadHandleAsync(
         SafeFileHandle sourceHandle,

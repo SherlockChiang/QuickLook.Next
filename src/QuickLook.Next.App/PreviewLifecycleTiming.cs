@@ -50,4 +50,12 @@ internal sealed class PreviewLifecycleTiming
         Mark("terminal", $"outcome={outcome}");
         _terminal = true;
     }
+
+    public void Cancel(string outcome)
+    {
+        if (_terminal)
+            return;
+        Mark("cancel-requested");
+        Complete(outcome);
+    }
 }

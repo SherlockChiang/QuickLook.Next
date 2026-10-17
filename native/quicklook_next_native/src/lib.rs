@@ -6,6 +6,9 @@
 //!      thread message, so the (latency-critical) COM selection read happens off the hook callback.
 //!   3. Explorer current selection via COM (IShellWindows → IShellBrowser → IFolderView).
 
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::mem::size_of;
@@ -24,6 +27,7 @@ mod rar_listing;
 mod win32;
 
 include!("abi_generated.rs");
+mod abi_signatures_generated;
 
 // Keep moved archive-entry exports available to crate-local integration tests and adapters.
 #[allow(unused_imports)]
@@ -114,7 +118,27 @@ type Callback = unsafe extern "C" fn(*const u16);
 pub type CancelCallback = extern "C" fn() -> bool;
 pub type AnimationOutputCallback = extern "C" fn(usize) -> *mut u8;
 type AnimationFrameBgra = (u32, Vec<u8>);
-type DecodedAnimationBgra = (u32, u32, Vec<AnimationFrameBgra>);
+type DecodedAnimationBgra = (u32, u32, Vec<AnimationFrameBgra>, bool);
+
+// The packet header predates explicit truncation metadata. Keep the 12-byte ABI stable and use
+// the otherwise-unused high bit of the frame-count field as a sideband flag. Consumers mask the
+// bit before validating the count; packets emitted by older hosts (which never set it) remain
+// valid and are interpreted as complete.
+const ANIMATION_PACKET_TRUNCATED_FLAG: u32 = 0x8000_0000;
+const ANIMATION_PACKET_FRAME_COUNT_MASK: u32 = !ANIMATION_PACKET_TRUNCATED_FLAG;
+
+enum SelectionRequest {
+    Read {
+        tag: &'static str,
+        cancel_generation: u64,
+    },
+    Stop,
+}
+
+struct SelectionWorker {
+    sender: mpsc::SyncSender<SelectionRequest>,
+    thread: std::thread::JoinHandle<()>,
+}
 
 /// Reader adapter used at image-codec I/O boundaries. It cannot interrupt one already-running
 /// OS read or a codec's internal CPU loop, but it makes cancellation observable before and after
@@ -180,10 +204,26 @@ const SWITCH_TIMER_ID: usize = 1;
 static SWITCH_TIMER_ARMED: AtomicUsize = AtomicUsize::new(0);
 static SWITCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SWITCH_TIMER_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SELECTION_CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SELECTION_WORKER: Mutex<Option<SelectionWorker>> = Mutex::new(None);
 static SVG_FONT_DATABASE: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
 
 thread_local! {
     static SHELL_WINDOWS_CACHE: std::cell::RefCell<Option<IShellWindows>> = const { std::cell::RefCell::new(None) };
+}
+
+// Borrow the thread-affine apartment so cached interfaces are released before COM teardown,
+// including when a worker unwinds. The borrow also prevents moving this scope to another thread.
+struct ShellWindowsCacheScope<'a> {
+    _apartment: &'a win32::com::StaApartment,
+}
+
+impl Drop for ShellWindowsCacheScope<'_> {
+    fn drop(&mut self) {
+        // Drop the owned interface outside the RefCell borrow, while the apartment is still live.
+        let cached = SHELL_WINDOWS_CACHE.with(|cache| cache.borrow_mut().take());
+        drop(cached);
+    }
 }
 
 // A valid extended Windows path may contain 32,767 UTF-16 units, each requiring up to four UTF-8 bytes.
@@ -207,13 +247,22 @@ fn emit(msg: &str) {
     if let Some(cb) = cb {
         let mut wide: Vec<u16> = msg.encode_utf16().collect();
         wide.push(0);
+        // SAFETY: The registered callback remains callable; wide is nul-terminated and live
+        // until it returns. The callback must copy the data if it needs to retain it.
         unsafe { cb(wide.as_ptr()) };
     }
 }
 
 /// Register the managed callback (a function pointer obtained from a kept-alive delegate).
+///
+/// # Safety
+/// A registered callback must remain callable from worker threads until every producer is
+/// stopped and every in-flight call has returned, including after replacement or removal.
+/// It must not unwind across the C ABI. The UTF-16 argument is NUL-terminated and valid only
+/// during invocation; the callback must copy it before retaining its contents. Do not call
+/// blocking native lifecycle methods from the callback, as they may join the invoking thread.
 #[no_mangle]
-pub extern "C" fn ql_set_callback(cb: Option<Callback>) {
+pub unsafe extern "C" fn ql_set_callback(cb: Option<Callback>) {
     if let Ok(mut slot) = CALLBACK.lock() {
         *slot = cb;
     }
@@ -230,8 +279,10 @@ pub extern "C" fn ql_set_preview_visible(visible: i32) {
             PREVIEW_VISIBILITY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         SWITCH_GENERATION.fetch_add(1, Ordering::SeqCst);
         if !is_visible {
+            SELECTION_CANCEL_GENERATION.fetch_add(1, Ordering::SeqCst);
             let tid = HOOK_TID.load(Ordering::SeqCst);
             if tid != 0 {
+                // SAFETY: This private message carries only an integer generation, not a pointer.
                 unsafe {
                     let _ = PostThreadMessageW(
                         tid,
@@ -249,7 +300,9 @@ pub extern "C" fn ql_set_preview_visible(visible: i32) {
 #[no_mangle]
 pub extern "C" fn ql_start() -> i32 {
     ffi_boundary(|| {
+        start_selection_worker();
         let Ok(mut runtime) = HOOK_THREAD.lock() else {
+            stop_selection_worker();
             return -8;
         };
         if runtime.is_some() {
@@ -277,10 +330,12 @@ pub extern "C" fn ql_stop() -> i32 {
             .ok()
             .and_then(|mut runtime| runtime.take());
         let Some(thread) = thread else {
+            stop_selection_worker();
             return 1;
         };
         let tid = HOOK_TID.load(Ordering::SeqCst);
         if tid != 0 {
+            // SAFETY: WM_QUIT has no pointer payload and targets the tracked pump thread.
             unsafe {
                 let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
             }
@@ -294,13 +349,24 @@ pub extern "C" fn ql_stop() -> i32 {
         PREVIEW_VISIBILITY_GENERATION.fetch_add(1, Ordering::SeqCst);
         SWITCH_TIMER_ARMED.store(0, Ordering::SeqCst);
         SWITCH_GENERATION.fetch_add(1, Ordering::SeqCst);
+        SELECTION_CANCEL_GENERATION.fetch_add(1, Ordering::SeqCst);
+        stop_selection_worker();
         1
     })
 }
 
 fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
+    let _apartment = match win32::com::StaApartment::initialize() {
+        Ok(apartment) => apartment,
+        Err(error) => {
+            emit(&format!("HOOK_FAILED\tCOM\t{}", error.code().0));
+            let _ = ready_tx.send(false);
+            return;
+        }
+    };
+    // SAFETY: Hooks/timers are installed and removed on this pump thread; callback structs
+    // are supplied by Windows, MSG is local writable storage, and messages carry no pointers.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         HOOK_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
 
         let keyboard_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), None, 0) {
@@ -309,7 +375,6 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
                 emit(&format!("HOOK_FAILED\tKEYBOARD\t{}", e.code().0));
                 let _ = ready_tx.send(false);
                 HOOK_TID.store(0, Ordering::SeqCst);
-                CoUninitialize();
                 return;
             }
         };
@@ -336,7 +401,7 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
             match msg.message {
                 WM_QL_PREVIEW => {
                     invalidate_switch_timer();
-                    do_selection_and_emit("OPEN");
+                    request_selection("OPEN");
                 }
                 WM_QL_SWITCH_DELAYED => {
                     // Delayed switch: Explorer needs a beat to update its selection after the arrow key.
@@ -380,30 +445,110 @@ fn hook_thread(ready_tx: mpsc::SyncSender<bool>) {
         }
         HOOK_TID.store(0, Ordering::SeqCst);
         emit("HOOK_STOPPED");
-        CoUninitialize();
     }
 }
 
 unsafe extern "system" fn switch_timer_proc(_hwnd: HWND, _msg: u32, id: usize, _tick: u32) {
-    let _ = KillTimer(None, id);
+    // SAFETY: Windows invokes this callback on the pump thread that owns this thread timer.
+    let _ = unsafe { KillTimer(None, id) };
     let generation = SWITCH_TIMER_GENERATION.load(Ordering::SeqCst);
     if SWITCH_TIMER_ARMED.swap(0, Ordering::SeqCst) != 0
         && SWITCH_GENERATION.load(Ordering::SeqCst) == generation
         && PREVIEW_VISIBLE.load(Ordering::SeqCst)
     {
-        do_selection_and_emit("SWITCH");
+        request_selection("SWITCH");
     }
+}
+
+/// Keep Explorer COM calls off the hook message pump. The bounded channel deliberately drops a
+/// request while one read and one newer request are already in flight; the App's switch debounce
+/// then coalesces the resulting intent and the next physical key can request a fresh selection.
+fn request_selection(tag: &'static str) {
+    let Ok(worker) = SELECTION_WORKER.lock() else {
+        return;
+    };
+    let Some(worker) = worker.as_ref() else {
+        return;
+    };
+    let _ = worker.sender.try_send(SelectionRequest::Read {
+        tag,
+        cancel_generation: SELECTION_CANCEL_GENERATION.load(Ordering::SeqCst),
+    });
+}
+
+fn accepts_selection_request(
+    request_cancel_generation: u64,
+    current_cancel_generation: u64,
+    tag: &str,
+    preview_visible: bool,
+) -> bool {
+    request_cancel_generation == current_cancel_generation && (tag != "SWITCH" || preview_visible)
+}
+
+fn start_selection_worker() {
+    let Ok(mut slot) = SELECTION_WORKER.lock() else {
+        return;
+    };
+    if slot.is_some() {
+        return;
+    }
+    let (sender, receiver) = mpsc::sync_channel(1);
+    // All Shell interfaces stay on this fresh worker's COM apartment; requests
+    // and callbacks carry owned data, and COM teardown occurs on the same thread.
+    let thread = std::thread::spawn(move || {
+        let Ok(_apartment) = win32::com::StaApartment::initialize() else {
+            return;
+        };
+        let _cache_scope = ShellWindowsCacheScope {
+            _apartment: &_apartment,
+        };
+        while let Ok(request) = receiver.recv() {
+            match request {
+                SelectionRequest::Read {
+                    tag,
+                    cancel_generation,
+                } if accepts_selection_request(
+                    cancel_generation,
+                    SELECTION_CANCEL_GENERATION.load(Ordering::SeqCst),
+                    tag,
+                    PREVIEW_VISIBLE.load(Ordering::SeqCst),
+                ) =>
+                {
+                    do_selection_and_emit(tag)
+                }
+                SelectionRequest::Read { .. } => {}
+                SelectionRequest::Stop => break,
+            }
+        }
+    });
+    *slot = Some(SelectionWorker { sender, thread });
+}
+
+fn stop_selection_worker() {
+    let Ok(mut slot) = SELECTION_WORKER.lock() else {
+        return;
+    };
+    let Some(worker) = slot.take() else {
+        return;
+    };
+    // A blocking stop is intentional: it lets one in-flight COM read release its apartment and
+    // keeps ql_stop's ownership/teardown boundary deterministic.
+    let _ = worker.sender.send(SelectionRequest::Stop);
+    drop(slot);
+    let _ = worker.thread.join();
 }
 
 unsafe fn cancel_switch_timer() {
     if SWITCH_TIMER_ARMED.swap(0, Ordering::SeqCst) != 0 {
-        let _ = KillTimer(None, SWITCH_TIMER_ID);
+        // SAFETY: The caller is the hook pump; the ID refers to its thread-local timer.
+        let _ = unsafe { KillTimer(None, SWITCH_TIMER_ID) };
     }
 }
 
 unsafe fn invalidate_switch_timer() {
     SWITCH_GENERATION.fetch_add(1, Ordering::SeqCst);
-    cancel_switch_timer();
+    // SAFETY: The caller is the hook pump that owns the switch timer.
+    unsafe { cancel_switch_timer() };
 }
 
 fn accepts_switch_event(
@@ -430,14 +575,18 @@ fn esc_close_should_fire(
 /// No allocations, no locks, no callback into managed code — all of that happens on the pump thread.
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
-        let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        // SAFETY: For HC_ACTION Windows supplies a live, aligned KBDLLHOOKSTRUCT for this callback.
+        let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let tid = HOOK_TID.load(Ordering::SeqCst);
         let m = wparam.0 as u32;
         let is_down = m == WM_KEYDOWN || m == WM_SYSKEYDOWN;
         let is_up = m == WM_KEYUP || m == WM_SYSKEYUP;
-        let bare_key = !modifier_key_down();
-        let explorer_foreground = foreground_is_explorer_window();
-        let text_input_active = explorer_foreground && foreground_text_input_active();
+        // SAFETY: These queries run on the hook thread and use only Win32 handles and local buffers.
+        let bare_key = !unsafe { modifier_key_down() };
+        // SAFETY: The queried HWND is used only for synchronous window-class lookup.
+        let explorer_foreground = unsafe { foreground_is_explorer_window() };
+        // SAFETY: Focus queries write to bounded local GUITHREADINFO/class-name buffers.
+        let text_input_active = explorer_foreground && unsafe { foreground_text_input_active() };
 
         if kb.vkCode == VK_SPACE_U32 {
             if is_down
@@ -451,7 +600,8 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 } else {
                     WM_QL_PREVIEW
                 };
-                let _ = PostThreadMessageW(tid, message, WPARAM(0), LPARAM(0));
+                // SAFETY: The message carries only integer values; no borrowed pointer escapes.
+                let _ = unsafe { PostThreadMessageW(tid, message, WPARAM(0), LPARAM(0)) };
             } else if is_up {
                 SPACE_HELD.store(false, Ordering::SeqCst);
             }
@@ -466,12 +616,15 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 && PREVIEW_VISIBLE.load(Ordering::SeqCst)
             {
                 let generation = PREVIEW_VISIBILITY_GENERATION.load(Ordering::SeqCst);
-                let _ = PostThreadMessageW(
-                    tid,
-                    WM_QL_SWITCH_DELAYED,
-                    WPARAM(generation as usize),
-                    LPARAM(0),
-                );
+                // SAFETY: This private message carries an integer generation, not a pointer.
+                let _ = unsafe {
+                    PostThreadMessageW(
+                        tid,
+                        WM_QL_SWITCH_DELAYED,
+                        WPARAM(generation as usize),
+                        LPARAM(0),
+                    )
+                };
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
             // Esc closes the preview only while the shell or the preview window owns focus and
@@ -479,24 +632,28 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             // never pay for GetGUIThreadInfo on the hook thread.
             let preview_visible = PREVIEW_VISIBLE.load(Ordering::SeqCst);
             if is_down && (explorer_foreground || preview_visible) {
-                let foreground_text_input = foreground_text_input_active();
+                // SAFETY: Focus queries use live local output buffers and do not retain HWNDs.
+                let foreground_text_input = unsafe { foreground_text_input_active() };
                 if esc_close_should_fire(
                     explorer_foreground,
                     preview_visible,
                     foreground_text_input,
                 ) {
-                    let _ = PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0));
+                    // SAFETY: This private message has no pointer payload.
+                    let _ = unsafe { PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0)) };
                 }
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
             if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
             {
-                let _ = PostThreadMessageW(tid, WM_QL_ZOOM_IN, WPARAM(0), LPARAM(0));
+                // SAFETY: This private message has no pointer payload.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QL_ZOOM_IN, WPARAM(0), LPARAM(0)) };
             }
         } else if matches!(kb.vkCode, VK_OEM_MINUS_U32 | VK_SUBTRACT_U32) {
             if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
             {
-                let _ = PostThreadMessageW(tid, WM_QL_ZOOM_OUT, WPARAM(0), LPARAM(0));
+                // SAFETY: This private message has no pointer payload.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QL_ZOOM_OUT, WPARAM(0), LPARAM(0)) };
             }
         } else if kb.vkCode == VK_F5_U32 {
             if is_down
@@ -504,7 +661,8 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 && PREVIEW_VISIBLE.load(Ordering::SeqCst)
                 && !F5_HELD.swap(true, Ordering::SeqCst)
             {
-                let _ = PostThreadMessageW(tid, WM_QL_RELOAD, WPARAM(0), LPARAM(0));
+                // SAFETY: This private message has no pointer payload.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QL_RELOAD, WPARAM(0), LPARAM(0)) };
             } else if is_up {
                 F5_HELD.store(false, Ordering::SeqCst);
             }
@@ -514,38 +672,46 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 && PREVIEW_VISIBLE.load(Ordering::SeqCst)
                 && !F11_HELD.swap(true, Ordering::SeqCst)
             {
-                let _ = PostThreadMessageW(tid, WM_QL_FULLSCREEN, WPARAM(0), LPARAM(0));
+                // SAFETY: This private message has no pointer payload.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QL_FULLSCREEN, WPARAM(0), LPARAM(0)) };
             } else if is_up {
                 F11_HELD.store(false, Ordering::SeqCst);
             }
         }
     }
-    CallNextHookEx(None, code, wparam, lparam)
+    // SAFETY: Forward the original Windows callback arguments without dereferencing lparam.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 unsafe fn foreground_is_explorer_window() -> bool {
-    let foreground = GetForegroundWindow();
+    // SAFETY: GetForegroundWindow takes no pointers and transfers no HWND ownership.
+    let foreground = unsafe { GetForegroundWindow() };
     if foreground.0.is_null() {
         return false;
     }
-    root_window_is_explorer(foreground)
+    // SAFETY: The HWND is only passed back to Win32 for synchronous class-name lookup.
+    unsafe { root_window_is_explorer(foreground) }
 }
 
 unsafe fn modifier_key_down() -> bool {
-    key_down(VK_SHIFT_U32) || key_down(VK_CONTROL_U32) || key_down(VK_MENU_U32)
+    // SAFETY: These are valid virtual-key constants; queries have no pointer arguments.
+    unsafe { key_down(VK_SHIFT_U32) || key_down(VK_CONTROL_U32) || key_down(VK_MENU_U32) }
 }
 
 unsafe fn key_down(vk: u32) -> bool {
-    (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
+    // SAFETY: GetAsyncKeyState takes an integer key code and no borrowed storage.
+    (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0
 }
 
 unsafe fn foreground_text_input_active() -> bool {
-    let foreground = GetForegroundWindow();
+    // SAFETY: This query has no pointer arguments and returns a borrowed HWND.
+    let foreground = unsafe { GetForegroundWindow() };
     if foreground.0.is_null() {
         return false;
     }
 
-    let thread_id = GetWindowThreadProcessId(foreground, None);
+    // SAFETY: Win32 validates the borrowed HWND; no process-ID output pointer is supplied.
+    let thread_id = unsafe { GetWindowThreadProcessId(foreground, None) };
     if thread_id == 0 {
         return false;
     }
@@ -561,7 +727,8 @@ unsafe fn foreground_text_input_active() -> bool {
         hwndCaret: HWND(std::ptr::null_mut()),
         rcCaret: RECT::default(),
     };
-    if GetGUIThreadInfo(thread_id, &mut info).is_err() {
+    // SAFETY: info is initialized with the required cbSize and remains writable for this call.
+    if unsafe { GetGUIThreadInfo(thread_id, &mut info) }.is_err() {
         return false;
     }
 
@@ -575,7 +742,8 @@ unsafe fn foreground_text_input_active() -> bool {
     }
 
     let mut class_name = [0u16; 128];
-    let len = GetClassNameW(focus, &mut class_name);
+    // SAFETY: Win32 receives the bounded mutable array and does not retain it.
+    let len = unsafe { GetClassNameW(focus, &mut class_name) };
     if len <= 0 {
         return false;
     }
@@ -600,7 +768,8 @@ pub unsafe extern "C" fn ql_test_is_text_input_class(
     class_len: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+        // SAFETY: The export's caller keeps class_utf8 readable and immutable during this call.
+        let Some(class_name) = (unsafe { utf8_arg(class_utf8, class_len, 256) }) else {
             return 0;
         };
         if is_text_input_class_name(class_name) {
@@ -618,7 +787,8 @@ pub unsafe extern "C" fn ql_test_is_explorer_window_class(
     class_len: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let Some(class_name) = utf8_arg(class_utf8, class_len, 256) else {
+        // SAFETY: The export's caller keeps class_utf8 readable and immutable during this call.
+        let Some(class_name) = (unsafe { utf8_arg(class_utf8, class_len, 256) }) else {
             return 0;
         };
         if is_explorer_window_class_name(class_name) {
@@ -633,31 +803,40 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code == HC_ACTION as i32
         && PREVIEW_VISIBLE.load(Ordering::SeqCst)
         && wparam.0 as u32 == WM_LBUTTONUP
-        && mouse_up_target_is_explorer(lparam)
+        // SAFETY: HC_ACTION/WM_LBUTTONUP supplies a live MSLLHOOKSTRUCT for this callback.
+        && unsafe { mouse_up_target_is_explorer(lparam) }
     {
         let tid = HOOK_TID.load(Ordering::SeqCst);
         let generation = PREVIEW_VISIBILITY_GENERATION.load(Ordering::SeqCst);
-        let _ = PostThreadMessageW(
-            tid,
-            WM_QL_SWITCH_DELAYED,
-            WPARAM(generation as usize),
-            LPARAM(0),
-        );
+        // SAFETY: This private message carries an integer generation, not a pointer.
+        let _ = unsafe {
+            PostThreadMessageW(
+                tid,
+                WM_QL_SWITCH_DELAYED,
+                WPARAM(generation as usize),
+                LPARAM(0),
+            )
+        };
     }
-    CallNextHookEx(None, code, wparam, lparam)
+    // SAFETY: Forward the original Windows hook arguments without retaining their storage.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 unsafe fn mouse_up_target_is_explorer(lparam: LPARAM) -> bool {
     if lparam.0 == 0 {
         return false;
     }
-    let mouse = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-    let hwnd = WindowFromPoint(mouse.pt);
+    // SAFETY: The hook callback caller supplies a live, aligned MSLLHOOKSTRUCT.
+    let mouse = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+    // SAFETY: POINT is passed by value and the resulting HWND is borrowed.
+    let hwnd = unsafe { WindowFromPoint(mouse.pt) };
     if hwnd.0.is_null() {
         return false;
     }
-    let root = GetAncestor(hwnd, GA_ROOT);
-    root_window_is_explorer(root)
+    // SAFETY: Win32 validates this borrowed HWND; no pointer payload is passed.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    // SAFETY: The root HWND is used only for synchronous class-name lookup.
+    unsafe { root_window_is_explorer(root) }
 }
 
 unsafe fn root_window_is_explorer(root: HWND) -> bool {
@@ -666,7 +845,8 @@ unsafe fn root_window_is_explorer(root: HWND) -> bool {
     }
 
     let mut class_name = [0u16; 128];
-    let len = GetClassNameW(root, &mut class_name);
+    // SAFETY: The bounded local array is writable and not retained by Win32.
+    let len = unsafe { GetClassNameW(root, &mut class_name) };
     if len <= 0 {
         return false;
     }
@@ -679,16 +859,23 @@ unsafe fn root_window_is_explorer(root: HWND) -> bool {
 #[no_mangle]
 pub extern "C" fn ql_get_selection() {
     ffi_void_boundary(|| {
-        let h = std::thread::spawn(|| unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // Shell interfaces are created/used on this fresh thread's COM apartment.
+        let h = std::thread::spawn(|| {
+            let Ok(_apartment) = win32::com::StaApartment::initialize() else {
+                emit("SELECTION_ERR\tCOM_INIT");
+                return;
+            };
+            let _cache_scope = ShellWindowsCacheScope {
+                _apartment: &_apartment,
+            };
             do_selection_and_emit("SELECTION");
-            CoUninitialize();
         });
         let _ = h.join();
     });
 }
 
 fn do_selection_and_emit(tag: &str) {
+    // SAFETY: Only the initialized COM worker and the fresh selection STA call this function.
     match unsafe { get_explorer_selection() } {
         Ok(paths) if !paths.is_empty() => emit(&format!("{tag}\t{}", paths.join("\t"))),
         Ok(_) => emit(&format!("{tag}\t<no selection / not in Explorer>")),
@@ -700,20 +887,26 @@ fn do_selection_and_emit(tag: &str) {
 /// If the foreground window is not an Explorer window, returns empty (no preview) — so pressing
 /// space in another app doesn't trigger a preview from a lingering Explorer selection.
 unsafe fn get_explorer_selection() -> Result<Vec<String>> {
-    let foreground = GetForegroundWindow();
-    let mut shell_windows = cached_shell_windows()?;
-    let count = match shell_windows.Count() {
+    // SAFETY: This query takes no pointer arguments and returns a borrowed HWND.
+    let foreground = unsafe { GetForegroundWindow() };
+    // SAFETY: The caller runs in an initialized STA; the cache is thread-local.
+    let mut shell_windows = unsafe { cached_shell_windows() }?;
+    // SAFETY: The COM interface remains owned and is called on its originating STA.
+    let count = match unsafe { shell_windows.Count() } {
         Ok(count) => count,
         Err(_) => {
             SHELL_WINDOWS_CACHE.with(|cache| *cache.borrow_mut() = None);
-            shell_windows = cached_shell_windows()?;
-            shell_windows.Count()?
+            // SAFETY: Recreate the thread-local COM interface on the same initialized STA.
+            shell_windows = unsafe { cached_shell_windows() }?;
+            // SAFETY: The recreated interface remains alive on this STA.
+            unsafe { shell_windows.Count() }?
         }
     };
 
     for i in 0..count {
         let idx = VARIANT::from(i);
-        let disp = match shell_windows.Item(&idx) {
+        // SAFETY: idx is a live VARIANT and shell_windows remains alive on its STA.
+        let disp = match unsafe { shell_windows.Item(&idx) } {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -721,9 +914,11 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
             Ok(w) => w,
             Err(_) => continue,
         };
-        let hwnd = HWND(wb.HWND().unwrap_or(SHANDLE_PTR(0)).0 as *mut _);
+        // SAFETY: wb owns a valid interface on this STA; HWND is returned by value.
+        let hwnd = HWND(unsafe { wb.HWND() }.unwrap_or(SHANDLE_PTR(0)).0 as *mut _);
         if hwnd == foreground {
-            let paths = read_window_selection(&wb).unwrap_or_default();
+            // SAFETY: wb is a live Explorer interface on this initialized STA.
+            let paths = unsafe { read_window_selection(&wb) }.unwrap_or_default();
             return Ok(paths);
         }
     }
@@ -732,18 +927,25 @@ unsafe fn get_explorer_selection() -> Result<Vec<String>> {
 
 unsafe fn read_window_selection(wb: &IWebBrowser2) -> Result<Vec<String>> {
     let sp: IServiceProvider = wb.cast()?;
-    let browser: IShellBrowser = sp.QueryService(&SID_STopLevelBrowser)?;
-    let view: IShellView = browser.QueryActiveShellView()?;
+    // SAFETY: sp is owned on the current STA and QueryService uses the typed Shell interface IID.
+    let browser: IShellBrowser = unsafe { sp.QueryService(&SID_STopLevelBrowser) }?;
+    // SAFETY: browser remains alive on the same STA and returns an owned view interface.
+    let view: IShellView = unsafe { browser.QueryActiveShellView() }?;
     let folder_view: IFolderView = view.cast()?;
-    let items: IShellItemArray = folder_view.Items(SVGIO_SELECTION)?;
-    let n = items.GetCount()?;
+    // SAFETY: folder_view is an owned interface on this STA; the selection flag is valid.
+    let items: IShellItemArray = unsafe { folder_view.Items(SVGIO_SELECTION) }?;
+    // SAFETY: items remains owned and local to this STA.
+    let n = unsafe { items.GetCount() }?;
     if n == 0 {
         return Ok(Vec::new());
     }
-    let item = items.GetItemAt(0)?;
-    let pw = PwstrGuard(item.GetDisplayName(SIGDN_FILESYSPATH)?);
+    // SAFETY: The count check ensures index zero exists; items remains alive on this STA.
+    let item = unsafe { items.GetItemAt(0) }?;
+    // SAFETY: The successful Shell call returns a CoTaskMem-allocated string owned by the guard.
+    let pw = PwstrGuard(unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }?);
     let path =
-        pw.0.to_string()
+        // SAFETY: The Shell-provided, nul-terminated UTF-16 allocation remains owned by pw.
+        unsafe { pw.0.to_string() }
             .map_err(|_| Error::from_hresult(HRESULT(0x80070057u32 as i32)))?;
     Ok(vec![path])
 }
@@ -753,7 +955,9 @@ unsafe fn cached_shell_windows() -> Result<IShellWindows> {
         if let Some(shell_windows) = cache.borrow().as_ref() {
             return Ok(shell_windows.clone());
         }
-        let shell_windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
+        // SAFETY: The caller initialized this STA; the typed interface and CLSID are ShellWindows.
+        let shell_windows: IShellWindows =
+            unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }?;
         *cache.borrow_mut() = Some(shell_windows.clone());
         Ok(shell_windows)
     })
@@ -762,6 +966,7 @@ unsafe fn cached_shell_windows() -> Result<IShellWindows> {
 struct PwstrGuard(PWSTR);
 impl Drop for PwstrGuard {
     fn drop(&mut self) {
+        // SAFETY: The guard exclusively owns the CoTaskMem allocation returned by GetDisplayName.
         unsafe {
             CoTaskMemFree(Some(self.0 .0 as *const _));
         }
@@ -924,6 +1129,8 @@ struct AnimationHandleRequest {
     gif_only: bool,
 }
 
+/// # Safety
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
 #[allow(clippy::too_many_arguments)]
 unsafe fn decode_animation_frames_handle_v2(
     source_handle: isize,
@@ -941,6 +1148,7 @@ unsafe fn decode_animation_frames_handle_v2(
     if out_required.is_null() {
         return QL_ERROR_INVALID_ARGUMENT;
     }
+    // SAFETY: The caller supplies an aligned writable scalar, checked non-null above.
     unsafe { *out_required = 0 };
     if out_buf.is_null() && out_cap != 0 {
         return QL_ERROR_INVALID_ARGUMENT;
@@ -955,13 +1163,29 @@ unsafe fn decode_animation_frames_handle_v2(
         cancel_cb,
         gif_only,
     };
-    let (width, height, frames) = match unsafe { decode_animation_frames_handle(request) } {
-        Ok(decoded) => decoded,
-        Err(status) => return status,
-    };
-    unsafe { write_animation_frames_v2(width, height, &frames, out_buf, out_cap, out_required) }
+    let (width, height, frames, truncated) =
+        // SAFETY: The caller keeps its HANDLE and immutable logical-name buffer live for this call.
+        match unsafe { decode_animation_frames_handle(request) } {
+            Ok(decoded) => decoded,
+            Err(status) => return status,
+        };
+    // SAFETY: The caller supplies disjoint output/scalar storage; frames are Rust-owned.
+    unsafe {
+        write_animation_frames_v2(
+            width,
+            height,
+            &frames,
+            truncated,
+            out_buf,
+            out_cap,
+            out_required,
+        )
+    }
 }
 
+/// # Safety
+/// The request's input pointer, callback and borrowed-HANDLE requirements match
+/// `reopen_handle_input_v2`; output storage is owned by Rust.
 unsafe fn decode_animation_frames_handle(
     request: AnimationHandleRequest,
 ) -> std::result::Result<DecodedAnimationBgra, i32> {
@@ -969,6 +1193,7 @@ unsafe fn decode_animation_frames_handle(
         return Err(QL_ERROR_LIMIT_EXCEEDED);
     }
 
+    // SAFETY: The caller lends the HANDLE and logical-name storage; reopening creates an owned file.
     let (mut file, logical_name, _, _) = unsafe {
         reopen_handle_input_v2(
             request.source_handle,
@@ -1016,7 +1241,7 @@ unsafe fn decode_animation_frames_handle(
 /// Output layout matches `ql_decode_gif_frames_sized_cancelable`.
 ///
 /// # Safety
-/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_gif_frames_handle(
     source_handle: isize,
@@ -1030,6 +1255,7 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards its caller's live HANDLE and disjoint pointer ranges.
     ffi_boundary(|| unsafe {
         decode_animation_frames_handle_v2(
             source_handle,
@@ -1052,8 +1278,11 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle(
 /// managed buffer size.
 ///
 /// # Safety
-/// The caller retains ownership of `source_handle`; `output_cb` must return writable storage for
-/// exactly the requested byte count and keep it valid until this call returns.
+/// Input, scalar, cancellation and borrowed-HANDLE requirements match `ql_preview_text_handle`.
+/// `output_cb` must remain callable and not unwind. Any non-null result must be exclusively
+/// writable for the requested initialized byte count in one live allocation until this call returns,
+/// disjoint from the logical name, scalar and Rust-owned frame storage. The callback must not
+/// invalidate or modify those ranges. A null result is an error and is never dereferenced.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
     source_handle: isize,
@@ -1066,6 +1295,8 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
     output_cb: Option<AnimationOutputCallback>,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller supplies live input/scalar storage and a callback returning exclusive
+    // output for the requested size until return; frame storage is separately Rust-owned.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -1081,14 +1312,22 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
             cancel_cb,
             gif_only: true,
         };
-        let (width, height, frames) = match decode_animation_frames_handle(request) {
+        let (width, height, frames, truncated) = match decode_animation_frames_handle(request) {
             Ok(decoded) => decoded,
             Err(status) => return status,
         };
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_animation_frames_direct(width, height, &frames, out_required, output_cb, cancel_cb)
+        write_animation_frames_direct(
+            width,
+            height,
+            &frames,
+            truncated,
+            out_required,
+            output_cb,
+            cancel_cb,
+        )
     })
 }
 
@@ -1096,7 +1335,7 @@ pub unsafe extern "C" fn ql_decode_gif_frames_handle_direct(
 /// Output layout matches the existing path-based animation packet exports.
 ///
 /// # Safety
-/// The caller retains ownership of `source_handle` and must keep all pointers valid for this call.
+/// The pointer, callback and borrowed-HANDLE requirements match `ql_preview_text_handle`.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_animation_frames_handle(
     source_handle: isize,
@@ -1110,6 +1349,7 @@ pub unsafe extern "C" fn ql_decode_animation_frames_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The unsafe export forwards its caller's live HANDLE and disjoint pointer ranges.
     ffi_boundary(|| unsafe {
         decode_animation_frames_handle_v2(
             source_handle,
@@ -1214,7 +1454,8 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
+    // SAFETY: The unsafe export forwards its caller's input/output buffers unchanged.
+    ffi_boundary(|| unsafe {
         ql_decode_gif_frames_sized_cancelable(
             path_utf8,
             path_len,
@@ -1239,14 +1480,15 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_cancelable(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export's caller keeps the input readable and immutable during this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let (width, height, frames) =
+        let (width, height, frames, truncated) =
             match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
                 Some(decoded) => decoded,
                 None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
@@ -1254,15 +1496,22 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_animation_frames(width, height, frames, out, out_cap)
+        // SAFETY: The export's output contract supplies exclusive writable storage when sufficient.
+        unsafe { write_animation_frames(width, height, frames, truncated, out, out_cap) }
     })
 }
 
 /// Path compatibility form of the exact-size, single-decode GIF handoff.
 ///
 /// # Safety
-/// `output_cb` must return writable storage for exactly the requested byte count and keep it valid
-/// until this call returns.
+/// `path_utf8` must remain readable and immutable for `path_len` bytes in one live allocation.
+/// Non-null `out_required` must be aligned and exclusively writable for one `usize`, disjoint
+/// from the path. Null inputs are allowed only on paths that reject them before access.
+/// Both callbacks must remain callable for this call and must not unwind. A non-null output
+/// callback result must contain initialized bytes and be exclusively writable for the requested
+/// byte count in one live
+/// allocation until return, disjoint from the path, scalar and Rust-owned frame storage.
+/// Callbacks must not invalidate or modify those ranges. A null result is never dereferenced.
 #[no_mangle]
 pub unsafe extern "C" fn ql_decode_gif_frames_sized_direct(
     path_utf8: *const u8,
@@ -1273,6 +1522,8 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_direct(
     output_cb: Option<AnimationOutputCallback>,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller supplies readable input, aligned writable scalar and an output callback
+    // providing exclusive storage that remains live until return; no input borrow aliases output.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -1285,7 +1536,7 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_direct(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        let (width, height, frames) =
+        let (width, height, frames, truncated) =
             match decode_gif_frames_bgra(path, target_width, target_height, cancel_cb) {
                 Some(decoded) if !decoded.2.is_empty() => decoded,
                 _ if cancel_requested(cancel_cb) => return QL_ERROR_CANCELLED,
@@ -1294,7 +1545,15 @@ pub unsafe extern "C" fn ql_decode_gif_frames_sized_direct(
         if cancel_requested(cancel_cb) {
             return QL_ERROR_CANCELLED;
         }
-        write_animation_frames_direct(width, height, &frames, out_required, output_cb, cancel_cb)
+        write_animation_frames_direct(
+            width,
+            height,
+            &frames,
+            truncated,
+            out_required,
+            output_cb,
+            cancel_cb,
+        )
     })
 }
 
@@ -1308,7 +1567,8 @@ pub unsafe extern "C" fn ql_decode_webp_frames_sized(
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| {
+    // SAFETY: The unsafe export forwards its caller's input/output buffers unchanged.
+    ffi_boundary(|| unsafe {
         ql_decode_webp_frames_sized_cancelable(
             path_utf8,
             path_len,
@@ -1333,14 +1593,15 @@ pub unsafe extern "C" fn ql_decode_webp_frames_sized_cancelable(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export's caller keeps the input readable and immutable during this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let (width, height, frames) =
+        let (width, height, frames, truncated) =
             match decode_webp_frames_bgra(path, target_width, target_height, cancel_cb) {
                 Some(decoded) => decoded,
                 None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
@@ -1348,7 +1609,8 @@ pub unsafe extern "C" fn ql_decode_webp_frames_sized_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_animation_frames(width, height, frames, out, out_cap)
+        // SAFETY: The export's output contract supplies exclusive writable storage when sufficient.
+        unsafe { write_animation_frames(width, height, frames, truncated, out, out_cap) }
     })
 }
 
@@ -1364,19 +1626,21 @@ pub unsafe extern "C" fn ql_decode_png_frames_sized_cancelable(
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export's caller keeps the input readable and immutable during this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let (width, height, frames) =
+        let (width, height, frames, truncated) =
             match decode_png_frames_bgra(path, target_width, target_height, cancel_cb) {
                 Some(decoded) => decoded,
                 None => return if cancel_requested(cancel_cb) { -3 } else { -2 },
             };
-        write_animation_frames(width, height, frames, out, out_cap)
+        // SAFETY: The export's output contract supplies exclusive writable storage when sufficient.
+        unsafe { write_animation_frames(width, height, frames, truncated, out, out_cap) }
     })
 }
 
@@ -1847,7 +2111,15 @@ fn decode_gif_frames_bgra_reader<R: Read>(
     if cancel_requested(cancel_cb) {
         return None;
     }
-    Some((width, height, decoded))
+    let truncated = if decoded.len() >= max_frames {
+        reader.next_frame_info().ok()?.is_some()
+    } else {
+        false
+    };
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    Some((width, height, decoded, truncated))
 }
 
 const MAX_SVG_INPUT_BYTES: u64 = 16 * 1024 * 1024;
@@ -2045,7 +2317,7 @@ fn decode_webp_frames_bgra(
     }
     let (width, height, _, _, _, _, _, bgra) =
         decode_image_bgra(path, target_width, target_height, cancel_cb)?;
-    Some((width, height, vec![(100, bgra)]))
+    Some((width, height, vec![(100, bgra)], false))
 }
 
 fn decode_webp_frames_bgra_reader<R: Read + Seek>(
@@ -2108,10 +2380,15 @@ fn decode_png_frames_bgra_reader<R: Read + Seek>(
     )
 }
 
-fn write_animation_frames(
+/// # Safety
+/// A sufficient, non-null output must contain initialized bytes in one live allocation,
+/// be exclusively writable for `out_cap` bytes
+/// and must not alias frame storage for the duration of this call.
+unsafe fn write_animation_frames(
     width: u32,
     height: u32,
     frames: Vec<AnimationFrameBgra>,
+    truncated: bool,
     out: *mut u8,
     out_cap: usize,
 ) -> i32 {
@@ -2126,56 +2403,76 @@ fn write_animation_frames(
         return -(total as i32);
     }
 
+    // SAFETY: The caller supplies exclusive writable storage; total is checked against capacity.
     unsafe {
         let output = std::slice::from_raw_parts_mut(out, total);
-        if write_animation_frames_packet(width, height, &frames, output).is_err() {
+        if write_animation_frames_packet(width, height, &frames, truncated, output).is_err() {
             return -2;
         }
     }
     total as i32
 }
 
+/// # Safety
+/// `out_required` must be non-null, aligned and exclusively writable for one `usize`.
+/// A sufficient non-null `out` must be exclusively writable for `out_cap` initialized bytes in
+/// one live allocation. Output ranges must be disjoint from each other and every
+/// frame allocation, and remain valid for this call.
 unsafe fn write_animation_frames_v2(
     width: u32,
     height: u32,
     frames: &[(u32, Vec<u8>)],
+    truncated: bool,
     out: *mut u8,
     out_cap: usize,
     out_required: *mut usize,
 ) -> i32 {
+    // SAFETY: The caller supplies an aligned, exclusively writable scalar.
     unsafe { *out_required = 0 };
     let total = match animation_frames_packet_length(width, height, frames) {
         Ok(total) => total,
         Err(AnimationPacketError::Internal) => return QL_ERROR_INTERNAL,
         Err(AnimationPacketError::LimitExceeded) => return QL_ERROR_LIMIT_EXCEEDED,
     };
+    // SAFETY: The same caller-owned scalar remains exclusively writable.
     unsafe { *out_required = total };
     if out.is_null() || out_cap < total {
         return QL_ERROR_BUFFER_TOO_SMALL;
     }
 
+    // SAFETY: The caller guarantees exclusive output, disjoint from frames/scalar; total fits.
     let output = unsafe { std::slice::from_raw_parts_mut(out, total) };
-    match write_animation_frames_packet(width, height, frames, output) {
+    match write_animation_frames_packet(width, height, frames, truncated, output) {
         Ok(()) => QL_OK,
         Err(AnimationPacketError::Internal) => QL_ERROR_INTERNAL,
         Err(AnimationPacketError::LimitExceeded) => QL_ERROR_LIMIT_EXCEEDED,
     }
 }
 
+/// # Safety
+/// `out_required` must be non-null, aligned and exclusively writable for one `usize`,
+/// disjoint from every frame allocation. Callbacks must remain callable and not unwind.
+/// A non-null output callback result must contain initialized bytes and be exclusively writable
+/// for the requested length
+/// in one live allocation until return, disjoint from the scalar and all frame allocations.
+/// Callbacks must not invalidate or modify those ranges.
 unsafe fn write_animation_frames_direct(
     width: u32,
     height: u32,
     frames: &[(u32, Vec<u8>)],
+    truncated: bool,
     out_required: *mut usize,
     output_cb: Option<AnimationOutputCallback>,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller supplies an aligned, exclusively writable scalar.
     unsafe { *out_required = 0 };
     let total = match animation_frames_packet_length(width, height, frames) {
         Ok(total) => total,
         Err(AnimationPacketError::Internal) => return QL_ERROR_INTERNAL,
         Err(AnimationPacketError::LimitExceeded) => return QL_ERROR_LIMIT_EXCEEDED,
     };
+    // SAFETY: The same caller-owned scalar remains exclusively writable.
     unsafe { *out_required = total };
     let Some(output_cb) = output_cb else {
         return QL_ERROR_INVALID_ARGUMENT;
@@ -2184,11 +2481,19 @@ unsafe fn write_animation_frames_direct(
     if output_ptr.is_null() {
         return QL_ERROR_INTERNAL;
     }
+    // SAFETY: The output callback guarantees exclusive storage for total bytes until return,
+    // disjoint from frame data and out_required. The null result was rejected above.
     let output = unsafe { std::slice::from_raw_parts_mut(output_ptr, total) };
     if cancel_requested(cancel_cb) {
         return QL_ERROR_CANCELLED;
     }
-    output[0..4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
+    let frame_count = (frames.len() as u32 & ANIMATION_PACKET_FRAME_COUNT_MASK)
+        | if truncated {
+            ANIMATION_PACKET_TRUNCATED_FLAG
+        } else {
+            0
+        };
+    output[0..4].copy_from_slice(&frame_count.to_le_bytes());
     output[4..8].copy_from_slice(&width.to_le_bytes());
     output[8..12].copy_from_slice(&height.to_le_bytes());
     let mut offset = 12;
@@ -2251,6 +2556,7 @@ fn write_animation_frames_packet(
     width: u32,
     height: u32,
     frames: &[(u32, Vec<u8>)],
+    truncated: bool,
     output: &mut [u8],
 ) -> std::result::Result<(), AnimationPacketError> {
     let total = animation_frames_packet_length(width, height, frames)?;
@@ -2258,7 +2564,13 @@ fn write_animation_frames_packet(
         return Err(AnimationPacketError::Internal);
     }
 
-    output[0..4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
+    let frame_count = (frames.len() as u32 & ANIMATION_PACKET_FRAME_COUNT_MASK)
+        | if truncated {
+            ANIMATION_PACKET_TRUNCATED_FLAG
+        } else {
+            0
+        };
+    output[0..4].copy_from_slice(&frame_count.to_le_bytes());
     output[4..8].copy_from_slice(&width.to_le_bytes());
     output[8..12].copy_from_slice(&height.to_le_bytes());
     let mut offset = 12;
@@ -2320,7 +2632,8 @@ fn decode_animation_frames_bgra(
     let max_frames = MAX_ANIMATED_FRAMES.min(max_frames_by_bytes);
 
     let mut decoded = Vec::new();
-    for frame in std::iter::once(Ok(first)).chain(frames).take(max_frames) {
+    let mut iterator = std::iter::once(Ok(first)).chain(frames);
+    for frame in iterator.by_ref().take(max_frames) {
         let frame = frame.ok()?;
         if cancel_requested(cancel_cb) {
             return None;
@@ -2357,7 +2670,21 @@ fn decode_animation_frames_bgra(
     if cancel_requested(cancel_cb) {
         return None;
     }
-    Some((width, height, decoded))
+    let truncated = if decoded.len() >= max_frames {
+        match iterator.next() {
+            Some(frame) => {
+                frame.ok()?;
+                true
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
+    if cancel_requested(cancel_cb) {
+        return None;
+    }
+    Some((width, height, decoded, truncated))
 }
 
 #[derive(Default)]
@@ -2656,6 +2983,15 @@ mod tests {
     }
 
     #[test]
+    fn selection_worker_drops_requests_canceled_by_close_but_keeps_open_after_show() {
+        assert!(accepts_selection_request(4, 4, "OPEN", false));
+        assert!(accepts_selection_request(4, 4, "OPEN", true));
+        assert!(!accepts_selection_request(3, 4, "OPEN", false));
+        assert!(accepts_selection_request(4, 4, "SWITCH", true));
+        assert!(!accepts_selection_request(4, 4, "SWITCH", false));
+    }
+
+    #[test]
     fn esc_close_spares_text_input_focus_in_either_owner() {
         // Shell owns focus over plain content: Esc closes.
         assert!(esc_close_should_fire(true, true, false));
@@ -2677,6 +3013,7 @@ mod tests {
         let mut output = [0u8; 16];
 
         assert_eq!(
+            // SAFETY: Immutable path and exclusive output arrays stay live and disjoint until return.
             unsafe {
                 ql_decode_gif_frames_sized_cancelable(
                     path.as_ptr(),
@@ -2691,6 +3028,7 @@ mod tests {
             -3
         );
         assert_eq!(
+            // SAFETY: Immutable path and exclusive output arrays stay live and disjoint until return.
             unsafe {
                 ql_decode_webp_frames_sized_cancelable(
                     path.as_ptr(),
@@ -2711,7 +3049,8 @@ mod tests {
         let value = "界".repeat(12_000);
         assert!(value.len() > 32 * 1024);
         assert_eq!(
-            utf8_arg(value.as_ptr(), value.len(), MAX_FFI_STRING_BYTES),
+            // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+            unsafe { utf8_arg(value.as_ptr(), value.len(), MAX_FFI_STRING_BYTES) },
             Some(value.as_str())
         );
     }
@@ -2800,11 +3139,13 @@ mod tests {
         let mut output = [0u8; 32];
         let mut required = usize::MAX;
         assert_eq!(
+            // SAFETY: Frame storage, aligned scalar and exclusive output array are live/disjoint.
             unsafe {
                 write_animation_frames_v2(
                     1,
                     1,
                     &bad_frame,
+                    false,
                     output.as_mut_ptr(),
                     output.len(),
                     &mut required,
@@ -2819,6 +3160,79 @@ mod tests {
             animation_frames_packet_length(u32::MAX, u32::MAX, &overflowing_dimensions,),
             Err(AnimationPacketError::LimitExceeded)
         );
+    }
+
+    #[test]
+    fn animation_packet_marks_truncation_without_changing_layout() {
+        let frames = vec![(20, vec![1, 2, 3, 4])];
+        let mut output = vec![0u8; 20];
+        write_animation_frames_packet(1, 1, &frames, true, &mut output)
+            .expect("write truncated packet");
+        let raw_count = u32::from_le_bytes(output[..4].try_into().unwrap());
+        assert_eq!(raw_count & ANIMATION_PACKET_FRAME_COUNT_MASK, 1);
+        assert_ne!(raw_count & ANIMATION_PACKET_TRUNCATED_FLAG, 0);
+        assert_eq!(output.len(), 12 + 4 + 4);
+    }
+
+    fn tiny_animation_frame() -> image::Frame {
+        image::Frame::new(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+    }
+
+    #[test]
+    fn animation_lookahead_distinguishes_complete_and_truncated_frame_limits() {
+        for count in [
+            MAX_ANIMATED_FRAMES - 1,
+            MAX_ANIMATED_FRAMES,
+            MAX_ANIMATED_FRAMES + 1,
+        ] {
+            let frames = (0..count).map(|_| Ok(tiny_animation_frame()));
+            let (_, _, decoded, truncated) =
+                decode_animation_frames_bgra(frames, 1, 1, None).expect("decode frames");
+            assert_eq!(decoded.len(), count.min(MAX_ANIMATED_FRAMES));
+            assert_eq!(truncated, count > MAX_ANIMATED_FRAMES);
+        }
+    }
+
+    #[test]
+    fn animation_lookahead_rejects_decoder_error_after_frame_limit() {
+        let frames = (0..MAX_ANIMATED_FRAMES).map(|_| Ok(tiny_animation_frame()));
+        let error = image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "injected lookahead failure",
+        ));
+        assert!(decode_animation_frames_bgra(
+            frames.chain(std::iter::once(Err(error))),
+            1,
+            1,
+            None,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn animation_lookahead_honors_cancellation_after_iterator_advances() {
+        static CANCELED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        extern "C" fn is_canceled() -> bool {
+            CANCELED.load(Ordering::SeqCst)
+        }
+
+        for has_extra_frame in [false, true] {
+            CANCELED.store(false, Ordering::SeqCst);
+            let mut count = 0;
+            let frames = std::iter::from_fn(|| {
+                count += 1;
+                if count > MAX_ANIMATED_FRAMES {
+                    CANCELED.store(true, Ordering::SeqCst);
+                    return has_extra_frame.then(|| Ok(tiny_animation_frame()));
+                }
+                Some(Ok(tiny_animation_frame()))
+            });
+            assert!(decode_animation_frames_bgra(frames, 1, 1, Some(is_canceled)).is_none());
+        }
     }
 
     #[test]
@@ -3195,6 +3609,8 @@ mod tests {
                 let length = source.metadata().expect("WebP metadata").len();
                 let mut required = 0usize;
                 assert_eq!(
+                    // SAFETY: The source/name stay live; null/zero output is a size query and
+                    // required is aligned exclusive scalar storage, separate from those inputs.
                     unsafe {
                         ql_decode_animation_frames_handle(
                             source.as_raw_handle() as isize,
@@ -3213,6 +3629,8 @@ mod tests {
                 );
                 let mut packet = vec![0u8; required];
                 assert_eq!(
+                    // SAFETY: The source/name stay live and packet/required provide disjoint writable
+                    // storage for the full synchronous decode; the export never adopts the source.
                     unsafe {
                         ql_decode_animation_frames_handle(
                             source.as_raw_handle() as isize,
@@ -3229,9 +3647,14 @@ mod tests {
                     },
                     QL_OK
                 );
+                let raw_frame_count = u32::from_le_bytes(packet[..4].try_into().unwrap());
                 assert_eq!(
-                    u32::from_le_bytes(packet[..4].try_into().unwrap()) as usize,
+                    (raw_frame_count & ANIMATION_PACKET_FRAME_COUNT_MASK) as usize,
                     frames.2.len()
+                );
+                assert_eq!(
+                    raw_frame_count & ANIMATION_PACKET_TRUNCATED_FLAG != 0,
+                    frames.3
                 );
                 assert_eq!(source.stream_position().unwrap(), position);
             }
@@ -3319,6 +3742,38 @@ mod tests {
     }
 
     #[test]
+    fn native_gif_frame_extraction_marks_frames_over_limit() {
+        for count in [
+            MAX_ANIMATED_FRAMES - 1,
+            MAX_ANIMATED_FRAMES,
+            MAX_ANIMATED_FRAMES + 1,
+        ] {
+            let mut bytes = Vec::new();
+            let mut encoder = gif::Encoder::new(&mut bytes, 1, 1, &[]).expect("gif encoder");
+            encoder
+                .set_repeat(gif::Repeat::Infinite)
+                .expect("set repeat");
+            for index in 0..count {
+                let mut pixel = [
+                    (index as u8).wrapping_mul(3),
+                    (index as u8).wrapping_mul(5),
+                    (index as u8).wrapping_mul(7),
+                    255,
+                ];
+                let mut frame = gif::Frame::from_rgba_speed(1, 1, &mut pixel, 10);
+                frame.delay = 2;
+                encoder.write_frame(&frame).expect("write gif frame");
+            }
+            drop(encoder);
+
+            let decoded = decode_gif_frames_bgra_reader(Cursor::new(bytes), 1, 1, None)
+                .expect("decode bounded gif");
+            assert_eq!(decoded.2.len(), count.min(MAX_ANIMATED_FRAMES));
+            assert_eq!(decoded.3, count > MAX_ANIMATED_FRAMES);
+        }
+    }
+
+    #[test]
     fn native_gif_frame_extraction_honors_background_disposal() {
         let path = write_disposal_gif(gif::DisposalMethod::Background);
 
@@ -3340,6 +3795,119 @@ mod tests {
 
         assert_eq!(decoded.2.len(), 3);
         assert_eq!(decoded.2[2].1, vec![0, 255, 0, 255, 0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn image_decoders_cancel_during_actual_reads_and_allow_fresh_decode() {
+        static CANCELED: AtomicBool = AtomicBool::new(false);
+        extern "C" fn is_canceled() -> bool {
+            CANCELED.load(Ordering::SeqCst)
+        }
+
+        struct CancelOnRead<'a> {
+            input: Cursor<&'a [u8]>,
+            reads: &'a std::cell::Cell<usize>,
+            cancel_at: usize,
+        }
+        impl Read for CancelOnRead<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let length = buffer.len().min(8);
+                let count = self.input.read(&mut buffer[..length])?;
+                if count > 0 {
+                    let reads = self.reads.get() + 1;
+                    self.reads.set(reads);
+                    if reads == self.cancel_at {
+                        CANCELED.store(true, Ordering::SeqCst);
+                    }
+                }
+                Ok(count)
+            }
+        }
+        impl Seek for CancelOnRead<'_> {
+            fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+                self.input.seek(position)
+            }
+        }
+
+        let mut corpus = Vec::new();
+        for animated in [false, true] {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                if animated {
+                    encoder.set_animated(2, 0).expect("enable APNG");
+                }
+                let mut writer = encoder.write_header().expect("PNG header");
+                writer
+                    .write_image_data(&[255, 0, 0, 255])
+                    .expect("PNG frame");
+                if animated {
+                    writer
+                        .write_image_data(&[0, 255, 0, 255])
+                        .expect("APNG frame");
+                }
+                writer.finish().expect("finish PNG");
+            }
+            corpus.push((if animated { "apng" } else { "png" }, bytes));
+        }
+        let mut gif = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut gif, 1, 1, &[]).expect("GIF encoder");
+            for mut pixel in [[255, 0, 0, 255], [0, 255, 0, 255]] {
+                encoder
+                    .write_frame(&gif::Frame::from_rgba_speed(1, 1, &mut pixel, 10))
+                    .expect("GIF frame");
+            }
+        }
+        corpus.push(("gif", gif));
+        let webp = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/image-corpus/external/webp-animated.webp"),
+        )
+        .expect("read animated WebP fixture");
+        corpus.push(("webp", webp));
+
+        for (format, bytes) in corpus {
+            for cancel_at in [1, 3] {
+                let reads = std::cell::Cell::new(0);
+                for cancel in [true, false] {
+                    CANCELED.store(false, Ordering::SeqCst);
+                    reads.set(0);
+                    let reader = CancelOnRead {
+                        input: Cursor::new(bytes.as_slice()),
+                        reads: &reads,
+                        cancel_at: if cancel { cancel_at } else { usize::MAX },
+                    };
+                    let decoded = match format {
+                        "png" => decode_image_bgra_reader(
+                            reader,
+                            "cancel.png",
+                            1,
+                            1,
+                            Some(is_canceled),
+                            Some(ImageFormat::Png),
+                        )
+                        .is_some(),
+                        "apng" => {
+                            decode_png_frames_bgra_reader(reader, 1, 1, Some(is_canceled)).is_some()
+                        }
+                        "gif" => {
+                            decode_gif_frames_bgra_reader(reader, 1, 1, Some(is_canceled)).is_some()
+                        }
+                        "webp" => decode_webp_frames_bgra_reader(reader, 1, 1, Some(is_canceled))
+                            .is_some(),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(decoded, !cancel, "{format}: cancel at read {cancel_at}");
+                    if cancel {
+                        assert_eq!(reads.get(), cancel_at, "no read after cancellation");
+                        assert!(CANCELED.load(Ordering::SeqCst));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -3536,11 +4104,11 @@ mod tests {
             .expect("second frame");
         writer.finish().expect("finish APNG");
 
-        let (width, height, frames) =
+        let (width, height, frames, truncated) =
             decode_png_frames_bgra(path.to_str().unwrap(), 2, 1, None).expect("decode APNG");
         let _ = std::fs::remove_file(path);
 
-        assert_eq!((width, height, frames.len()), (2, 1, 2));
+        assert_eq!((width, height, frames.len(), truncated), (2, 1, 2, false));
         assert_eq!(frames[0].0, 100);
         assert_eq!(frames[1].0, 200);
         assert_eq!(&frames[0].1[..4], &[0, 0, 255, 255]);
@@ -3697,6 +4265,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_text_handle(
                 source_handle,
@@ -3720,6 +4290,8 @@ mod handle_v2_tests {
         out_cap: usize,
         out_required: *mut usize,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_probe_file_handle(
                 source_handle,
@@ -3744,6 +4316,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_executable_handle(
                 source_handle,
@@ -3769,6 +4343,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_torrent_handle(
                 source_handle,
@@ -3794,6 +4370,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_mail_handle(
                 source_handle,
@@ -3819,6 +4397,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_archive_handle(
                 source_handle,
@@ -3844,6 +4424,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_package_handle(
                 source_handle,
@@ -3869,6 +4451,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_image_metadata_handle(
                 source_handle,
@@ -3894,6 +4478,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_office_handle(
                 source_handle,
@@ -3919,6 +4505,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_extract_office_image_handle(
                 source_handle,
@@ -3948,6 +4536,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_extract_office_layout_image_handle(
                 source_handle,
@@ -3977,6 +4567,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_extract_package_icon_handle(
                 source_handle,
@@ -4004,6 +4596,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_decode_image_handle(
                 source_handle,
@@ -4033,6 +4627,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_decode_image_with_waveform_handle(
                 source_handle,
@@ -4062,6 +4658,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_decode_gif_frames_handle(
                 source_handle,
@@ -4091,6 +4689,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_decode_animation_frames_handle(
                 source_handle,
@@ -4118,6 +4718,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_ebook_handle(
                 source_handle,
@@ -4145,6 +4747,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_extract_archive_entry_handle(
                 source_handle,
@@ -4174,6 +4778,8 @@ mod handle_v2_tests {
         out_written: *mut u64,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_extract_archive_entry_to_output_handle(
                 source_handle,
@@ -4233,6 +4839,8 @@ mod handle_v2_tests {
         out_required: *mut usize,
         cancel_cb: Option<CancelCallback>,
     ) -> i32 {
+        // SAFETY: Test callers keep HANDLEs/input ranges live and provide disjoint aligned
+        // scalar/output storage; malformed null/length cases return before accessing them.
         unsafe {
             ql_preview_sqlite_handles(
                 main_handle,
@@ -4770,6 +5378,7 @@ mod handle_v2_tests {
         assert_eq!(status, QL_ERROR_INVALID_HANDLE);
         assert_eq!(required, 0);
 
+        // SAFETY: This returns a borrowed pseudo-handle; validation rejects it as a non-file.
         let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
         let status = call_text_handle(
             thread.0 as isize,
@@ -5733,6 +6342,7 @@ mod handle_v2_tests {
             ),
             QL_ERROR_INVALID_HANDLE
         );
+        // SAFETY: This returns a borrowed pseudo-handle; validation rejects it as a non-file.
         let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
         assert_eq!(
             call_office_layout_image_handle(
@@ -6970,6 +7580,7 @@ mod handle_v2_tests {
         );
         assert_eq!(written, 0);
 
+        // SAFETY: This returns a borrowed pseudo-handle; validation rejects it as a non-file.
         let thread = unsafe { windows::Win32::System::Threading::GetCurrentThread() };
         written = u64::MAX;
         assert_eq!(

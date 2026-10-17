@@ -16,6 +16,8 @@
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)Cargo.lock" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)rust-toolchain.toml"
                           Condition="Exists('$(QuickLookNativeSourceRoot)rust-toolchain.toml')" />
+    <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot)..\rust-toolchain.toml"
+                          Condition="Exists('$(QuickLookNativeSourceRoot)..\rust-toolchain.toml')" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot).cargo\config.toml"
                           Condition="Exists('$(QuickLookNativeSourceRoot).cargo\config.toml')" />
     <QuickLookNativeInput Include="$(QuickLookNativeSourceRoot).cargo\config"

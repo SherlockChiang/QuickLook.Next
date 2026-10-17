@@ -53,6 +53,8 @@ var animationParents = new ConcurrentDictionary<string, string>();
 var animationHandoffGates = new ConcurrentDictionary<string, SemaphoreSlim>();
 var metadataRequests = new ConcurrentDictionary<string, ImageMetadataRequestState>();
 var retainedRasterSources = new ConcurrentDictionary<string, RetainedRasterSource>();
+var imageRefreshCts = new ConcurrentDictionary<(string RequestId, long Generation), CancellationTokenSource>();
+long imageRefreshGeneration = 0;
 TimeSpan imageDecodeTimeout = TimeSpan.FromMilliseconds(2500);
 TimeSpan systemImageDecodeTimeout = TimeSpan.FromSeconds(2);
 TimeSpan imageMetadataTimeout = TimeSpan.FromMilliseconds(1500);
@@ -86,7 +88,11 @@ while (true)
                 {
                     WindowsHandleTransfer.VerifyNamedPipeServerProcess(pipe.SafePipeHandle, hello.AppProcessId);
                     producer.Initialize();
-                    await channel.SendAsync(new HostReady(producer.AdapterLuid));
+                    await channel.SendAsync(new HostReady(producer.AdapterLuid)
+                    {
+                        HdrScRgbSurfaceSupported = producer.HdrScRgbSurfaceSupported,
+                        ImageRefreshSupported = true,
+                    });
                     authenticated = true;
                 }
                 catch (Exception ex)
@@ -118,7 +124,8 @@ while (true)
                         open.Probe,
                         open.TargetWidth,
                         open.TargetHeight,
-                        open.PrepareAnimation));
+                        open.PrepareAnimation,
+                        open.HdrDisplayEnabled));
                 }
                 finally
                 {
@@ -134,7 +141,8 @@ while (true)
                 }
                 catch (Exception ex)
                 {
-                    await channel.SendAsync(new PreviewError(open.RequestId, ex.Message));
+                    DiagLog.Write("RasterHost", $"HANDLE adoption failed request={open.RequestId}: {ex}");
+                    await channel.SendAsync(PreviewError.InternalFailure(open.RequestId, "adopt-handle"));
                     break;
                 }
                 if (!IsValidRequestId(open.RequestId)
@@ -160,7 +168,8 @@ while (true)
                             open.Probe,
                             open.TargetWidth,
                             open.TargetHeight,
-                            open.PrepareAnimation),
+                            open.PrepareAnimation,
+                            open.HdrDisplayEnabled),
                         sourceHandle,
                         open.SourceLength);
                 }
@@ -206,6 +215,43 @@ while (true)
                 await CloseAnimationAsync(animationClose.RequestId);
                 break;
 
+            case PreviewImageRefresh refresh when IsValidRequestId(refresh.RequestId) && refresh.ImageGeneration > 0:
+                await surfacePublishGate.WaitAsync();
+                try
+                {
+                    if (activeOpen is not { } refreshParent
+                        || refresh.RequestId != activeRequestId
+                        || refreshParent.RequestId != refresh.RequestId
+                        || !IsImage(refreshParent.Probe)
+                        || refreshParent.PrepareAnimation
+                        || refresh.ImageGeneration <= imageRefreshGeneration
+                        || !retainedRasterSources.TryGetValue(refresh.RequestId, out var refreshSource)
+                        || !refreshSource.TryAcquire(RetainedRasterOperations.StaticImage, out var refreshLease)
+                        || refreshLease is null)
+                    {
+                        await channel.SendAsync(new PreviewImageRefreshError(refresh.RequestId, refresh.ImageGeneration));
+                        break;
+                    }
+                    imageRefreshGeneration = refresh.ImageGeneration;
+                    CancelImageRefreshes(refresh.RequestId);
+                    StartImageRefresh(refreshParent, refresh, refreshLease);
+                }
+                finally
+                {
+                    surfacePublishGate.Release();
+                }
+                break;
+
+            case PreviewImageRefreshClose refreshClose when IsValidRequestId(refreshClose.RequestId) && refreshClose.ImageGeneration > 0:
+                if (imageRefreshCts.TryGetValue((refreshClose.RequestId, refreshClose.ImageGeneration), out var refreshCts))
+                {
+                    try { refreshCts.Cancel(); } catch (ObjectDisposedException) { }
+                }
+                TrackTerminalWorker(Task.Delay(250).ContinueWith(
+                    _ => producer.ReleasePage(refreshClose.RequestId, -1, refreshClose.ImageGeneration),
+                    TaskContinuationOptions.OnlyOnRanToCompletion));
+                break;
+
             case PreviewImageMetadataOpen metadata
                 when IsValidRequestId(metadata.RequestId)
                      && IsValidRequestId(metadata.PreviewRequestId):
@@ -245,7 +291,7 @@ while (true)
                 }
                 SurfaceTransfer rh = producer.CreateSurface(resize.Width, resize.Height);
                 await channel.SendAsync(new PreviewSurface(
-                    resize.RequestId, rh.HostHandle, resize.Width, resize.Height, resize.Dpi, "B8G8R8A8_UNORM")
+                    resize.RequestId, rh.HostHandle, resize.Width, resize.Height, resize.Dpi, PreviewSurfaceFormats.SdrBgra8)
                 {
                     TransferId = rh.TransferId,
                 });
@@ -256,6 +302,8 @@ while (true)
                                        && page.PageGeneration > 0
                                        && double.IsFinite(page.Scale)
                                        && page.Scale > 0:
+                PdfPageRenderCancellation.CancelSuperseded(
+                    pdfPageRenderCts, page.RequestId, page.PageIndex, page.PageGeneration);
                 TrackTerminalWorker(HandlePageOpenAsync(page));
                 break;
 
@@ -325,6 +373,10 @@ try
     foreach (var cts in remainingOpenCts)
     {
         try { cts.Cancel(); } catch { }
+    }
+    foreach (var cts in imageRefreshCts.Values)
+    {
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
     }
     CancellationTokenSource[] remainingPageCts = pdfPageRenderCts.Values.ToArray();
     foreach (var cts in remainingPageCts)
@@ -453,6 +505,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
         DeleteRetainedRasterSource(previousRequestId);
     }
     activeRequestId = open.RequestId;
+    imageRefreshGeneration = 0;
     activeOpen = sourceHandle is null ? open : null;
     idleTrimmer.SetPreviewActive(true);
     string[] existing;
@@ -558,7 +611,7 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
             {
                 await channel.SendAsync(IsImage(open.Probe)
                     ? CreateImagePreviewError(open.RequestId, open.Probe.Extension)
-                    : new PreviewError(open.RequestId, ex.Message));
+                    : PreviewError.InternalFailure(open.RequestId, "open", open.Probe?.Extension));
             }
             catch { }
         }
@@ -580,12 +633,53 @@ void StartOpen(RasterOpen open, SafeFileHandle? sourceHandle = null, long source
     TrackTerminalWorker(worker);
 }
 
+void CancelImageRefreshes(string requestId)
+{
+    foreach (var entry in imageRefreshCts)
+    {
+        if (entry.Key.RequestId == requestId)
+        {
+            try { entry.Value.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
+}
+
+void StartImageRefresh(RasterOpen parent, PreviewImageRefresh refresh, RetainedRasterSourceLease lease)
+{
+    var key = (refresh.RequestId, refresh.ImageGeneration);
+    var cts = new CancellationTokenSource();
+    imageRefreshCts[key] = cts;
+    TrackTerminalWorker(Task.Run(async () =>
+    {
+        try
+        {
+            using (lease)
+                await HandleImageOpenAsync(
+                    parent with { HdrDisplayEnabled = refresh.HdrDisplayEnabled },
+                    lease, cts.Token, refresh.ImageGeneration);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            DiagLog.Write("RasterHost", "image refresh failed: " + ex.Message);
+            await channel.SendAsync(new PreviewImageRefreshError(refresh.RequestId, refresh.ImageGeneration));
+        }
+        finally
+        {
+            imageRefreshCts.TryRemove(key, out _);
+            cts.Dispose();
+        }
+    }));
+}
+
 async Task<bool> HandleImageOpenAsync(
     RasterOpen open,
     RetainedRasterSourceLease source,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    long imageGeneration = 0)
 {
     NativeDecodedImage? image = null;
+    bool hdrAllowed = open.HdrDisplayEnabled && producer.HdrScRgbSurfaceSupported;
     bool nativeHandleDecodeAttempted = false;
     if (ShouldPrepareGifAnimation(open))
     {
@@ -610,7 +704,8 @@ async Task<bool> HandleImageOpenAsync(
             systemImageDecodeTimeout,
             cancellationToken,
             open.TargetWidth,
-            open.TargetHeight);
+            open.TargetHeight,
+            hdrAllowed);
     }
     if (image is null
         && !nativeHandleDecodeAttempted
@@ -635,15 +730,25 @@ async Task<bool> HandleImageOpenAsync(
             systemImageDecodeTimeout,
             cancellationToken,
             open.TargetWidth,
-            open.TargetHeight);
+            open.TargetHeight,
+            hdrAllowed);
     }
     cancellationToken.ThrowIfCancellationRequested();
     if (image is null)
     {
-        DeletePreparedGifDecode(open.RequestId);
-        await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
+        if (imageGeneration > 0)
+            await channel.SendAsync(new PreviewImageRefreshError(open.RequestId, imageGeneration));
+        else
+        {
+            DeletePreparedGifDecode(open.RequestId);
+            await channel.SendAsync(CreateImagePreviewError(open.RequestId, open.Probe.Extension));
+        }
         return false;
     }
+
+    DiagLog.Write(
+        "RasterHost",
+        ImageDecodeDiagnostics.Format(image, open.TargetWidth, open.TargetHeight, handleInput: true));
 
     await surfacePublishGate.WaitAsync(cancellationToken);
     try
@@ -651,17 +756,48 @@ async Task<bool> HandleImageOpenAsync(
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
             return false;
-        SurfaceTransfer imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+        bool isHdr = false;
+        string hdrFallbackReason = GetHdrFallbackReason(open, image, hdrAllowed);
+        SurfaceTransfer imageHandle;
+        if (hdrAllowed && image.Rgba16Float is { } rgba16Float)
+        {
+            try
+            {
+                imageHandle = imageGeneration > 0
+                    ? producer.CreatePresentedPageSurface(open.RequestId, -1, imageGeneration, rgba16Float, image.Width, image.Height, hdrScRgb: true)
+                    : producer.CreatePresentedHdrSurface(rgba16Float, image.Width, image.Height);
+                isHdr = true;
+            }
+            catch (Exception ex)
+            {
+                hdrFallbackReason = $"surface-upload-failed:{ex.GetType().Name}";
+                DiagLog.Write("RasterHost", $"HDR surface upload failed; falling back to SDR: {ex.GetType().Name}");
+                imageHandle = CreateSdrImageSurface();
+            }
+        }
+        else
+        {
+            imageHandle = CreateSdrImageSurface();
+        }
+        LogHdrDecision(open, image, producer.HdrScRgbSurfaceSupported, isHdr, hdrFallbackReason, imageGeneration);
+        SurfaceTransfer CreateSdrImageSurface()
+            => imageGeneration > 0
+                ? producer.CreatePresentedPageSurface(open.RequestId, -1, imageGeneration, image.Bgra, image.Width, image.Height)
+                : producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
         await channel.SendAsync(new PreviewSurface(
             open.RequestId,
             imageHandle.HostHandle,
             (uint)image.Width,
             (uint)image.Height,
             96.0,
-            "B8G8R8A8_UNORM")
+            isHdr ? PreviewSurfaceFormats.HdrScRgbFp16 : PreviewSurfaceFormats.SdrBgra8)
         {
             TransferId = imageHandle.TransferId,
+            IsHdr = isHdr,
+            ImageGeneration = imageGeneration,
         });
+        if (imageGeneration > 0)
+            return true;
         string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
             ? Path.GetFileName(open.Probe.Path)
             : $"{Path.GetFileName(open.Probe.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
@@ -678,6 +814,42 @@ async Task<bool> HandleImageOpenAsync(
     }
 
     return await PublishImageWaveformAsync(open, image, cancellationToken);
+}
+
+static string GetHdrFallbackReason(
+    RasterOpen open,
+    NativeDecodedImage image,
+    bool hdrAllowed)
+{
+    if (!open.HdrDisplayEnabled)
+        return "display-not-hdr";
+    if (!hdrAllowed)
+        return "fp16-surface-unavailable";
+    if (image.Rgba16Float is null)
+        return image.SourceProfile is ImageColorProfileKind.HlgBt2020
+            ? "hlg-conversion-not-enabled"
+            : "source-not-validated-pq";
+    if (!image.SourceMetadataComplete)
+        return "source-metadata-incomplete";
+    return "surface-upload-pending";
+}
+
+static void LogHdrDecision(
+    RasterOpen open,
+    NativeDecodedImage image,
+    bool fp16SurfaceSupported,
+    bool isHdr,
+    string fallbackReason,
+    long imageGeneration)
+{
+    DiagLog.Write(
+        "RasterHost",
+        $"hdr decision request={open.RequestId}; displayCapability={(open.HdrDisplayEnabled ? "hdr" : "sdr-or-unknown")}; " +
+        $"hdrScRgbSurfaceSupported={fp16SurfaceSupported}; sourceProfile={image.SourceProfile}; " +
+        $"sourceBitDepth={image.SourceBitDepth}; sourceMetadataComplete={image.SourceMetadataComplete}; " +
+        $"decodedHdrPayload={image.Rgba16Float is not null}; selectedFormat=" +
+        $"{(isHdr ? PreviewSurfaceFormats.HdrScRgbFp16 : PreviewSurfaceFormats.SdrBgra8)}; " +
+        $"imageGeneration={imageGeneration}; fallbackReason={fallbackReason}");
 }
 
 async Task<bool> PublishImageWaveformAsync(
@@ -725,7 +897,8 @@ static async Task<NativeDecodedImage?> DecodeSystemImageHandleWithTimeoutAsync(
     TimeSpan timeout,
     CancellationToken cancellationToken,
     uint targetWidth,
-    uint targetHeight)
+    uint targetHeight,
+    bool enableHdr = false)
 {
     using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
     timeoutCts.CancelAfter(timeout);
@@ -737,7 +910,8 @@ static async Task<NativeDecodedImage?> DecodeSystemImageHandleWithTimeoutAsync(
             source.LogicalName,
             timeoutCts.Token,
             targetWidth,
-            targetHeight);
+            targetHeight,
+            enableHdr);
     }
     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
     {
@@ -996,7 +1170,8 @@ void StartPreparedAnimationHandoff(
                         packet.FrameCount,
                         packet.Width,
                         packet.Height,
-                        packet.PacketLength));
+                        packet.PacketLength,
+                        packet.IsTruncated));
                     packet = null;
                 }
                 catch
@@ -1021,7 +1196,7 @@ void StartPreparedAnimationHandoff(
             DiagLog.Write(
                 "RasterHost",
                 $"prepared GIF handoff failed request={animation.RequestId}: {ex}");
-            try { await channel.SendAsync(new PreviewError(animation.RequestId, ex.Message)); } catch { }
+            try { await channel.SendAsync(PreviewError.InternalFailure(animation.RequestId, "animation-handoff")); } catch { }
         }
         finally
         {
@@ -1099,7 +1274,8 @@ void StartAnimationDecode(
                         packet.FrameCount,
                         packet.Width,
                         packet.Height,
-                        packet.PacketLength));
+                        packet.PacketLength,
+                        packet.IsTruncated));
                     packet = null; // The handoff dictionary owns it until close or disconnect.
                 }
                 catch
@@ -1122,7 +1298,7 @@ void StartAnimationDecode(
         catch (Exception ex)
         {
             DiagLog.Write("RasterHost", $"animation decode failed request={animation.RequestId}: {ex}");
-            try { await channel.SendAsync(new PreviewError(animation.RequestId, ex.Message)); } catch { }
+            try { await channel.SendAsync(PreviewError.InternalFailure(animation.RequestId, "animation-decode")); } catch { }
         }
         finally
         {
@@ -1202,7 +1378,8 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                 systemImageDecodeTimeout,
                 cancellationToken,
                 open.TargetWidth,
-                open.TargetHeight);
+                open.TargetHeight,
+                open.HdrDisplayEnabled && producer.HdrScRgbSurfaceSupported);
             if (ShouldPrepareGifAnimation(open))
                 StartPreparedGifPathDecode(open);
 
@@ -1212,8 +1389,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
             {
                 DiagLog.Write(
                     "RasterHost",
-                    $"image raster {image.Width}x{image.Height} original={image.OriginalWidth}x{image.OriginalHeight}; " +
-                    $"native decode={image.DecodeMilliseconds}ms resize={image.ResizeMilliseconds}ms convert={image.ConvertMilliseconds}ms");
+                    ImageDecodeDiagnostics.Format(image, open.TargetWidth, open.TargetHeight, handleInput: false));
                 var uploadWatch = Stopwatch.StartNew();
                 await surfacePublishGate.WaitAsync(cancellationToken);
                 try
@@ -1221,12 +1397,42 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
                         return;
-                    SurfaceTransfer imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                    bool hdrAllowed = open.HdrDisplayEnabled && producer.HdrScRgbSurfaceSupported;
+                    bool isHdr = false;
+                    string hdrFallbackReason = GetHdrFallbackReason(open, image, hdrAllowed);
+                    SurfaceTransfer imageHandle;
+                    if (hdrAllowed && image.Rgba16Float is { } rgba16Float)
+                    {
+                        try
+                        {
+                            imageHandle = producer.CreatePresentedHdrSurface(rgba16Float, image.Width, image.Height);
+                            isHdr = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            hdrFallbackReason = $"surface-upload-failed:{ex.GetType().Name}";
+                            DiagLog.Write("RasterHost", $"HDR surface upload failed; falling back to SDR: {ex.GetType().Name}");
+                            imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                        }
+                    }
+                    else
+                    {
+                        imageHandle = producer.CreatePresentedSurface(image.Bgra, image.Width, image.Height);
+                    }
+                    LogHdrDecision(open, image, producer.HdrScRgbSurfaceSupported, isHdr, hdrFallbackReason, imageGeneration: 0);
                     uploadWatch.Stop();
                     DiagLog.Write("RasterHost", $"image surface upload/create {uploadWatch.ElapsedMilliseconds}ms; bytes={image.Bgra.Length}");
                     await channel.SendAsync(new PreviewSurface(
-                        open.RequestId, imageHandle.HostHandle, (uint)image.Width, (uint)image.Height, 96.0, "B8G8R8A8_UNORM")
-                    { TransferId = imageHandle.TransferId });
+                        open.RequestId,
+                        imageHandle.HostHandle,
+                        (uint)image.Width,
+                        (uint)image.Height,
+                        96.0,
+                        isHdr ? PreviewSurfaceFormats.HdrScRgbFp16 : PreviewSurfaceFormats.SdrBgra8)
+                    {
+                        TransferId = imageHandle.TransferId,
+                        IsHdr = isHdr,
+                    });
                     string title = image.Width == image.OriginalWidth && image.Height == image.OriginalHeight
                         ? Path.GetFileName(open.Probe.Path)
                         : $"{Path.GetFileName(open.Probe.Path)} — {image.OriginalWidth}x{image.OriginalHeight} scaled to {image.Width}x{image.Height}";
@@ -1261,7 +1467,7 @@ async Task HandleOpenAsync(RasterOpen open, CancellationToken cancellationToken)
         DiagLog.Write("RasterHost", "open ERROR: " + ex);
         await channel.SendAsync(IsImage(open.Probe)
             ? CreateImagePreviewError(open.RequestId, open.Probe.Extension)
-            : new PreviewError(open.RequestId, ex.Message));
+            : PreviewError.InternalFailure(open.RequestId, "open", open.Probe?.Extension));
     }
 }
 
@@ -1338,13 +1544,20 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
     TimeSpan systemTimeout,
     CancellationToken cancellationToken,
     uint targetWidth,
-    uint targetHeight)
+    uint targetHeight,
+    bool enableHdr = false)
 {
     bool systemDecodeAttempted = PreferSystemImageDecoder(path);
     if (systemDecodeAttempted)
     {
         using var systemTrace = DiagLog.TraceScope("RasterHost", $"system image decode path={path}", 250);
-        var systemImage = await DecodeSystemImageWithTimeoutAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
+        var systemImage = await DecodeSystemImageWithTimeoutAsync(
+            path,
+            systemTimeout,
+            cancellationToken,
+            targetWidth,
+            targetHeight,
+            enableHdr);
         if (systemImage is not null)
             return systemImage;
     }
@@ -1352,13 +1565,25 @@ static async Task<NativeDecodedImage?> DecodeImageAsync(
     NativeDecodedImage? nativeImage;
     using (DiagLog.TraceScope("RasterHost", $"native image decode target={targetWidth}x{targetHeight} path={path}", 250))
         nativeImage = await NativeImageDecoder.TryDecodeAsync(
-            path, timeout, cancellationToken, targetWidth, targetHeight, systemDecodeAttempted);
+            path,
+            timeout,
+            cancellationToken,
+            targetWidth,
+            targetHeight,
+            systemDecodeAttempted,
+            enableHdr);
     if (nativeImage is not null)
         return nativeImage;
 
     return systemDecodeAttempted
         ? null
-        : await DecodeSystemFallbackAsync(path, systemTimeout, cancellationToken, targetWidth, targetHeight);
+        : await DecodeSystemFallbackAsync(
+            path,
+            systemTimeout,
+            cancellationToken,
+            targetWidth,
+            targetHeight,
+            enableHdr);
 }
 
 static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(
@@ -1366,10 +1591,17 @@ static async Task<NativeDecodedImage?> DecodeSystemFallbackAsync(
     TimeSpan timeout,
     CancellationToken cancellationToken,
     uint targetWidth,
-    uint targetHeight)
+    uint targetHeight,
+    bool enableHdr = false)
 {
     using var trace = DiagLog.TraceScope("RasterHost", $"system image fallback decode path={path}", 250);
-    return await DecodeSystemImageWithTimeoutAsync(path, timeout, cancellationToken, targetWidth, targetHeight);
+    return await DecodeSystemImageWithTimeoutAsync(
+        path,
+        timeout,
+        cancellationToken,
+        targetWidth,
+        targetHeight,
+        enableHdr);
 }
 
 static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
@@ -1377,7 +1609,8 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
     TimeSpan timeout,
     CancellationToken cancellationToken,
     uint targetWidth,
-    uint targetHeight)
+    uint targetHeight,
+    bool enableHdr = false)
 {
     try
     {
@@ -1385,7 +1618,12 @@ static async Task<NativeDecodedImage?> DecodeSystemImageWithTimeoutAsync(
         timeoutCts.CancelAfter(timeout);
         try
         {
-            return await SystemImageDecoder.TryDecodeAsync(path, timeoutCts.Token, targetWidth, targetHeight);
+            return await SystemImageDecoder.TryDecodeAsync(
+                path,
+                timeoutCts.Token,
+                targetWidth,
+                targetHeight,
+                enableHdr);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
         {
@@ -1441,7 +1679,7 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
             var sendWatch = Stopwatch.StartNew();
             await channel.SendAsync(new PreviewSurface(
                 page.RequestId, handle.HostHandle, (uint)rendered.Width, (uint)rendered.Height, 96.0,
-                "B8G8R8A8_UNORM", page.PageIndex, page.PageGeneration)
+                PreviewSurfaceFormats.SdrBgra8, page.PageIndex, page.PageGeneration)
             {
                 TransferId = handle.TransferId,
             });
@@ -1459,13 +1697,29 @@ async Task HandlePageOpenAsync(PreviewPageOpen page)
     }
     catch (TimeoutException ex)
     {
-        DiagLog.Write("RasterHost", $"page render timed out: request={page.RequestId} page={page.PageIndex}");
-        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, page.PageGeneration, true, ex.Message));
+        if (pageCts.IsCancellationRequested)
+            return;
+        DiagLog.Write(
+            "RasterHost",
+            $"page render timed out: request={page.RequestId} page={page.PageIndex}; detail={ex}");
+        await channel.SendAsync(new PreviewPageError(
+            page.RequestId,
+            page.PageIndex,
+            page.PageGeneration,
+            true,
+            "PDF page render timed out."));
     }
     catch (Exception ex)
     {
+        if (pageCts.IsCancellationRequested)
+            return;
         DiagLog.Write("RasterHost", $"page render failed: {ex.Message}");
-        await channel.SendAsync(new PreviewPageError(page.RequestId, page.PageIndex, page.PageGeneration, false, ex.Message));
+        await channel.SendAsync(new PreviewPageError(
+            page.RequestId,
+            page.PageIndex,
+            page.PageGeneration,
+            false,
+            "PDF page render failed."));
     }
     finally
     {
@@ -1533,6 +1787,7 @@ void DeletePreparedGifDecode(string requestId)
 
 void DeleteRetainedRasterSource(string requestId)
 {
+    CancelImageRefreshes(requestId);
     if (retainedRasterSources.TryRemove(requestId, out var source))
         source.Dispose();
 }
@@ -1593,7 +1848,8 @@ internal sealed record RasterOpen(
     QuickLook.Next.Contracts.FileProbe Probe,
     uint TargetWidth,
     uint TargetHeight,
-    bool PrepareAnimation);
+    bool PrepareAnimation,
+    bool HdrDisplayEnabled = false);
 
 internal sealed class PreparedGifDecodeState
 {

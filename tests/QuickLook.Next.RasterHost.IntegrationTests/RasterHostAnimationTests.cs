@@ -17,6 +17,182 @@ public sealed class RasterHostAnimationTests
     [InlineData("gif", false)]
     [InlineData("gif", true)]
     [InlineData("webp", false)]
+    [InlineData("webp", true)]
+    [InlineData("png", false)]
+    [InlineData("png", true)]
+    public async Task Animation_and_static_reopens_release_parent_and_child_resources(
+        string extension,
+        bool closeChildFirst)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        string pipeName = $"quicklook_next_raster_animation_mixed_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
+        string token = RandomNumberGenerator.GetHexString(32);
+        await using var pipe = new NamedPipeServerStream(
+            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string physicalPath = Path.Combine(Path.GetTempPath(), $"quicklook-animation-mixed-{Guid.NewGuid():N}.bin");
+        string logicalStem = Path.Combine(Path.GetTempPath(), $"missing-animation-mixed-{Guid.NewGuid():N}");
+        byte[] staticBytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=");
+        byte[] animatedBytes = extension == "png"
+            ? CreateAnimatedPng()
+            : await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", $"animated.{extension}"), timeout.Token);
+        string hostPath = Path.Combine(AppContext.BaseDirectory, "RasterHost", "QuickLook.Next.RasterHost.exe");
+        using Process host = Process.Start(new ProcessStartInfo(hostPath)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "--pipe", pipeName, "--session-token", token },
+        }) ?? throw new InvalidOperationException("RasterHost did not start");
+        bool hostExited = false;
+        try
+        {
+            await pipe.WaitForConnectionAsync(timeout.Token);
+            using var channel = new PipeChannel(pipe);
+            await channel.SendAsync(new Hello(Environment.ProcessId, token), timeout.Token);
+            Assert.IsType<HostReady>(await channel.ReceiveAsync(timeout.Token));
+            string? previousParent = null;
+            string? previousChild = null;
+            // Two animation opens bracketed by static previews exercise both directions,
+            // including APNG/static PNG with the same logical extension.
+            for (int step = 0; step < 5; step++)
+            {
+                bool animated = step % 2 != 0;
+                string currentExtension = animated ? extension : "png";
+                byte[] bytes = animated ? animatedBytes : staticBytes;
+                await File.WriteAllBytesAsync(physicalPath, bytes, timeout.Token);
+                string logicalPath = logicalStem + "." + currentExtension;
+                Assert.False(File.Exists(logicalPath));
+                string parentId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+                var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
+                using (pinned.Handle)
+                {
+                    var probe = new FileProbe(logicalPath, "." + currentExtension, bytes[..Math.Min(bytes.Length, 64)])
+                    {
+                        Kind = "image",
+                        Size = pinned.Length,
+                        IsAnimated = animated,
+                    };
+                    long remoteHandle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
+                    await channel.SendAsync(new PreviewOpenHandle(parentId, remoteHandle, pinned.Length, logicalPath, probe)
+                    {
+                        TargetWidth = 64,
+                        TargetHeight = 64,
+                        PrepareAnimation = animated && extension == "gif",
+                    }, timeout.Token);
+                }
+                if (previousParent is not null)
+                    await channel.SendAsync(new PreviewClose(previousParent), timeout.Token);
+                if (previousChild is not null)
+                    await channel.SendAsync(new PreviewAnimationFramesClose(previousChild), timeout.Token);
+                await ReceiveMixedImageAsync(channel, host, parentId, currentExtension != "gif", timeout.Token);
+                Assert.False(TryOverwriteFile(physicalPath));
+
+                if (animated)
+                {
+                    string childId = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
+                    await channel.SendAsync(new PreviewAnimationFramesOpen(childId, parentId, 64, 64), timeout.Token);
+                    if (previousChild is not null)
+                        await channel.SendAsync(new PreviewAnimationFramesClose(previousChild), timeout.Token);
+                    PreviewAnimationFramesReady frames = Assert.IsType<PreviewAnimationFramesReady>(
+                        await channel.ReceiveAsync(timeout.Token));
+                    Assert.Equal(childId, frames.RequestId);
+                    Assert.Equal(parentId, frames.PreviewRequestId);
+                    Assert.InRange(frames.FrameCount, 2, 120);
+                    Assert.InRange(frames.Width, 1, 64);
+                    Assert.InRange(frames.Height, 1, 64);
+                    int frameBytes = checked(frames.Width * frames.Height * 4);
+                    Assert.Equal(12L + frames.FrameCount * (4L + frameBytes), frames.PacketLength);
+                    using SharedSectionView view = SharedSectionView.DuplicateAndMapReadOnly(
+                        host.SafeHandle, frames.SectionHandle, checked((int)frames.PacketLength));
+                    byte[] header = view.Bytes[..12].ToArray();
+                    byte[] firstFrame = view.Bytes.Slice(16, frameBytes).ToArray();
+                    Assert.Equal(frames.FrameCount, (int)(BitConverter.ToUInt32(header, 0) & 0x7fff_ffffu));
+                    Assert.Equal(frames.IsTruncated, (BitConverter.ToUInt32(header, 0) & 0x8000_0000u) != 0);
+                    Assert.Equal(frames.Width, BitConverter.ToInt32(header, 4));
+                    Assert.Equal(frames.Height, BitConverter.ToInt32(header, 8));
+                    if (closeChildFirst)
+                    {
+                        await channel.SendAsync(new PreviewAnimationFramesClose(childId), timeout.Token);
+                        await WaitUntilAsync(() => !CanDuplicateSection(host, frames.SectionHandle,
+                            checked((int)frames.PacketLength)), timeout.Token);
+                        Assert.False(TryOverwriteFile(physicalPath));
+                    }
+                    await channel.SendAsync(new PreviewClose(parentId), timeout.Token);
+                    // Check remote closure before another open can reuse this numeric HANDLE.
+                    await WaitUntilAsync(() => !CanDuplicateSection(host, frames.SectionHandle,
+                        checked((int)frames.PacketLength)), timeout.Token);
+                    await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+                    Assert.Equal(header, view.Bytes[..12].ToArray());
+                    Assert.Equal(firstFrame, view.Bytes.Slice(16, frameBytes).ToArray());
+                    previousChild = childId;
+                }
+                else
+                {
+                    await channel.SendAsync(new PreviewClose(parentId), timeout.Token);
+                    await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+                }
+                previousParent = parentId;
+                Assert.False(host.HasExited);
+            }
+        }
+        finally
+        {
+            try { hostExited = await RasterHostProcessTestHelper.CompleteAsync(pipe, host); }
+            finally { File.Delete(physicalPath); }
+        }
+        RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
+    }
+
+    private static async Task ReceiveMixedImageAsync(
+        PipeChannel channel,
+        Process host,
+        string requestId,
+        bool expectWaveform,
+        CancellationToken cancellationToken)
+    {
+        bool surfaceReceived = false;
+        bool readyReceived = false;
+        bool waveformReceived = false;
+        while (!surfaceReceived || !readyReceived || (expectWaveform && !waveformReceived))
+        {
+            ControlMessage message = await channel.ReceiveAsync(cancellationToken)
+                ?? throw new EndOfStreamException("RasterHost closed during mixed animation preview");
+            switch (message)
+            {
+                case PreviewSurface surface:
+                    Assert.False(surfaceReceived);
+                    Assert.Equal(requestId, surface.RequestId);
+                    using (var handle = new Microsoft.Win32.SafeHandles.SafeFileHandle(
+                        WindowsHandleTransfer.DuplicateHandleFromProcess(host.SafeHandle, surface.SharedHandle), true))
+                    {
+                        Assert.False(handle.IsInvalid);
+                    }
+                    await channel.SendAsync(new PreviewSurfaceRelease(surface.TransferId), cancellationToken);
+                    surfaceReceived = true;
+                    break;
+                case PreviewReady ready:
+                    Assert.False(readyReceived);
+                    Assert.Equal(requestId, ready.RequestId);
+                    readyReceived = true;
+                    break;
+                case PreviewImageWaveform waveform:
+                    Assert.True(expectWaveform);
+                    Assert.False(waveformReceived);
+                    Assert.Equal(requestId, waveform.RequestId);
+                    Assert.True(ImageWaveformBuilder.IsValid(waveform.Waveform));
+                    waveformReceived = true;
+                    break;
+                default:
+                    throw new Xunit.Sdk.XunitException($"Unexpected mixed preview message: {message}");
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("gif", false)]
+    [InlineData("gif", true)]
+    [InlineData("webp", false)]
     [InlineData("png", false)]
     public async Task Animated_frames_are_section_backed_and_released_on_close(
         string extension,
@@ -153,7 +329,9 @@ public sealed class RasterHostAnimationTests
                 host.SafeHandle,
                 frames.SectionHandle,
                 checked((int)frames.PacketLength));
-            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(frameView.Bytes[..4]));
+            uint rawFrameCount = BitConverter.ToUInt32(frameView.Bytes[..4]);
+            Assert.Equal(frames.FrameCount, (int)(rawFrameCount & 0x7fff_ffffu));
+            Assert.Equal(frames.IsTruncated, (rawFrameCount & 0x8000_0000u) != 0);
             int frameBytes = checked(frames.Width * frames.Height * 4);
             long expectedPacketLength = checked(
                 12L + frames.FrameCount * (4L + frameBytes));
@@ -178,7 +356,7 @@ public sealed class RasterHostAnimationTests
                     () => !CanDuplicateSection(host, frames.SectionHandle, checked((int)frames.PacketLength)),
                     animationCloseTimeout.Token);
             }
-            Assert.Equal(frames.FrameCount, (int)BitConverter.ToUInt32(frameView.Bytes[..4]));
+            Assert.Equal(frames.FrameCount, (int)(BitConverter.ToUInt32(frameView.Bytes[..4]) & 0x7fff_ffffu));
             Assert.False(Directory.Exists(packetDirectory));
             using (var previewCloseTimeout = new CancellationTokenSource(Timeout))
             {

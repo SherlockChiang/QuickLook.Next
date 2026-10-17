@@ -11,7 +11,10 @@ pub unsafe extern "C" fn ql_preview_text(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None))
+    // SAFETY: The export caller guarantees valid input/output buffers for this call.
+    ffi_boundary(|| unsafe {
+        ql_preview_text_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[doc = include_str!("../ffi_pointer_safety.md")]
@@ -30,7 +33,8 @@ pub unsafe extern "C" fn ql_preview_text_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
@@ -38,7 +42,8 @@ pub unsafe extern "C" fn ql_preview_text_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -58,13 +63,17 @@ pub unsafe extern "C" fn ql_preview_info(
         if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
-        let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let kind =
+            unsafe { optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES) }.unwrap_or("");
         let json = preview::render_info(path, kind, size, modified_unix);
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -76,7 +85,10 @@ pub unsafe extern "C" fn ql_preview_executable(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None))
+    // SAFETY: The export caller guarantees valid input/output buffers for this call.
+    ffi_boundary(|| unsafe {
+        ql_preview_executable_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[doc = include_str!("../ffi_pointer_safety.md")]
@@ -95,7 +107,8 @@ pub unsafe extern "C" fn ql_preview_executable_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
@@ -103,7 +116,8 @@ pub unsafe extern "C" fn ql_preview_executable_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -120,12 +134,14 @@ pub unsafe extern "C" fn ql_preview_archive(
         if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
         let json = preview::render_archive(path, cancel_cb);
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -137,7 +153,10 @@ pub unsafe extern "C" fn ql_preview_ebook(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None))
+    // SAFETY: The export caller guarantees valid input/output buffers for this call.
+    ffi_boundary(|| unsafe {
+        ql_preview_ebook_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[doc = include_str!("../ffi_pointer_safety.md")]
@@ -156,7 +175,8 @@ pub unsafe extern "C" fn ql_preview_ebook_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
@@ -164,7 +184,8 @@ pub unsafe extern "C" fn ql_preview_ebook_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -176,7 +197,10 @@ pub unsafe extern "C" fn ql_preview_torrent(
     out_buf: *mut u8,
     out_cap: usize,
 ) -> i32 {
-    ffi_boundary(|| ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None))
+    // SAFETY: The export caller guarantees valid input/output buffers for this call.
+    ffi_boundary(|| unsafe {
+        ql_preview_torrent_cancelable(path_utf8, path_len, out_buf, out_cap, None)
+    })
 }
 
 #[doc = include_str!("../ffi_pointer_safety.md")]
@@ -195,7 +219,8 @@ pub unsafe extern "C" fn ql_preview_torrent_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
@@ -203,7 +228,8 @@ pub unsafe extern "C" fn ql_preview_torrent_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -221,12 +247,14 @@ pub unsafe extern "C" fn ql_preview_office(
         if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
         let json = preview::render_office(path, cancel_cb);
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -243,12 +271,14 @@ pub unsafe extern "C" fn ql_preview_image_metadata(
         if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
         let json = preview::render_image_metadata(path);
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 

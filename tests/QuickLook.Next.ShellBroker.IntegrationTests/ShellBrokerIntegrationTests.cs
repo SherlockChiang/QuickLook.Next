@@ -136,7 +136,12 @@ public sealed class ShellBrokerIntegrationTests
         await session.OpenAsync(second, FixturePath, 64);
         string[] error = (await session.Channel.ReceiveAsync() ?? "").Split('\t');
         Assert.Equal(["ERROR", second], error[..2]);
-        Assert.Contains("active request", Decode(error[2]), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            ShellBrokerProtocol.StableErrorMessage,
+            Decode(error[2]));
+        var parsed = Assert.IsType<PreviewError>(ShellBrokerProtocol.Parse(string.Join('\t', error)));
+        Assert.Equal(PreviewErrorCodes.ContentFailed, parsed.Code);
+        Assert.Equal("shell-broker", parsed.Phase);
 
         await session.Channel.SendAsync($"CLOSE\t{first}");
         await WaitUntilAsync(

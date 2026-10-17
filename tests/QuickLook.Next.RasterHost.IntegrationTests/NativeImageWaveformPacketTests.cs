@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Reflection;
 using QuickLook.Next.Core;
+using QuickLook.Next.RasterHost;
 using Xunit;
 
 namespace QuickLook.Next.RasterHost.IntegrationTests;
@@ -24,6 +25,8 @@ public sealed class NativeImageWaveformPacketTests
             decoded.GetType().GetProperty("Waveform")!.GetValue(decoded));
         Assert.True(ImageWaveformBuilder.IsValid(waveform));
         Assert.Equal(DensityBytes, waveform.RgbDensity.Length);
+        Assert.Equal(new NativeImageStageTimings(2, 3, 4),
+            Assert.IsType<NativeDecodedImage>(decoded).NativeStageTimings);
 
         Assert.Null(Parse(valid, valid.Length - 1));
         Assert.Null(Parse([.. valid, 0]));

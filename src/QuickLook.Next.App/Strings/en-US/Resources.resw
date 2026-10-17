@@ -37,6 +37,9 @@
   <data name="PauseAnimation" xml:space="preserve">
     <value>Pause animation</value>
   </data>
+  <data name="AnimationFramesTruncated" xml:space="preserve">
+    <value>animation frames limited for preview stability</value>
+  </data>
   <data name="ShowPreviewDetails" xml:space="preserve">
     <value>Show preview details</value>
   </data>

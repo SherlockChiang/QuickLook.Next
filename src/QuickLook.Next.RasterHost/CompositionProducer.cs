@@ -5,6 +5,7 @@ using Windows.Win32.Graphics.Direct3D;
 using Windows.Win32.Graphics.Direct3D11;
 using Windows.Win32.Graphics.Dxgi;
 using Windows.Win32.Graphics.Dxgi.Common;
+using QuickLook.Next.Core;
 
 namespace QuickLook.Next.RasterHost;
 
@@ -36,6 +37,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
     private int _presentFailureHResult;
 
     public long AdapterLuid { get; private set; }
+    public bool HdrScRgbSurfaceSupported { get; private set; }
 
     public void Initialize()
     {
@@ -80,6 +82,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
                 AdapterLuid = adapterLuid;
                 _presentFailureHResult = 0;
                 _initialized = true;
+                HdrScRgbSurfaceSupported = ProbeHdrScRgbSurfaceCore();
             }
             catch
             {
@@ -164,7 +167,72 @@ internal sealed unsafe class CompositionProducer : IDisposable
             bool retained = false;
             try
             {
-                PresentPixelsCore(sc, bgra, width, height);
+                PresentPixelsCore(
+                    sc,
+                    bgra,
+                    width,
+                    height,
+                    DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+                    bytesPerPixel: 4);
+                transfer = RetainSurfaceTransferCore(surface);
+                retained = true;
+                _liveSwapchains.Add(sc);
+                return transfer;
+            }
+            catch
+            {
+                if (retained)
+                    ReleaseSurfaceTransferCore(transfer.TransferId);
+                else
+                    PInvoke.CloseHandle(surface);
+                _liveSwapchains.Remove(sc);
+                ReleaseCom(sc);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Presents linear scRGB RGBA pixels stored as IEEE-754 binary16 values.
+    /// The caller must have already validated the source profile and display policy;
+    /// this method only owns the GPU format/color-space contract and fails closed when
+    /// the startup capability probe did not pass.
+    /// </summary>
+    public SurfaceTransfer CreatePresentedHdrSurface(
+        byte[] rgba16Float,
+        int width,
+        int height)
+    {
+        if (!HdrScRgbSurfaceSupported)
+            throw new InvalidOperationException("FP16 scRGB composition is unavailable.");
+        if (width <= 0 || height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        int expected = checked(width * height * 8);
+        if (rgba16Float.Length != expected)
+            throw new ArgumentException(
+                $"RGBA16F buffer length {rgba16Float.Length} does not match {width}x{height}.",
+                nameof(rgba16Float));
+
+        lock (_sync)
+        {
+            EnsureAvailableCore();
+            EnsureSurfaceTransferCapacityCore();
+            var (surface, sc) = CreateSwapchainCore(
+                (uint)width,
+                (uint)height,
+                DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT);
+            SurfaceTransfer transfer = default;
+            bool retained = false;
+            try
+            {
+                PresentPixelsCore(
+                    sc,
+                    rgba16Float,
+                    width,
+                    height,
+                    DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT,
+                    bytesPerPixel: 8,
+                    hdrScRgb: true);
                 transfer = RetainSurfaceTransferCore(surface);
                 retained = true;
                 _liveSwapchains.Add(sc);
@@ -185,10 +253,17 @@ internal sealed unsafe class CompositionProducer : IDisposable
 
     /// <summary>Page surface keyed by request and page, so stale closes cannot release a newer preview.</summary>
     public SurfaceTransfer CreatePresentedPageSurface(
-        string requestId, int pageIndex, long pageGeneration, byte[] bgra, int width, int height)
+        string requestId, int pageIndex, long pageGeneration, byte[] bgra, int width, int height,
+        bool hdrScRgb = false)
     {
         if (width <= 0 || height <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-        int expected = checked(width * height * 4);
+        if (hdrScRgb && !HdrScRgbSurfaceSupported)
+            throw new InvalidOperationException("FP16 scRGB composition is unavailable.");
+        int bytesPerPixel = hdrScRgb ? 8 : 4;
+        DXGI_FORMAT format = hdrScRgb
+            ? DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT
+            : DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+        int expected = checked(width * height * bytesPerPixel);
         if (bgra.Length != expected)
             throw new ArgumentException($"BGRA buffer length {bgra.Length} does not match {width}x{height}.", nameof(bgra));
 
@@ -196,12 +271,21 @@ internal sealed unsafe class CompositionProducer : IDisposable
         {
             EnsureAvailableCore();
             EnsureSurfaceTransferCapacityCore();
-            var (surface, sc) = CreateSwapchainCore((uint)width, (uint)height);
+            if (pageIndex < 0 && _pageSwapchains.Keys.Count(static key => key.PageIndex < 0) >= 4)
+                throw new InvalidOperationException("Too many unreleased image refresh surfaces.");
+            var (surface, sc) = CreateSwapchainCore((uint)width, (uint)height, format);
             SurfaceTransfer transfer = default;
             bool retained = false;
             try
             {
-                PresentPixelsCore(sc, bgra, width, height);
+                PresentPixelsCore(
+                    sc,
+                    bgra,
+                    width,
+                    height,
+                    format,
+                    bytesPerPixel,
+                    hdrScRgb);
                 transfer = RetainSurfaceTransferCore(surface);
                 retained = true;
                 var key = (requestId, pageIndex, pageGeneration);
@@ -237,7 +321,11 @@ internal sealed unsafe class CompositionProducer : IDisposable
         catch (InvalidComObjectException) { }
     }
 
-    private (HANDLE Surface, IDXGISwapChain1 Swapchain) CreateSwapchainCore(uint width, uint height)
+    private (HANDLE Surface, IDXGISwapChain1 Swapchain) CreateSwapchainCore(
+        uint width,
+        uint height,
+        DXGI_FORMAT format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_ALPHA_MODE alphaMode = DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED)
     {
         HANDLE surface;
         HRESULT hr = PInvoke.DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, null, &surface);
@@ -247,13 +335,13 @@ internal sealed unsafe class CompositionProducer : IDisposable
         {
             Width = width,
             Height = height,
-            Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format = format,
             SampleDesc = new DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
             BufferUsage = DXGI_USAGE.DXGI_USAGE_RENDER_TARGET_OUTPUT,
             BufferCount = 2,
             Scaling = DXGI_SCALING.DXGI_SCALING_STRETCH,
             SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-            AlphaMode = DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_PREMULTIPLIED,
+            AlphaMode = alphaMode,
         };
         try
         {
@@ -264,6 +352,47 @@ internal sealed unsafe class CompositionProducer : IDisposable
         {
             PInvoke.CloseHandle(surface);
             throw;
+        }
+    }
+
+    private bool ProbeHdrScRgbSurfaceCore()
+    {
+        HANDLE surface = default;
+        IDXGISwapChain1? swapchain = null;
+        try
+        {
+            (surface, swapchain) = CreateSwapchainCore(
+                1,
+                1,
+                DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT);
+            IDXGISwapChain3 swapchain3 = (IDXGISwapChain3)swapchain;
+            swapchain3.CheckColorSpaceSupport(
+                DXGI_COLOR_SPACE_TYPE.DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                out DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG support);
+            if (!support.HasFlag(DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG.DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))
+                return false;
+
+            try
+            {
+                swapchain3.SetColorSpace1(
+                    DXGI_COLOR_SPACE_TYPE.DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("RasterHost", "FP16 scRGB surface probe unavailable: " + ex.Message);
+            return false;
+        }
+        finally
+        {
+            if (surface.Value != null)
+                PInvoke.CloseHandle(surface);
+            ReleaseCom(swapchain);
         }
     }
 
@@ -303,14 +432,27 @@ internal sealed unsafe class CompositionProducer : IDisposable
         {
             EnsureAvailableCore();
             var sc = _swapchain ?? throw new InvalidOperationException("Surface has not been created.");
-            PresentPixelsCore(sc, bgra, width, height);
+            PresentPixelsCore(
+                sc,
+                bgra,
+                width,
+                height,
+                DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+                bytesPerPixel: 4);
         }
     }
 
-    private void PresentPixelsCore(IDXGISwapChain1 sc, byte[] bgra, int width, int height)
+    private void PresentPixelsCore(
+        IDXGISwapChain1 sc,
+        byte[] pixels,
+        int width,
+        int height,
+        DXGI_FORMAT format,
+        int bytesPerPixel,
+        bool hdrScRgb = false)
     {
-        int expected = checked(width * height * 4);
-        fixed (byte* p = bgra)
+        int expected = checked(width * height * bytesPerPixel);
+        fixed (byte* p = pixels)
         {
             var desc = new D3D11_TEXTURE2D_DESC
             {
@@ -318,7 +460,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
                 Height = (uint)height,
                 MipLevels = 1,
                 ArraySize = 1,
-                Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+                Format = format,
                 SampleDesc = new DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
                 Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT,
                 BindFlags = 0,
@@ -336,6 +478,12 @@ internal sealed unsafe class CompositionProducer : IDisposable
             ID3D11Texture2D? backbuffer = null;
             try
             {
+                if (hdrScRgb)
+                {
+                    IDXGISwapChain3 swapchain3 = (IDXGISwapChain3)sc;
+                    swapchain3.SetColorSpace1(
+                        DXGI_COLOR_SPACE_TYPE.DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+                }
                 _device.CreateTexture2D(desc, data, out source);
                 sc.GetBuffer<ID3D11Texture2D>(0, out backbuffer);
                 _ctx.CopyResource((ID3D11Resource)backbuffer, (ID3D11Resource)source);
@@ -472,6 +620,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
             _ctx = null!;
             _device = null!;
             _initialized = false;
+            HdrScRgbSurfaceSupported = false;
             _presentFailureHResult = 0;
         }
     }

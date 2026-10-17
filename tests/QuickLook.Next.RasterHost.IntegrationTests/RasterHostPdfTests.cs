@@ -286,8 +286,10 @@ public sealed class RasterHostPdfTests
         RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
     }
 
-    [Fact]
-    public async Task Canceling_first_waiter_does_not_cancel_shared_pdf_render()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Canceling_first_waiter_does_not_cancel_shared_pdf_render(bool explicitlyCloseOldGeneration)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         string pipeName = $"quicklook_next_raster_pdf_waiter_test_{Environment.ProcessId}_{RandomNumberGenerator.GetHexString(16)}";
@@ -323,7 +325,8 @@ public sealed class RasterHostPdfTests
                 return host.HandleCount > preRenderHandles;
             }, timeout.Token);
             await channel.SendAsync(new PreviewPageOpen(requestId, 0, 2, 4), timeout.Token);
-            await channel.SendAsync(new PreviewPageClose(requestId, 0, 1), timeout.Token);
+            if (explicitlyCloseOldGeneration)
+                await channel.SendAsync(new PreviewPageClose(requestId, 0, 1), timeout.Token);
 
             PreviewSurface secondSurface = await ReceiveSurfaceAsync(channel, requestId, 2, timeout.Token);
             Assert.Equal((requestId, 0, 2L),

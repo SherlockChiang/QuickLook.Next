@@ -47,8 +47,12 @@ internal sealed class RasterHostSupervisor
     public event Action<PreviewSurface>? SurfaceReceived;
     public event Action<PreviewPageError>? PageErrorReceived;
     public event Action<PreviewImageWaveform>? ImageWaveformReceived;
+    public event Action<PreviewImageRefreshError>? ImageRefreshFailed;
 
     public long AdapterLuid { get; private set; }
+    public bool HdrScRgbSurfaceSupported { get; private set; }
+    public bool HdrDisplayEnabled { get; set; }
+    public bool ImageRefreshSupported { get; private set; }
 
     public RasterHostSupervisor(string hostExePath, DispatcherQueue ui)
     {
@@ -61,6 +65,8 @@ internal sealed class RasterHostSupervisor
         using var trace = DiagLog.TraceScope("App", "host start", 500);
         _stopping = false;
         int gen = ++_generation;
+        HdrScRgbSurfaceSupported = false;
+        ImageRefreshSupported = false;
         _handleOpenSends.Clear();
         _ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // Dispose the old channel + process + pipe before creating new ones (prevents handle leaks on restart).
@@ -208,6 +214,8 @@ internal sealed class RasterHostSupervisor
         {
             case HostReady ready:
                 AdapterLuid = ready.AdapterLuid;
+                HdrScRgbSurfaceSupported = ready.HdrScRgbSurfaceSupported;
+                ImageRefreshSupported = ready.ImageRefreshSupported;
                 _ready.TrySetResult();
                 break;
             case PreviewSurface surface:
@@ -218,6 +226,9 @@ internal sealed class RasterHostSupervisor
                 break;
             case PreviewImageWaveform waveform:
                 _ui.TryEnqueue(() => ImageWaveformReceived?.Invoke(waveform));
+                break;
+            case PreviewImageRefreshError refreshError:
+                _ui.TryEnqueue(() => ImageRefreshFailed?.Invoke(refreshError));
                 break;
             case PreviewImageMetadataReady metadata:
                 _pending.TryComplete(metadata.RequestId, metadata);
@@ -382,11 +393,13 @@ internal sealed class RasterHostSupervisor
                 TargetWidth = targetWidth,
                 TargetHeight = targetHeight,
                 PrepareAnimation = prepareAnimation,
+                HdrDisplayEnabled = HdrDisplayEnabled,
             });
         }
         catch (Exception ex)
         {
-            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            DiagLog.Write("App", $"RasterHost HANDLE send failed request={requestId}: {ex}");
+            _pending.TryComplete(requestId, PreviewError.InternalFailure(requestId, "send-handle", probe.Extension));
             if (generation == _generation)
                 RecycleHost(requestId, "handle preview request could not be delivered");
         }
@@ -453,12 +466,14 @@ internal sealed class RasterHostSupervisor
                 TargetWidth = targetWidth,
                 TargetHeight = targetHeight,
                 PrepareAnimation = prepareAnimation,
+                HdrDisplayEnabled = HdrDisplayEnabled,
             });
         }
         catch (Exception ex)
         {
             RemoveCloudRequestState(requestId);
-            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            DiagLog.Write("App", $"RasterHost open send failed request={requestId}: {ex}");
+            _pending.TryComplete(requestId, PreviewError.InternalFailure(requestId, "send-open", probe.Extension));
         }
     }
 
@@ -468,6 +483,24 @@ internal sealed class RasterHostSupervisor
         {
             DiagLog.Write("App", $"host send resize request={requestId}; size={width}x{height}; dpi={dpi:0.##}");
             await _channel.SendAsync(new PreviewResize(requestId, width, height, dpi));
+        }
+    }
+
+    public Task RefreshImageAsync(PreviewImageRefresh refresh, CancellationToken cancellationToken)
+        => ImageRefreshSupported && _channel is { } channel
+            ? channel.SendAsync(refresh, cancellationToken)
+            : Task.CompletedTask;
+
+    public async Task CloseImageRefreshAsync(PreviewImageRefreshClose close)
+    {
+        try
+        {
+            if (ImageRefreshSupported && _channel is { } channel)
+                await channel.SendAsync(close);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "image refresh release failed: " + ex.Message);
         }
     }
 
@@ -619,12 +652,15 @@ internal sealed class RasterHostSupervisor
                 ready.SectionHandle,
                 checked((int)ready.PacketLength));
             ReadOnlySpan<byte> packet = view.Bytes;
-            int count = checked((int)BitConverter.ToUInt32(packet[..4]));
+            uint rawCount = BitConverter.ToUInt32(packet[..4]);
+            bool packetTruncated = (rawCount & 0x8000_0000u) != 0;
+            int count = checked((int)(rawCount & 0x7fff_ffffu));
             int width = checked((int)BitConverter.ToUInt32(packet[4..8]));
             int height = checked((int)BitConverter.ToUInt32(packet[8..12]));
             int frameBytes = checked(width * height * 4);
             long expectedLength = checked(12L + count * (4L + frameBytes));
             if (count != ready.FrameCount || width != ready.Width || height != ready.Height
+                || packetTruncated != ready.IsTruncated
                 || expectedLength != packet.Length)
                 return null;
 
@@ -642,7 +678,7 @@ internal sealed class RasterHostSupervisor
             if (offset != packet.Length)
                 return null;
 
-            var result = new NativeAnimationFrames(width, height, view, frames);
+            var result = new NativeAnimationFrames(width, height, view, frames, packetTruncated);
             view = null;
             return result;
         }

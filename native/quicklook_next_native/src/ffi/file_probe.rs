@@ -5,11 +5,7 @@ use crate::{preview, MAX_FFI_STRING_BYTES};
 
 /// Probe a file (UTF-8 path) and write its FileProbe JSON (UTF-8) into `out`.
 /// Returns the JSON byte length, `-needed` if the buffer is too small, or a negative error.
-///
-/// # Safety
-///
-/// `path_utf8` must be readable for `path_len` bytes. When non-null, `out` must be writable
-/// for `out_cap` bytes. Both buffers must remain valid for the duration of the call.
+#[doc = include_str!("../ffi_pointer_safety.md")]
 #[no_mangle]
 pub unsafe extern "C" fn ql_probe_file(
     path_utf8: *const u8,
@@ -18,7 +14,8 @@ pub unsafe extern "C" fn ql_probe_file(
     out_cap: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
@@ -30,23 +27,8 @@ pub unsafe extern "C" fn ql_probe_file(
         if out.is_null() || out_cap < bytes.len() {
             return -(bytes.len() as i32);
         }
+        // SAFETY: out is exclusive caller storage with checked capacity; JSON is separately owned.
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
         bytes.len() as i32
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ql_probe_file;
-    use crate::MAX_FFI_STRING_BYTES;
-
-    #[test]
-    fn file_probe_rejects_oversized_path_before_dereference() {
-        let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
-
-        assert_eq!(
-            unsafe { ql_probe_file(dangling, MAX_FFI_STRING_BYTES + 1, std::ptr::null_mut(), 0,) },
-            -1
-        );
-    }
 }

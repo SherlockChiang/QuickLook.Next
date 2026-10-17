@@ -68,6 +68,15 @@ internal sealed class RasterPreviewPresenter
 
     public bool AttachSurface(Compositor compositor, PreviewSurface surface, out string? error)
     {
+        if (!PreviewSurfaceFormats.IsKnown(surface.Format)
+            || (surface.IsHdr is { } declaredHdr
+                && declaredHdr != PreviewSurfaceFormats.IsHdr(surface.Format)))
+        {
+            CompositionInterop.CloseSharedHandle((nint)surface.SharedHandle);
+            error = "surface format is unsupported or inconsistent";
+            return false;
+        }
+
         var (compSurface, hr) = CompositionInterop.CreateSurfaceForHandle(compositor, (nint)surface.SharedHandle);
         if (hr < 0 || compSurface is null)
         {
@@ -75,7 +84,11 @@ internal sealed class RasterPreviewPresenter
             return false;
         }
 
-        ElementCompositionPreview.SetElementChildVisual(_previewRoot, null);
+        var brush = compositor.CreateSurfaceBrush(compSurface);
+        brush.Stretch = CompositionStretch.Fill;
+        var sprite = compositor.CreateSpriteVisual();
+        sprite.Brush = brush;
+        ElementCompositionPreview.SetElementChildVisual(_previewRoot, sprite);
         _fallbackImage.Source = null;
         _fallbackImage.Visibility = Visibility.Collapsed;
         _fallbackImage.RenderTransform = null;
@@ -83,14 +96,9 @@ internal sealed class RasterPreviewPresenter
         _fallbackTransform = null;
         DisposeSprite();
 
-        var brush = compositor.CreateSurfaceBrush(compSurface);
-        brush.Stretch = CompositionStretch.Fill;
-        var sprite = compositor.CreateSpriteVisual();
-        sprite.Brush = brush;
         _sprite = sprite;
         _surfaceWidth = surface.Width;
         _surfaceHeight = surface.Height;
-        ElementCompositionPreview.SetElementChildVisual(_previewRoot, sprite);
         error = null;
         return true;
     }

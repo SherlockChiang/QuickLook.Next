@@ -19,12 +19,14 @@ pub unsafe extern "C" fn ql_preview_folder(
         if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {
             return 0;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return 0,
         };
         let json = preview::render_folder(path, cancel_cb);
-        write_json_out(&json, out_buf, out_cap)
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        unsafe { write_json_out(&json, out_buf, out_cap) }
     })
 }
 
@@ -38,8 +40,11 @@ pub unsafe extern "C" fn ql_is_text(
     magic_len: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let ext =
+            unsafe { optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES) }.unwrap_or("");
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let magic = match unsafe { optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) } {
             Some(bytes) => bytes,
             None => return 0,
         };
@@ -63,9 +68,14 @@ pub unsafe extern "C" fn ql_is_archive(
     magic_len: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let ext = optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let kind = optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES).unwrap_or("");
-        let magic = match optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let ext =
+            unsafe { optional_utf8_arg(ext_utf8, ext_len, MAX_FFI_STRING_BYTES) }.unwrap_or("");
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let kind =
+            unsafe { optional_utf8_arg(kind_utf8, kind_len, MAX_FFI_STRING_BYTES) }.unwrap_or("");
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let magic = match unsafe { optional_bytes_arg(magic, magic_len, MAX_FFI_MAGIC_BYTES) } {
             Some(bytes) => bytes,
             None => return 0,
         };
@@ -85,22 +95,37 @@ mod tests {
 
     #[test]
     fn optional_arguments_accept_null_only_with_zero_length() {
-        assert_eq!(optional_utf8_arg(std::ptr::null(), 0, 8), Some(""));
-        assert_eq!(optional_bytes_arg(std::ptr::null(), 0, 8), Some(&[][..]));
-        assert!(optional_utf8_arg(std::ptr::null(), 1, 8).is_none());
-        assert!(optional_bytes_arg(std::ptr::null(), 1, 8).is_none());
+        assert_eq!(
+            // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+            unsafe { optional_utf8_arg(std::ptr::null(), 0, 8) },
+            Some("")
+        );
+        assert_eq!(
+            // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+            unsafe { optional_bytes_arg(std::ptr::null(), 0, 8) },
+            Some(&[][..])
+        );
+        // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+        assert!(unsafe { optional_utf8_arg(std::ptr::null(), 1, 8) }.is_none());
+        // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+        assert!(unsafe { optional_bytes_arg(std::ptr::null(), 1, 8) }.is_none());
     }
 
     #[test]
     fn oversized_arguments_are_rejected_before_dereference() {
         let dangling = std::ptr::NonNull::<u8>::dangling().as_ptr();
         assert!(
-            optional_utf8_arg(dangling, MAX_FFI_STRING_BYTES + 1, MAX_FFI_STRING_BYTES).is_none()
+            // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+            unsafe { optional_utf8_arg(dangling, MAX_FFI_STRING_BYTES + 1, MAX_FFI_STRING_BYTES) }
+                .is_none()
         );
         assert!(
-            optional_bytes_arg(dangling, MAX_FFI_MAGIC_BYTES + 1, MAX_FFI_MAGIC_BYTES).is_none()
+            // SAFETY: The fixture buffer is live, or these invalid arguments are rejected before access.
+            unsafe { optional_bytes_arg(dangling, MAX_FFI_MAGIC_BYTES + 1, MAX_FFI_MAGIC_BYTES) }
+                .is_none()
         );
         assert_eq!(
+            // SAFETY: The oversized extension is rejected before access; null/zero magic is empty.
             unsafe { ql_is_text(dangling, MAX_FFI_STRING_BYTES + 1, std::ptr::null(), 0) },
             0
         );
@@ -109,6 +134,7 @@ mod tests {
     #[test]
     fn folder_route_rejects_null_output_without_dereference() {
         let path = b".";
+        // SAFETY: Null output returns before accessing the live input path.
         let status =
             unsafe { ql_preview_folder(path.as_ptr(), path.len(), std::ptr::null_mut(), 0, None) };
         assert_eq!(status, 0);

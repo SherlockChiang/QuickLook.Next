@@ -95,7 +95,7 @@ public static partial class PreviewFailureDiagnostics
         return SafeErrorCode().IsMatch(normalized) ? normalized : PreviewErrorCodes.Unknown;
     }
 
-    private static string NormalizePhase(string? value)
+    internal static string NormalizePhase(string? value)
     {
         string normalized = value?.Trim().ToLowerInvariant() ?? "";
         return SafePhase().IsMatch(normalized) ? normalized : "unknown";
@@ -107,7 +107,7 @@ public static partial class PreviewFailureDiagnostics
         return SafeVersion().IsMatch(normalized) ? normalized : "unknown";
     }
 
-    private static string NormalizeFormat(params string?[] candidates)
+    internal static string NormalizeFormat(params string?[] candidates)
     {
         foreach (string? candidate in candidates)
         {

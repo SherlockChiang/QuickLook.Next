@@ -23,61 +23,61 @@ internal sealed class NativeBridge : IDisposable
     [return: MarshalAs(UnmanagedType.I1)]
     private delegate bool NativeCancelCallback();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern uint ql_abi_version();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern ulong ql_capabilities();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern void ql_set_callback(NativeCallback? cb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_start();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_stop();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern void ql_set_preview_visible(int visible);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern void ql_get_selection();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_probe_file(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_probe_file([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_probe_file_handle(
-        SafeFileHandle sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_torrent(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_folder(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            SafeFileHandle sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_text([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_archive([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, IntPtr cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_ebook([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_office([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, IntPtr cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_executable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_torrent([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_folder([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, IntPtr cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_info(
-        byte[] pathUtf8,
-        nuint pathLen,
-        byte[] kindUtf8,
-        nuint kindLen,
-        long size,
-        long modifiedUnix,
-        byte[] outBuf,
-        nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_get_thumbnail(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_get_thumbnail_cancelable(byte[] pathUtf8, nuint pathLen, int size, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_get_thumbnail_cancelable_with_flags(byte[] pathUtf8, nuint pathLen, int size, uint flags, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            [In] byte[] kindUtf8,
+            nuint kindLen,
+            long size,
+            long modifiedUnix,
+            [In, Out] byte[] outBuf,
+            nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_get_thumbnail([In] byte[] pathUtf8, nuint pathLen, int size, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_get_thumbnail_cancelable([In] byte[] pathUtf8, nuint pathLen, int size, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_get_thumbnail_cancelable_with_flags([In] byte[] pathUtf8, nuint pathLen, int size, uint flags, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
     private delegate int NativePreviewCall(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
     private delegate int NativePreviewCallWithCancel(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, IntPtr cancelCb);
     private const int MaxNativePreviewJsonBytes = 12 * 1024 * 1024;
@@ -134,18 +134,26 @@ internal sealed class NativeBridge : IDisposable
 
     private void OnNative(IntPtr utf16)
     {
-        string? line = Marshal.PtrToStringUni(utf16);
-        if (line is null) return;
-        NativeHookStatus? hookStatus = NativeHookStatus.TryParse(line);
-        if (hookStatus is not null)
+        try
         {
-            HookStatus = hookStatus;
-            if (hookStatus.State == NativeHookState.Failed)
-                LastHookFailure = hookStatus;
-            return;
+            // Copy the transient native string before returning to the producer thread.
+            string? line = Marshal.PtrToStringUni(utf16);
+            if (line is null) return;
+            NativeHookStatus? hookStatus = NativeHookStatus.TryParse(line);
+            if (hookStatus is not null)
+            {
+                HookStatus = hookStatus;
+                if (hookStatus.State == NativeHookState.Failed)
+                    LastHookFailure = hookStatus;
+                return;
+            }
+            var intent = NativeIntent.TryParse(line);
+            if (intent is not null) _onIntent?.Invoke(intent);
         }
-        var intent = NativeIntent.TryParse(line);
-        if (intent is not null) _onIntent?.Invoke(intent);
+        catch
+        {
+            // Managed parsing and event handlers must never throw across the native callback ABI.
+        }
     }
 
     /// <summary>Native single-source-of-truth file probe (type/magic/metadata, cached). Null on failure.</summary>

@@ -19,7 +19,8 @@ pub unsafe extern "C" fn ql_extract_package_icon(
     out_cap: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
@@ -28,7 +29,8 @@ pub unsafe extern "C" fn ql_extract_package_icon(
             Some(x) => x,
             None => return -2,
         };
-        write_raster_packet(w, h, &bgra, out, out_cap)
+        // SAFETY: The export requires exclusive output; bgra is separate Rust-owned storage.
+        unsafe { write_raster_packet(w, h, &bgra, out, out_cap) }
     })
 }
 
@@ -45,7 +47,8 @@ pub unsafe extern "C" fn ql_extract_package_icon_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
@@ -56,7 +59,8 @@ pub unsafe extern "C" fn ql_extract_package_icon_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_raster_packet(w, h, &bgra, out, out_cap)
+        // SAFETY: The export requires exclusive output; bgra is separate Rust-owned storage.
+        unsafe { write_raster_packet(w, h, &bgra, out, out_cap) }
     })
 }
 
@@ -71,7 +75,8 @@ pub unsafe extern "C" fn ql_extract_office_image(
     out_cap: usize,
 ) -> i32 {
     ffi_boundary(|| {
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
@@ -80,7 +85,8 @@ pub unsafe extern "C" fn ql_extract_office_image(
             Some(x) => x,
             None => return -2,
         };
-        write_raster_packet(w, h, &bgra, out, out_cap)
+        // SAFETY: The export requires exclusive output; bgra is separate Rust-owned storage.
+        unsafe { write_raster_packet(w, h, &bgra, out, out_cap) }
     })
 }
 
@@ -97,7 +103,8 @@ pub unsafe extern "C" fn ql_extract_office_image_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        let path = match utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) {
+        // SAFETY: The export caller guarantees valid input/output buffers for this call.
+        let path = match unsafe { utf8_arg(path_utf8, path_len, MAX_FFI_STRING_BYTES) } {
             Some(s) => s,
             None => return -1,
         };
@@ -108,7 +115,8 @@ pub unsafe extern "C" fn ql_extract_office_image_cancelable(
         if cancel_requested(cancel_cb) {
             return -3;
         }
-        write_raster_packet(w, h, &bgra, out, out_cap)
+        // SAFETY: The export requires exclusive output; bgra is separate Rust-owned storage.
+        unsafe { write_raster_packet(w, h, &bgra, out, out_cap) }
     })
 }
 
@@ -129,6 +137,7 @@ pub unsafe extern "C" fn ql_extract_office_image_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends live HANDLE/input ranges and disjoint exclusive output/scalar storage.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -185,6 +194,7 @@ pub unsafe extern "C" fn ql_extract_office_layout_image_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends live HANDLE/input ranges and disjoint exclusive output/scalar storage.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;
@@ -254,6 +264,7 @@ pub unsafe extern "C" fn ql_extract_package_icon_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The caller lends live HANDLE/input ranges and disjoint exclusive output/scalar storage.
     ffi_boundary(|| unsafe {
         if out_required.is_null() {
             return QL_ERROR_INVALID_ARGUMENT;

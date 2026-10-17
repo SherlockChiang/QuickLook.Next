@@ -59,6 +59,51 @@ public sealed class PipeChannelTests
     }
 
     [Fact]
+    public async Task Internal_preview_error_round_trips_bounded_wire_fields()
+    {
+        await using var pipes = await ConnectedPipePair.CreateAsync();
+        using var sender = new PipeChannel(pipes.Server);
+        using var receiver = new PipeChannel(pipes.Client);
+        var error = PreviewError.InternalFailure("request", "handle-open", ".PNG");
+        Task<ControlMessage?> receive = receiver.ReceiveAsync();
+        await sender.SendAsync(error).WaitAsync(Timeout);
+        var received = Assert.IsType<PreviewError>(await receive.WaitAsync(Timeout));
+
+        Assert.Equal(error, received);
+        Assert.Equal("Preview failed.", received.Message);
+        Assert.Equal(PreviewErrorCodes.ContentFailed, received.Code);
+        Assert.Equal("png", received.Format);
+        Assert.Equal("handle-open", received.Phase);
+    }
+
+    [Theory]
+    [InlineData("C:\\Users\\alice\\private.png")]
+    [InlineData("private\r\npath=secret")]
+    [InlineData("用户秘密")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Internal_preview_error_drops_invalid_metadata(string hostileValue)
+    {
+        var error = PreviewError.InternalFailure("request", hostileValue, hostileValue);
+        string payload = ProtocolJson.Serialize(error);
+
+        Assert.Equal("unknown", error.Phase);
+        Assert.Equal("unknown", error.Format);
+        Assert.DoesNotContain(hostileValue, payload, StringComparison.Ordinal);
+        Assert.InRange(payload.Length, 1, 256);
+    }
+
+    [Fact]
+    public void Legacy_preview_error_without_phase_remains_readable()
+    {
+        const string legacyJson = """{"type":"preview.error","requestId":"request","message":"failed"}""";
+        var error = Assert.IsType<PreviewError>(ProtocolJson.Deserialize(legacyJson));
+
+        Assert.Equal("request", error.RequestId);
+        Assert.Equal("failed", error.Message);
+        Assert.Null(error.Phase);
+    }
+
+    [Fact]
     public async Task Receive_accepts_crlf_and_unterminated_final_line()
     {
         var first = new PreviewError("first", "one");

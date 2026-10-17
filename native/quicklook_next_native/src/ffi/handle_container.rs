@@ -23,6 +23,7 @@ pub unsafe extern "C" fn ql_preview_archive_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -63,6 +64,7 @@ pub unsafe extern "C" fn ql_preview_package_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -97,6 +99,7 @@ pub unsafe extern "C" fn ql_preview_office_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -137,6 +140,7 @@ pub unsafe extern "C" fn ql_preview_ebook_handle(
     out_required: *mut usize,
     cancel_cb: Option<CancelCallback>,
 ) -> i32 {
+    // SAFETY: The export forwards its caller's live HANDLE/input and disjoint writable outputs.
     ffi_boundary(|| unsafe {
         preview_handle_v2(
             source_handle,
@@ -194,6 +198,7 @@ mod tests {
         ];
         for export in exports {
             let mut required = usize::MAX;
+            // SAFETY: required is aligned/writable; cancellation rejects null inputs before I/O.
             let status = unsafe {
                 export(
                     0,

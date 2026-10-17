@@ -7,7 +7,6 @@ use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
 };
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::Shell::{
     IShellItem, IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
     SIIGBF_INCACHEONLY,
@@ -127,13 +126,15 @@ fn thumbnail_request_channel() -> (
 fn thumbnail_sta_worker() -> &'static ThumbnailStaWorker {
     THUMBNAIL_STA.get_or_init(|| {
         let (sender, receiver) = thumbnail_request_channel();
-        std::thread::spawn(move || unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        std::thread::spawn(move || {
+            let Ok(_apartment) = super::com::StaApartment::initialize() else {
+                return;
+            };
             while let Ok(request) = receiver.recv() {
-                let result = shell_thumbnail(&request.path, request.size, request.flags);
+                // SAFETY: The guard initialized this STA and every Shell interface stays here.
+                let result = unsafe { shell_thumbnail(&request.path, request.size, request.flags) };
                 let _ = request.reply.send(result);
             }
-            CoUninitialize();
         });
         ThumbnailStaWorker { sender }
     })
@@ -178,6 +179,7 @@ impl OwnedShellBitmap {
 
 impl Drop for OwnedShellBitmap {
     fn drop(&mut self) {
+        // SAFETY: This guard exclusively owns the Shell-returned HBITMAP and deletes it once.
         unsafe {
             let _ = DeleteObject(self.0.into());
         }
@@ -188,6 +190,7 @@ struct ScreenDc(HDC);
 
 impl ScreenDc {
     unsafe fn acquire() -> Option<Self> {
+        // SAFETY: A null HWND requests a screen DC; a successful result is owned by this guard.
         let handle = unsafe { GetDC(None) };
         (!handle.0.is_null()).then_some(Self(handle))
     }
@@ -195,14 +198,18 @@ impl ScreenDc {
 
 impl Drop for ScreenDc {
     fn drop(&mut self) {
+        // SAFETY: Release the DC once, on the acquiring thread and with the same null HWND.
         unsafe {
             let _ = ReleaseDC(None, self.0);
         }
     }
 }
 
+/// # Safety
+/// The caller must initialize COM and keep Shell interfaces on the current STA.
 unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> ThumbnailResult {
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: wide is nul-terminated and live during this call on the initialized STA.
     let item: IShellItem =
         unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }.ok()?;
     let factory: IShellItemImageFactory = item.cast().ok()?;
@@ -212,14 +219,19 @@ unsafe fn shell_thumbnail(path: &str, size: i32, flags: u32) -> ThumbnailResult 
         (false, true) => Default::default(),
         (false, false) => SIIGBF_BIGGERSIZEOK,
     };
+    // SAFETY: factory is an owned interface on this STA; GetImage transfers bitmap ownership.
     let bitmap = OwnedShellBitmap::new(
         unsafe { factory.GetImage(SIZE { cx: size, cy: size }, shell_flags) }.ok()?,
     )?;
+    // SAFETY: The owned bitmap stays live and is not selected into any device context.
     unsafe { hbitmap_to_bgra(bitmap.0) }
 }
 
+/// # Safety
+/// bitmap must be live for this call and must not be selected into a device context.
 unsafe fn hbitmap_to_bgra(bitmap: HBITMAP) -> ThumbnailResult {
     let mut metadata = BITMAP::default();
+    // SAFETY: bitmap is live and the output points to an initialized BITMAP with matching size.
     let got = unsafe {
         GetObjectW(
             bitmap.into(),
@@ -248,7 +260,9 @@ unsafe fn hbitmap_to_bgra(bitmap: HBITMAP) -> ThumbnailResult {
         ..Default::default()
     };
 
+    // SAFETY: The screen DC is acquired and dropped on this worker thread.
     let device_context = unsafe { ScreenDc::acquire() }?;
+    // SAFETY: bitmap is unselected; checked 32-bit dimensions match the writable pixels buffer.
     let lines = unsafe {
         GetDIBits(
             device_context.0,

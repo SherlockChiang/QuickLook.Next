@@ -218,7 +218,8 @@ internal sealed class ParserHostSupervisor
         }
         catch (Exception ex)
         {
-            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            DiagLog.Write("App", $"ParserHost HANDLE send failed request={requestId}: {ex}");
+            _pending.TryComplete(requestId, PreviewError.InternalFailure(requestId, "send-handle", probe.Extension));
             if (generation == _generation)
                 RecycleHost("handle preview request could not be delivered");
         }
@@ -309,7 +310,10 @@ internal sealed class ParserHostSupervisor
         }
         catch (Exception ex)
         {
-            _pending.TryComplete(open.RequestId, new PreviewError(open.RequestId, ex.Message));
+            DiagLog.Write("App", $"ParserHost SQLite HANDLE send failed request={open.RequestId}: {ex}");
+            _pending.TryComplete(
+                open.RequestId,
+                PreviewError.InternalFailure(open.RequestId, "send-sqlite", open.Probe.Extension));
             if (generation == _generation)
                 RecycleHost("SQLite handle preview request could not be delivered");
         }
@@ -347,7 +351,8 @@ internal sealed class ParserHostSupervisor
         catch (Exception ex)
         {
             _recycleOnCancel.TryRemove(requestId, out _);
-            _pending.TryComplete(requestId, new PreviewError(requestId, ex.Message));
+            DiagLog.Write("App", $"ParserHost open send failed request={requestId}: {ex}");
+            _pending.TryComplete(requestId, PreviewError.InternalFailure(requestId, "send-open"));
         }
     }
 
@@ -595,7 +600,8 @@ internal sealed class ParserHostSupervisor
         }
         catch (Exception ex)
         {
-            _pending.TryComplete(open.RequestId, new PreviewError(open.RequestId, ex.Message));
+            DiagLog.Write("App", $"ParserHost PDF text HANDLE send failed request={open.RequestId}: {ex}");
+            _pending.TryComplete(open.RequestId, PreviewError.InternalFailure(open.RequestId, "send-pdf-text", ".pdf"));
             if (generation == _generation)
                 RecycleHost("PDF text HANDLE request could not be delivered");
         }

@@ -20,14 +20,14 @@ internal static class SyntaxHighlighter
     private const int InitialSpanPacketBytes = 16 * 1024;
     private static bool _nativeUnavailable;
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_highlight_spans(
-        byte[] textUtf8,
-        nuint textLen,
-        byte[] langUtf8,
-        nuint langLen,
-        byte[] outBuf,
-        nuint outCap);
+            [In] byte[] textUtf8,
+            nuint textLen,
+            [In] byte[] langUtf8,
+            nuint langLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap);
 
     internal readonly record struct NativeSpan(int Start, int Length, TokenKind Kind);
 

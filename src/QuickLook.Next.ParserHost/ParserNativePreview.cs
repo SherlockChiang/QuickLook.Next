@@ -42,23 +42,23 @@ internal static class ParserNativePreview
         out nuint outRequired,
         NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern uint ql_abi_version();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern ulong ql_capabilities();
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_archive(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_archive([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_archive_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
     public static void EnsureCompatible()
     {
@@ -66,209 +66,209 @@ internal static class ParserNativePreview
         NativeAbi.EnsureCapabilities(ql_capabilities(), NativeAbi.ParserHandleInputs);
     }
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_office(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_office([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_office_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_package_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_text(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_text_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_text([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_text_cancelable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_text_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_executable_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_torrent_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_mail_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_pdf_text_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_sqlite_handles(
-        nint mainHandle,
-        ulong mainExpectedLength,
-        nint walHandle,
-        ulong walExpectedLength,
-        nint shmHandle,
-        ulong shmExpectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint mainHandle,
+            ulong mainExpectedLength,
+            nint walHandle,
+            ulong walExpectedLength,
+            nint shmHandle,
+            ulong shmExpectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_ebook(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_ebook_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_ebook([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_ebook_cancelable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_ebook_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_executable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_executable_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_executable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_executable_cancelable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_torrent(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int ql_preview_torrent_cancelable(byte[] pathUtf8, nuint pathLen, byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_torrent([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int ql_preview_torrent_cancelable([In] byte[] pathUtf8, nuint pathLen, [In, Out] byte[] outBuf, nuint outCap, NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_info(
-        byte[] pathUtf8,
-        nuint pathLen,
-        byte[] kindUtf8,
-        nuint kindLen,
-        long size,
-        long modifiedUnix,
-        byte[] outBuf,
-        nuint outCap);
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            [In] byte[] kindUtf8,
+            nuint kindLen,
+            long size,
+            long modifiedUnix,
+            [In, Out] byte[] outBuf,
+            nuint outCap);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_preview_database_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        long size,
-        long modifiedUnix,
-        byte[] outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            long size,
+            long modifiedUnix,
+            [In, Out] byte[] outBuf,
+            nuint outCap,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_archive_entry_to_output_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] entryPathUtf8,
-        nuint entryPathLen,
-        nint outputHandle,
-        ulong outputCapacity,
-        out ulong outWritten,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In] byte[] entryPathUtf8,
+            nuint entryPathLen,
+            nint outputHandle,
+            ulong outputCapacity,
+            out ulong outWritten,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_package_icon_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        nint outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            nint outBuf,
+            nuint outCap,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_package_icon_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        nint outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            nint outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_office_image_cancelable(
-        byte[] pathUtf8,
-        nuint pathLen,
-        nint outBuf,
-        nuint outCap,
-        NativeCancelCallback? cancelCb);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+            [In] byte[] pathUtf8,
+            nuint pathLen,
+            nint outBuf,
+            nuint outCap,
+            NativeCancelCallback? cancelCb);
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_office_image_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        nint outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            nint outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern int ql_extract_office_layout_image_handle(
-        nint sourceHandle,
-        ulong expectedLength,
-        byte[] logicalNameUtf8,
-        nuint logicalNameLen,
-        byte[] imageRefUtf8,
-        nuint imageRefLen,
-        uint targetWidth,
-        uint targetHeight,
-        nint outBuf,
-        nuint outCap,
-        out nuint outRequired,
-        NativeCancelCallback? cancelCb);
+            nint sourceHandle,
+            ulong expectedLength,
+            [In] byte[] logicalNameUtf8,
+            nuint logicalNameLen,
+            [In] byte[] imageRefUtf8,
+            nuint imageRefLen,
+            uint targetWidth,
+            uint targetHeight,
+            nint outBuf,
+            nuint outCap,
+            out nuint outRequired,
+            NativeCancelCallback? cancelCb);
 
     public static string? TryPreview(string kind, string path, FileProbe probe, CancellationToken cancellationToken)
     {
