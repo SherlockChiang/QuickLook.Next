@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'checked-invocation.ps1')
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-native-abi-contract.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Native ABI compiler/schema contracts failed'
 
 $libPath = Join-Path $Root "native\quicklook_next_native\src\lib.rs"
 $abiGeneratedPath = Join-Path $Root "native\quicklook_next_native\src\abi_generated.rs"
@@ -10,6 +13,7 @@ $ffiModulePath = Join-Path $Root "native\quicklook_next_native\src\ffi\mod.rs"
 $ffiArchiveEntryPath = Join-Path $Root "native\quicklook_next_native\src\ffi\archive_entry.rs"
 $ffiArchiveEntryTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\archive_entry\tests.rs"
 $ffiCommonPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common.rs"
+$ffiCommonTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\common\tests.rs"
 $ffiContractPath = Join-Path $Root "native\quicklook_next_native\src\ffi\contract.rs"
 $ffiDatabasePath = Join-Path $Root "native\quicklook_next_native\src\ffi\database.rs"
 $ffiFileProbePath = Join-Path $Root "native\quicklook_next_native\src\ffi\file_probe.rs"
@@ -25,8 +29,9 @@ $ffiRoutingPath = Join-Path $Root "native\quicklook_next_native\src\ffi\routing.
 $ffiStaticImagePath = Join-Path $Root "native\quicklook_next_native\src\ffi\static_image.rs"
 $ffiStaticImageHandlePath =
     Join-Path $Root "native\quicklook_next_native\src\ffi\static_image\handle.rs"
+$ffiStaticImagePacketPath =
+    Join-Path $Root "native\quicklook_next_native\src\ffi\static_image\packet.rs"
 $ffiThumbnailPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail.rs"
-$ffiThumbnailTestsPath = Join-Path $Root "native\quicklook_next_native\src\ffi\thumbnail\tests.rs"
 $win32ModulePath = Join-Path $Root "native\quicklook_next_native\src\win32\mod.rs"
 $shellThumbnailPath = Join-Path (
     $Root) "native\quicklook_next_native\src\win32\shell_thumbnail.rs"
@@ -88,6 +93,7 @@ foreach ($path in @(
         $ffiArchiveEntryPath,
         $ffiArchiveEntryTestsPath,
         $ffiCommonPath,
+        $ffiCommonTestsPath,
         $ffiContractPath,
         $ffiDatabasePath,
         $ffiFileProbePath,
@@ -102,8 +108,8 @@ foreach ($path in @(
         $ffiRoutingPath,
         $ffiStaticImagePath,
         $ffiStaticImageHandlePath,
+        $ffiStaticImagePacketPath,
         $ffiThumbnailPath,
-        $ffiThumbnailTestsPath,
         $win32ModulePath,
         $shellThumbnailPath,
         $previewPath,
@@ -166,6 +172,7 @@ if ($failures.Count -eq 0) {
     $ffiArchiveEntryText = Get-Content -LiteralPath $ffiArchiveEntryPath -Raw
     $ffiArchiveEntryTestsText = Get-Content -LiteralPath $ffiArchiveEntryTestsPath -Raw
     $ffiCommonText = Get-Content -LiteralPath $ffiCommonPath -Raw
+    $ffiCommonTestsText = Get-Content -LiteralPath $ffiCommonTestsPath -Raw
     $ffiContractText = Get-Content -LiteralPath $ffiContractPath -Raw
     $ffiDatabaseText = Get-Content -LiteralPath $ffiDatabasePath -Raw
     $ffiFileProbeText = Get-Content -LiteralPath $ffiFileProbePath -Raw
@@ -175,13 +182,12 @@ if ($failures.Count -eq 0) {
     $ffiHandlePreviewText = Get-Content -LiteralPath $ffiHandlePreviewPath -Raw
     $ffiHandleStructuredText = Get-Content -LiteralPath $ffiHandleStructuredPath -Raw
     $ffiPathPreviewText = Get-Content -LiteralPath $ffiPathPreviewPath -Raw
-    $ffiPathPreviewTestsText = Get-Content -LiteralPath $ffiPathPreviewTestsPath -Raw
     $ffiRasterPacketText = Get-Content -LiteralPath $ffiRasterPacketPath -Raw
     $ffiRoutingText = Get-Content -LiteralPath $ffiRoutingPath -Raw
     $ffiStaticImageText = Get-Content -LiteralPath $ffiStaticImagePath -Raw
     $ffiStaticImageHandleText = Get-Content -LiteralPath $ffiStaticImageHandlePath -Raw
+    $ffiStaticImagePacketText = Get-Content -LiteralPath $ffiStaticImagePacketPath -Raw
     $ffiThumbnailText = Get-Content -LiteralPath $ffiThumbnailPath -Raw
-    $ffiThumbnailTestsText = Get-Content -LiteralPath $ffiThumbnailTestsPath -Raw
     $win32ModuleText = Get-Content -LiteralPath $win32ModulePath -Raw
     $shellText = Get-Content -LiteralPath $shellThumbnailPath -Raw
     $previewText = Get-Content -LiteralPath $previewPath -Raw
@@ -371,6 +377,18 @@ if ($failures.Count -eq 0) {
         "write_v2_out",
         "ffi_boundary",
         "ffi_void_boundary")
+    foreach ($pointerHelper in $commonHelpers | Where-Object { $_ -notin @("ffi_boundary", "ffi_void_boundary") }) {
+        if ($ffiCommonText -notmatch ('(?m)^pub\(crate\)\s+unsafe\s+fn\s+' +
+                [regex]::Escape($pointerHelper) + '(?:<[^>]*>)?\s*\(')) {
+            $failures.Add("Raw-pointer helper $pointerHelper must require an unsafe caller.")
+        }
+    }
+    if ($libText -notmatch '#!\[deny\(unsafe_op_in_unsafe_fn\)\]' -or
+        $libText -notmatch '#!\[deny\(clippy::undocumented_unsafe_blocks\)\]' -or
+        $ffiModuleText -notmatch '#!\[deny\(unsafe_op_in_unsafe_fn\)\]' -or
+        $previewText -notmatch '#!\[forbid\(unsafe_code\)\]') {
+        $failures.Add("Crate-wide unsafe lints and safe preview modules must remain compiler-enforced.")
+    }
     foreach ($commonHelper in $commonHelpers) {
         $commonHelperPattern = '(?m)^pub\(crate\)\s+' +
             '(?:unsafe\s+)?fn\s+' + [regex]::Escape($commonHelper) +
@@ -385,20 +403,10 @@ if ($failures.Count -eq 0) {
     if ($libText -match $rootCommonDefinitionPattern) {
         $failures.Add("lib.rs must not retain ffi::common helper definitions.")
     }
-    foreach ($commonTest in @(
-            'utf8_arguments_reject_null_nonzero_and_invalid_bytes',
-            'optional_arguments_accept_only_null_zero_length',
-            'oversized_arguments_are_rejected_before_dereference',
-            'json_output_preserves_length_and_capacity_contract',
-            'v2_output_reports_required_size_and_invalid_output',
-            'panic_boundaries_map_or_contain_panics')) {
-        if ($ffiCommonText -notmatch "fn\s+$commonTest\s*\(") {
-            $failures.Add("ffi::common lost focused test: $commonTest")
-        }
-    }
-    $ffiCommonLineCount = @(Get-Content -LiteralPath $ffiCommonPath).Count
-    if ($ffiCommonLineCount -gt 240) {
-        $failures.Add("The shared ffi::common module grew beyond 240 lines: $ffiCommonLineCount")
+    # Helper behavior is exercised by test-rust-ffi-behavior.ps1 against the real
+    # module and compiled mutations; child test names are not the contract.
+    if ($ffiCommonText -notmatch '(?m)^mod tests;\s*$') {
+        $failures.Add('ffi::common must retain its focused child test module.')
     }
 
     $expectedArchiveEntryExports = @(
@@ -521,55 +529,16 @@ if ($failures.Count -eq 0) {
     }
     if ($ffiRasterPacketText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
         $ffiRasterPacketText -notmatch 'write_raster_packet_v2\([\s\S]*QL_ERROR_BUFFER_TOO_SMALL[\s\S]*QL_ERROR_INVALID_ARGUMENT[\s\S]*QL_OK' -or
-        $ffiRasterPacketText -notmatch 'fn\s+checked_raster_writer_writes_exact_packet_and_rejects_bad_layout\s*\(' -or
         $libText -match '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:checked_raster_packet_length|write_checked_raster_packet|write_raster_packet|write_raster_packet_v2)\s*\(') {
         $failures.Add(
             "ffi::raster_packet lost exact BGRA geometry, status semantics, focused tests, or root isolation.")
     }
-    $ffiRasterPacketLineCount = @(Get-Content -LiteralPath $ffiRasterPacketPath).Count
-    if ($ffiRasterPacketLineCount -gt 180) {
-        $failures.Add(
-            "The focused ffi::raster_packet module grew beyond 180 lines: $ffiRasterPacketLineCount")
-    }
 
-    $expectedContractExports = @("ql_abi_version", "ql_capabilities", "ql_probe")
+    # Generated compiler assertions and PE export inspection own ABI signatures and
+    # discovery values. Keep the independent explicit-import and panic policies.
     if ($ffiContractText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
-        $ffiContractText -match '(?m)^\s*pub\s+(?!(?:unsafe\s+)?extern\s+"C")' -or
-        $ffiContractText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
-        $failures.Add(
-            "ffi::contract must use explicit imports and expose only its stable C ABI surface.")
-    }
-    $contractExports = [regex]::Matches(
-        $ffiContractText,
-        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
-    $contractNoMangleCount = [regex]::Matches(
-        $ffiContractText,
-        '(?m)^\s*#\[no_mangle\]\s*$').Count
-    if ($contractExports.Count -ne $expectedContractExports.Count -or
-        $contractNoMangleCount -ne $expectedContractExports.Count) {
-        $failures.Add("ffi::contract must expose exactly three stable C ABI entry points.")
-    }
-    foreach ($contractExport in $expectedContractExports) {
-        $contractPattern = '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+' +
-            [regex]::Escape($contractExport) + '\s*\('
-        if ($ffiContractText -notmatch $contractPattern) {
-            $failures.Add("ffi::contract lost expected export: $contractExport")
-        }
-        if ($libText -match $contractPattern) {
-            $failures.Add("$contractExport implementation must remain in ffi::contract, not lib.rs.")
-        }
-    }
-    if ($ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_abi_version\(\)\s*->\s*u32\s*\{\s*QL_NATIVE_ABI_VERSION\s*\}' -or
-        $ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_capabilities\(\)\s*->\s*u64\s*\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}' -or
-        $ffiContractText -notmatch '(?s)pub\s+extern\s+"C"\s+fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*\{\s*ffi_boundary\(\|\|\s*a\s*\+\s*b\)\s*\}') {
-        $failures.Add("ffi::contract lost its infallible discovery or panic-bounded probe contract.")
-    }
-    if ($ffiContractText -notmatch 'fn\s+native_abi_version_is_stable\s*\(') {
-        $failures.Add("ffi::contract lost its stable ABI capability regression test.")
-    }
-    $ffiContractLineCount = @(Get-Content -LiteralPath $ffiContractPath).Count
-    if ($ffiContractLineCount -gt 140) {
-        $failures.Add("The focused ffi::contract module grew beyond 140 lines: $ffiContractLineCount")
+        $ffiContractText -notmatch '(?s)fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+        $failures.Add("ffi::contract must retain explicit imports and the probe panic boundary.")
     }
 
     $expectedDatabaseExports = @(
@@ -784,11 +753,14 @@ if ($failures.Count -eq 0) {
     }
     if ($ffiFileProbeText -notmatch
             'ql_probe_file\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*preview::file_probe::probe_path_json\([\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*bytes\.len\(\)[\s\S]*copy_nonoverlapping\(' -or
-        $ffiFileProbeText -notmatch
-            'fn\s+file_probe_rejects_oversized_path_before_dereference\s*\(' -or
         $libText -match
             '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+ql_probe_file\s*\(') {
         $failures.Add("ffi::file_probe lost its bounded path, panic, or output negotiation contract.")
+    }
+    # File-probe pointer, output, and panic behavior is exercised by the executable
+    # rust-ffi-behavior fixture against the real adapter and deliberate mutations.
+    if ($ffiFileProbeText -match '(?m)^mod tests;\s*$') {
+        $failures.Add("ffi::file_probe must not reintroduce a duplicate source-local test module.")
     }
     $fileProbeProviderExports = [regex]::Matches(
         $previewFileProbeText,
@@ -967,7 +939,9 @@ if ($failures.Count -eq 0) {
         }
     }
     if ($ffiStaticImageHandleText -notmatch
-            'ql_decode_image_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024[\s\S]*reopen_handle_input_v2\([\s\S]*MAX_SVG_INPUT_BYTES[\s\S]*preflight_native_image_packet_length\([\s\S]*false[\s\S]*write_v2_out\(' -or
+            'ql_decode_image_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024[\s\S]*reopen_handle_input_v2\([\s\S]*MAX_SVG_INPUT_BYTES[\s\S]*preflight_native_image_packet_length\([\s\S]*false[\s\S]*write_image_packet\(' -or
+        $ffiStaticImagePacketText -notmatch
+            'pub\(crate\)\s+unsafe\s+fn\s+write_image_packet\([\s\S]*IMAGE_PACKET_HEADER_BYTES[\s\S]*copy_nonoverlapping\(' -or
         $ffiStaticImageHandleText -notmatch
             'ql_decode_image_with_waveform_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*reopen_handle_input_v2\([\s\S]*decode_svg_bgra_bytes_with_waveform\([\s\S]*preflight_native_image_packet_length\([\s\S]*true[\s\S]*write_image_waveform_packet\(' -or
         $ffiStaticImageHandleText -notmatch
@@ -1085,19 +1059,6 @@ if ($failures.Count -eq 0) {
                 "$handlePreviewExport must contain panics and use the shared ABI 2 HANDLE contract.")
         }
     }
-    foreach ($handlePreviewTest in @(
-            "handle_preview_rejects_null_required_before_handle_access",
-            "handle_preview_rejects_null_output_with_capacity")) {
-        if ($ffiHandlePreviewText -notmatch "fn\s+$handlePreviewTest\s*\(") {
-            $failures.Add("ffi::handle_preview lost focused test: $handlePreviewTest")
-        }
-    }
-    $ffiHandlePreviewLineCount = @(Get-Content -LiteralPath $ffiHandlePreviewPath).Count
-    if ($ffiHandlePreviewLineCount -gt 300) {
-        $failures.Add(
-            "The focused ffi::handle_preview module grew beyond 300 lines: $ffiHandlePreviewLineCount")
-    }
-
     $expectedHandleStructuredExports = @(
         "ql_preview_text_handle",
         "ql_preview_executable_handle",
@@ -1392,31 +1353,16 @@ if ($failures.Count -eq 0) {
             $pathPreviewEnd - $pathPreviewMatch.Index)
         $pathPreviewName = $pathPreviewMatch.Groups["name"].Value
         if ($expectedPathPreviewExports -notcontains $pathPreviewName -or
-            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*(?://[^\r\n]*\r?\n\s*)*ffi_boundary\(\|\|') {
             $failures.Add("$pathPreviewName must contain panics before returning across the Rust FFI boundary")
         }
     }
     if ($ffiPathPreviewText -notmatch '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$') {
         $failures.Add("ffi::path_preview must keep focused tests in its child module.")
     }
-    foreach ($pathPreviewTest in @(
-            'simple_preview_exports_honor_cancellation_before_file_access',
-            'path_preview_exports_reject_invalid_pointer_contracts',
-            'info_preview_treats_invalid_optional_kind_as_empty',
-            'office_and_image_metadata_reject_invalid_paths_before_file_access')) {
-        if ($ffiPathPreviewTestsText -notmatch "fn\s+$pathPreviewTest\s*\(") {
-            $failures.Add("ffi::path_preview lost focused test: $pathPreviewTest")
-        }
-    }
-    $ffiPathPreviewLineCount = @(Get-Content -LiteralPath $ffiPathPreviewPath).Count
-    if ($ffiPathPreviewLineCount -gt 280) {
-        $failures.Add("The focused ffi::path_preview module grew beyond 280 lines: $ffiPathPreviewLineCount")
-    }
-    $ffiPathPreviewTestsLineCount = @(Get-Content -LiteralPath $ffiPathPreviewTestsPath).Count
-    if ($ffiPathPreviewTestsLineCount -gt 160) {
-        $failures.Add(
-            "The focused ffi::path_preview tests grew beyond 160 lines: $ffiPathPreviewTestsLineCount")
-    }
+    # test-rust-ffi-behavior.ps1 executes all twelve actual path adapters with
+    # observable renderer substitutes and per-export compiled mutations. Keep
+    # real-provider unit tests, not their function names or an arbitrary line budget.
 
     foreach ($forbidden in @(
             'struct\s+ThumbnailStaWorker',
@@ -1498,19 +1444,12 @@ if ($failures.Count -eq 0) {
         $failures.Add(
             "The three Shell thumbnail exports must remain panic-bounded typed-error adapters.")
     }
-    if ($ffiThumbnailTestsText -notmatch
-        'fn\s+thumbnail_export_rejects_oversized_request_before_shell_dispatch\s*\(') {
-        $failures.Add("ffi::thumbnail lost its pre-dispatch request-bound regression test.")
-    }
+    # Thumbnail pointer, typed-error, cancellation, and packet behavior is
+    # exercised by the executable rust-ffi-behavior fixture and mutations.
     $ffiThumbnailLineCount = @(Get-Content -LiteralPath $ffiThumbnailPath).Count
     if ($ffiThumbnailLineCount -gt 140) {
         $failures.Add(
             "The focused ffi::thumbnail module grew beyond 140 lines: $ffiThumbnailLineCount")
-    }
-    $ffiThumbnailTestsLineCount = @(Get-Content -LiteralPath $ffiThumbnailTestsPath).Count
-    if ($ffiThumbnailTestsLineCount -gt 60) {
-        $failures.Add(
-            "The focused ffi::thumbnail tests grew beyond 60 lines: $ffiThumbnailTestsLineCount")
     }
 
     $shellLineCount = @(Get-Content -LiteralPath $shellThumbnailPath).Count

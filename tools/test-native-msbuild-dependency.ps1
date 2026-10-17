@@ -10,7 +10,7 @@ function Assert-True([bool]$Condition, [string]$Message) {
 
 function Invoke-FixtureBuild([string]$ProjectPath, [string]$CargoExecutable) {
     $cargoProperty = "/p:QuickLookNativeCargoExecutable=$CargoExecutable"
-    $output = @(& dotnet build $ProjectPath --no-restore --verbosity quiet $cargoProperty 2>&1)
+    $output = @(& $dotnetCommand build $ProjectPath --no-restore --verbosity quiet $cargoProperty 2>&1)
     [pscustomobject]@{
         ExitCode = $LASTEXITCODE
         Output = ($output -join [Environment]::NewLine)
@@ -45,6 +45,12 @@ $nativeProjectPath = Join-Path $Root "native\QuickLook.Next.Native.proj"
 $nativePropsPath = Join-Path $Root "native\QuickLook.Next.Native.props"
 $buildPropsPath = Join-Path $Root "Directory.Build.props"
 $buildTargetsPath = Join-Path $Root "Directory.Build.targets"
+$bundledDotnet = Join-Path $Root "artifacts\tools\dotnet-10.0.302\dotnet.exe"
+$dotnetCommand = if (Test-Path -LiteralPath $bundledDotnet -PathType Leaf) {
+    $bundledDotnet
+} else {
+    (Get-Command dotnet -ErrorAction Stop).Source
+}
 $nativeProjectText = Get-Content -LiteralPath $nativeProjectPath -Raw
 $nativePropsText = Get-Content -LiteralPath $nativePropsPath -Raw
 $buildPropsText = Get-Content -LiteralPath $buildPropsPath -Raw
@@ -63,7 +69,9 @@ Assert-True ($nativeProjectText -match 'build --workspace --release --locked') `
 Assert-True ($nativeProjectText -match '--target\s+&quot;\$\(QuickLookNativeTargetTriple\)&quot;') `
     "The native MSBuild target must select the .NET RID-compatible Cargo target."
 Assert-True ($nativeProjectText -match 'WorkingDirectory="\$\(QuickLookNativeSourceRoot\)"') `
-    "Cargo must run from native/ so rust-toolchain.toml is honored."
+    "Cargo must run from native/ so the repository toolchain is inherited."
+Assert-True ($nativeProjectText.Contains('$(QuickLookNativeSourceRoot)..\rust-toolchain.toml')) `
+    "Changes to the repository Rust toolchain must invalidate the native DLL."
 Assert-True ($nativeProjectText -match 'Condition="!Exists\(''\$\(QuickLookNativeDll\)''\)"') `
     "A successful Cargo exit without the DLL must fail the MSBuild target."
 Assert-True ($nativeProjectText -match '<Touch Files="\$\(QuickLookNativeBuildStamp\)"') `
@@ -122,7 +130,7 @@ members = ["quicklook_next_native"]
 resolver = "2"
 '@
     Set-Content -LiteralPath (Join-Path $fixtureNative "Cargo.lock") -Encoding utf8 -Value "# fixture"
-    Set-Content -LiteralPath (Join-Path $fixtureNative "rust-toolchain.toml") -Encoding utf8 -Value @'
+    Set-Content -LiteralPath (Join-Path $tempRoot "rust-toolchain.toml") -Encoding utf8 -Value @'
 [toolchain]
 channel = "1.96.0"
 '@
@@ -197,7 +205,7 @@ for %%D in ("%QUICKLOOK_NEXT_NATIVE_OUTPUT%") do if not exist "%%~dpD" mkdir "%%
 exit /b 0
 '@
 
-    & dotnet restore $fixtureSolution --configfile $nugetConfig --verbosity quiet
+    & $dotnetCommand restore $fixtureSolution --configfile $nugetConfig --verbosity quiet
     Assert-True ($LASTEXITCODE -eq 0) "The isolated consumer fixture solution must restore successfully."
 
     $logPath = Join-Path $tempRoot "cargo-invocations.log"

@@ -45,6 +45,16 @@ function Get-SourceFiles {
 $nativeAbiGenerator = Join-Path $PSScriptRoot "generate-native-abi.ps1"
 Invoke-CheckedScript -Path $nativeAbiGenerator -Arguments @{ Root = $Root; Check = $true } `
     -FailureMessage "Generated native ABI files drifted from native/abi-contract.json"
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-native-abi-contract.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Native ABI compiler/schema contracts failed'
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-native-pe-exports.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Native PE export-reader fixtures failed'
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-native-abi-exports.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Built native DLL exports drifted from schema'
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-managed-native-abi-fixtures.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Managed ABI compiler/metadata fixtures failed'
+Invoke-CheckedScript -Path (Join-Path $PSScriptRoot 'test-managed-native-abi.ps1') `
+    -Arguments @{ Root = $Root } -FailureMessage 'Built managed native-ABI declarations drifted from schema'
 
 # Governance documents and license metadata must remain explicit.
 $licensePath = Join-Path $Root "LICENSE"
@@ -235,7 +245,9 @@ $apiRules = @(
             "src/QuickLook.Next.RasterHost/NativeImageDecoder.cs",
             "src/QuickLook.Next.RasterHost/SystemImageDecoder.cs",
             "plugins/QuickLook.Next.Plugin.Text/TextProvider.cs",
-            "plugins/QuickLook.Next.Plugin.Image/ImageProvider.cs"
+            "plugins/QuickLook.Next.Plugin.Image/ImageProvider.cs",
+            # Build-time bounded metadata inspection; never grants preview path authority.
+            "tools/managed-native-abi.cs"
         )
     }
 )
@@ -407,7 +419,7 @@ if (Test-Path $protocolPath) {
         Add-Failure "SQLite snapshots must use a dedicated main/WAL/SHM handle IPC envelope"
     }
     if ($protocolText -notmatch 'record\s+HeroRasterExtracted\([^;]*SectionHandle,[^;]*PacketLength,[^;]*Width,[^;]*Height\)\s*:\s*ControlMessage;' -or
-        $protocolText -notmatch 'record\s+PreviewAnimationFramesReady\([^;]*SectionHandle,[^;]*FrameCount,[^;]*Width,[^;]*Height,[^;]*PacketLength\)\s*:\s*ControlMessage;' -or
+        $protocolText -notmatch 'record\s+PreviewAnimationFramesReady\([^;]*SectionHandle,[^;]*FrameCount,[^;]*Width,[^;]*Height,[^;]*PacketLength(?:,\s*bool\s+IsTruncated\s*=\s*false)?\)\s*:\s*ControlMessage;' -or
         $protocolText -match 'record\s+(HeroRasterExtracted|PreviewAnimationFramesReady)\([^;]*FileHandle') {
         Add-Failure "Animation and hero raster packets must cross as anonymous section handles, never temporary files"
     }
@@ -965,12 +977,10 @@ if (Test-Path $parserHostProgram) {
             Add-Failure "ParserHost direct HANDLE routing must include '$kind'"
         }
     }
-    if ($parserNativePreviewText -notmatch '\[DllImport\(Dll,\s*CallingConvention\s*=\s*CallingConvention\.Cdecl\)\]\s*private\s+static\s+extern\s+int\s+ql_preview_mail_handle\(\s*nint\s+sourceHandle,\s*ulong\s+expectedLength,\s*byte\[\]\s+logicalNameUtf8,\s*nuint\s+logicalNameLen,\s*byte\[\]\s+outBuf,\s*nuint\s+outCap,\s*out\s+nuint\s+outRequired,\s*NativeCancelCallback\?\s+cancelCb\s*\);') {
-        Add-Failure "ParserHost Outlook mail HANDLE routing must retain the exact native P/Invoke contract"
-    }
-    if ($parserNativePreviewText -notmatch '\[DllImport\(Dll,\s*CallingConvention\s*=\s*CallingConvention\.Cdecl\)\]\s*private\s+static\s+extern\s+int\s+ql_extract_pdf_text_handle\(\s*nint\s+sourceHandle,\s*ulong\s+expectedLength,\s*byte\[\]\s+logicalNameUtf8,\s*nuint\s+logicalNameLen,\s*byte\[\]\s+outBuf,\s*nuint\s+outCap,\s*out\s+nuint\s+outRequired,\s*NativeCancelCallback\?\s+cancelCb\s*\);' -or
-        $parserNativePreviewText -notmatch 'TryExtractPdfTextHandle\([\s\S]*?TryHandleJson\(\s*ql_extract_pdf_text_handle,[\s\S]*?NativeAbi\.MaxPdfTextInputBytes') {
-        Add-Failure "ParserHost PDF text extraction must retain the exact bounded native HANDLE P/Invoke contract"
+    # Compiled metadata now checks both P/Invoke signatures against the ABI schema.
+    # Keep the independent PDF input-limit/routing rule until behavior coverage replaces it.
+    if ($parserNativePreviewText -notmatch 'TryExtractPdfTextHandle\([\s\S]*?TryHandleJson\(\s*ql_extract_pdf_text_handle,[\s\S]*?NativeAbi\.MaxPdfTextInputBytes') {
+        Add-Failure "ParserHost PDF text extraction must retain bounded native HANDLE routing"
     }
     $pathPreviewMethod = [regex]::Match(
         $parserNativePreviewText,
@@ -1251,6 +1261,15 @@ if (Test-Path $parserHostProgram) {
         $nativeStaticImageHandleText = ""
         Add-Failure "Missing Rust static-image HANDLE FFI source: $nativeStaticImageHandlePath"
     }
+    $nativeStaticImagePacketPath =
+        Join-Path $Root "native/quicklook_next_native/src/ffi/static_image/packet.rs"
+    if (Test-Path -LiteralPath $nativeStaticImagePacketPath -PathType Leaf) {
+        $nativeStaticImagePacketText = Get-Content -LiteralPath $nativeStaticImagePacketPath -Raw
+    }
+    else {
+        $nativeStaticImagePacketText = ""
+        Add-Failure "Missing Rust static-image packet writer: $nativeStaticImagePacketPath"
+    }
     $nativeContractPath = Join-Path $Root "native/quicklook_next_native/src/ffi/contract.rs"
     if (Test-Path -LiteralPath $nativeContractPath -PathType Leaf) {
         $nativeContractText = Get-Content -LiteralPath $nativeContractPath -Raw
@@ -1324,15 +1343,6 @@ if (Test-Path $parserHostProgram) {
         $nativeThumbnailFfiText = ""
         Add-Failure "Missing Rust Shell thumbnail FFI source: $nativeThumbnailFfiPath"
     }
-    $nativeThumbnailFfiTestsPath =
-        Join-Path $Root "native/quicklook_next_native/src/ffi/thumbnail/tests.rs"
-    if (Test-Path -LiteralPath $nativeThumbnailFfiTestsPath -PathType Leaf) {
-        $nativeThumbnailFfiTestsText = Get-Content -LiteralPath $nativeThumbnailFfiTestsPath -Raw
-    }
-    else {
-        $nativeThumbnailFfiTestsText = ""
-        Add-Failure "Missing Rust Shell thumbnail FFI tests: $nativeThumbnailFfiTestsPath"
-    }
     $nativeRoutingPath = Join-Path $Root "native/quicklook_next_native/src/ffi/routing.rs"
     if (Test-Path -LiteralPath $nativeRoutingPath -PathType Leaf) {
         $nativeRoutingText = Get-Content -LiteralPath $nativeRoutingPath -Raw
@@ -1351,11 +1361,7 @@ if (Test-Path $parserHostProgram) {
     }
     $nativePathPreviewTestsPath =
         Join-Path $Root "native/quicklook_next_native/src/ffi/path_preview/tests.rs"
-    if (Test-Path -LiteralPath $nativePathPreviewTestsPath -PathType Leaf) {
-        $nativePathPreviewTestsText = Get-Content -LiteralPath $nativePathPreviewTestsPath -Raw
-    }
-    else {
-        $nativePathPreviewTestsText = ""
+    if (-not (Test-Path -LiteralPath $nativePathPreviewTestsPath -PathType Leaf)) {
         Add-Failure "Missing Rust FFI path-preview tests: $nativePathPreviewTestsPath"
     }
     $panicBoundaryExemptions = @{
@@ -1388,57 +1394,24 @@ if (Test-Path $parserHostProgram) {
         }
 
         if ($voidBoundaryExports -contains $entryPoint) {
-            if ($entryBody -notmatch '(?s)\)\s*\{\s*ffi_void_boundary\(\|\|') {
+            if ($entryBody -notmatch '(?s)\)\s*\{\s*(?://[^\r\n]*\r?\n\s*)*ffi_void_boundary\(\|\|') {
                 Add-Failure "$entryPoint must contain panics with the void Rust FFI boundary"
             }
             continue
         }
 
-        if ($entryBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+        # Safety comments are not statements; the panic boundary must still be the first operation.
+        if ($entryBody -notmatch '(?s)->\s*i32\s*\{\s*(?://[^\r\n]*\r?\n\s*)*ffi_boundary\(\|\|') {
             Add-Failure "$entryPoint must contain panics before returning across the Rust FFI boundary"
         }
     }
 
-    # Stable ABI discovery and the smoke-test export live together; scan them independently so
-    # constant getters stay mechanically infallible and the arithmetic probe retains containment.
-    $contractExports = [regex]::Matches(
-        $nativeContractText,
-        '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(?<name>[A-Za-z0-9_]+)\s*\(')
-    $expectedContractExports = @("ql_abi_version", "ql_capabilities", "ql_probe")
-    if ($contractExports.Count -ne $expectedContractExports.Count -or
-        $nativeContractText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
-        $nativeContractText -match '(?m)^\s*pub\s+(?!(?:unsafe\s+)?extern\s+"C")' -or
-        $nativeContractText -match '(?m)^\s*pub\s+(?:unsafe\s+)?extern\s+"(?!C")') {
-        Add-Failure "ffi::contract must expose exactly three stable C ABI entry points and no other public surface"
-    }
-    foreach ($contractName in $expectedContractExports) {
-        $contractPattern = '(?m)^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+' +
-            [regex]::Escape($contractName) + '\s*\('
-        if ($nativeContractText -notmatch $contractPattern) {
-            Add-Failure "ffi::contract lost expected export: $contractName"
-        }
-        if ($nativeLibText -match $contractPattern) {
-            Add-Failure "$contractName must remain in ffi::contract, not lib.rs"
-        }
-    }
-    $abiVersionBody = [regex]::Match(
-        $nativeContractText,
-        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_abi_version\(\)\s*->\s*u32\s*(?<body>\{.*?\})').Groups["body"].Value
-    $capabilityContractBody = [regex]::Match(
-        $nativeContractText,
-        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_capabilities\(\)\s*->\s*u64\s*(?<body>\{.*?\})').Groups["body"].Value
-    $probeContractBody = [regex]::Match(
-        $nativeContractText,
-        '(?s)pub\s+extern\s+"C"\s+fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*(?<body>\{.*?\})').Groups["body"].Value
-    if ($abiVersionBody -notmatch '^\{\s*QL_NATIVE_ABI_VERSION\s*\}$' -or
-        $capabilityContractBody -notmatch '^\{\s*QL_FEATURE_HANDLE_TEXT[\s\S]*QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT[\s\S]*QL_FEATURE_HANDLE_MAIL[\s\S]*QL_FEATURE_HANDLE_PDF_TEXT\s*\}$' -or
-        $abiVersionBody -match '\b(?:unwrap|expect)\s*\(|panic!\s*\(|thread::spawn|Vec::|String::|format!\s*\(' -or
-        $capabilityContractBody -match '\b(?:unwrap|expect)\s*\(|panic!\s*\(|thread::spawn|Vec::|String::|format!\s*\(' -or
-        $probeContractBody -notmatch '^\{\s*ffi_boundary\(\|\|\s*a\s*\+\s*b\)\s*\}$') {
-        Add-Failure "ffi::contract discovery getters must remain infallible and ql_probe must retain its panic boundary"
-    }
-    if (@(Get-Content -LiteralPath $nativeContractPath).Count -gt 140) {
-        Add-Failure "The focused ffi::contract module grew beyond 140 lines"
+    # ABI names/types and exact discovery values are checked by generated compiler
+    # assertions plus the built DLL export inventory. Retain panic containment and
+    # explicit-import policy until broader behavior replacement has equivalent coverage.
+    if ($nativeContractText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or
+        $nativeContractText -notmatch '(?s)fn\s+ql_probe\([^)]*\)\s*->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+        Add-Failure "ffi::contract must retain explicit imports and the probe panic boundary"
     }
 
     # FFI route adapters live in a focused module; scan that file independently so an export
@@ -1535,7 +1508,7 @@ if (Test-Path $parserHostProgram) {
             $pathPreviewEnd - $pathPreviewMatch.Index)
         $pathPreviewName = $pathPreviewMatch.Groups["name"].Value
         if ($expectedPathPreviewExports -notcontains $pathPreviewName -or
-            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*ffi_boundary\(\|\|') {
+            $pathPreviewBody -notmatch '(?s)->\s*i32\s*\{\s*(?://[^\r\n]*\r?\n\s*)*ffi_boundary\(\|\|') {
             Add-Failure "$pathPreviewName must contain panics before returning across the Rust FFI boundary"
         }
     }
@@ -1543,22 +1516,16 @@ if (Test-Path $parserHostProgram) {
         $nativePathPreviewText -notmatch '\b(?:ffi_boundary|optional_utf8_arg|utf8_arg|write_json_out)\b') {
         Add-Failure "ffi::path_preview lost its explicit bounded adapter dependencies"
     }
-    if ($nativePathPreviewText -notmatch '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$' -or
-        $nativePathPreviewTestsText -notmatch
-            'fn\s+simple_preview_exports_honor_cancellation_before_file_access\s*\(' -or
-        $nativePathPreviewTestsText -notmatch
-            'fn\s+path_preview_exports_reject_invalid_pointer_contracts\s*\(' -or
-        $nativePathPreviewTestsText -notmatch
-            'fn\s+info_preview_treats_invalid_optional_kind_as_empty\s*\(' -or
-        $nativePathPreviewTestsText -notmatch
-            'fn\s+office_and_image_metadata_reject_invalid_paths_before_file_access\s*\(') {
+    if ($nativePathPreviewText -notmatch '(?m)^#\[cfg\(test\)\]\r?\nmod tests;\s*$') {
         Add-Failure "ffi::path_preview lost its focused child-module boundary tests"
     }
-    if (@(Get-Content -LiteralPath $nativePathPreviewPath).Count -gt 280) {
-        Add-Failure "The focused ffi::path_preview module grew beyond 280 lines"
-    }
-    if (@(Get-Content -LiteralPath $nativePathPreviewTestsPath).Count -gt 160) {
-        Add-Failure "The focused ffi::path_preview tests grew beyond 160 lines"
+    # The executable FFI behavior fixture owns path argument/output/cancellation
+    # contracts with per-export mutations. Preserve real-provider unit tests;
+    # their names/line counts are not a behavior proof. Ownership and first-statement
+    # panic rules above and compiler safety contracts remain independent gates.
+    if ($nativeFfiModuleText -notmatch '#!\[deny\(unsafe_op_in_unsafe_fn\)\]' -or
+        $nativePreviewText -notmatch '#!\[forbid\(unsafe_code\)\]') {
+        Add-Failure "Compiler-enforced FFI unsafe operations and safe preview modules must remain enabled"
     }
     # Path and borrowed-HANDLE probing share one provider. Keep filesystem/cache/classification
     # mechanics out of lib.rs while the public ABI remains a thin, bounded panic-safe adapter.
@@ -1588,8 +1555,6 @@ if (Test-Path $parserHostProgram) {
     }
     if ($nativeFileProbeFfiText -notmatch
             'ql_probe_file\([\s\S]*ffi_boundary\(\|\|[\s\S]*utf8_arg\([^\r\n]*MAX_FFI_STRING_BYTES\)[\s\S]*preview::file_probe::probe_path_json\([\s\S]*out\.is_null\(\)\s*\|\|\s*out_cap\s*<\s*bytes\.len\(\)[\s\S]*return\s+-\(bytes\.len\(\)\s+as\s+i32\)[\s\S]*copy_nonoverlapping\(' -or
-        $nativeFileProbeFfiText -notmatch
-            'fn\s+file_probe_rejects_oversized_path_before_dereference\s*\(' -or
         $nativeLibText -match
             '(?m)^pub\s+unsafe\s+extern\s+"C"\s+fn\s+ql_probe_file\s*\(') {
         Add-Failure "ffi::file_probe lost its bounded path, panic, required-size, or copy contract"
@@ -1769,7 +1734,9 @@ if (Test-Path $parserHostProgram) {
         }
     }
     if ($nativeStaticImageHandleText -notmatch
-            'ql_decode_image_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024[\s\S]*reopen_handle_input_v2\([\s\S]*MAX_SVG_INPUT_BYTES[\s\S]*preflight_native_image_packet_length\([\s\S]*false[\s\S]*write_v2_out\(' -or
+            'ql_decode_image_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*expected_length\s*>\s*256\s*\*\s*1024\s*\*\s*1024[\s\S]*reopen_handle_input_v2\([\s\S]*MAX_SVG_INPUT_BYTES[\s\S]*preflight_native_image_packet_length\([\s\S]*false[\s\S]*write_image_packet\(' -or
+        $nativeStaticImagePacketText -notmatch
+            'pub\(crate\)\s+unsafe\s+fn\s+write_image_packet\([\s\S]*checked_mul\(packet\.height\s+as\s+usize\)[\s\S]*IMAGE_PACKET_HEADER_BYTES\.checked_add\([\s\S]*packet\.bgra\.len\(\)\s*==\s*raster_bytes[\s\S]*\*out_required\s*=\s*total[\s\S]*total\s*>\s*out_cap[\s\S]*copy_nonoverlapping\(' -or
         $nativeStaticImageHandleText -notmatch
             'ql_decode_image_with_waveform_handle\([\s\S]*ffi_boundary\(\|\|\s*unsafe[\s\S]*out_required\.is_null\(\)[\s\S]*reopen_handle_input_v2\([\s\S]*decode_svg_bgra_bytes_with_waveform\([\s\S]*preflight_native_image_packet_length\([\s\S]*true[\s\S]*write_image_waveform_packet\(' -or
         $nativeStaticImageHandleText -notmatch
@@ -1931,10 +1898,6 @@ if (Test-Path $parserHostProgram) {
         $nativeHandlePreviewText -notmatch 'write_v2_out\(json\.as_bytes\(\),\s*out_buf,\s*out_cap,\s*out_required\)') {
         Add-Failure "ffi::handle_preview lost its bounded logical-name, HANDLE ownership, or output contract"
     }
-    if (@(Get-Content -LiteralPath $nativeHandlePreviewPath).Count -gt 300) {
-        Add-Failure "The focused ffi::handle_preview module grew beyond 300 lines"
-    }
-
     # Textual and metadata HANDLE routes are thin consumers of the shared ABI 2 boundary. Keep
     # their format-specific closures together and independently guarded from the composition root.
     $expectedHandleStructuredExports = @(
@@ -2282,15 +2245,10 @@ if (Test-Path $parserHostProgram) {
         $nativeThumbnailFfiText -notmatch 'write_raster_packet\(') {
         Add-Failure "ffi::thumbnail lost its panic, path, typed-error, or checked packet boundary"
     }
-    if ($nativeThumbnailFfiTestsText -notmatch
-        'fn\s+thumbnail_export_rejects_oversized_request_before_shell_dispatch\s*\(') {
-        Add-Failure "ffi::thumbnail lost its pre-dispatch request-bound regression test"
-    }
+    # Thumbnail pointer, typed-error, cancellation, and packet behavior is
+    # exercised by the executable rust-ffi-behavior fixture and mutations.
     if (@(Get-Content -LiteralPath $nativeThumbnailFfiPath).Count -gt 140) {
         Add-Failure "The focused ffi::thumbnail module grew beyond 140 lines"
-    }
-    if (@(Get-Content -LiteralPath $nativeThumbnailFfiTestsPath).Count -gt 60) {
-        Add-Failure "The focused ffi::thumbnail tests grew beyond 60 lines"
     }
     $rasterPacketExports = [regex]::Matches(
         $nativeRasterPacketText,
@@ -2301,13 +2259,9 @@ if (Test-Path $parserHostProgram) {
         $nativeRasterPacketText -match 'pub(?:\([^)]+\))?\s+(?:unsafe\s+)?extern\s+"C"' -or
         $nativeRasterPacketText -notmatch 'fn\s+checked_raster_packet_length\([\s\S]*bgra_len\s*!=\s*expected_bgra_len' -or
         $nativeRasterPacketText -notmatch 'pub\(crate\)\s+unsafe\s+fn\s+write_raster_packet_v2\([\s\S]*QL_ERROR_INTERNAL' -or
-        $nativeRasterPacketText -notmatch 'fn\s+checked_raster_writer_writes_exact_packet_and_rejects_bad_layout\s*\(' -or
         $nativeLibText -match '(?m)^(?:pub\(crate\)\s+)?(?:unsafe\s+)?fn\s+(?:checked_raster_packet_length|write_checked_raster_packet|write_raster_packet|write_raster_packet_v2)\s*\(' -or
         $nativeLibText -match '(?m)^pub\(crate\) use ffi::raster_packet::') {
         Add-Failure "Checked Hero raster packet writers must remain bounded and private to ffi::raster_packet"
-    }
-    if (@(Get-Content -LiteralPath $nativeRasterPacketPath).Count -gt 180) {
-        Add-Failure "The focused ffi::raster_packet module grew beyond 180 lines"
     }
     if ($nativeLibText -notmatch 'enum\s+AnimationPacketError\s*\{[\s\S]*Internal,[\s\S]*LimitExceeded' -or
         $nativeLibText -notmatch 'Err\(AnimationPacketError::Internal\)\s*=>\s*return\s+QL_ERROR_INTERNAL') {
@@ -2546,9 +2500,7 @@ if (Test-Path $parserHostProgram) {
         Add-Failure "Rust archive extraction must retain a bounded checked reader-to-writer pipeline"
     }
 
-    $capabilitiesBody = [regex]::Match(
-        $nativeContractText,
-        'pub extern "C" fn ql_capabilities\(\)\s*->\s*u64\s*\{[\s\S]*?\}').Value
+    # Exact capability return values are evaluated by the Rust compiler, not body text.
     if ($nativeAbiGeneratedText -notmatch 'QL_FEATURE_HANDLE_SQLITE_SNAPSHOT:\s*u64\s*=\s*1\s*<<\s*3' -or
         $nativeAbiGeneratedText -notmatch 'QL_FEATURE_HANDLE_ARCHIVE:\s*u64\s*=\s*1\s*<<\s*4' -or
         $nativeAbiGeneratedText -notmatch 'QL_FEATURE_HANDLE_OFFICE:\s*u64\s*=\s*1\s*<<\s*5' -or
@@ -2569,24 +2521,6 @@ if (Test-Path $parserHostProgram) {
         $nativeAbiGeneratedText -notmatch 'QL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT:\s*u64\s*=\s*1\s*<<\s*20' -or
         $nativeAbiGeneratedText -notmatch 'QL_FEATURE_HANDLE_MAIL:\s*u64\s*=\s*1\s*<<\s*21' -or
         $nativeAbiGeneratedText -notmatch 'QL_FEATURE_HANDLE_PDF_TEXT:\s*u64\s*=\s*1\s*<<\s*22' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_EBOOK\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_STATIC_IMAGE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_SVG\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_GIF\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PACKAGE_ICON\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PROBE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_RASTER_IMAGE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ANIMATION\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_OFFICE_LAYOUT_IMAGE\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_ARCHIVE_ENTRY_OUTPUT\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_IMAGE_METADATA\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_DIRECT_GIF_ANIMATION_OUTPUT\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_MAIL\b' -or
-        $capabilitiesBody -notmatch '\bQL_FEATURE_HANDLE_PDF_TEXT\b' -or
         $nativeAbiGeneratedText -notmatch 'QL_ERROR_LIMIT_EXCEEDED:\s*i32\s*=\s*-9') {
         Add-Failure "Rust must advertise HANDLE capability bits 3-22 and retain LIMIT_EXCEEDED"
     }
@@ -3195,6 +3129,20 @@ if (-not (Test-Path -LiteralPath $rustModuleBoundaryTest -PathType Leaf)) {
 Invoke-CheckedScript -Path $rustModuleBoundaryTest -Arguments @{ Root = $Root } `
     -FailureMessage "Rust module-boundary tests failed"
 
+$rustFfiBehaviorTest = Join-Path $PSScriptRoot "test-rust-ffi-behavior.ps1"
+if (-not (Test-Path -LiteralPath $rustFfiBehaviorTest -PathType Leaf)) {
+    throw "Missing Rust FFI behavior contract test: $rustFfiBehaviorTest"
+}
+Invoke-CheckedScript -Path $rustFfiBehaviorTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Rust FFI behavior contracts failed"
+
+$rustHandlePreviewBehaviorTest = Join-Path $PSScriptRoot "test-rust-handle-preview-behavior.ps1"
+if (-not (Test-Path -LiteralPath $rustHandlePreviewBehaviorTest -PathType Leaf)) {
+    throw "Missing Rust HANDLE preview behavior contract test: $rustHandlePreviewBehaviorTest"
+}
+Invoke-CheckedScript -Path $rustHandlePreviewBehaviorTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Rust HANDLE preview behavior contracts failed"
+
 $supervisedHostErrorUiTest = Join-Path $PSScriptRoot "test-supervised-host-error-ui.ps1"
 if (-not (Test-Path -LiteralPath $supervisedHostErrorUiTest -PathType Leaf)) {
     throw "Missing supervised host error UI guard: $supervisedHostErrorUiTest"
@@ -3205,6 +3153,10 @@ Invoke-CheckedScript -Path $supervisedHostErrorUiTest -Arguments @{ Root = $Root
 $checkedInvocationTest = Join-Path $PSScriptRoot "test-checked-invocation.ps1"
 Invoke-CheckedScript -Path $checkedInvocationTest -Arguments @{ Root = $Root } `
     -FailureMessage "Checked child-script invocation tests failed"
+
+$previewBaselineTest = Join-Path $PSScriptRoot "test-measure-preview-baseline.ps1"
+Invoke-CheckedScript -Path $previewBaselineTest -Arguments @{ Root = $Root } `
+    -FailureMessage "Preview baseline extractor tests failed"
 
 $staleCallbackGuard = Join-Path $PSScriptRoot "guard-stale-callbacks.ps1"
 Invoke-CheckedScript -Path $staleCallbackGuard -Arguments @{ Root = $Root } `

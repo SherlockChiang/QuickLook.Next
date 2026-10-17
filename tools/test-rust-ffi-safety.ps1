@@ -25,6 +25,7 @@ if ($sharedSafety -notmatch '(?m)^# Safety\s*$' -or
 
 $failures = [Collections.Generic.List[string]]::new()
 $rawPointerExports = 0
+$retainedCallbackExports = 0
 $sourceFiles = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Filter "*.rs")
 
 foreach ($sourceFile in $sourceFiles) {
@@ -49,15 +50,20 @@ foreach ($sourceFile in $sourceFiles) {
             continue
         }
         $exportName = $Matches[1]
-        if ($signature -notmatch '\*(?:const|mut)\s+') {
+        if ($signature -notmatch '\*(?:const|mut)\s+' -and $exportName -ne 'ql_set_callback') {
             continue
         }
 
-        $rawPointerExports++
+        if ($exportName -eq 'ql_set_callback') {
+            $retainedCallbackExports++
+        }
+        else {
+            $rawPointerExports++
+        }
         if ($signature -notmatch
             'pub\s+unsafe\s+extern\s+"(?:C|system)"\s+fn') {
             $failures.Add(
-                "$exportName accepts raw pointers but is not an unsafe export in $($sourceFile.FullName).")
+                "$exportName accepts raw pointers or a retained callback but is not an unsafe export in $($sourceFile.FullName).")
         }
 
         $documentation = [Collections.Generic.List[string]]::new()
@@ -82,6 +88,9 @@ foreach ($sourceFile in $sourceFiles) {
 if ($rawPointerExports -eq 0) {
     $failures.Add("No raw-pointer exports were found; the guard did not inspect the ABI.")
 }
+if ($retainedCallbackExports -ne 1) {
+    $failures.Add('Exactly one unsafe retained-callback registration export must be inspected.')
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "Rust FFI safety guard failed:" -ForegroundColor Red
@@ -92,5 +101,5 @@ if ($failures.Count -gt 0) {
 }
 
 Write-Host (
-    "Rust FFI safety guard passed; files=$($sourceFiles.Count); raw-pointer exports=$rawPointerExports") `
+    "Rust FFI safety guard passed; files=$($sourceFiles.Count); raw-pointer exports=$rawPointerExports; retained callbacks=$retainedCallbackExports") `
     -ForegroundColor Green

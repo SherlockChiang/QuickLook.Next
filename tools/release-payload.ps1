@@ -8,6 +8,7 @@ function Get-QuickLookReleasePayload {
     )
 
     $tfm = "net10.0-windows10.0.19041.0\win-x64"
+    $parserTfm = "net10.0-windows\win-x64"
     $entries = [Collections.Generic.Dictionary[string, object]]::new(
         [StringComparer]::OrdinalIgnoreCase)
 
@@ -180,7 +181,7 @@ function Get-QuickLookReleasePayload {
     $rasterHostOutput = Join-Path (
         $Root) "src\QuickLook.Next.RasterHost\bin\Release\$tfm"
     $parserHostOutput = Join-Path (
-        $Root) "src\QuickLook.Next.ParserHost\bin\Release\$tfm"
+        $Root) "src\QuickLook.Next.ParserHost\bin\Release\$parserTfm"
     $shellBrokerOutput = Join-Path (
         $Root) "src\QuickLook.Next.ShellBroker\bin\Release\$tfm"
 

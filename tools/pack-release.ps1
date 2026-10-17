@@ -16,6 +16,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent          # ...\QuickLook.Next
 $dist = Join-Path $root "dist"
 $tfm  = "net10.0-windows10.0.19041.0\win-x64"
+$parserTfm = "net10.0-windows\win-x64"
 $versionFile = Join-Path $root "VERSION"
 $artifacts = if ($ArtifactsDirectory) { $ArtifactsDirectory } else { Join-Path $root "artifacts" }
 $nativeProject = Join-Path $root "native\QuickLook.Next.Native.proj"
@@ -77,7 +78,7 @@ $requiredOutputs = @(
     $nativeDll,
     (Join-Path $root "src\QuickLook.Next.App\bin\Release\$tfm\QuickLook.Next.App.exe"),
     (Join-Path $root "src\QuickLook.Next.RasterHost\bin\Release\$tfm\QuickLook.Next.RasterHost.exe"),
-    (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$tfm\QuickLook.Next.ParserHost.exe"),
+    (Join-Path $root "src\QuickLook.Next.ParserHost\bin\Release\$parserTfm\QuickLook.Next.ParserHost.exe"),
     (Join-Path $root "src\QuickLook.Next.ShellBroker\bin\Release\$tfm\QuickLook.Next.ShellBroker.exe")
 )
 foreach ($requiredOutput in $requiredOutputs) {

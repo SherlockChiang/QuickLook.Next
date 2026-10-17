@@ -9,6 +9,7 @@ $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) (
     "quicklook-next-release-payload-test-" +
     [Guid]::NewGuid().ToString("N"))
 $tfm = "net10.0-windows10.0.19041.0\win-x64"
+$parserTfm = "net10.0-windows\win-x64"
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 
 function Set-FixtureFile([string]$Path, [string]$Content) {
@@ -47,7 +48,7 @@ try {
     $rasterOutput = Join-Path (
         $fixtureRoot) "src\QuickLook.Next.RasterHost\bin\Release\$tfm"
     $parserOutput = Join-Path (
-        $fixtureRoot) "src\QuickLook.Next.ParserHost\bin\Release\$tfm"
+        $fixtureRoot) "src\QuickLook.Next.ParserHost\bin\Release\$parserTfm"
     $brokerOutput = Join-Path (
         $fixtureRoot) "src\QuickLook.Next.ShellBroker\bin\Release\$tfm"
     $artifacts = Join-Path $fixtureRoot "artifacts"
@@ -75,6 +76,14 @@ try {
         Join-Path $parserOutput "QuickLook.Next.ParserHost.exe") "parser"
     Set-FixtureFile (
         Join-Path $parserOutput "QuickLook.Next.Core.dll") "core"
+    # Leave the previous SDK-targeted output alongside the new host. Enumeration
+    # must select the current framework, rather than shipping stale projections.
+    $obsoleteParserOutput = Join-Path (
+        $fixtureRoot) "src\QuickLook.Next.ParserHost\bin\Release\$tfm"
+    Set-FixtureFile (
+        Join-Path $obsoleteParserOutput "QuickLook.Next.ParserHost.exe") "obsolete parser"
+    Set-FixtureFile (
+        Join-Path $obsoleteParserOutput "Microsoft.Windows.SDK.NET.dll") "obsolete projection"
 
     foreach ($name in @(
             "QuickLook.Next.ShellBroker.exe",
@@ -100,6 +109,7 @@ try {
             "zh-CN/Microsoft.ui.xaml.dll.mui",
             "zh-TW/Microsoft.ui.xaml.dll.mui",
             "RasterHost/QuickLook.Next.Contracts.dll",
+            "ParserHost/QuickLook.Next.ParserHost.exe",
             "ParserHost/QuickLook.Next.Core.dll",
             "THIRD-PARTY-NOTICES.txt"))
     {
@@ -109,12 +119,18 @@ try {
     }
     foreach ($prunedPath in @(
             "DirectML.dll",
+            "ParserHost/Microsoft.Windows.SDK.NET.dll",
             "ignored.pdb",
             "fr-FR/Microsoft.ui.xaml.dll.mui"))
     {
         if ($paths -contains $prunedPath) {
             throw "Release payload retained a pruned file: $prunedPath"
         }
+    }
+
+    $parserExecutable = $payload | Where-Object RelativePath -eq "ParserHost/QuickLook.Next.ParserHost.exe"
+    if ($parserExecutable.SourcePath -ne (Join-Path $parserOutput "QuickLook.Next.ParserHost.exe")) {
+        throw "Release payload selected the obsolete ParserHost framework output."
     }
 
     $crashProbeLeak = Join-Path (
