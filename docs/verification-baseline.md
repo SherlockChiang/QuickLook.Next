@@ -702,6 +702,72 @@ Parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
 packaged UI and remote CI acceptance remain open. No signing, installation,
 publication or remote changes are authorized by this verification-only work.
 
+## Behavior-backed database adapter checks
+
+On 2026-10-18, `O26-06c.9` extends the HANDLE probe in the working tree based
+on `6ac5034`. It compiles both actual `ffi::database` C exports, the private
+optional-HANDLE helper, common/shared HANDLE boundary and real Win32 reopen
+implementation. The new `tools/fixtures/rust-database-behavior.rs` supplies
+observable legacy-path and reader providers; these do not implement or verify
+SQLite/WAL parsing. The real native database/provider tests remain unchanged.
+The path limit, all three database byte limits and `DatabaseCompanionReader`
+declaration are extracted from their production sources rather than copied
+with smaller fixture limits.
+
+Six new groups cover exact Unicode path/metadata/callback forwarding, invalid
+UTF-8 and exact/over-limit arguments, zero/empty results, legacy signed byte
+capacity negotiation, and pre/post-render cancellation returning zero. The
+SQLite cases exercise all nine absent/nonempty/present-empty WAL/SHM
+combinations, distinct main/WAL/SHM bytes after rename/decoy replacement,
+independent positions, basename/length/mtime/callback forwarding, required-size
+negotiation and output canaries. Invalid/non-disk HANDLEs, sharing-denied
+reopens, length mismatch, invalid tuple precedence, cleanup after a later
+companion fails, all five reader statuses, cancellation precedence, contained
+provider panics and fresh recovery are executable contracts. Caller positions
+and process HANDLE counts must remain unchanged.
+
+Real exact-limit/one-byte-over file lengths exercise the 256 MiB main, 64 MiB
+WAL and 4 MiB SHM limits. This is necessary because the shared boundary checks
+main length against the actual object before entering database limit logic.
+Each provider reads at most a 32-byte prefix; a separate fixture ceiling
+prevents future production-limit increases from silently growing temporary
+files beyond 256 MiB plus the one-byte over-limit case.
+
+The expanded fixture passes 18 groups and rejects 112 warning-free compiled
+mutations (36 new; 232 total across both current FFI fixtures). New mutations
+cover argument/callback/status/capacity changes, absent-versus-empty handling,
+wrong/swapped companion readers, a deliberate reopened-WAL leak on a later
+failure, tuple-versus-limit precedence and both disabled/inclusive byte limits.
+The first compile exposed a missing `Read` import in the wrapper's extracted
+companion descriptor; the import was added without relaxing safety lints.
+The diagnostic remains in `handle-behavior-initial.log`. Mutants retain their
+real pointer-safety documentation when relocated, and helper mutations now
+select the private function explicitly. Only after the complete positive and
+mutation run passed were the duplicated database test-name, 220-line-budget,
+reader-forwarding and equivalent constant-presence checks removed. Export
+inventory, explicit imports, module/private-helper ownership, shared HANDLE
+boundary and panic policies remain; native SQLite/WAL tests were not removed.
+
+Workspace/fixture formatting, all-target/all-feature Clippy and Rust tests pass
+(364 passed, one ignored external corpus). Prebuilt Release regressions pass
+Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13. The focused
+module-boundary/guidance checks, changed PowerShell syntax and whitespace
+checks pass. All five native/staged DLL hashes still match `96FA9C35...`;
+this test/guard batch has no product, ABI or dependency change and no Release
+rebuild. Logs and hashes are under `artifacts/o26-06c9-20261018`.
+The final full architecture `-SkipDist` run passes, including 22 shared/path/
+routing groups with 120 compiled mutation rejections, 18 HANDLE groups with
+112 compiled mutation rejections, ABI/schema/metadata checks, restricted-host
+launch, native corpus 10/10 and system corpus 4/5 (optional JXL unavailable).
+Distribution/package and manual UI/HDR acceptance are not established.
+Implementation/fixture commit: `c4429d7`; all results above verify the same
+changed source before that commit, without implying a new build or remote run.
+
+Parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
+packaged UI and remote CI acceptance remain open. No signing, installation,
+publication or remote changes are part of this batch. The next scoped fixture
+is the seven path/HANDLE Hero image exports (`O26-06c.10`).
+
 ## Pinned Local Toolchain
 
 On 2026-09-05 the Microsoft win-x64 SDK `10.0.302` archive was installed beside

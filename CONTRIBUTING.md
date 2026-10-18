@@ -144,7 +144,7 @@ fixture runs 22 behavior groups and rejects 120 warning-free compiled mutations.
 
 The HANDLE preview boundary has a separate executable check:
 `tools/test-rust-handle-preview-behavior.ps1` compiles the real
-`ffi::handle_preview`, `ffi::handle_container`, `ffi::handle_structured`,
+`ffi::handle_preview`, `ffi::handle_container`, `ffi::handle_structured`, `ffi::database`,
 `native_input`, common output adapter and bounded file probe against the locked
 Windows dependency artifact. It uses real Win32 `ReOpenFile` ownership and
 checks independent positions, rename/decoy resistance, exact logical-name and
@@ -159,9 +159,19 @@ reader statuses where supplied by the provider. Text's
 empty result maps to I/O failure or cancellation; a one-shot fourth-poll callback
 checks its inner cancellation branch without masking by the shared post-render
 check.
+The database fixture additionally executes the legacy path export and SQLite's
+main/WAL/SHM export. It distinguishes absent companions from present-empty files,
+observes distinct pinned bytes and metadata after rename/decoy replacement, and
+checks all optional tuple combinations, native reopen failures and later-failure
+cleanup. Actual database byte limits and the companion descriptor are extracted
+from production sources; real exact/one-byte-over file lengths exercise all three
+limits without relaxing the shared reopen check. Providers read at most 32 bytes
+per input. Legacy zero-on-cancellation, five HANDLE reader statuses,
+cancellation precedence, panic recovery and both output protocols are independent
+contracts; real SQLite/WAL parser tests remain required.
 Short/exact/spare output, pre-cancelled null input, post-render cancellation,
 empty output, panic containment and fresh recovery remain executable contracts.
-The positive probe is followed by 76
+The 18-group positive probe is followed by 112
 warning-free source mutations, each of which must fail its expected behavior
 group. The architecture guard runs this check after the shared FFI behavior
 fixture.

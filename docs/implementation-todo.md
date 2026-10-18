@@ -249,12 +249,35 @@ reviewable; source edits do not authorize remote publication or destructive clea
         diagnostics are under `artifacts/o26-06c8-20261018`; parent stays open.
       - Implementation/fixture commit: `fe813c4`; all results above were
         verified against the same changed source before that commit.
-    - [ ] `O26-06c.9` Add compiled behavior for `ffi::database` path and SQLite
+    - [x] `O26-06c.9` Add compiled behavior for `ffi::database` path and SQLite
       multi-HANDLE exports before replacing equivalent test-name/line-budget
       and reader-forwarding checks. Preserve optional WAL/SHM tuple validation,
       independent pinned readers, main/companion byte limits, typed errors,
       cancellation, output canaries and cleanup. Retain real SQLite/WAL parser
       tests and structural ownership/panic/security policies.
+      - Verified 2026-10-18 in the working tree based on `6ac5034`: six new
+        groups cover legacy path and actual main/WAL/SHM exports, nine
+        optional-companion combinations, distinct pinned bytes, reopen errors,
+        all three real exact/over byte limits, cancellation precedence, output
+        canaries and cleanup. HANDLE fixture passes 18 groups/112 compiled
+        mutations (36 new; 232 across both FFI fixtures). Replaced only
+        equivalent duplicated database rules; native SQLite/WAL tests and
+        ownership/export/panic policies remain.
+      - Rust 364/1 ignored, fmt/Clippy, PowerShell syntax, focused boundaries
+        and full architecture `-SkipDist` pass. Prebuilt Release tests pass
+        Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13. Native
+        corpus 10/10; system 4/5 with optional JXL unavailable. All five DLLs
+        match `96FA9C35...`; no product/ABI/dependency changes or Release
+        rebuild. Evidence and initial wrapper compile diagnostic are under
+        `artifacts/o26-06c9-20261018`; parent remains open.
+      - Implementation/fixture commit: `c4429d7`; the results above verify
+        the same changed source before that commit.
+    - [ ] `O26-06c.10` Add compiled behavior for the seven `ffi::hero_image`
+      path/HANDLE exports before replacing equivalent test-name, line-budget
+      and forwarding checks. Preserve pinned readers, Office image-reference
+      and dimension limits, checked raster packets, typed failures,
+      cancellation, output canaries and cleanup. Retain real Office/package
+      provider tests and structural ownership/panic/security policies.
 - [ ] `O26-07` Extract demonstrated lifecycle/ownership components and consolidate
   shared supervisor primitives with failure and transfer cleanup coverage.
 - [ ] `O26-08` Centralize format facts and migrate linked App policies into a

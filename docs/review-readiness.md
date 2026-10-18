@@ -89,7 +89,7 @@ failure remains historical evidence rather than a current verified blocker.
   optional extension/kind fallback versus invalid magic rejection, actual input
   limits and folder output/callback/panic behavior against observable providers.
   A separate HANDLE probe compiles the real `ffi::handle_preview`,
-  `ffi::handle_container`, `ffi::handle_structured` and `native_input` modules
+  `ffi::handle_container`, `ffi::handle_structured`, `ffi::database` and `native_input` modules
   with actual Win32 reopen ownership. Observable provider substitutes cover the
   four container and four structured exports'
   exact renderer/name/length/mtime/callback forwarding, all typed statuses,
@@ -97,16 +97,24 @@ failure remains historical evidence rather than a current verified blocker.
   real format-parser limits remain independently tested. Text-empty I/O versus
   cancellation is checked with a one-shot poll callback so the shared post-render
   cancellation check cannot mask an incorrect inner result.
-  The shared/path/routing gates require 120 compiled mutations to fail, and the HANDLE
-  boundary gate adds 76 compiled mutations (196 total across the current FFI
+  The database path/SQLite exports additionally cover distinct pinned main/WAL/SHM
+  bytes, absent versus present-empty companions, all optional tuples, native
+  failures and cleanup after a later reopen fails. Exact/one-byte-over real
+  file lengths test all three actual byte limits. Both output protocols,
+  legacy zero-on-cancellation, typed errors, cancellation precedence, panic
+  containment and fresh recovery are checked with observable providers, not
+  substitutes for the real SQLite/WAL parser tests.
+  The shared/path/routing gates require 120 compiled mutations to fail, and the 18-group HANDLE
+  boundary gate adds 112 compiled mutations (232 total across the current FFI
   behavior fixtures). The former helper test-name/line-budget, file-probe and
   thumbnail test-name, path-preview
   test-name/child-test-line-budget, HANDLE test-name/line-budget, and container
   pre-cancellation-test-name/line-budget/reader-status-call-shape checks, and
-  structured pre-cancellation-test-name/line-budget/mail-forwarding rules and
-  the routing line-budget rule were
+  structured pre-cancellation-test-name/line-budget/mail-forwarding rules,
+  the routing line-budget rule, and database test-name/line-budget/reader-forwarding
+  and equivalent limit-presence rules were
   removed after coverage was added; independent implementation bounds remain
-  where applicable. Path-preview, routing, container and structured unit tests,
+  where applicable. Path-preview, routing, container, structured and database unit tests,
   module ownership and first-statement panic-boundary rules are retained.
   Wider source-guard migration remains `O26-06c`.
   The built win-x64 DLL export table is inspected without loading the DLL,
