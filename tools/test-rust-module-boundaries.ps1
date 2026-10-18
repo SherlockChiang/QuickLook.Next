@@ -579,25 +579,18 @@ if ($failures.Count -eq 0) {
     }
     if ($ffiDatabaseText -notmatch 'ql_preview_database_cancelable\([\s\S]*ffi_boundary\(\|\|\s*\{' -or
         $ffiDatabaseText -notmatch 'ql_preview_sqlite_handles\([\s\S]*ffi_boundary\(\|\|\s*unsafe' -or
-        $ffiDatabaseText -notmatch 'preview_handle_v2\([\s\S]*reopen_optional_handle\([\s\S]*preview::render_database_reader\(' -or
-        $ffiDatabaseText -notmatch 'MAX_DATABASE_HANDLE_BYTES' -or
-        $ffiDatabaseText -notmatch 'MAX_SQLITE_WAL_BYTES' -or
-        $ffiDatabaseText -notmatch 'MAX_SQLITE_SHM_BYTES') {
+        $ffiDatabaseText -notmatch 'ql_preview_sqlite_handles\([\s\S]*preview_handle_v2\(') {
         $failures.Add(
-            "ffi::database lost its path/handle panic boundaries or bounded SQLite companion routing.")
+            "ffi::database lost its path/handle panic boundaries or shared HANDLE ownership boundary.")
     }
     if ($libText -match '(?m)^fn\s+reopen_optional_handle\s*\(' -or
         $ffiDatabaseText -notmatch '(?m)^fn\s+reopen_optional_handle\s*\(') {
         $failures.Add("The optional SQLite HANDLE adapter must remain private to ffi::database.")
     }
-    if ($ffiDatabaseText -notmatch 'fn\s+database_exports_cancel_before_file_access\s*\(') {
-        $failures.Add("ffi::database lost its pre-file-access cancellation test.")
-    }
-    $ffiDatabaseLineCount = @(Get-Content -LiteralPath $ffiDatabasePath).Count
-    if ($ffiDatabaseLineCount -gt 220) {
-        $failures.Add(
-            "The focused ffi::database module grew beyond 220 lines: $ffiDatabaseLineCount")
-    }
+    # Database path/SQLite output, optional tuple/reader forwarding, real byte limits,
+    # cancellation and cleanup are executed by the HANDLE behavior fixture, not
+    # inferred from test names, call order, constant presence or a 220-line budget.
+    # Keep the actual SQLite/WAL parser tests and structural ownership policies.
 
     # Hero image path and HANDLE exports live together behind checked raster packet writers.
     $expectedHeroImageExports = @(

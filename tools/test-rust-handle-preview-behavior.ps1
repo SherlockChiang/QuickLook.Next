@@ -2,32 +2,40 @@ param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-$behaviorGroupCount = 12
+$behaviorGroupCount = 18
 $Root = [IO.Path]::GetFullPath($Root)
 $sourceRoot = Join-Path $Root 'native/quicklook_next_native/src'
 $fixturePath = Join-Path $PSScriptRoot 'fixtures/rust-handle-preview-behavior.rs'
 $handlePath = Join-Path $sourceRoot 'ffi/handle_preview.rs'
 $containerPath = Join-Path $sourceRoot 'ffi/handle_container.rs'
 $structuredPath = Join-Path $sourceRoot 'ffi/handle_structured.rs'
+$databasePath = Join-Path $sourceRoot 'ffi/database.rs'
 $inputPath = Join-Path $sourceRoot 'native_input.rs'
 $handleText = (Get-Content -LiteralPath $handlePath -Raw).Replace("`r`n", "`n")
 $containerText = (Get-Content -LiteralPath $containerPath -Raw).Replace("`r`n", "`n")
 $structuredText = (Get-Content -LiteralPath $structuredPath -Raw).Replace("`r`n", "`n")
+$databaseText = (Get-Content -LiteralPath $databasePath -Raw).Replace("`r`n", "`n")
 $inputText = (Get-Content -LiteralPath $inputPath -Raw).Replace("`r`n", "`n")
 $libText = Get-Content -LiteralPath (Join-Path $sourceRoot 'lib.rs') -Raw
 $crateLints = @([regex]::Matches($libText, '(?m)^#!\[(?:deny|forbid)\([^\r\n]*\)\]') | ForEach-Object Value) -join "`n"
 $logicalLimit = [regex]::Match($libText, '(?m)^const MAX_LOGICAL_NAME_BYTES:[^\r\n]*;').Value
+$pathLimit = [regex]::Match($libText, '(?m)^const MAX_FFI_STRING_BYTES:[^\r\n]*;').Value
+$previewText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview.rs') -Raw
+$databaseLimits = @([regex]::Matches($previewText, '(?m)^pub\(crate\) const MAX_(?:DATABASE_HANDLE|SQLITE_WAL|SQLITE_SHM)_BYTES:[^\r\n]*;') | ForEach-Object Value)
+$databaseProviderText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview/database/mod.rs') -Raw
+$companionReader = [regex]::Match($databaseProviderText, '(?ms)^pub\(crate\) struct DatabaseCompanionReader<[^\r\n]+\{.*?^\}').Value
 $cancelHelper = [regex]::Match($libText, '(?ms)^fn cancel_requested\([^\r\n]*\) -> bool \{\r?\n.*?^\}').Value
 $typesText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview/types.rs') -Raw
 $readerError = [regex]::Match($typesText, '(?ms)^#\[derive\([^\r\n]*\)\]\r?\npub\(crate\) enum ReaderPreviewError \{.*?^\}').Value
 if ($crateLints -notmatch 'unsafe_op_in_unsafe_fn' -or $crateLints -notmatch 'clippy::undocumented_unsafe_blocks' -or
-    -not $logicalLimit -or -not $cancelHelper -or -not $readerError) { throw 'Actual HANDLE safety/type contracts are missing.' }
+    -not $logicalLimit -or -not $pathLimit -or $databaseLimits.Count -ne 3 -or -not $companionReader -or
+    -not $cancelHelper -or -not $readerError) { throw 'Actual HANDLE safety/type contracts are missing.' }
 
 function Edit-HandleFixture([string]$Text, $Case) {
     $prefix = ''
     $suffix = ''
     if ($Case.Scope) {
-        $starts = [regex]::Matches($Text, '(?m)^pub(?:\(crate\))? (?:unsafe )?(?:extern "C" )?fn (?<name>[a-z0-9_]+)\(')
+        $starts = [regex]::Matches($Text, '(?m)^(?:pub(?:\(crate\))? )?(?:unsafe )?(?:extern "C" )?fn (?<name>[a-z0-9_]+)\(')
         $selected = @($starts | Where-Object { $_.Groups['name'].Value -ceq $Case.Scope })
         if ($selected.Count -ne 1) { throw "Mutation scope drifted: $($Case.Name)" }
         $start = $selected[0].Index
@@ -166,6 +174,100 @@ foreach ($mutation in @(
         Scope = 'ql_preview_text_handle'; Before = $mutation.Before; After = $mutation.After; Count = 1 }
 }
 
+$databaseProviderCall = @'
+preview::render_database_reader(
+                    &mut main,
+                    main_expected_length,
+                    preview::DatabaseCompanionReader {
+                        reader: wal_reader,
+                        length: wal_expected_length,
+                    },
+                    preview::DatabaseCompanionReader {
+                        reader: shm_reader,
+                        length: shm_expected_length,
+                    },
+                    logical_name,
+                    modified_unix,
+                    cancel_cb,
+                )
+'@
+foreach ($mutation in @(
+        @{ Name = 'name'; Before = 'logical_name'; After = '{ std::hint::black_box(logical_name); "wrong.db" }' },
+        @{ Name = 'main-length'; Before = "                    main_expected_length,`n"; After = "                    main_expected_length.saturating_sub(1),`n" },
+        @{ Name = 'wal-length'; Before = 'length: wal_expected_length'; After = 'length: wal_expected_length.saturating_add(1)' },
+        @{ Name = 'shm-length'; Before = 'length: shm_expected_length'; After = 'length: shm_expected_length.saturating_add(1)' },
+        @{ Name = 'modified'; Before = 'modified_unix'; After = 'modified_unix.saturating_add(1)' },
+        @{ Name = 'callback'; Before = 'cancel_cb'; After = 'None' })) {
+    $cases += @{ Name = "sqlite-provider-$($mutation.Name)"; Target = 'database'; Scope = 'ql_preview_sqlite_handles';
+        Expected = 'database_dispatch'; Before = $databaseProviderCall; After = $databaseProviderCall.Replace($mutation.Before, $mutation.After); Count = 1 }
+}
+foreach ($mutation in @(
+        @{ Name = 'path'; Before = 'path,'; After = '{ std::hint::black_box(path); "wrong.db" },' },
+        @{ Name = 'size'; Before = 'size,'; After = 'size.saturating_sub(1),' },
+        @{ Name = 'modified'; Before = 'modified_unix,'; After = 'modified_unix.saturating_add(1),' },
+        @{ Name = 'callback'; Before = 'cancel_cb)'; After = 'None)' })) {
+    $call = 'preview::render_database_info(path, size, modified_unix, cancel_cb)'
+    $cases += @{ Name = "database-path-$($mutation.Name)"; Target = 'database'; Scope = 'ql_preview_database_cancelable';
+        Expected = 'database_path_outputs'; Before = $call; After = $call.Replace($mutation.Before, $mutation.After); Count = 1 }
+}
+foreach ($mutation in @(
+        @{ Name = 'invalid-pointer-status'; Before = "if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {`n            return 0;";
+            After = "if path_utf8.is_null() || out_buf.is_null() || out_cap == 0 {`n            return 1;"; Expected = 'database_path_failures' },
+        @{ Name = 'pre-cancel'; Before = "if cancel_requested(cancel_cb) {`n            return 0;";
+            After = "if std::hint::black_box(false) && cancel_requested(cancel_cb) {`n            return 0;"; Expected = 'database_path_failures' },
+        @{ Name = 'post-cancel'; Before = 'if cancel_requested(cancel_cb) || json.is_empty() {';
+            After = 'if (std::hint::black_box(false) && cancel_requested(cancel_cb)) || json.is_empty() {'; Expected = 'database_path_failures' },
+        @{ Name = 'empty-status'; Before = "if cancel_requested(cancel_cb) || json.is_empty() {`n            return 0;";
+            After = "if cancel_requested(cancel_cb) || json.is_empty() {`n            return 1;"; Expected = 'database_path_failures' },
+        @{ Name = 'invalid-utf8-status'; Before = 'None => return 0,'; After = 'None => return 1,'; Expected = 'database_path_failures' },
+        @{ Name = 'path-limit'; Before = 'path_len, MAX_FFI_STRING_BYTES'; After = 'path_len, MAX_FFI_STRING_BYTES - 1'; Expected = 'database_path_outputs' },
+        @{ Name = 'output-capacity'; Before = 'write_json_out(&json, out_buf, out_cap)';
+            After = 'write_json_out(&json, out_buf, out_cap.saturating_sub(1))'; Expected = 'database_path_outputs' })) {
+    $cases += @{ Name = "database-$($mutation.Name)"; Target = 'database'; Scope = 'ql_preview_database_cancelable';
+        Expected = $mutation.Expected; Before = $mutation.Before; After = $mutation.After; Count = 1 }
+}
+foreach ($status in @('InvalidHandle', 'Io', 'LengthMismatch')) {
+    $constant = @{ InvalidHandle = 'QL_ERROR_INVALID_HANDLE'; Io = 'QL_ERROR_IO'; LengthMismatch = 'QL_ERROR_LENGTH_MISMATCH' }[$status]
+    $cases += @{ Name = "sqlite-optional-status-$status"; Target = 'database'; Scope = 'reopen_optional_handle';
+        Expected = 'database_arguments'; Before = "native_input::NativeInputError::$status => $constant"; After = "native_input::NativeInputError::$status => $constant + 1"; Count = 1 }
+}
+foreach ($mutation in @(
+        @{ Name = 'present-empty'; Scope = 'reopen_optional_handle'; Before = 'if source_handle == 0 {';
+            After = 'if source_handle == 0 || expected_length == 0 {'; Expected = 'database_dispatch' },
+        @{ Name = 'optional-length'; Scope = 'reopen_optional_handle'; Before = 'source_handle, expected_length)';
+            After = 'source_handle, expected_length.saturating_sub(1))'; Expected = 'database_dispatch' },
+        @{ Name = 'wal-source'; Before = 'reopen_optional_handle(wal_handle, wal_expected_length)?';
+            After = 'reopen_optional_handle({ std::hint::black_box(wal_handle); main_handle }, wal_expected_length)?'; Expected = 'database_dispatch' },
+        @{ Name = 'shm-source'; Before = 'reopen_optional_handle(shm_handle, shm_expected_length)?';
+            After = 'reopen_optional_handle({ std::hint::black_box(shm_handle); main_handle }, shm_expected_length)?'; Expected = 'database_dispatch' },
+        @{ Name = 'swap-companions'; Before = 'let wal_reader = wal.as_mut()';
+            After = 'std::mem::swap(&mut wal, &mut shm); let wal_reader = wal.as_mut()'; Expected = 'database_dispatch' },
+        @{ Name = 'later-failure-leak'; Before = 'let mut shm = reopen_optional_handle(shm_handle, shm_expected_length)?;';
+            After = 'let mut shm = match reopen_optional_handle(shm_handle, shm_expected_length) { Ok(shm) => shm, Err(status) => { std::mem::forget(wal); return Err(status); } };'; Expected = 'database_arguments' },
+        @{ Name = 'boundary-callback'; Before = "out_required,`n            cancel_cb,";
+            After = "out_required,`n            None,"; Expected = 'database_errors_cancellation' },
+        @{ Name = 'reader-status'; Before = '.map_err(reader_preview_status)';
+            After = '.map_err(|_| { std::hint::black_box(reader_preview_status); crate::QL_ERROR_INTERNAL })'; Expected = 'database_errors_cancellation' })) {
+    $scope = if ($mutation.Scope) { $mutation.Scope } else { 'ql_preview_sqlite_handles' }
+    $cases += @{ Name = "sqlite-$($mutation.Name)"; Target = 'database'; Scope = $scope;
+        Expected = $mutation.Expected; Before = $mutation.Before; After = $mutation.After; Count = 1 }
+}
+foreach ($companion in @('wal', 'shm')) {
+    $condition = "${companion}_handle == 0 && ${companion}_expected_length != 0"
+    $cases += @{ Name = "sqlite-$companion-tuple-precedence"; Target = 'database'; Scope = 'ql_preview_sqlite_handles';
+        Expected = 'database_arguments'; Before = $condition; After = "(std::hint::black_box(false) && ($condition))"; Count = 1 }
+}
+foreach ($limit in @(
+        @('main', 'MAX_DATABASE_HANDLE_BYTES'), @('wal', 'MAX_SQLITE_WAL_BYTES'), @('shm', 'MAX_SQLITE_SHM_BYTES'))) {
+    $condition = "$($limit[0])_expected_length > preview::$($limit[1])"
+    foreach ($mutation in @(
+            @{ Name = 'inclusive'; After = $condition.Replace(' > ', ' >= ') },
+            @{ Name = 'disabled'; After = "(std::hint::black_box(false) && ($condition))" })) {
+        $cases += @{ Name = "sqlite-$($limit[0])-limit-$($mutation.Name)"; Target = 'database'; Scope = 'ql_preview_sqlite_handles';
+            Expected = 'database_limits'; Before = $condition; After = $mutation.After; Count = 1 }
+    }
+}
+
 Push-Location -LiteralPath $Root
 $tempRoot = $null
 try {
@@ -191,10 +293,18 @@ try {
         $selectedHandle = $handlePath
         $selectedContainer = $containerPath
         $selectedStructured = $structuredPath
+        $selectedDatabase = $databasePath
         $selectedInput = $inputPath
         if ($case.Expected) {
             $selectedInput = Join-Path $tempRoot 'native_input.rs'
-            if ($case.Target -ceq 'structured') {
+            if ($case.Target -ceq 'database') {
+                $selectedDatabase = Join-Path $tempRoot 'database.rs'
+                # Preserve the actual pointer-contract documentation when relocating only this mutant.
+                $databaseMutant = (Edit-HandleFixture $databaseText $case).Replace('../ffi_pointer_safety.md',
+                    (Join-Path $sourceRoot 'ffi_pointer_safety.md').Replace('\', '/'))
+                [IO.File]::WriteAllText($selectedDatabase, $databaseMutant)
+            }
+            elseif ($case.Target -ceq 'structured') {
                 $selectedStructured = Join-Path $tempRoot 'handle_structured.rs'
                 [IO.File]::WriteAllText($selectedStructured, (Edit-HandleFixture $structuredText $case))
             }
@@ -214,6 +324,8 @@ try {
         $handleInclude = $selectedHandle.Replace('\', '/')
         $containerInclude = $selectedContainer.Replace('\', '/')
         $structuredInclude = $selectedStructured.Replace('\', '/')
+        $databaseInclude = $selectedDatabase.Replace('\', '/')
+        $databaseFixtureInclude = (Join-Path $PSScriptRoot 'fixtures/rust-database-behavior.rs').Replace('\', '/')
         $inputInclude = $selectedInput.Replace('\', '/')
         $fixtureInclude = $fixturePath.Replace('\', '/')
         $body = @"
@@ -221,6 +333,7 @@ $crateLints
 #![allow(dead_code)]
 include!("$abiInclude");
 $logicalLimit
+$pathLimit
 type CancelCallback = extern "C" fn() -> bool;
 $cancelHelper
 #[path = "$commonInclude"] mod ffi_common;
@@ -231,7 +344,10 @@ mod native_input {
 }
 mod preview {
     #![forbid(unsafe_code)]
+    use std::io::Read;
     $readerError
+    $($databaseLimits -join "`n")
+    $companionReader
     pub fn is_text_file(_name: &str, ext: &str, _bytes: &[u8]) -> bool { ext == ".txt" }
     #[derive(Default)] pub struct AnimationProbe { pub is_animated: Option<bool> }
     pub fn probe_image_animation_reader(_file: &mut std::fs::File, _name: &str, _size: u64) -> Option<AnimationProbe> { None }
@@ -239,6 +355,8 @@ mod preview {
     pub mod file_probe { pub use crate::probe_reader as probe_reader_json; }
     pub(crate) use crate::{
         archive_reader as render_archive_reader,
+        database_path as render_database_info,
+        database_reader as render_database_reader,
         ebook_reader as render_ebook_reader,
         executable_reader as render_executable_reader,
         image_reader as render_image_metadata_reader,
@@ -256,8 +374,10 @@ mod ffi {
     #[path = "$handleInclude"] pub mod handle_preview;
     #[path = "$containerInclude"] pub mod handle_container;
     #[path = "$structuredInclude"] pub mod handle_structured;
+    #[path = "$databaseInclude"] pub mod database;
 }
 include!("$fixtureInclude");
+include!("$databaseFixtureInclude");
 "@
         [IO.File]::WriteAllText($wrapper, $body)
         $compiled = @(& $driver $wrapper --edition=2021 --crate-name=rust_handle_preview_behavior `

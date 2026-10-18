@@ -2059,22 +2059,16 @@ if (Test-Path $parserHostProgram) {
         }
         if ($databaseFfiName -eq "ql_preview_sqlite_handles" -and
             ($databaseFfiBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
-                $databaseFfiBody -notmatch 'preview_handle_v2\(' -or
-                $databaseFfiBody -notmatch 'reopen_optional_handle\(' -or
-                $databaseFfiBody -notmatch 'preview::render_database_reader\(')) {
-            Add-Failure "ql_preview_sqlite_handles lost its shared HANDLE boundary or bounded companion routing"
+                $databaseFfiBody -notmatch 'preview_handle_v2\(')) {
+            Add-Failure "ql_preview_sqlite_handles lost its shared HANDLE ownership or panic boundary"
         }
     }
-    if ($nativeLibText -notmatch '(?m)^pub\(crate\) use ffi::database::\{ql_preview_database_cancelable,\s*ql_preview_sqlite_handles\};\s*$' -or
-        $nativeDatabaseFfiText -notmatch 'fn\s+database_exports_cancel_before_file_access\s*\(' -or
-        $nativeDatabaseFfiText -notmatch 'MAX_DATABASE_HANDLE_BYTES' -or
-        $nativeDatabaseFfiText -notmatch 'MAX_SQLITE_WAL_BYTES' -or
-        $nativeDatabaseFfiText -notmatch 'MAX_SQLITE_SHM_BYTES') {
-        Add-Failure "ffi::database lost its re-export, cancellation test, or SQLite input bounds"
+    if ($nativeLibText -notmatch '(?m)^pub\(crate\) use ffi::database::\{ql_preview_database_cancelable,\s*ql_preview_sqlite_handles\};\s*$') {
+        Add-Failure "ffi::database lost its crate-private re-export"
     }
-    if (@(Get-Content -LiteralPath $nativeDatabaseFfiPath).Count -gt 220) {
-        Add-Failure "The focused ffi::database module grew beyond 220 lines"
-    }
+    # Actual path/SQLite exports, companion tuple/reader routing, all three real
+    # byte limits, cancellation, output and cleanup are checked by the compiled
+    # HANDLE behavior fixture below. Keep native unit tests and ownership policies.
     # Office and package Hero extraction owns all seven path/HANDLE ABI exports. Keep the path
     # compatibility surface panic-bounded and the HANDLE surface pinned to caller-owned buffers.
     $expectedHeroImageExports = @(

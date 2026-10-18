@@ -47,6 +47,8 @@ fn reset(mode: Mode) {
     MODE.set(mode);
     REOPENS.set(0);
     CALLS.with(|calls| calls.borrow_mut().clear());
+    DATABASE_PATH_CALLS.with(|calls| calls.borrow_mut().clear());
+    DATABASE_CALLS.with(|calls| calls.borrow_mut().clear());
     CANCEL_POLLS.set(0);
 }
 
@@ -244,28 +246,48 @@ pub fn probe_reader(
 struct Source {
     path: PathBuf,
     file: File,
+    length: u64,
 }
 
 impl Source {
     fn new(share: u32) -> Self {
+        Self::with_bytes(share, DATA)
+    }
+
+    fn with_bytes(share: u32, bytes: &[u8]) -> Self {
         SEQUENCE.set(SEQUENCE.get() + 1);
         let path = PathBuf::from(std::env::args().nth(1).expect("owned fixture directory")).join(
             format!("input-{}-{}.bin", std::process::id(), SEQUENCE.get()),
         );
-        fs::write(&path, DATA).expect("write fixture");
+        fs::write(&path, bytes).expect("write fixture");
         let mut file = OpenOptions::new()
             .read(true)
             .share_mode(share)
             .open(&path)
             .expect("open source");
         file.seek(SeekFrom::Start(3)).expect("position source");
-        Self { path, file }
+        Self {
+            path,
+            file,
+            length: bytes.len() as u64,
+        }
+    }
+
+    fn resize(&mut self, length: u64) {
+        OpenOptions::new()
+            .write(true)
+            .share_mode(7)
+            .open(&self.path)
+            .expect("open bounded fixture for resize")
+            .set_len(length)
+            .expect("resize fixture");
+        self.length = length;
     }
 
     fn input(&self, name: &[u8]) -> Input {
         Input {
             raw: self.file.as_raw_handle() as isize,
-            length: DATA.len() as u64,
+            length: self.length,
             name: name.as_ptr(),
             name_len: name.len(),
         }
@@ -275,7 +297,7 @@ impl Source {
         assert_eq!(self.file.stream_position().expect("source still owned"), 3);
         assert_eq!(
             self.file.metadata().expect("source still open").len(),
-            DATA.len() as u64
+            self.length
         );
     }
 }
@@ -1203,7 +1225,7 @@ fn text_empty_semantics() {
 
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
-    let cases: [(&str, fn()); 12] = [
+    let cases: [(&str, fn()); 18] = [
         ("native_ownership", native_ownership),
         ("handle_outputs", handle_outputs),
         ("handle_arguments", handle_arguments),
@@ -1222,6 +1244,12 @@ fn main() {
             structured_errors_cancellation,
         ),
         ("text_empty_semantics", text_empty_semantics),
+        ("database_path_outputs", database_path_outputs),
+        ("database_path_failures", database_path_failures),
+        ("database_dispatch", database_dispatch),
+        ("database_arguments", database_arguments),
+        ("database_limits", database_limits),
+        ("database_errors_cancellation", database_errors_cancellation),
     ];
     let group_count = cases.len();
     for (name, probe) in cases {
