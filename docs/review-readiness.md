@@ -79,12 +79,15 @@ failure remains historical evidence rather than a current verified blocker.
   these verify declaration compatibility, not the actual pointer value/lifetime.
   Shared raw-pointer adapter behavior is checked by an executable probe over the
   real `ffi::common`, `ffi::raster_packet`, `ffi::file_probe`,
-  `ffi::thumbnail`, and `ffi::path_preview` modules, including canaries,
+  `ffi::thumbnail`, `ffi::path_preview`, and `ffi::routing` modules, including canaries,
   status/length semantics, packet bytes, path errors, text classification,
   thumbnail typed errors/cancellation, and panic containment. Observable
   substitutes check all twelve path exports, argument/renderer forwarding,
   pre/post-render cancellation, optional kind fallback and panic recovery;
   actual format parsers remain independently covered by Rust workspace tests.
+  Three actual routing exports additionally check classifier arguments/results,
+  optional extension/kind fallback versus invalid magic rejection, actual input
+  limits and folder output/callback/panic behavior against observable providers.
   A separate HANDLE probe compiles the real `ffi::handle_preview`,
   `ffi::handle_container`, `ffi::handle_structured` and `native_input` modules
   with actual Win32 reopen ownership. Observable provider substitutes cover the
@@ -94,15 +97,16 @@ failure remains historical evidence rather than a current verified blocker.
   real format-parser limits remain independently tested. Text-empty I/O versus
   cancellation is checked with a one-shot poll callback so the shared post-render
   cancellation check cannot mask an incorrect inner result.
-  The shared/path gates require 93 compiled mutations to fail, and the HANDLE
-  boundary gate adds 76 compiled mutations (169 total across the current FFI
+  The shared/path/routing gates require 120 compiled mutations to fail, and the HANDLE
+  boundary gate adds 76 compiled mutations (196 total across the current FFI
   behavior fixtures). The former helper test-name/line-budget, file-probe and
   thumbnail test-name, path-preview
   test-name/child-test-line-budget, HANDLE test-name/line-budget, and container
   pre-cancellation-test-name/line-budget/reader-status-call-shape checks, and
-  structured pre-cancellation-test-name/line-budget/mail-forwarding rules were
+  structured pre-cancellation-test-name/line-budget/mail-forwarding rules and
+  the routing line-budget rule were
   removed after coverage was added; independent implementation bounds remain
-  where applicable. Path-preview, container and structured unit tests,
+  where applicable. Path-preview, routing, container and structured unit tests,
   module ownership and first-statement panic-boundary rules are retained.
   Wider source-guard migration remains `O26-06c`.
   The built win-x64 DLL export table is inspected without loading the DLL,

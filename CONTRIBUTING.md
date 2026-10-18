@@ -121,8 +121,9 @@ runs these checks and requires already built native and managed win-x64 outputs.
 
 The shared raw-pointer adapter contracts have an executable check as well:
 `tools/test-rust-ffi-behavior.ps1` links the checked-in `ffi::common`,
-`ffi::raster_packet`, `ffi::file_probe`, `ffi::thumbnail`, and `ffi::path_preview`
-modules into a bounded Windows probe. It tests canary-preserving buffer/status
+`ffi::raster_packet`, `ffi::file_probe`, `ffi::thumbnail`, `ffi::path_preview`,
+and `ffi::routing` modules into a bounded Windows probe. It tests
+canary-preserving buffer/status
 behavior, path and typed thumbnail errors, cancellation, packet bytes, and
 panic containment, then compiles deliberate source mutations that must fail.
 Path-preview renderers use observable substitutes: all twelve actual exports
@@ -132,6 +133,14 @@ on a fresh call. These substitutes do not establish parser/file-I/O limits;
 retain workspace tests against the real format providers. Fixture data stays
 inside the harness-owned temporary directory, including failing mutation runs.
 The architecture guard runs this check alongside the compiler safety fixtures.
+The three actual routing exports have observable classifier/folder providers.
+Checks preserve exact Unicode/binary arguments, bool-to-integer results,
+optional extension/kind fallback, null/length/magic limits, folder short-buffer
+canaries and provider-delegated cancellation, empty output, panic cleanup and
+fresh recovery. The checked-in input limits are extracted rather than copied.
+These substitutes do not establish real format detection or directory traversal
+limits; retain the actual routing/folder provider tests. The shared/path/routing
+fixture runs 22 behavior groups and rejects 120 warning-free compiled mutations.
 
 The HANDLE preview boundary has a separate executable check:
 `tools/test-rust-handle-preview-behavior.ps1` compiles the real

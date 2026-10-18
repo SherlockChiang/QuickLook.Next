@@ -228,12 +228,33 @@ reviewable; source edits do not authorize remote publication or destructive clea
       - Implementation/fixture commit: `2fb1c95`; verification was performed
         before that commit. Subsequent completed batches must also be committed
         locally after verification; push/publication still requires authorization.
-    - [ ] `O26-06c.8` Cover the three actual `ffi::routing` exports with
+    - [x] `O26-06c.8` Cover the three actual `ffi::routing` exports with
       compiled behavior and deliberate mutations before replacing its remaining
-      line-budget check. Preserve optional UTF-8/magic fallback semantics,
+      line-budget check. Preserve optional UTF-8 fallback versus invalid-magic rejection,
       argument limits, provider dispatch, folder output/cancellation forwarding,
       panic containment and real routing/provider tests; retain export ownership
       and first-statement panic policies.
+      - Verified 2026-10-18 in the working tree based on `a19906d`: the
+        shared/path/routing fixture passes 22 groups and rejects 120 compiled
+        mutations (27 new; 196 across both FFI fixtures). Only the equivalent
+        150-line routing budget was removed. Optional hint fallback versus
+        invalid magic rejection, exact limits, folder output/callback and panic
+        recovery remain executable contracts; all native tests and export/
+        ownership/panic policies remain. Rust 364/1 ignored, fmt/Clippy,
+        syntax, focused guards, final architecture `-SkipDist` and prebuilt
+        Release regressions pass (Core 390, ParserHost 49, RasterHost 53,
+        ShellBroker 13). Native corpus 10/10; system 4/5 with optional JXL
+        unavailable. All five native/staged DLL hashes match `96FA9C35...`;
+        no product/ABI/dependency changes. Evidence and two initial fixture
+        diagnostics are under `artifacts/o26-06c8-20261018`; parent stays open.
+      - Implementation/fixture commit: `fe813c4`; all results above were
+        verified against the same changed source before that commit.
+    - [ ] `O26-06c.9` Add compiled behavior for `ffi::database` path and SQLite
+      multi-HANDLE exports before replacing equivalent test-name/line-budget
+      and reader-forwarding checks. Preserve optional WAL/SHM tuple validation,
+      independent pinned readers, main/companion byte limits, typed errors,
+      cancellation, output canaries and cleanup. Retain real SQLite/WAL parser
+      tests and structural ownership/panic/security policies.
 - [ ] `O26-07` Extract demonstrated lifecycle/ownership components and consolidate
   shared supervisor primitives with failure and transfer cleanup coverage.
 - [ ] `O26-08` Centralize format facts and migrate linked App policies into a

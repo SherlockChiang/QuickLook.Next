@@ -644,6 +644,64 @@ The container and structured HANDLE fixture/guard changes were subsequently
 committed together as `2fb1c95`. The results above describe verification of the
 same source before the commit; no additional build or remote run is implied.
 
+## Behavior-backed routing adapter checks
+
+On 2026-10-18, `O26-06c.8` extends the shared/path FFI probe in the working
+tree based on `a19906d`. It compiles the actual `ffi::routing` module and its
+three C exports with the real common argument/output and panic helpers. The
+new `tools/fixtures/rust-routing-behavior.rs` uses observable classifier and
+folder providers, not real format detection or directory I/O. Real routing,
+folder, text and archive provider tests remain in the Rust workspace gate.
+Both input limits are extracted from the actual crate root. The success marker
+now derives its group count from the actual fixture array.
+
+Four groups cover exact Unicode extension, embedded-NUL kind and binary magic
+forwarding, true/false integer results, optional UTF-8 fallback and magic
+rejection. They exercise null/zero versus null/positive lengths, malformed
+UTF-8, non-null empty values, exact/over-limit arguments and lengths above
+`isize::MAX`. Oversized probes never remove the real isize/pointer checks.
+Folder cases cover invalid inputs before provider access, null/zero output,
+short/exact/spare byte capacities, UTF-8 payload/canaries, exact callback
+identity, provider-delegated cancellation, empty output, contained provider
+panics and fresh calls. Drop counters check provider cleanup during unwinding.
+These adapter checks do not establish parser or directory traversal limits.
+
+The expanded fixture passes 22 groups and rejects 120 warning-free compiled
+mutation rejections (27 new; 196 across both FFI fixtures). New cases change
+classifier arguments/results/fallbacks/limits and folder path/renderer/callback,
+invalid-input status, zero capacity, payload and output capacity. Initially,
+the false-result mutant changed zero to one, making both branches identical;
+Clippy rejected it before execution. It now returns the deliberately wrong
+value two, so compilation must pass before the behavior assertion fails.
+No lint allowance was added. The initial diagnostic is retained as
+`artifacts/o26-06c8-20261018/ffi-behavior-initial.log`.
+The next run rejected an ambiguous false-result mutation anchor: the last
+export's source slice also contained its unit tests, which had another
+standalone zero. The anchor now selects the complete `else` branch without
+relaxing its exact count. All 27 scoped routing anchors were checked
+independently; the diagnostic is retained in `ffi-behavior-anchor.log`.
+Only after the complete positive/mutation run passed was the routing module's
+150-line budget removed. Its three-export inventory, explicit imports,
+root/module ownership and first-statement panic rules remain independently
+guarded; the three routing unit tests were not removed.
+
+Workspace/fixture formatting, all-target/all-feature Clippy and Rust tests
+pass (364 passed, one ignored external corpus). Prebuilt Release regressions
+pass Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13. All five
+native/staged DLL hashes match `96FA9C35...`; no Release rebuild, product/ABI
+or dependency change is part of this batch. Evidence is retained under
+`artifacts/o26-06c8-20261018`. Implementation/fixture commit: `fe813c4`;
+verification used the same changed source before that commit.
+PowerShell syntax, scoped anchors, focused module-boundary/guidance checks and
+the final full architecture `-SkipDist` run pass, including 22 shared/path/
+routing groups with 120 compiled mutations, 12 HANDLE groups with 76 mutations,
+restricted-host launch, native image corpus 10/10 and system corpus 4/5
+(optional JXL unavailable). Distribution/package and manual UI/HDR acceptance
+are not established by this test-only batch.
+Parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
+packaged UI and remote CI acceptance remain open. No signing, installation,
+publication or remote changes are authorized by this verification-only work.
+
 ## Pinned Local Toolchain
 
 On 2026-09-05 the Microsoft win-x64 SDK `10.0.302` archive was installed beside
