@@ -537,9 +537,112 @@ mapping, callback forwarding, cancellation and the deliberate reopened-handle
 leak. The focused module-boundary check also passes after removing only the
 duplicated HANDLE test-name and 300-line-budget rules; export ownership,
 first-statement panic boundaries and security/ownership source invariants stay
-independent. The full architecture gate is the next verification step for this
-batch; parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
+independent. At this seven-group stage the full architecture gate was the next
+step; the expanded verification below records the completed gate. Parent
+`O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
 packaged UI and remote CI acceptance remain open.
+
+## Behavior-backed container HANDLE adapter checks
+
+On 2026-10-18, `O26-06c.6` extends the HANDLE fixture in the working tree based
+on `80e3562`. The existing script now also compiles the actual
+`ffi::handle_container` module with all four archive/package/Office/ebook C
+exports, the real common/HANDLE boundary and actual Win32 reopen implementation.
+The provider substitutes accept owned `File` readers, read their bytes from
+position zero, and record renderer, basename, source length, modification time
+(where applicable) and the actual cancellation callback. They do not parse
+formats or establish parser resource limits; the real-provider Rust tests and
+the existing container pre-cancellation unit test are unchanged.
+
+Two new groups check null/zero size queries, short/exact/spare output canaries,
+UTF-8 output, exact provider/metadata/callback forwarding, all five typed reader
+failures, empty output, pre-cancelled null input/invalid HANDLE rejection before
+I/O, cancellation after reopen and after rendering, provider panic containment
+and a fresh successful call. Every failure/cancellation path preserves output,
+the caller's source position and ownership, with reopened-handle cleanup checked
+against a process-handle baseline in the single-threaded probe.
+
+The expanded fixture passes nine groups and rejects 49 warning-free compiled
+mutations: the previous 26 and 23 new per-export mutations of logical name,
+source length, provider callback, modification time, boundary callback and
+typed-reader mapping. The source-mutation anchors initially matched closure
+bindings as well as arguments; they now target the complete provider call. A
+stale seven-group success marker was also corrected; the probe now derives its
+marker from the actual group array. Neither issue required a
+production change or relaxed lints. Only after compiled behavior evidence passed
+were the two duplicated pre-cancellation-test-name and 260-line-budget rules,
+plus two duplicated sets of per-export reader-status-call-shape checks, removed
+from the guards.
+Export/module ownership, shared-helper use and panic/safety rules remain.
+
+Focused HANDLE/module-boundary checks, PowerShell parsing, fixture/workspace
+formatting, all-target/all-feature Clippy and Rust workspace tests pass (364
+passed, one ignored external corpus). Prebuilt Release managed regressions also
+pass Core 390, ParserHost 49, RasterHost 53 and ShellBroker 13. The native DLL
+and all four staged App/Host copies still match `96FA9C35...`; no rebuild was
+needed for a fixture/guard-only change. The final architecture `-SkipDist` gate
+also passes, including both FFI fixtures (142 compiled mutation rejections),
+restricted-host launch, native image corpus 10/10 and system corpus 4/5 (optional
+JXL unavailable). Logs and native/staged DLL hash inventory are retained under
+`artifacts/o26-06c6-20261018-e0b3b747`. No product implementation,
+ABI, dependencies or release outputs have been changed by this batch.
+Parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
+packaged UI and remote CI acceptance remain open. No signing, installation,
+publication or remote changes were performed.
+
+## Behavior-backed structured HANDLE adapter checks
+
+On 2026-10-18, `O26-06c.7` extends the existing HANDLE fixture in the working
+tree based on `80e3562`, retaining the uncommitted container migration above.
+It compiles the actual `ffi::handle_structured` module and all four
+text/executable/torrent/mail C exports with the real common/HANDLE boundary,
+native input and Win32 reopen implementation. Observable providers accept the
+actual owned or borrowed `File`, read its pinned bytes from position zero and
+record renderer, basename, applicable length/mtime and callback. Shared
+container/structured fixture helpers avoid duplicating the output and cleanup
+assertions. Providers are substitutes, not format parsers; real-parser tests
+and the existing structured pre-cancellation unit test are unchanged.
+
+Three new groups cover dispatch and size negotiation with short/exact/spare
+output canaries, the five typed reader errors for executable/torrent/mail,
+empty output, pre-cancelled null input/invalid HANDLE before I/O, cancellation
+before/after reopening and after rendering, provider panics and fresh recovery.
+Text's empty `String` maps to I/O failure unless cancelled. A callback true only
+on the fourth poll exercises that inner branch: the fifth, shared post-render
+poll is false, so it cannot mask an incorrect inner error. Failure paths retain
+the output canaries and caller's open source at position three; process HANDLE
+counts return to baseline after each call.
+
+The focused fixture passes 12 groups and rejects 76 warning-free compiled
+mutations (27 new; 169 across the shared/path and HANDLE fixtures). New cases
+change provider name/length/mtime/callback, boundary callback, typed-error
+mapping, executable/torrent dispatch and text-empty status/cancellation.
+Initially, the wrong-renderer mutants failed compilation because their original
+provider imports became unused. The mutants now keep those imports observably
+used and must compile before failing the dispatch behavior group; no lint was
+relaxed. After the complete mutation run passed, only the structured
+pre-cancellation-test-name check, two duplicated 260-line budgets and two
+duplicated mail-forwarding regexes were removed. Export/module ownership,
+shared-helper use and panic/safety rules remain guarded.
+
+Workspace and fixture formatting, all-target/all-feature Clippy and Rust
+workspace tests pass (364 passed, one ignored external corpus). Prebuilt
+Release regressions pass Core 390, ParserHost 49, RasterHost 53 and ShellBroker
+13. All five native/staged DLL hashes still match `96FA9C35...`; this batch
+changes no product implementation, ABI, dependencies or Release outputs.
+PowerShell syntax, focused module-boundary/architecture-guidance checks and
+the final full architecture `-SkipDist` run pass, including both FFI fixtures,
+restricted-host launch, native image corpus 10/10 and system corpus 4/5
+(optional JXL unavailable). Distribution/package and manual UI/HDR acceptance
+are not established by this test-only batch.
+Logs and the DLL hash inventory are under `artifacts/o26-06c7-20261018`.
+Parent `O26-06c`/`O26-06`, `E26-04`, physical HDR/performance, optional JXL,
+packaged UI and remote CI acceptance remain open. No signing, installation,
+publication or remote changes were performed.
+
+The container and structured HANDLE fixture/guard changes were subsequently
+committed together as `2fb1c95`. The results above describe verification of the
+same source before the commit; no additional build or remote run is implied.
 
 ## Pinned Local Toolchain
 

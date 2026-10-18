@@ -135,16 +135,27 @@ The architecture guard runs this check alongside the compiler safety fixtures.
 
 The HANDLE preview boundary has a separate executable check:
 `tools/test-rust-handle-preview-behavior.ps1` compiles the real
-`ffi::handle_preview`, `native_input`, common output adapter and bounded file
-probe against the locked Windows dependency artifact. It uses real Win32
-`ReOpenFile` ownership and checks independent positions, rename/decoy
-resistance, exact logical-name and length validation, native/reader status
-mapping, output negotiation/canaries, cancellation (including callback poll
-ordering), panic containment and process-handle cleanup. PDF/image providers
-are observable substitutes for dispatch and error paths; they do not replace
-format-parser tests. The positive probe is followed by 26 warning-free source
-mutations, each of which must fail its expected behavior group. The architecture
-guard runs this check after the shared FFI behavior fixture.
+`ffi::handle_preview`, `ffi::handle_container`, `ffi::handle_structured`,
+`native_input`, common output adapter and bounded file probe against the locked
+Windows dependency artifact. It uses real Win32 `ReOpenFile` ownership and
+checks independent positions, rename/decoy resistance, exact logical-name and
+length validation, native/reader status mapping, output negotiation/canaries,
+cancellation (including callback poll
+ordering), panic containment and process-handle cleanup. PDF/image, container
+and structured providers are observable substitutes for dispatch and error
+paths; they do not replace format-parser tests. All four container and four
+structured exports must forward the exact reopened reader, basename, length,
+modification time (where applicable) and callback, and preserve all five typed
+reader statuses where supplied by the provider. Text's
+empty result maps to I/O failure or cancellation; a one-shot fourth-poll callback
+checks its inner cancellation branch without masking by the shared post-render
+check.
+Short/exact/spare output, pre-cancelled null input, post-render cancellation,
+empty output, panic containment and fresh recovery remain executable contracts.
+The positive probe is followed by 76
+warning-free source mutations, each of which must fail its expected behavior
+group. The architecture guard runs this check after the shared FFI behavior
+fixture.
 
 Explain why a new dependency is necessary and how its security, maintenance, binary size, and runtime
 cost were evaluated. Update `packages.lock.json` or `Cargo.lock` only when the dependency graph really

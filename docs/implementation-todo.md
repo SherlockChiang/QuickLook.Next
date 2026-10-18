@@ -187,6 +187,53 @@ reviewable; source edits do not authorize remote publication or destructive clea
       checks passed on 2026-10-18; the duplicated two test-name and 300-line
       rules were removed while export ownership, panic-boundary and security
       invariants remain guarded. Format-family migrations remain open.
+    - [x] `O26-06c.6` Extend the HANDLE behavior fixture to all four actual
+      `ffi::handle_container` exports. Check renderer/name/length/mtime and
+      callback forwarding, short/exact/spare output canaries, five typed reader
+      failures, empty output, pre-HANDLE and post-render cancellation, panic
+      recovery and owning-file cleanup. Replace duplicated pre-cancellation
+      test-name, 260-line-budget and reader-status-call-shape rules only with
+      compiled behavior evidence; retain the existing native unit test and
+      export/module/panic policies.
+      - Verified 2026-10-18 in the working tree based on `80e3562`: nine
+        HANDLE groups and 49 compiled mutation rejections pass (23 new
+        per-export mutations; 142 across both FFI behavior fixtures). Removed
+        only equivalent duplicated rules; no product/ABI/dependency changes.
+        Rust 364/1 ignored, fmt/Clippy, PowerShell syntax, module boundaries,
+        final architecture `-SkipDist` and prebuilt Release regressions pass
+        (Core 390, ParserHost 49, RasterHost 53, ShellBroker 13). Native corpus
+        10/10; system 4/5 with optional JXL unavailable. All five native/staged
+        DLL hashes still match `96FA9C35...`. Evidence is retained under
+        `artifacts/o26-06c6-20261018-e0b3b747`; parent `O26-06c` stays open.
+      - Implementation/fixture commit: `2fb1c95` (container and structured
+        HANDLE migrations); verification was performed before that commit.
+    - [x] `O26-06c.7` Migrate `ffi::handle_structured` pre-HANDLE cancellation
+      test-name, line-budget and duplicated mail-forwarding rules to behavior
+      over the four actual exports. Preserve text's empty-output/error
+      semantics, typed reader errors, callback forwarding, exact HANDLE reader
+      ownership and existing real-parser tests before removing equivalent
+      source-shape rules.
+      - Verified 2026-10-18 in the working tree based on `80e3562`: 12 HANDLE
+        groups and 76 compiled mutation rejections pass (27 new; 169 across
+        both FFI fixtures). Text-empty I/O versus cancellation has an isolated
+        one-shot callback check. Only equivalent structured test-name,
+        line-budget and mail-forwarding rules were removed; native tests and
+        module/export/panic policies remain. Rust 364/1 ignored, fmt/Clippy,
+        syntax, focused guards, final architecture `-SkipDist` and prebuilt
+        Release regressions pass (Core 390, ParserHost 49, RasterHost 53,
+        ShellBroker 13). Native corpus 10/10; system 4/5 with optional JXL
+        unavailable. All five native/staged DLL hashes still match
+        `96FA9C35...`; no product/ABI/dependency changes. Evidence is under
+        `artifacts/o26-06c7-20261018`; parent `O26-06c` stays open.
+      - Implementation/fixture commit: `2fb1c95`; verification was performed
+        before that commit. Subsequent completed batches must also be committed
+        locally after verification; push/publication still requires authorization.
+    - [ ] `O26-06c.8` Cover the three actual `ffi::routing` exports with
+      compiled behavior and deliberate mutations before replacing its remaining
+      line-budget check. Preserve optional UTF-8/magic fallback semantics,
+      argument limits, provider dispatch, folder output/cancellation forwarding,
+      panic containment and real routing/provider tests; retain export ownership
+      and first-statement panic policies.
 - [ ] `O26-07` Extract demonstrated lifecycle/ownership components and consolidate
   shared supervisor primitives with failure and transfer cleanup coverage.
 - [ ] `O26-08` Centralize format facts and migrate linked App policies into a
