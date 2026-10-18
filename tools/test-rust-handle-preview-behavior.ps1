@@ -2,12 +2,17 @@ param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+$behaviorGroupCount = 12
 $Root = [IO.Path]::GetFullPath($Root)
 $sourceRoot = Join-Path $Root 'native/quicklook_next_native/src'
 $fixturePath = Join-Path $PSScriptRoot 'fixtures/rust-handle-preview-behavior.rs'
 $handlePath = Join-Path $sourceRoot 'ffi/handle_preview.rs'
+$containerPath = Join-Path $sourceRoot 'ffi/handle_container.rs'
+$structuredPath = Join-Path $sourceRoot 'ffi/handle_structured.rs'
 $inputPath = Join-Path $sourceRoot 'native_input.rs'
 $handleText = (Get-Content -LiteralPath $handlePath -Raw).Replace("`r`n", "`n")
+$containerText = (Get-Content -LiteralPath $containerPath -Raw).Replace("`r`n", "`n")
+$structuredText = (Get-Content -LiteralPath $structuredPath -Raw).Replace("`r`n", "`n")
 $inputText = (Get-Content -LiteralPath $inputPath -Raw).Replace("`r`n", "`n")
 $libText = Get-Content -LiteralPath (Join-Path $sourceRoot 'lib.rs') -Raw
 $crateLints = @([regex]::Matches($libText, '(?m)^#!\[(?:deny|forbid)\([^\r\n]*\)\]') | ForEach-Object Value) -join "`n"
@@ -79,6 +84,87 @@ foreach ($export in @('ql_extract_pdf_text_handle', 'ql_preview_image_metadata_h
     $cases += @{ Name = "$export-callback"; Expected = 'handle_cancellation'; Scope = $export;
         Before = "            cancel_cb,`n"; After = "            None,`n"; Count = 1 }
 }
+foreach ($export in @(
+        'ql_preview_archive_handle',
+        'ql_preview_package_handle',
+        'ql_preview_office_handle',
+        'ql_preview_ebook_handle')) {
+    $family = $export.Replace('ql_preview_', '').Replace('_handle', '')
+    $providerCall = if ($family -ceq 'package') {
+        'preview::render_package_reader(file, logical_name, expected_length, cancel_cb)'
+    }
+    else {
+        "preview::render_${family}_reader(`n                    file,`n                    logical_name,`n                    expected_length,`n                    modified_unix,`n                    cancel_cb,`n                )"
+    }
+    foreach ($mutation in @(
+            @{ Name = 'name'; Argument = 'logical_name'; Replacement = '{ std::hint::black_box(logical_name); "wrong-name" }' },
+            @{ Name = 'length'; Argument = 'expected_length'; Replacement = 'expected_length.saturating_sub(1)' },
+            @{ Name = 'callback'; Argument = 'cancel_cb'; Replacement = 'None' })) {
+        $cases += @{ Name = "$export-$($mutation.Name)"; Expected = 'container_dispatch'; Target = 'container';
+            Scope = $export; Before = $providerCall;
+            After = $providerCall.Replace($mutation.Argument, $mutation.Replacement); Count = 1 }
+    }
+    if ($family -cne 'package') {
+        $cases += @{ Name = "$export-modified"; Expected = 'container_dispatch'; Target = 'container';
+            Scope = $export; Before = $providerCall;
+            After = $providerCall.Replace('modified_unix', 'modified_unix.saturating_add(1)'); Count = 1 }
+    }
+    $cases += @{ Name = "$export-boundary-callback"; Expected = 'container_errors_cancellation'; Target = 'container';
+        Scope = $export; Before = "out_required,`n            cancel_cb,";
+        After = "out_required,`n            None,"; Count = 1 }
+}
+foreach ($export in @(
+        'ql_preview_archive_handle',
+        'ql_preview_package_handle',
+        'ql_preview_office_handle',
+        'ql_preview_ebook_handle')) {
+    $cases += @{ Name = "$export-reader-status"; Expected = 'container_errors_cancellation'; Target = 'container';
+        Scope = $export; Before = '.map_err(reader_preview_status)'; After = '.map_err(|_| crate::QL_ERROR_INTERNAL)'; Count = 1 }
+}
+
+foreach ($family in @('text', 'executable', 'torrent', 'mail')) {
+    $export = "ql_preview_${family}_handle"
+    $providerCall = if ($family -ceq 'text') {
+        'preview::render_text_reader(&mut file, logical_name, cancel_cb)'
+    }
+    else {
+        $fileArg = if ($family -ceq 'mail') { 'file' } else { '&mut file' }
+        $lengthArg = if ($family -ceq 'mail') { 'expected_length' } else { 'size' }
+        "preview::render_${family}_reader(`n                    $fileArg,`n                    logical_name,`n                    $lengthArg,`n                    modified_unix,`n                    cancel_cb,`n                )"
+    }
+    $mutations = @(
+        @{ Name = 'name'; Argument = 'logical_name'; Replacement = '{ std::hint::black_box(logical_name); "wrong-name" }' },
+        @{ Name = 'callback'; Argument = 'cancel_cb'; Replacement = 'None' })
+    if ($family -cne 'text') {
+        $mutations += @(
+            @{ Name = 'length'; Argument = $lengthArg; Replacement = "$lengthArg.saturating_sub(1)" },
+            @{ Name = 'modified'; Argument = 'modified_unix'; Replacement = 'modified_unix.saturating_add(1)' })
+        $cases += @{ Name = "$export-reader-status"; Expected = 'structured_errors_cancellation'; Target = 'structured';
+            Scope = $export; Before = '.map_err(reader_preview_status)'; After = '.map_err(|_| crate::QL_ERROR_INTERNAL)'; Count = 1 }
+    }
+    foreach ($mutation in $mutations) {
+        $cases += @{ Name = "$export-$($mutation.Name)"; Expected = 'structured_dispatch'; Target = 'structured';
+            Scope = $export; Before = $providerCall;
+            After = $providerCall.Replace($mutation.Argument, $mutation.Replacement); Count = 1 }
+    }
+    $cases += @{ Name = "$export-boundary-callback"; Expected = 'structured_errors_cancellation'; Target = 'structured';
+        Scope = $export; Before = "out_required,`n            cancel_cb,";
+        After = "out_required,`n            None,"; Count = 1 }
+}
+foreach ($family in @('executable', 'torrent')) {
+    $other = if ($family -ceq 'executable') { 'torrent' } else { 'executable' }
+    $cases += @{ Name = "ql_preview_${family}_handle-renderer"; Expected = 'structured_dispatch'; Target = 'structured';
+        Scope = "ql_preview_${family}_handle"; Before = "preview::render_${family}_reader(";
+        After = "({ std::hint::black_box(preview::render_${family}_reader); preview::render_${other}_reader })("; Count = 1 }
+}
+foreach ($mutation in @(
+        @{ Name = 'empty-io-status'; Before = "                        QL_ERROR_IO`n"; After = "                        QL_ERROR_IO + 1`n"; Expected = 'structured_errors_cancellation' },
+        @{ Name = 'empty-cancel-status'; Before = "                        QL_ERROR_CANCELLED`n"; After = "                        QL_ERROR_CANCELLED + 1`n"; Expected = 'text_empty_semantics' },
+        @{ Name = 'empty-check'; Before = 'if json.is_empty() {'; After = 'if std::hint::black_box(false) && json.is_empty() {'; Expected = 'structured_errors_cancellation' },
+        @{ Name = 'empty-callback'; Before = 'if cancel_requested(cancel_cb) {'; After = 'if cancel_requested(None) {'; Expected = 'text_empty_semantics' })) {
+    $cases += @{ Name = "ql_preview_text_handle-$($mutation.Name)"; Expected = $mutation.Expected; Target = 'structured';
+        Scope = 'ql_preview_text_handle'; Before = $mutation.Before; After = $mutation.After; Count = 1 }
+}
 
 Push-Location -LiteralPath $Root
 $tempRoot = $null
@@ -103,17 +189,31 @@ try {
     $executable = Join-Path $tempRoot 'contract.exe'
     foreach ($case in $cases) {
         $selectedHandle = $handlePath
+        $selectedContainer = $containerPath
+        $selectedStructured = $structuredPath
         $selectedInput = $inputPath
         if ($case.Expected) {
-            $selectedHandle = Join-Path $tempRoot 'handle_preview.rs'
             $selectedInput = Join-Path $tempRoot 'native_input.rs'
-            [IO.File]::WriteAllText($selectedHandle, (Edit-HandleFixture $handleText $case))
+            if ($case.Target -ceq 'structured') {
+                $selectedStructured = Join-Path $tempRoot 'handle_structured.rs'
+                [IO.File]::WriteAllText($selectedStructured, (Edit-HandleFixture $structuredText $case))
+            }
+            elseif ($case.Target -ceq 'container') {
+                $selectedContainer = Join-Path $tempRoot 'handle_container.rs'
+                [IO.File]::WriteAllText($selectedContainer, (Edit-HandleFixture $containerText $case))
+            }
+            else {
+                $selectedHandle = Join-Path $tempRoot 'handle_preview.rs'
+                [IO.File]::WriteAllText($selectedHandle, (Edit-HandleFixture $handleText $case))
+            }
             [IO.File]::WriteAllText($selectedInput, $inputText)
         }
         $abiInclude = (Join-Path $sourceRoot 'abi_generated.rs').Replace('\', '/')
         $commonInclude = (Join-Path $sourceRoot 'ffi/common.rs').Replace('\', '/')
         $probeInclude = (Join-Path $sourceRoot 'preview/file_probe.rs').Replace('\', '/')
         $handleInclude = $selectedHandle.Replace('\', '/')
+        $containerInclude = $selectedContainer.Replace('\', '/')
+        $structuredInclude = $selectedStructured.Replace('\', '/')
         $inputInclude = $selectedInput.Replace('\', '/')
         $fixtureInclude = $fixturePath.Replace('\', '/')
         $body = @"
@@ -137,12 +237,25 @@ mod preview {
     pub fn probe_image_animation_reader(_file: &mut std::fs::File, _name: &str, _size: u64) -> Option<AnimationProbe> { None }
     #[path = "$probeInclude"] pub(crate) mod actual_file_probe;
     pub mod file_probe { pub use crate::probe_reader as probe_reader_json; }
-    pub(crate) use crate::{pdf_reader as render_pdf_text_reader, image_reader as render_image_metadata_reader};
+    pub(crate) use crate::{
+        archive_reader as render_archive_reader,
+        ebook_reader as render_ebook_reader,
+        executable_reader as render_executable_reader,
+        image_reader as render_image_metadata_reader,
+        mail_reader as render_mail_reader,
+        office_reader as render_office_reader,
+        package_reader as render_package_reader,
+        pdf_reader as render_pdf_text_reader,
+        text_reader as render_text_reader,
+        torrent_reader as render_torrent_reader,
+    };
 }
 mod rar_listing { pub fn is_rar_magic(bytes: &[u8]) -> bool { bytes.starts_with(b"Rar!\x1a\x07") } }
 mod ffi {
     use crate::ffi_common as common;
     #[path = "$handleInclude"] pub mod handle_preview;
+    #[path = "$containerInclude"] pub mod handle_container;
+    #[path = "$structuredInclude"] pub mod handle_structured;
 }
 include!("$fixtureInclude");
 "@
@@ -153,13 +266,13 @@ include!("$fixtureInclude");
         if ($LASTEXITCODE -ne 0) { throw "HANDLE fixture must compile first ($($case.Name)): $($compiled -join "`n")" }
         $output = @(& $executable $tempRoot 2>&1)
         $probeExit = $LASTEXITCODE
-        $expectedText = if ($case.Expected) { 'HANDLE_CONTRACT_FAILED:' + $case.Expected } else { 'HANDLE_CONTRACT_PASSED:7' }
+        $expectedText = if ($case.Expected) { 'HANDLE_CONTRACT_FAILED:' + $case.Expected } else { "HANDLE_CONTRACT_PASSED:$behaviorGroupCount" }
         $expectedExit = if ($case.Expected) { 1 } else { 0 }
         if ($probeExit -ne $expectedExit -or ($output -join "`n") -cne $expectedText) {
             throw "Unexpected HANDLE behavior ($($case.Name)): exit=$probeExit; $($output -join "`n")"
         }
     }
-    Write-Host "Rust HANDLE preview behavior passed: 7 groups; 1 positive, $($cases.Count - 1) compiled mutation rejections; real Win32 reopen." -ForegroundColor Green
+    Write-Host "Rust HANDLE behavior passed: $behaviorGroupCount groups; 1 positive, $($cases.Count - 1) compiled mutation rejections; real Win32 reopen." -ForegroundColor Green
 }
 finally {
     if ($tempRoot -and (Test-Path -LiteralPath $tempRoot)) {

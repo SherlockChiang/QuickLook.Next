@@ -1950,14 +1950,9 @@ if (Test-Path $parserHostProgram) {
         if ($nativeLibText -match [regex]::Escape($handleStructuredSignature)) {
             Add-Failure "$handleStructuredName must remain in ffi::handle_structured, not lib.rs"
         }
-        if ($handleStructuredName -eq "ql_preview_mail_handle" -and
-            $handleStructuredBody -notmatch 'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
-            Add-Failure "ql_preview_mail_handle must pass the exact reopened HANDLE reader, length, metadata, and cancellation callback into Rust mail parsing"
-        }
     }
-    if (@(Get-Content -LiteralPath $nativeHandleStructuredPath).Count -gt 260) {
-        Add-Failure "The focused ffi::handle_structured module grew beyond 260 lines"
-    }
+    # Structured HANDLE forwarding, text-empty/typed statuses, cancellation and
+    # cleanup are checked by the compiled behavior fixture below, not source shape.
 
     # Container-backed JSON HANDLE routes remain thin consumers of the shared ABI 2 boundary.
     $expectedHandleContainerExports = @(
@@ -2004,21 +1999,15 @@ if (Test-Path $parserHostProgram) {
             ""
         }
         if ($handleContainerBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
-            $handleContainerBody -notmatch 'preview_handle_v2\(' -or
-            $handleContainerBody -notmatch '\.map_err\(reader_preview_status\)') {
-            Add-Failure "$handleContainerName must contain panics, use the shared ABI 2 HANDLE contract, and preserve reader error mapping"
+            $handleContainerBody -notmatch 'preview_handle_v2\(') {
+            Add-Failure "$handleContainerName must contain panics and use the shared ABI 2 HANDLE contract"
         }
         if ($nativeLibText -match [regex]::Escape($handleContainerSignature)) {
             Add-Failure "$handleContainerName must remain in ffi::handle_container, not lib.rs"
         }
     }
-    if ($nativeHandleContainerText -notmatch
-        'fn\s+container_handle_exports_cancel_before_handle_access\s*\(') {
-        Add-Failure "ffi::handle_container lost its pre-HANDLE cancellation test"
-    }
-    if (@(Get-Content -LiteralPath $nativeHandleContainerPath).Count -gt 260) {
-        Add-Failure "The focused ffi::handle_container module grew beyond 260 lines"
-    }
+    # Container forwarding, reader-status mapping and cancellation are covered by the
+    # compiled HANDLE behavior fixture below, rather than test-name/line-count rules.
 
     # Database path compatibility and multi-HANDLE SQLite adapters share one focused FFI module.
     $expectedDatabaseFfiExports = @(

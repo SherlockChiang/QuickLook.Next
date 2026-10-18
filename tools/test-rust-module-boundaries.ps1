@@ -1139,20 +1139,8 @@ if ($failures.Count -eq 0) {
                 "$handleStructuredExport must contain panics and use the shared ABI 2 HANDLE contract.")
         }
     }
-    if ($ffiHandleStructuredText -notmatch
-        'preview::render_mail_reader\(\s*file,\s*logical_name,\s*expected_length,\s*modified_unix,\s*cancel_cb,\s*\)\s*\.map_err\(reader_preview_status\)') {
-        $failures.Add(
-            "ffi::handle_structured must pass the exact reopened HANDLE reader into Rust mail parsing.")
-    }
-    if ($ffiHandleStructuredText -notmatch
-        'fn\s+structured_handle_exports_cancel_before_handle_access\s*\(') {
-        $failures.Add("ffi::handle_structured lost its pre-HANDLE cancellation test.")
-    }
-    $ffiHandleStructuredLineCount = @(Get-Content -LiteralPath $ffiHandleStructuredPath).Count
-    if ($ffiHandleStructuredLineCount -gt 260) {
-        $failures.Add(
-            "The focused ffi::handle_structured module grew beyond 260 lines: $ffiHandleStructuredLineCount")
-    }
+    # Actual structured-HANDLE exports are behavior-checked for reader forwarding,
+    # text-empty/typed errors, cancellation, output, panic recovery and ownership.
 
     $expectedHandleContainerExports = @(
         "ql_preview_archive_handle",
@@ -1228,21 +1216,13 @@ if ($failures.Count -eq 0) {
             ""
         }
         if ($handleContainerBody -notmatch 'ffi_boundary\(\|\|\s*unsafe' -or
-            $handleContainerBody -notmatch 'preview_handle_v2\(' -or
-            $handleContainerBody -notmatch '\.map_err\(reader_preview_status\)') {
+            $handleContainerBody -notmatch 'preview_handle_v2\(') {
             $failures.Add(
-                "$handleContainerExport must contain panics, use the shared ABI 2 HANDLE contract, and preserve reader error mapping.")
+                "$handleContainerExport must contain panics and use the shared ABI 2 HANDLE contract.")
         }
     }
-    if ($ffiHandleContainerText -notmatch
-        'fn\s+container_handle_exports_cancel_before_handle_access\s*\(') {
-        $failures.Add("ffi::handle_container lost its pre-HANDLE cancellation test.")
-    }
-    $ffiHandleContainerLineCount = @(Get-Content -LiteralPath $ffiHandleContainerPath).Count
-    if ($ffiHandleContainerLineCount -gt 260) {
-        $failures.Add(
-            "The focused ffi::handle_container module grew beyond 260 lines: $ffiHandleContainerLineCount")
-    }
+    # Container argument/error/cancellation behavior is executed by the HANDLE fixture;
+    # keep module ownership, export shape and the shared panic boundary as separate policies.
 
     if ($ffiRoutingText -notmatch '(?m)^use\s+super::common::\{' -or
         $ffiRoutingText -match '(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?use\s+[^;\r\n]*::\*[^;\r\n]*;' -or

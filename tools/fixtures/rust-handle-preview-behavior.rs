@@ -1,5 +1,5 @@
-// Compiled with real common/native_input/handle_preview modules and the locked Windows rlib.
-// PDF/image substitutes observe dispatch and fail paths; they do not validate format parsing.
+// Compiled with real common/native_input/HANDLE adapters and the locked Windows rlib.
+// Renderer substitutes observe dispatch and fail paths; they do not validate format parsing.
 use std::cell::{Cell, RefCell};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -30,8 +30,9 @@ struct Call {
     renderer: &'static str,
     name: String,
     length: u64,
+    modified: Option<i64>,
     position: u64,
-    callback: bool,
+    callback: Option<CancelCallback>,
 }
 
 thread_local! {
@@ -74,6 +75,7 @@ fn observe(
     renderer: &'static str,
     name: &str,
     length: u64,
+    modified: Option<i64>,
     cb: Option<CancelCallback>,
 ) {
     let position = file.stream_position().expect("provider position");
@@ -82,8 +84,9 @@ fn observe(
             renderer,
             name: name.to_owned(),
             length,
+            modified,
             position,
-            callback: cb.is_some(),
+            callback: cb,
         })
     });
 }
@@ -111,7 +114,7 @@ pub(crate) fn pdf_reader(
     length: u64,
     cb: Option<CancelCallback>,
 ) -> Result<String, ReaderPreviewError> {
-    observe(&mut file, "pdf", "", length, cb);
+    observe(&mut file, "pdf", "", length, None, cb);
     response(&mut file, "pdf")
 }
 
@@ -121,8 +124,97 @@ pub(crate) fn image_reader(
     cb: Option<CancelCallback>,
 ) -> Result<String, ReaderPreviewError> {
     let length = file.metadata().expect("image length").len();
-    observe(file, "image", name, length, cb);
+    observe(file, "image", name, length, None, cb);
     response(file, "image")
+}
+
+fn container_reader(
+    mut file: File,
+    renderer: &'static str,
+    name: &str,
+    length: u64,
+    modified: Option<i64>,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    observe(&mut file, renderer, name, length, modified, cb);
+    response(&mut file, renderer)
+}
+
+pub(crate) fn archive_reader(
+    file: File,
+    name: &str,
+    length: u64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    container_reader(file, "archive", name, length, Some(modified), cb)
+}
+
+pub(crate) fn package_reader(
+    file: File,
+    name: &str,
+    length: u64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    container_reader(file, "package", name, length, None, cb)
+}
+
+pub(crate) fn office_reader(
+    file: File,
+    name: &str,
+    length: u64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    container_reader(file, "office", name, length, Some(modified), cb)
+}
+
+pub(crate) fn ebook_reader(
+    file: File,
+    name: &str,
+    length: u64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    container_reader(file, "ebook", name, length, Some(modified), cb)
+}
+
+pub(crate) fn text_reader(file: &mut File, name: &str, cb: Option<CancelCallback>) -> String {
+    let length = file.metadata().expect("text length").len();
+    observe(file, "text", name, length, None, cb);
+    response(file, "text").expect("text provider has no typed error result")
+}
+
+pub(crate) fn executable_reader(
+    file: &mut File,
+    name: &str,
+    length: i64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    observe(file, "executable", name, length as u64, Some(modified), cb);
+    response(file, "executable")
+}
+
+pub(crate) fn torrent_reader(
+    file: &mut File,
+    name: &str,
+    length: i64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    observe(file, "torrent", name, length as u64, Some(modified), cb);
+    response(file, "torrent")
+}
+
+pub(crate) fn mail_reader(
+    file: File,
+    name: &str,
+    length: u64,
+    modified: i64,
+    cb: Option<CancelCallback>,
+) -> Result<String, ReaderPreviewError> {
+    container_reader(file, "mail", name, length, Some(modified), cb)
 }
 
 fn expected_status(error: ReaderPreviewError) -> i32 {
@@ -141,7 +233,7 @@ pub fn probe_reader(
     length: u64,
     modified: i64,
 ) -> Result<String, i32> {
-    observe(file, "probe", name, length, None);
+    observe(file, "probe", name, length, Some(modified), None);
     if matches!(MODE.get(), Mode::Success) {
         preview::actual_file_probe::probe_reader_json(file, name, length, modified)
     } else {
@@ -260,6 +352,144 @@ impl Export {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FamilyExport {
+    Archive,
+    Package,
+    Office,
+    Ebook,
+    Text,
+    Executable,
+    Torrent,
+    Mail,
+}
+
+impl FamilyExport {
+    /// # Safety
+    /// The borrowed HANDLE and non-null input/output ranges must remain valid/disjoint.
+    unsafe fn call(
+        self,
+        input: Input,
+        out: *mut u8,
+        cap: usize,
+        required: *mut usize,
+        cb: Option<CancelCallback>,
+    ) -> i32 {
+        // SAFETY: Each export shares the documented ABI 2 borrowed-HANDLE contract.
+        unsafe {
+            match self {
+                Self::Archive => ffi::handle_container::ql_preview_archive_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Package => ffi::handle_container::ql_preview_package_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Office => ffi::handle_container::ql_preview_office_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Ebook => ffi::handle_container::ql_preview_ebook_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Text => ffi::handle_structured::ql_preview_text_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Executable => ffi::handle_structured::ql_preview_executable_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Torrent => ffi::handle_structured::ql_preview_torrent_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+                Self::Mail => ffi::handle_structured::ql_preview_mail_handle(
+                    input.raw,
+                    input.length,
+                    input.name,
+                    input.name_len,
+                    out,
+                    cap,
+                    required,
+                    cb,
+                ),
+            }
+        }
+    }
+
+    fn renderer(self) -> &'static str {
+        match self {
+            Self::Archive => "archive",
+            Self::Package => "package",
+            Self::Office => "office",
+            Self::Ebook => "ebook",
+            Self::Text => "text",
+            Self::Executable => "executable",
+            Self::Torrent => "torrent",
+            Self::Mail => "mail",
+        }
+    }
+}
+
+const CONTAINER_EXPORTS: [FamilyExport; 4] = [
+    FamilyExport::Archive,
+    FamilyExport::Package,
+    FamilyExport::Office,
+    FamilyExport::Ebook,
+];
+
+const STRUCTURED_EXPORTS: [FamilyExport; 4] = [
+    FamilyExport::Text,
+    FamilyExport::Executable,
+    FamilyExport::Torrent,
+    FamilyExport::Mail,
+];
+
 const EXPORTS: [Export; 3] = [Export::Probe, Export::Pdf, Export::Image];
 extern "C" fn never_cancel() -> bool {
     false
@@ -277,6 +507,12 @@ extern "C" fn cancel_on_second_poll() -> bool {
     let poll = CANCEL_POLLS.get() + 1;
     CANCEL_POLLS.set(poll);
     poll == 2
+}
+
+extern "C" fn cancel_on_fourth_poll() -> bool {
+    let poll = CANCEL_POLLS.get() + 1;
+    CANCEL_POLLS.set(poll);
+    poll == 4
 }
 
 fn native_ownership() {
@@ -390,7 +626,7 @@ fn handle_outputs() {
                         BASENAME
                     }
                 );
-                assert_eq!(call.callback, !matches!(export, Export::Probe));
+                assert_eq!(call.callback.is_some(), !matches!(export, Export::Probe));
             });
             if capacity < expected_size {
                 assert_eq!(out, [0xa5; 2064]);
@@ -633,6 +869,16 @@ fn handle_cancellation() {
             assert_eq!(required, 0);
             assert_eq!(REOPENS.get(), reopens);
             assert_eq!(calls(), readers);
+            if readers > 0 {
+                CALLS.with(|calls| {
+                    assert!(std::ptr::fn_addr_eq(
+                        calls.borrow()[0]
+                            .callback
+                            .expect("forwarded cancellation callback"),
+                        callback,
+                    ));
+                });
+            }
             assert_eq!(out, [0xa5; 256]);
             source.unchanged();
             assert_eq!(handles(), baseline);
@@ -694,9 +940,270 @@ fn handle_panics() {
     }
 }
 
+fn container_dispatch() {
+    family_dispatch(&CONTAINER_EXPORTS);
+}
+
+fn structured_dispatch() {
+    family_dispatch(&STRUCTURED_EXPORTS);
+}
+
+fn family_dispatch(exports: &[FamilyExport]) {
+    let mut source = Source::new(7);
+    let input = source.input(HINT.as_bytes());
+    let expected_modified = source
+        .file
+        .metadata()
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let baseline = handles();
+    for &export in exports {
+        reset(Mode::Success);
+        let mut required = usize::MAX;
+        assert_eq!(
+            // SAFETY: Null/zero is the documented size query over a live borrowed HANDLE.
+            unsafe { export.call(input, null_mut(), 0, &mut required, Some(never_cancel)) },
+            QL_ERROR_BUFFER_TOO_SMALL
+        );
+        let expected_size = required;
+        assert!(expected_size > 0 && expected_size < 2048);
+        for capacity in [expected_size - 1, expected_size, 2048] {
+            reset(Mode::Success);
+            required = usize::MAX;
+            let mut out = [0xa5; 2064];
+            assert_eq!(
+                // SAFETY: Output is initialized, exclusive and disjoint from the live input.
+                unsafe {
+                    export.call(
+                        input,
+                        out[4..].as_mut_ptr(),
+                        capacity,
+                        &mut required,
+                        Some(never_cancel),
+                    )
+                },
+                if capacity < expected_size {
+                    QL_ERROR_BUFFER_TOO_SMALL
+                } else {
+                    QL_OK
+                }
+            );
+            assert_eq!(required, expected_size);
+            if capacity < expected_size {
+                assert_eq!(out, [0xa5; 2064]);
+            } else {
+                let payload = std::str::from_utf8(&out[4..4 + required]).expect("UTF-8 payload");
+                assert_eq!(
+                    payload,
+                    format!(
+                        "{{\"renderer\":\"{}\",\"bytes\":\"pinned bytes\"}}",
+                        export.renderer()
+                    )
+                );
+                assert!(out[..4]
+                    .iter()
+                    .chain(out[4 + required..].iter())
+                    .all(|byte| *byte == 0xa5));
+            }
+            assert_eq!(REOPENS.get(), 1);
+            assert_eq!(calls(), 1);
+            CALLS.with(|calls| {
+                let call = &calls.borrow()[0];
+                assert_eq!(call.renderer, export.renderer());
+                assert_eq!(call.name, BASENAME);
+                assert_eq!(call.length, DATA.len() as u64);
+                assert_eq!(
+                    call.modified,
+                    if matches!(export, FamilyExport::Package | FamilyExport::Text) {
+                        None
+                    } else {
+                        Some(expected_modified)
+                    }
+                );
+                assert_eq!(call.position, 0);
+                assert!(std::ptr::fn_addr_eq(
+                    call.callback.expect("forwarded callback"),
+                    never_cancel as CancelCallback,
+                ));
+            });
+            source.unchanged();
+            assert_eq!(handles(), baseline);
+        }
+    }
+}
+
+fn container_errors_cancellation() {
+    family_errors_cancellation(&CONTAINER_EXPORTS);
+}
+
+fn structured_errors_cancellation() {
+    family_errors_cancellation(&STRUCTURED_EXPORTS);
+}
+
+fn family_errors_cancellation(exports: &[FamilyExport]) {
+    let mut source = Source::new(7);
+    let input = source.input(HINT.as_bytes());
+    let baseline = handles();
+    let errors = [
+        ReaderPreviewError::Cancelled,
+        ReaderPreviewError::Io,
+        ReaderPreviewError::Malformed,
+        ReaderPreviewError::LengthMismatch,
+        ReaderPreviewError::LimitExceeded,
+    ];
+    for &export in exports {
+        reset(Mode::Success);
+        let mut required = usize::MAX;
+        let invalid = Input {
+            raw: 0,
+            length: 0,
+            name: null(),
+            name_len: 0,
+        };
+        assert_eq!(
+            // SAFETY: Pre-cancellation must reject null input/invalid HANDLE before accessing either.
+            unsafe { export.call(invalid, null_mut(), 0, &mut required, Some(pre_cancel)) },
+            QL_ERROR_CANCELLED
+        );
+        assert_eq!(required, 0);
+        assert_eq!(REOPENS.get(), 0);
+        assert_eq!(calls(), 0);
+        assert_eq!(handles(), baseline);
+        for mode in errors.map(Mode::Error).into_iter().chain([Mode::Empty]) {
+            if matches!(export, FamilyExport::Text) && matches!(mode, Mode::Error(_)) {
+                continue;
+            }
+            reset(mode);
+            let mut out = [0xa5; 64];
+            let mut required = usize::MAX;
+            let expected = match mode {
+                Mode::Error(error) => expected_status(error),
+                Mode::Empty if matches!(export, FamilyExport::Text) => QL_ERROR_IO,
+                Mode::Empty => QL_ERROR_INTERNAL,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                // SAFETY: Borrowed input and exclusive initialized outputs remain live.
+                unsafe { export.call(input, out.as_mut_ptr(), out.len(), &mut required, None) },
+                expected
+            );
+            assert_eq!(required, 0);
+            assert_eq!(calls(), 1);
+            assert_eq!(out, [0xa5; 64]);
+            source.unchanged();
+            assert_eq!(handles(), baseline);
+        }
+
+        for (callback, reopens, readers) in [
+            (pre_cancel as CancelCallback, 0, 0),
+            (cancel_on_second_poll as CancelCallback, 0, 0),
+            (after_reopen as CancelCallback, 1, 0),
+            (after_reader as CancelCallback, 1, 1),
+        ] {
+            reset(Mode::Success);
+            let mut out = [0xa5; 256];
+            let mut required = usize::MAX;
+            assert_eq!(
+                // SAFETY: Callback is static/non-unwinding; all pointer ranges are live and disjoint.
+                unsafe {
+                    export.call(
+                        input,
+                        out.as_mut_ptr(),
+                        out.len(),
+                        &mut required,
+                        Some(callback),
+                    )
+                },
+                QL_ERROR_CANCELLED
+            );
+            assert_eq!(required, 0);
+            assert_eq!(REOPENS.get(), reopens);
+            assert_eq!(calls(), readers);
+            if readers > 0 {
+                CALLS.with(|calls| {
+                    assert!(std::ptr::fn_addr_eq(
+                        calls.borrow()[0]
+                            .callback
+                            .expect("forwarded cancellation callback"),
+                        callback,
+                    ));
+                });
+            }
+            assert_eq!(out, [0xa5; 256]);
+            source.unchanged();
+            assert_eq!(handles(), baseline);
+        }
+
+        reset(Mode::Panic);
+        let mut out = [0xa5; 256];
+        let mut required = usize::MAX;
+        assert_eq!(
+            // SAFETY: Provider panics remain contained by the actual exported FFI boundary.
+            unsafe { export.call(input, out.as_mut_ptr(), out.len(), &mut required, None) },
+            QL_ERROR_INTERNAL
+        );
+        assert_eq!(required, 0);
+        assert_eq!(calls(), 1);
+        assert_eq!(out, [0xa5; 256]);
+        source.unchanged();
+        assert_eq!(handles(), baseline);
+        reset(Mode::Success);
+        assert_eq!(
+            // SAFETY: The source remains borrowed and usable after cancellation and panic unwinding.
+            unsafe { export.call(input, out.as_mut_ptr(), out.len(), &mut required, None) },
+            QL_OK
+        );
+        source.unchanged();
+        assert_eq!(handles(), baseline);
+    }
+}
+
+fn text_empty_semantics() {
+    let mut source = Source::new(7);
+    let input = source.input(HINT.as_bytes());
+    let baseline = handles();
+    reset(Mode::Empty);
+    let mut out = [0xa5; 256];
+    let mut required = usize::MAX;
+    assert_eq!(
+        // SAFETY: Source and initialized outputs are live/disjoint; callback is static/non-unwinding.
+        unsafe {
+            FamilyExport::Text.call(
+                input,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut required,
+                Some(cancel_on_fourth_poll),
+            )
+        },
+        QL_ERROR_CANCELLED
+    );
+    // The callback is true only inside the text-empty branch. The shared post-render
+    // check sees false, so it cannot hide a wrong/missing inner cancellation result.
+    assert_eq!(CANCEL_POLLS.get(), 5);
+    assert_eq!(REOPENS.get(), 1);
+    assert_eq!(calls(), 1);
+    assert_eq!(required, 0);
+    assert_eq!(out, [0xa5; 256]);
+    source.unchanged();
+    assert_eq!(handles(), baseline);
+    reset(Mode::Success);
+    assert_eq!(
+        // SAFETY: A fresh call reuses the still-live borrowed source and exclusive outputs.
+        unsafe { FamilyExport::Text.call(input, out.as_mut_ptr(), out.len(), &mut required, None) },
+        QL_OK
+    );
+    source.unchanged();
+    assert_eq!(handles(), baseline);
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
-    let cases: [(&str, fn()); 7] = [
+    let cases: [(&str, fn()); 12] = [
         ("native_ownership", native_ownership),
         ("handle_outputs", handle_outputs),
         ("handle_arguments", handle_arguments),
@@ -704,12 +1211,24 @@ fn main() {
         ("reader_errors", reader_errors),
         ("handle_cancellation", handle_cancellation),
         ("handle_panics", handle_panics),
+        ("container_dispatch", container_dispatch),
+        (
+            "container_errors_cancellation",
+            container_errors_cancellation,
+        ),
+        ("structured_dispatch", structured_dispatch),
+        (
+            "structured_errors_cancellation",
+            structured_errors_cancellation,
+        ),
+        ("text_empty_semantics", text_empty_semantics),
     ];
+    let group_count = cases.len();
     for (name, probe) in cases {
         if std::panic::catch_unwind(probe).is_err() {
             eprintln!("HANDLE_CONTRACT_FAILED:{name}");
             std::process::exit(1);
         }
     }
-    println!("HANDLE_CONTRACT_PASSED:7");
+    println!("HANDLE_CONTRACT_PASSED:{group_count}");
 }
