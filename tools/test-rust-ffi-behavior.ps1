@@ -3,10 +3,12 @@ param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = 'Stop'
 # Expected runtime assertion failures are inspected, not leaked to the parent guard.
 $PSNativeCommandUseErrorActionPreference = $false
+$behaviorGroupCount = 22
 $Root = [IO.Path]::GetFullPath($Root)
 $sourceRoot = Join-Path $Root 'native/quicklook_next_native/src'
 $fixturePath = Join-Path $PSScriptRoot 'fixtures/rust-ffi-behavior.rs'
 $pathFixturePath = Join-Path $PSScriptRoot 'fixtures/rust-path-preview-behavior.rs'
+$routingFixturePath = Join-Path $PSScriptRoot 'fixtures/rust-routing-behavior.rs'
 $libText = Get-Content -LiteralPath (Join-Path $sourceRoot 'lib.rs') -Raw
 $crateLints = @([regex]::Matches($libText, '(?m)^#!\[(?:deny|forbid)\([^\r\n]*\)\]') |
     ForEach-Object Value) -join "`n"
@@ -18,15 +20,18 @@ $rasterPath = Join-Path $sourceRoot 'ffi/raster_packet.rs'
 $fileProbePath = Join-Path $sourceRoot 'ffi/file_probe.rs'
 $thumbnailPath = Join-Path $sourceRoot 'ffi/thumbnail.rs'
 $pathPreviewPath = Join-Path $sourceRoot 'ffi/path_preview.rs'
+$routingPath = Join-Path $sourceRoot 'ffi/routing.rs'
 $previewFileProbePath = Join-Path $sourceRoot 'preview/file_probe.rs'
 $commonText = (Get-Content -LiteralPath $commonPath -Raw).Replace("`r`n", "`n")
 $rasterText = (Get-Content -LiteralPath $rasterPath -Raw).Replace("`r`n", "`n")
 $fileProbeText = (Get-Content -LiteralPath $fileProbePath -Raw).Replace("`r`n", "`n")
 $thumbnailText = (Get-Content -LiteralPath $thumbnailPath -Raw).Replace("`r`n", "`n")
 $pathPreviewText = (Get-Content -LiteralPath $pathPreviewPath -Raw).Replace("`r`n", "`n")
+$routingText = (Get-Content -LiteralPath $routingPath -Raw).Replace("`r`n", "`n")
 $cancelHelper = [regex]::Match($libText, '(?ms)^fn cancel_requested\([^\r\n]*\) -> bool \{\r?\n.*?^\}').Value
 $stringLimit = [regex]::Match($libText, '(?m)^const MAX_FFI_STRING_BYTES:[^\r\n]*;').Value
-if (-not $cancelHelper -or -not $stringLimit) { throw 'Actual cancellation helper/string limit is missing.' }
+$magicLimit = [regex]::Match($libText, '(?m)^const MAX_FFI_MAGIC_BYTES:[^\r\n]*;').Value
+if (-not $cancelHelper -or -not $stringLimit -or -not $magicLimit) { throw 'Actual cancellation helper/input limits are missing.' }
 
 function Edit-FixtureText([string]$Text, $Case) {
     $prefix = ''
@@ -143,6 +148,38 @@ $cases += @(
     @{ Name = 'path-office-callback'; Expected = 'path_outputs'; File = 'path_preview'; Export = 'ql_preview_office'; Before = 'render_office(path, cancel_cb)'; After = 'render_office(path, cancel_cb.filter(|_| std::hint::black_box(false)))'; Count = 1 }
 )
 
+foreach ($family in @('text', 'archive')) {
+    $export = "ql_is_$family"
+    $call = if ($family -ceq 'text') { 'preview::is_text(ext, magic)' } else { 'preview::is_archive(ext, kind, magic)' }
+    foreach ($mutation in @(
+            @{ Name = 'extension'; Expected = 'routing_classification'; Before = $call; After = $call.Replace('ext,', '{ std::hint::black_box(ext); "wrong" },') },
+            @{ Name = 'magic'; Expected = 'routing_classification'; Before = $call; After = $call.Replace('magic)', '&magic[..0])') },
+            @{ Name = 'true-result'; Expected = 'routing_classification'; Before = "            1`n"; After = "            2`n" },
+            @{ Name = 'false-result'; Expected = 'routing_classification'; Before = "        } else {`n            0`n        }"; After = "        } else {`n            2`n        }" },
+            @{ Name = 'extension-fallback'; Expected = 'routing_optional'; Before = '}.unwrap_or("")'; After = '}.unwrap_or("wrong")'; Count = $(if ($family -ceq 'archive') { 2 } else { 1 }); Occurrence = 0 },
+            @{ Name = 'magic-limit'; Expected = 'routing_optional'; Before = 'magic_len, MAX_FFI_MAGIC_BYTES'; After = 'magic_len, MAX_FFI_MAGIC_BYTES - 1' },
+            @{ Name = 'extension-limit'; Expected = 'routing_optional'; Before = 'ext_len, MAX_FFI_STRING_BYTES'; After = 'ext_len, MAX_FFI_STRING_BYTES - 1' },
+            @{ Name = 'invalid-magic-status'; Expected = 'routing_optional'; Before = 'None => return 0,'; After = 'None => return 1,' })) {
+        $case = @{ Name = "$export-$($mutation.Name)"; Expected = $mutation.Expected; File = 'routing'; Export = $export;
+            Before = $mutation.Before; After = $mutation.After; Count = 1 }
+        if ($mutation.ContainsKey('Count')) { $case.Count = $mutation.Count; $case.Occurrence = $mutation.Occurrence }
+        $cases += $case
+    }
+}
+$cases += @(
+    @{ Name = 'archive-kind'; Expected = 'routing_classification'; File = 'routing'; Export = 'ql_is_archive'; Before = 'preview::is_archive(ext, kind, magic)'; After = 'preview::is_archive(ext, { std::hint::black_box(kind); "wrong" }, magic)'; Count = 1 },
+    @{ Name = 'archive-kind-fallback'; Expected = 'routing_optional'; File = 'routing'; Export = 'ql_is_archive'; Before = '}.unwrap_or("")'; After = '}.unwrap_or("wrong")'; Count = 2; Occurrence = 1 },
+    @{ Name = 'archive-kind-limit'; Expected = 'routing_optional'; File = 'routing'; Export = 'ql_is_archive'; Before = 'kind_len, MAX_FFI_STRING_BYTES'; After = 'kind_len, MAX_FFI_STRING_BYTES - 1'; Count = 1 },
+    @{ Name = 'folder-invalid-path-status'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'None => return 0,'; After = 'None => return -1,'; Count = 1 },
+    @{ Name = 'folder-zero-capacity'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = ' || out_cap == 0'; After = ''; Count = 1 },
+    @{ Name = 'folder-path'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'preview::render_folder(path, cancel_cb)'; After = 'preview::render_folder({ std::hint::black_box(path); "wrong" }, cancel_cb)'; Count = 1 },
+    @{ Name = 'folder-callback'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'preview::render_folder(path, cancel_cb)'; After = 'preview::render_folder(path, cancel_cb.filter(|_| std::hint::black_box(false)))'; Count = 1 },
+    @{ Name = 'folder-payload'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'write_json_out(&json,'; After = 'write_json_out(&json[..0],'; Count = 1 },
+    @{ Name = 'folder-capacity'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'write_json_out(&json, out_buf, out_cap)'; After = 'write_json_out(&json, out_buf, out_cap.saturating_sub(1))'; Count = 1 },
+    @{ Name = 'folder-path-limit'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'path_len, MAX_FFI_STRING_BYTES'; After = 'path_len, MAX_FFI_STRING_BYTES - 1'; Count = 1 },
+    @{ Name = 'folder-renderer'; Expected = 'routing_folder'; File = 'routing'; Export = 'ql_preview_folder'; Before = 'preview::render_folder(path, cancel_cb)'; After = 'preview::render_text(path, cancel_cb)'; Count = 1 }
+)
+
 Push-Location -LiteralPath $Root
 $tempRoot = $null
 try {
@@ -159,6 +196,7 @@ try {
         $selectedFileProbe = $fileProbePath
         $selectedThumbnail = $thumbnailPath
         $selectedPathPreview = $pathPreviewPath
+        $selectedRouting = $routingPath
         if ($case.File) {
             $selectedCommon = Join-Path $tempRoot 'common.rs'
             $selectedRaster = Join-Path $tempRoot 'raster_packet.rs'
@@ -167,16 +205,19 @@ try {
             $selectedFileProbe = Join-Path $selectedFileProbeDirectory 'file_probe.rs'
             $selectedThumbnail = Join-Path $selectedFileProbeDirectory 'thumbnail.rs'
             $selectedPathPreview = Join-Path $selectedFileProbeDirectory 'path_preview.rs'
+            $selectedRouting = Join-Path $selectedFileProbeDirectory 'routing.rs'
             $mutatedCommon = if ($case.File -ceq 'common') { Edit-FixtureText $commonText $case } else { $commonText }
             $mutatedRaster = if ($case.File -ceq 'raster') { Edit-FixtureText $rasterText $case } else { $rasterText }
             $mutatedFileProbe = if ($case.File -ceq 'file_probe') { Edit-FixtureText $fileProbeText $case } else { $fileProbeText }
             $mutatedThumbnail = if ($case.File -ceq 'thumbnail') { Edit-FixtureText $thumbnailText $case } else { $thumbnailText }
             $mutatedPathPreview = if ($case.File -ceq 'path_preview') { Edit-FixtureText $pathPreviewText $case } else { $pathPreviewText }
+            $mutatedRouting = if ($case.File -ceq 'routing') { Edit-FixtureText $routingText $case } else { $routingText }
             [IO.File]::WriteAllText($selectedCommon, $mutatedCommon)
             [IO.File]::WriteAllText($selectedRaster, $mutatedRaster)
             [IO.File]::WriteAllText($selectedFileProbe, $mutatedFileProbe)
             [IO.File]::WriteAllText($selectedThumbnail, $mutatedThumbnail)
             [IO.File]::WriteAllText($selectedPathPreview, $mutatedPathPreview)
+            [IO.File]::WriteAllText($selectedRouting, $mutatedRouting)
             Copy-Item -LiteralPath (Join-Path $sourceRoot 'ffi_pointer_safety.md') `
                 -Destination (Join-Path $tempRoot 'ffi_pointer_safety.md') -Force
         }
@@ -186,18 +227,22 @@ try {
         $fileProbeInclude = $selectedFileProbe.Replace('\', '/')
         $thumbnailInclude = $selectedThumbnail.Replace('\', '/')
         $pathPreviewInclude = $selectedPathPreview.Replace('\', '/')
+        $routingInclude = $selectedRouting.Replace('\', '/')
         $previewFileProbeInclude = $previewFileProbePath.Replace('\', '/')
         $behaviorInclude = $fixturePath.Replace('\', '/')
         $pathBehaviorInclude = $pathFixturePath.Replace('\', '/')
+        $routingBehaviorInclude = $routingFixturePath.Replace('\', '/')
         $body = @"
 $crateLints
 #![allow(dead_code)]
 include!("$abiPath");
 $stringLimit
+$magicLimit
 type CancelCallback = extern "C" fn() -> bool;
 #[path = "$commonInclude"] mod ffi_common;
 #[path = "$rasterInclude"] mod raster_packet;
 #[path = "$pathBehaviorInclude"] mod path_behavior;
+#[path = "$routingBehaviorInclude"] mod routing_behavior;
 mod preview {
     pub fn is_text_file(file_name: &str, ext: &str, magic: &[u8]) -> bool {
         matches!(ext, ".txt" | ".json" | ".md" | ".ini" | ".log") ||
@@ -212,6 +257,7 @@ mod preview {
     ) -> Option<AnimationProbe> { None }
     pub use crate::path_behavior::provider::{render_archive, render_ebook, render_executable,
         render_image_metadata, render_info, render_office, render_text, render_torrent};
+    pub use crate::routing_behavior::provider::{is_text, is_archive, render_folder};
     #[path = "$previewFileProbeInclude"]
     pub mod file_probe;
 }
@@ -222,6 +268,9 @@ const _: [fn(&str, Option<CancelCallback>) -> String; 6] = [preview::render_text
     preview::render_torrent, preview::render_office];
 const _: fn(&str) -> String = preview::render_image_metadata;
 const _: fn(&str, &str, i64, i64) -> String = preview::render_info;
+const _: fn(&str, Option<CancelCallback>) -> String = preview::render_folder;
+const _: fn(&str, &[u8]) -> bool = preview::is_text;
+const _: fn(&str, &str, &[u8]) -> bool = preview::is_archive;
 mod rar_listing {
     pub fn is_rar_magic(magic: &[u8]) -> bool {
         magic.starts_with(b"Rar!\x1A\x07")
@@ -259,6 +308,8 @@ mod ffi {
     pub mod thumbnail;
     #[path = "$pathPreviewInclude"]
     pub mod path_preview;
+    #[path = "$routingInclude"]
+    pub mod routing;
 }
 include!("$behaviorInclude");
 "@
@@ -270,7 +321,7 @@ include!("$behaviorInclude");
         $output = @(& $executable $tempRoot 2>&1)
         $probeExit = $LASTEXITCODE
         if (-not $case.Expected) {
-            if ($probeExit -ne 0 -or ($output -join "`n") -cne 'FFI_CONTRACT_PASSED:18') {
+            if ($probeExit -ne 0 -or ($output -join "`n") -cne "FFI_CONTRACT_PASSED:$behaviorGroupCount") {
                 throw "Positive FFI behavior fixture failed ($($case.Name)): $($output -join "`n")"
             }
         }
@@ -278,7 +329,7 @@ include!("$behaviorInclude");
             throw "Mutation must fail its expected behavior case ($($case.Name)): exit=$probeExit; $($output -join "`n")"
         }
     }
-    Write-Host "Rust FFI behavior contracts passed: 18 cases; 1 positive, $($cases.Count - 1) compiled mutation rejections." -ForegroundColor Green
+    Write-Host "Rust FFI behavior contracts passed: $behaviorGroupCount cases; 1 positive, $($cases.Count - 1) compiled mutation rejections." -ForegroundColor Green
 }
 finally {
     if ($tempRoot -and (Test-Path -LiteralPath $tempRoot)) {

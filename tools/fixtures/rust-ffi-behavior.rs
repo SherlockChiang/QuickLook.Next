@@ -560,7 +560,7 @@ fn panic_void() {
 
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
-    let cases: [(&str, fn()); 18] = [
+    let cases: [(&str, fn()); 22] = [
         ("arguments_text", arguments_text),
         ("arguments_optional", arguments_optional),
         ("arguments_bounds", arguments_bounds),
@@ -579,12 +579,20 @@ fn main() {
         ("path_cancellation", path_behavior::path_cancellation),
         ("path_optional", path_behavior::path_optional),
         ("path_panics", path_behavior::path_panics),
+        (
+            "routing_classification",
+            routing_behavior::routing_classification,
+        ),
+        ("routing_optional", routing_behavior::routing_optional),
+        ("routing_folder", routing_behavior::routing_folder),
+        ("routing_panics", routing_behavior::routing_panics),
     ];
+    let group_count = cases.len();
     for (name, probe) in cases {
         if std::panic::catch_unwind(probe).is_err() {
             eprintln!("FFI_CONTRACT_FAILED:{name}");
             std::process::exit(1);
         }
     }
-    println!("FFI_CONTRACT_PASSED:18");
+    println!("FFI_CONTRACT_PASSED:{group_count}");
 }
