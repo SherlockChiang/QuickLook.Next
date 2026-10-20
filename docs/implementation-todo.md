@@ -272,12 +272,22 @@ reviewable; source edits do not authorize remote publication or destructive clea
         `artifacts/o26-06c9-20261018`; parent remains open.
       - Implementation/fixture commit: `c4429d7`; the results above verify
         the same changed source before that commit.
-    - [ ] `O26-06c.10` Add compiled behavior for the seven `ffi::hero_image`
+    - [x] `O26-06c.10` Add compiled behavior for the seven `ffi::hero_image`
       path/HANDLE exports before replacing equivalent test-name, line-budget
       and forwarding checks. Preserve pinned readers, Office image-reference
       and dimension limits, checked raster packets, typed failures,
       cancellation, output canaries and cleanup. Retain real Office/package
       provider tests and structural ownership/panic/security policies.
+      - Verified 2026-10-20 in the working tree at implementation commit
+        `3c6040a`: the real `ffi::hero_image` module is compiled into the
+        HANDLE behavior probe. Six behavior groups cover path packets and
+        failures, HANDLE packets and failures, argument forwarding, Office
+        image-reference validation and layout dimensions. The focused run
+        passed 24 groups with 25 compiled mutation rejections; the full run
+        passed 24 groups with 137 compiled mutation rejections. Rust formatting,
+        the 365-test native workspace, and whitespace checks passed. No product
+        code, ABI, dependency, or Release payload changed. The parent
+        `O26-06c` remains open for any remaining equivalent source-shape rules.
 - [ ] `O26-07` Extract demonstrated lifecycle/ownership components and consolidate
   shared supervisor primitives with failure and transfer cleanup coverage.
 - [ ] `O26-08` Centralize format facts and migrate linked App policies into a

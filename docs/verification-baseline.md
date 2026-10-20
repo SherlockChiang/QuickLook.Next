@@ -7,6 +7,29 @@ Store certification are separate claims.
 
 ## October external review: host lookup and FFI contracts
 
+### Hero image FFI behavior
+
+On 2026-10-20, `O26-06c.10` was implemented in commit `3c6040a`. The HANDLE
+behavior probe now compiles the actual `ffi::hero_image` module and an
+observable provider fixture. Its six new groups cover the seven path/HANDLE
+exports, checked raster packet output, Office image-reference and dimension
+validation, typed reader failures, cancellation before and after file access,
+output canaries, and reopened-file cleanup.
+
+The focused `HeroImage` run passed 24 behavior groups and rejected 25 compiled
+mutations. The full HANDLE run passed the same 24 groups and rejected 137
+compiled mutations across the complete fixture. Rust formatting and the native
+workspace tests passed with 365 tests and one ignored external-corpus test.
+This batch changes only test tooling and fixtures; it does not change product
+code, the ABI, dependencies, or the Release payload. A full architecture gate
+was not claimed for this batch because the current machine does not expose the
+repository-pinned .NET SDK `10.0.302`; its isolated gate stops at the managed
+ABI fixture when that SDK is unavailable.
+
+The parent `O26-06c` and `O26-06` remain open for any remaining equivalent
+source-shape migrations. Performance, packaging, manual UI, HDR hardware, and
+Store acceptance remain separate evidence tracks.
+
 On 2026-10-12, `O26-01` and the scoped `O26-02` implementation were verified in
 the working tree based on `65843d06c1137993f6745fe789cb92811676f19f`, using the
 pinned local SDK below. This evidence includes the existing uncommitted work;
