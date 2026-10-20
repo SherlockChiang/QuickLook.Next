@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using QuickLook.Next.Contracts;
 using QuickLook.Next.Core;
 using Xunit;
@@ -40,6 +41,7 @@ public sealed class RasterHostStaticImageHandleTests
             ArgumentList = { "--pipe", pipeName, "--session-token", token },
         }) ?? throw new InvalidOperationException("RasterHost did not start");
         bool hostExited = false;
+        var latencySamples = new List<MixedPreviewLatencySample>();
         try
         {
             await pipe.WaitForConnectionAsync(timeout.Token);
@@ -58,6 +60,8 @@ public sealed class RasterHostStaticImageHandleTests
                     string? canceledRequestId = cancelBeforeReceiving
                         ? RandomNumberGenerator.GetHexString(32).ToLowerInvariant()
                         : null;
+                    long? cancelSentTimestamp = null;
+                    var openToComplete = Stopwatch.StartNew();
                     var pinned = WindowsHandleTransfer.OpenPinnedReadOnlyFile(physicalPath);
                     try
                     {
@@ -79,6 +83,7 @@ public sealed class RasterHostStaticImageHandleTests
                             // Cancel without awaiting any preview output, then reopen the same
                             // exact file object with a distinct request and receiver-owned HANDLE.
                             await channel.SendAsync(new PreviewClose(canceledRequestId), timeout.Token);
+                            cancelSentTimestamp = Stopwatch.GetTimestamp();
                         }
                         long handle = WindowsHandleTransfer.DuplicateFileToProcess(pinned.Handle, host.SafeHandle);
                         await channel.SendAsync(new PreviewOpenHandle(
@@ -97,9 +102,22 @@ public sealed class RasterHostStaticImageHandleTests
                     if (previousRequestId is not null)
                         await channel.SendAsync(new PreviewClose(previousRequestId), timeout.Token);
                     await ReceiveStaticImagePreviewAsync(channel, host, requestId, timeout.Token, canceledRequestId);
+                    openToComplete.Stop();
                     Assert.False(TryOverwriteFile(physicalPath));
+                    double? cancelToReadyMs = cancelSentTimestamp is long cancelTimestamp
+                        ? Stopwatch.GetElapsedTime(cancelTimestamp).TotalMilliseconds
+                        : null;
                     await channel.SendAsync(new PreviewClose(requestId), timeout.Token);
+                    var closeToWritable = Stopwatch.StartNew();
                     await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
+                    closeToWritable.Stop();
+                    latencySamples.Add(new MixedPreviewLatencySample(
+                        sample.Extension,
+                        round,
+                        cancelBeforeReceiving,
+                        openToComplete.Elapsed.TotalMilliseconds,
+                        cancelToReadyMs,
+                        closeToWritable.Elapsed.TotalMilliseconds));
                     Assert.False(host.HasExited);
                     previousRequestId = requestId;
                 }
@@ -111,6 +129,7 @@ public sealed class RasterHostStaticImageHandleTests
             finally { try { File.Delete(physicalPath); } catch { } }
         }
         RasterHostProcessTestHelper.AssertCleanExit(host, hostExited);
+        WriteMixedPreviewLatencyReport(latencySamples, cancelBeforeReceiving);
     }
 
     [Fact]
@@ -1023,6 +1042,39 @@ public sealed class RasterHostStaticImageHandleTests
             return false;
         }
     }
+
+    private static void WriteMixedPreviewLatencyReport(
+        IReadOnlyCollection<MixedPreviewLatencySample> samples,
+        bool cancelBeforeReceiving)
+    {
+        string? directory = Environment.GetEnvironmentVariable("QL_RASTER_LATENCY_REPORT_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+            return;
+
+        Directory.CreateDirectory(directory);
+        string suffix = cancelBeforeReceiving ? "cancel-before-receiving" : "normal";
+        string path = Path.Combine(directory, $"mixed-format-{suffix}.json");
+        var report = new MixedPreviewLatencyReport(
+            "quicklook-next.raster-mixed-latency.v1",
+            DateTimeOffset.UtcNow,
+            cancelBeforeReceiving,
+            samples);
+        File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+    }
+
+    private sealed record MixedPreviewLatencyReport(
+        string Schema,
+        DateTimeOffset GeneratedUtc,
+        bool CancelBeforeReceiving,
+        IReadOnlyCollection<MixedPreviewLatencySample> Samples);
+
+    private sealed record MixedPreviewLatencySample(
+        string Format,
+        int Round,
+        bool CancelBeforeReceiving,
+        double OpenToCompleteMs,
+        double? CancelToReadyMs,
+        double CloseToWritableMs);
 
     private static byte[] CreateOnePixelBmp()
     {
