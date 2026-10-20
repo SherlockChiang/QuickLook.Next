@@ -339,6 +339,20 @@ gate pass. Standalone checks retain their separately recorded results.
       passed. GitHub `v1.0.1`, Store candidate run `33403260965`, and both
       locally retained Store package hashes were verified against `a64b60c`;
       current Partner Center certification was explicitly not inferred.
+  - [x] `E26-01b-current` Re-run the complete `tools/release.ps1 -SkipPackage`
+    sequence against the current post-hero-image commits with the bundled
+    pinned SDK `10.0.302`, preserving the tested-payload proof and exact test
+    counts.
+    - Verified 2026-10-20 after implementation commit `3c6040a` and recorded
+      in the following documentation commit: Release 1.0.1 passed with
+      Rust 365/1 ignored, Core 390, ParserHost 49, RasterHost 53, and
+      ShellBroker 13. The solution build produced 0 warnings and 0 errors;
+      locked restore, formatting, Clippy, native MSBuild, ABI/FFI guards,
+      restricted-host launch, native image corpus 10/10, system image corpus
+      4/5, and the complete architecture gate all passed. JXL remains
+      unavailable under the optional-codec policy. Packaging, installation,
+      manual UI, HDR hardware, Store, remote CI, and publication evidence
+      remain open.
   - [ ] `E26-01d` Validate local packaging and preserve the tested-payload proof.
     Record the exact source/version/artifact identity. Product installation,
     Store acquisition, remote integration PR, and publication need owner approval.

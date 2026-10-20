@@ -30,6 +30,23 @@ The parent `O26-06c` and `O26-06` remain open for any remaining equivalent
 source-shape migrations. Performance, packaging, manual UI, HDR hardware, and
 Store acceptance remain separate evidence tracks.
 
+### Current pinned release baseline
+
+On 2026-10-20, the complete `tools/release.ps1 -SkipPackage` sequence passed
+against the current post-hero-image source with the bundled SDK `10.0.302` and
+Rust `1.96.0`. Release 1.0.1 built with zero warnings and zero errors. The
+locked restore, Rust formatting, all-target/all-feature Clippy, native tests,
+native MSBuild, managed Release build and tests, ABI metadata, FFI behavior,
+restricted-host, image corpus, format, installer, localization, and complete
+architecture checks passed.
+
+The test counts were Rust 365 passed with one ignored external-corpus test,
+Core 390, ParserHost 49, RasterHost 53, and ShellBroker 13. The native corpus
+decoded 10/10 samples. The system codec corpus decoded 4/5 samples; JXL was
+unavailable under the existing optional-codec policy. This run produced the
+tested build proof and did not package, install, sign, publish, or perform manual
+UI, physical HDR, Store, or remote CI acceptance.
+
 On 2026-10-12, `O26-01` and the scoped `O26-02` implementation were verified in
 the working tree based on `65843d06c1137993f6745fe789cb92811676f19f`, using the
 pinned local SDK below. This evidence includes the existing uncommitted work;
