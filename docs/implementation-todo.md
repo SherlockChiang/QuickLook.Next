@@ -353,6 +353,13 @@ gate pass. Standalone checks retain their separately recorded results.
       unavailable under the optional-codec policy. Packaging, installation,
       manual UI, HDR hardware, Store, remote CI, and publication evidence
       remain open.
+    - Re-run verified 2026-10-20 after the latency instrumentation commits
+      `bcb138a` and `7579b93`: Release 1.0.1 passed with Rust 364/1 ignored,
+      Core 390, ParserHost 49, RasterHost 53, and ShellBroker 13. The separate
+      external image smoke passed 10/10; system image smoke decoded 4/5 with
+      optional JXL unavailable. The tested-release proof is recorded at
+      `artifacts/.tested-release-build.json`; packaging and manual release
+      acceptance remain open.
   - [ ] `E26-01d` Validate local packaging and preserve the tested-payload proof.
     Record the exact source/version/artifact identity. Product installation,
     Store acquisition, remote integration PR, and publication need owner approval.

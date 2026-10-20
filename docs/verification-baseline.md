@@ -47,6 +47,17 @@ unavailable under the existing optional-codec policy. This run produced the
 tested build proof and did not package, install, sign, publish, or perform manual
 UI, physical HDR, Store, or remote CI acceptance.
 
+A complete rerun was performed after the mixed-format latency instrumentation
+commits `bcb138a` and `7579b93`, using the same bundled SDK and source at
+`7579b938ce27a69e1a59dceba9fd4c2971b1a9cd`. Release 1.0.1 again passed with
+zero build warnings and errors. The current run reported Rust 364 passed and
+one ignored test, Core 390, ParserHost 49, RasterHost 53, and ShellBroker 13.
+The separate external image corpus smoke passed 10/10; the system image corpus
+decoded 4/5 because JXL remains unavailable under the optional-codec policy.
+The tested-release proof records the current payload identity and hashes under
+`artifacts/.tested-release-build.json`. Packaging, installation, manual UI,
+physical HDR, Store, remote CI, and publication acceptance remain open.
+
 ### Current build and preview measurements
 
 On 2026-10-20, `tools/measure-build-baseline.ps1 -Iterations 2` collected a
