@@ -1,8 +1,11 @@
-param([string]$Root = (Split-Path $PSScriptRoot -Parent))
+param(
+    [string]$Root = (Split-Path $PSScriptRoot -Parent),
+    [ValidateSet('All', 'HeroImage')][string]$MutationFamily = 'All'
+)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-$behaviorGroupCount = 18
+$behaviorGroupCount = 24
 $Root = [IO.Path]::GetFullPath($Root)
 $sourceRoot = Join-Path $Root 'native/quicklook_next_native/src'
 $fixturePath = Join-Path $PSScriptRoot 'fixtures/rust-handle-preview-behavior.rs'
@@ -10,17 +13,21 @@ $handlePath = Join-Path $sourceRoot 'ffi/handle_preview.rs'
 $containerPath = Join-Path $sourceRoot 'ffi/handle_container.rs'
 $structuredPath = Join-Path $sourceRoot 'ffi/handle_structured.rs'
 $databasePath = Join-Path $sourceRoot 'ffi/database.rs'
+$heroPath = Join-Path $sourceRoot 'ffi/hero_image.rs'
 $inputPath = Join-Path $sourceRoot 'native_input.rs'
 $handleText = (Get-Content -LiteralPath $handlePath -Raw).Replace("`r`n", "`n")
 $containerText = (Get-Content -LiteralPath $containerPath -Raw).Replace("`r`n", "`n")
 $structuredText = (Get-Content -LiteralPath $structuredPath -Raw).Replace("`r`n", "`n")
 $databaseText = (Get-Content -LiteralPath $databasePath -Raw).Replace("`r`n", "`n")
+$heroText = (Get-Content -LiteralPath $heroPath -Raw).Replace("`r`n", "`n")
 $inputText = (Get-Content -LiteralPath $inputPath -Raw).Replace("`r`n", "`n")
 $libText = Get-Content -LiteralPath (Join-Path $sourceRoot 'lib.rs') -Raw
 $crateLints = @([regex]::Matches($libText, '(?m)^#!\[(?:deny|forbid)\([^\r\n]*\)\]') | ForEach-Object Value) -join "`n"
 $logicalLimit = [regex]::Match($libText, '(?m)^const MAX_LOGICAL_NAME_BYTES:[^\r\n]*;').Value
 $pathLimit = [regex]::Match($libText, '(?m)^const MAX_FFI_STRING_BYTES:[^\r\n]*;').Value
+$imageRefLimit = [regex]::Match($libText, '(?m)^const MAX_OFFICE_IMAGE_REF_BYTES:[^\r\n]*;').Value
 $previewText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview.rs') -Raw
+$layoutDimension = [regex]::Match($previewText, '(?m)^pub\(crate\) const MAX_OFFICE_LAYOUT_IMAGE_DIMENSION:[^\r\n]*;').Value
 $databaseLimits = @([regex]::Matches($previewText, '(?m)^pub\(crate\) const MAX_(?:DATABASE_HANDLE|SQLITE_WAL|SQLITE_SHM)_BYTES:[^\r\n]*;') | ForEach-Object Value)
 $databaseProviderText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview/database/mod.rs') -Raw
 $companionReader = [regex]::Match($databaseProviderText, '(?ms)^pub\(crate\) struct DatabaseCompanionReader<[^\r\n]+\{.*?^\}').Value
@@ -28,7 +35,8 @@ $cancelHelper = [regex]::Match($libText, '(?ms)^fn cancel_requested\([^\r\n]*\) 
 $typesText = Get-Content -LiteralPath (Join-Path $sourceRoot 'preview/types.rs') -Raw
 $readerError = [regex]::Match($typesText, '(?ms)^#\[derive\([^\r\n]*\)\]\r?\npub\(crate\) enum ReaderPreviewError \{.*?^\}').Value
 if ($crateLints -notmatch 'unsafe_op_in_unsafe_fn' -or $crateLints -notmatch 'clippy::undocumented_unsafe_blocks' -or
-    -not $logicalLimit -or -not $pathLimit -or $databaseLimits.Count -ne 3 -or -not $companionReader -or
+    -not $logicalLimit -or -not $pathLimit -or -not $imageRefLimit -or -not $layoutDimension -or
+    $databaseLimits.Count -ne 3 -or -not $companionReader -or
     -not $cancelHelper -or -not $readerError) { throw 'Actual HANDLE safety/type contracts are missing.' }
 
 function Edit-HandleFixture([string]$Text, $Case) {
@@ -268,6 +276,62 @@ foreach ($limit in @(
     }
 }
 
+# Hero image adapters: compile each forwarding/guard mutation against the real FFI module,
+# then require the observable provider/argument/output behavior to reject it.
+foreach ($export in @('ql_extract_package_icon', 'ql_extract_office_image')) {
+    $provider = if ($export -ceq 'ql_extract_package_icon') { 'preview::extract_package_icon_bgra(path, None)' } else { 'preview::extract_office_image_bgra(path, None)' }
+    $wrongProvider = if ($export -ceq 'ql_extract_package_icon') { 'preview::extract_office_image_bgra(path, None)' } else { 'preview::extract_package_icon_bgra(path, None)' }
+    $cases += @{ Name = "$export-provider"; Target = 'hero'; Scope = $export; Expected = 'hero_path_packets'; Before = $provider; After = $wrongProvider; Count = 1 }
+    $cases += @{ Name = "$export-writer"; Target = 'hero'; Scope = $export; Expected = 'hero_path_packets'; Before = 'write_raster_packet(w, h, &bgra, out, out_cap)'; After = 'write_raster_packet(w, h, &bgra[..4], out, out_cap)'; Count = 1 }
+}
+foreach ($export in @('ql_extract_package_icon_cancelable', 'ql_extract_office_image_cancelable')) {
+    $family = if ($export -ceq 'ql_extract_package_icon_cancelable') { 'package' } else { 'office' }
+    $provider = "preview::extract_${family}_image_bgra(path, cancel_cb)"
+    if ($family -ceq 'package') { $provider = 'preview::extract_package_icon_bgra(path, cancel_cb)' }
+    $wrongProvider = if ($family -ceq 'package') { 'preview::extract_office_image_bgra(path, cancel_cb)' } else { 'preview::extract_package_icon_bgra(path, cancel_cb)' }
+    $cases += @{ Name = "$export-provider"; Target = 'hero'; Scope = $export; Expected = 'hero_path_packets'; Before = $provider; After = $wrongProvider; Count = 1 }
+    $cases += @{ Name = "$export-boundary-callback"; Target = 'hero'; Scope = $export; Expected = 'hero_path_failures'; Before = 'if cancel_requested(cancel_cb) {'; After = 'if cancel_requested(None) {'; Count = 3; Occurrence = 0 }
+    $cases += @{ Name = "$export-post-callback"; Target = 'hero'; Scope = $export; Expected = 'hero_path_failures'; Before = 'if cancel_requested(cancel_cb) {'; After = 'if cancel_requested(None) {'; Count = 3; Occurrence = 2 }
+}
+
+foreach ($export in @('ql_extract_office_image_handle', 'ql_extract_package_icon_handle')) {
+    $family = if ($export -ceq 'ql_extract_office_image_handle') { 'office' } else { 'package' }
+    $provider = if ($family -ceq 'office') {
+        "preview::extract_office_image_bgra_reader(`n            file,`n            expected_length,`n            &logical_name,`n            cancel_cb,`n        )"
+    } else {
+        "preview::extract_package_icon_bgra_reader(`n            file,`n            expected_length,`n            &logical_name,`n            cancel_cb,`n        )"
+    }
+    $wrongProvider = if ($family -ceq 'office') {
+        "preview::extract_office_image_bgra_reader(`n            file,`n            expected_length.saturating_sub(1),`n            &logical_name,`n            cancel_cb,`n        )"
+    } else {
+        "preview::extract_package_icon_bgra_reader(`n            file,`n            expected_length.saturating_sub(1),`n            &logical_name,`n            cancel_cb,`n        )"
+    }
+    $cases += @{ Name = "$export-provider-length"; Target = 'hero'; Scope = $export; Expected = 'hero_handle_packets'; Before = $provider; After = $wrongProvider; Count = 1 }
+    $cases += @{ Name = "$export-provider-callback"; Target = 'hero'; Scope = $export; Expected = 'hero_handle_packets'; Before = $provider; After = $provider.Replace('cancel_cb', 'None'); Count = 1 }
+    $cases += @{ Name = "$export-reader-status"; Target = 'hero'; Scope = $export; Expected = 'hero_handle_failures'; Before = 'Err(error) => return reader_preview_status(error),'; After = 'Err(_) => return crate::QL_ERROR_INTERNAL,'; Count = 1 }
+}
+
+foreach ($mutation in @(
+        @{ Name = 'layout-dimension-zero'; Before = 'target_width == 0'; After = 'std::hint::black_box(false) && target_width == 0'; Expected = 'hero_handle_arguments' },
+        @{ Name = 'layout-dimension-limit'; Before = 'target_width > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION'; After = 'std::hint::black_box(false) && target_width > preview::MAX_OFFICE_LAYOUT_IMAGE_DIMENSION'; Expected = 'hero_handle_arguments' },
+        @{ Name = 'layout-name-validation'; Before = 'if !preview::office_layout_image_ref_is_valid(&logical_name, &image_ref) {'; After = 'if std::hint::black_box(false) && !preview::office_layout_image_ref_is_valid(&logical_name, &image_ref) {'; Expected = 'hero_handle_packets' },
+        @{ Name = 'layout-ref-limit'; Before = 'owned_utf8_arg(image_ref_utf8, image_ref_len, MAX_OFFICE_IMAGE_REF_BYTES)'; After = 'owned_utf8_arg(image_ref_utf8, image_ref_len, std::hint::black_box(MAX_OFFICE_IMAGE_REF_BYTES).saturating_sub(MAX_OFFICE_IMAGE_REF_BYTES - 1))'; Expected = 'hero_handle_packets' },
+        @{ Name = 'layout-ref-forwarding'; Before = "            &image_ref,`n            target_width,"; After = "            `"wrong-ref`",`n            target_width,"; Expected = 'hero_handle_packets' },
+        @{ Name = 'layout-width-forwarding'; Before = "            target_width,`n            target_height,"; After = "            target_width.saturating_add(1),`n            target_height,"; Expected = 'hero_handle_packets' },
+        @{ Name = 'layout-height-forwarding'; Before = "            target_width,`n            target_height,"; After = "            target_width,`n            target_height.saturating_add(1),"; Expected = 'hero_handle_packets' })) {
+    $cases += @{ Name = "ql_extract_office_layout_image_handle-$($mutation.Name)"; Target = 'hero'; Scope = 'ql_extract_office_layout_image_handle'; Expected = $mutation.Expected; Before = $mutation.Before; After = $mutation.After; Count = 1 }
+}
+foreach ($mutation in @(
+        @{ Name = 'required-reset'; Before = '*out_required = 0'; After = '*out_required = 1'; Expected = 'hero_handle_arguments' },
+        @{ Name = 'output-capacity'; Before = 'write_raster_packet_v2(width, height, &bgra, out_buf, out_cap, out_required)'; After = 'write_raster_packet_v2(width, height, &bgra, out_buf, out_cap.saturating_sub(1), out_required)'; Expected = 'hero_handle_packets' })) {
+    $cases += @{ Name = "hero-$($mutation.Name)"; Target = 'hero'; Scope = 'ql_extract_package_icon_handle'; Expected = $mutation.Expected; Before = $mutation.Before; After = $mutation.After; Count = 1 }
+}
+
+# The architecture gate always uses All. A focused run is diagnostic, not full acceptance.
+if ($MutationFamily -ceq 'HeroImage') {
+    $cases = @($cases | Where-Object { -not $_.Expected -or $_.Target -ceq 'hero' })
+}
+
 Push-Location -LiteralPath $Root
 $tempRoot = $null
 try {
@@ -294,10 +358,17 @@ try {
         $selectedContainer = $containerPath
         $selectedStructured = $structuredPath
         $selectedDatabase = $databasePath
+        $selectedHero = $heroPath
         $selectedInput = $inputPath
         if ($case.Expected) {
             $selectedInput = Join-Path $tempRoot 'native_input.rs'
-            if ($case.Target -ceq 'database') {
+            if ($case.Target -ceq 'hero') {
+                $selectedHero = Join-Path $tempRoot 'hero_image.rs'
+                $heroMutant = (Edit-HandleFixture $heroText $case).Replace('../ffi_pointer_safety.md',
+                    (Join-Path $sourceRoot 'ffi_pointer_safety.md').Replace('\', '/'))
+                [IO.File]::WriteAllText($selectedHero, $heroMutant)
+            }
+            elseif ($case.Target -ceq 'database') {
                 $selectedDatabase = Join-Path $tempRoot 'database.rs'
                 # Preserve the actual pointer-contract documentation when relocating only this mutant.
                 $databaseMutant = (Edit-HandleFixture $databaseText $case).Replace('../ffi_pointer_safety.md',
@@ -320,11 +391,14 @@ try {
         }
         $abiInclude = (Join-Path $sourceRoot 'abi_generated.rs').Replace('\', '/')
         $commonInclude = (Join-Path $sourceRoot 'ffi/common.rs').Replace('\', '/')
+        $rasterInclude = (Join-Path $sourceRoot 'ffi/raster_packet.rs').Replace('\', '/')
         $probeInclude = (Join-Path $sourceRoot 'preview/file_probe.rs').Replace('\', '/')
         $handleInclude = $selectedHandle.Replace('\', '/')
         $containerInclude = $selectedContainer.Replace('\', '/')
         $structuredInclude = $selectedStructured.Replace('\', '/')
         $databaseInclude = $selectedDatabase.Replace('\', '/')
+        $heroInclude = $selectedHero.Replace('\', '/')
+        $heroFixtureInclude = (Join-Path $PSScriptRoot 'fixtures/rust-hero-image-behavior.rs').Replace('\', '/')
         $databaseFixtureInclude = (Join-Path $PSScriptRoot 'fixtures/rust-database-behavior.rs').Replace('\', '/')
         $inputInclude = $selectedInput.Replace('\', '/')
         $fixtureInclude = $fixturePath.Replace('\', '/')
@@ -334,6 +408,7 @@ $crateLints
 include!("$abiInclude");
 $logicalLimit
 $pathLimit
+$imageRefLimit
 type CancelCallback = extern "C" fn() -> bool;
 $cancelHelper
 #[path = "$commonInclude"] mod ffi_common;
@@ -346,6 +421,7 @@ mod preview {
     #![forbid(unsafe_code)]
     use std::io::Read;
     $readerError
+    $layoutDimension
     $($databaseLimits -join "`n")
     $companionReader
     pub fn is_text_file(_name: &str, ext: &str, _bytes: &[u8]) -> bool { ext == ".txt" }
@@ -357,6 +433,12 @@ mod preview {
         archive_reader as render_archive_reader,
         database_path as render_database_info,
         database_reader as render_database_reader,
+        hero_office_path as extract_office_image_bgra,
+        hero_package_path as extract_package_icon_bgra,
+        hero_office_reader as extract_office_image_bgra_reader,
+        hero_package_reader as extract_package_icon_bgra_reader,
+        hero_layout_reader as extract_office_layout_image_bgra_reader,
+        hero_validate_ref as office_layout_image_ref_is_valid,
         ebook_reader as render_ebook_reader,
         executable_reader as render_executable_reader,
         image_reader as render_image_metadata_reader,
@@ -375,9 +457,12 @@ mod ffi {
     #[path = "$containerInclude"] pub mod handle_container;
     #[path = "$structuredInclude"] pub mod handle_structured;
     #[path = "$databaseInclude"] pub mod database;
+    #[path = "$heroInclude"] pub mod hero_image;
+    #[path = "$rasterInclude"] pub mod raster_packet;
 }
 include!("$fixtureInclude");
 include!("$databaseFixtureInclude");
+include!("$heroFixtureInclude");
 "@
         [IO.File]::WriteAllText($wrapper, $body)
         $compiled = @(& $driver $wrapper --edition=2021 --crate-name=rust_handle_preview_behavior `
@@ -392,7 +477,7 @@ include!("$databaseFixtureInclude");
             throw "Unexpected HANDLE behavior ($($case.Name)): exit=$probeExit; $($output -join "`n")"
         }
     }
-    Write-Host "Rust HANDLE behavior passed: $behaviorGroupCount groups; 1 positive, $($cases.Count - 1) compiled mutation rejections; real Win32 reopen." -ForegroundColor Green
+    Write-Host "Rust HANDLE behavior passed: $behaviorGroupCount groups; 1 positive, $($cases.Count - 1) compiled mutation rejections; real Win32 reopen; mutation family=$MutationFamily." -ForegroundColor Green
 }
 finally {
     if ($tempRoot -and (Test-Path -LiteralPath $tempRoot)) {

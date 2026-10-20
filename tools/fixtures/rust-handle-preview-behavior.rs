@@ -16,6 +16,7 @@ use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount
 const DATA: &[u8] = b"pinned bytes";
 const HINT: &str = "C:\\not-authority\\renamed-é.txt";
 const BASENAME: &str = "renamed-é.txt";
+const LAYOUT_HINT: &str = "C:\\not-authority\\report.docx";
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -49,6 +50,8 @@ fn reset(mode: Mode) {
     CALLS.with(|calls| calls.borrow_mut().clear());
     DATABASE_PATH_CALLS.with(|calls| calls.borrow_mut().clear());
     DATABASE_CALLS.with(|calls| calls.borrow_mut().clear());
+    HERO_CALLS.with(|calls| calls.borrow_mut().clear());
+    HERO_VALIDATIONS.with(|calls| calls.borrow_mut().clear());
     CANCEL_POLLS.set(0);
 }
 
@@ -1225,7 +1228,7 @@ fn text_empty_semantics() {
 
 fn main() {
     std::panic::set_hook(Box::new(|_| {}));
-    let cases: [(&str, fn()); 18] = [
+    let cases: [(&str, fn()); 24] = [
         ("native_ownership", native_ownership),
         ("handle_outputs", handle_outputs),
         ("handle_arguments", handle_arguments),
@@ -1250,6 +1253,12 @@ fn main() {
         ("database_arguments", database_arguments),
         ("database_limits", database_limits),
         ("database_errors_cancellation", database_errors_cancellation),
+        ("hero_path_packets", hero_path_packets),
+        ("hero_path_failures", hero_path_failures),
+        ("hero_handle_packets", hero_handle_packets),
+        ("hero_handle_arguments", hero_handle_arguments),
+        ("hero_layout_validation", hero_layout_validation),
+        ("hero_handle_failures", hero_handle_failures),
     ];
     let group_count = cases.len();
     for (name, probe) in cases {
