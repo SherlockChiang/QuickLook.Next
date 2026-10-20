@@ -47,6 +47,24 @@ unavailable under the existing optional-codec policy. This run produced the
 tested build proof and did not package, install, sign, publish, or perform manual
 UI, physical HDR, Store, or remote CI acceptance.
 
+### Current build and preview measurements
+
+On 2026-10-20, `tools/measure-build-baseline.ps1 -Iterations 2` collected a
+current Release build report with SDK `10.0.302`. The median times were
+36.837 seconds for clean builds, 23.630 seconds for incremental builds, and
+21.490 seconds for no-change builds. Clean preparation and dependency restore
+are outside the timed interval; the report is an observation and does not set a
+performance budget. The report and per-run logs remain under ignored
+`artifacts/`.
+
+The preview extractor was also run against the current local App and RasterHost
+logs. It found 146 ParserHost resource samples: private bytes were 14.3 MiB
+at p50 and p95, and HANDLE count was 263 at p50 and p95. The logs contained no
+parseable lifecycle preview, first-paint, cancellation, or RasterHost image-stage
+samples, so those statistics remain null. The current data does not justify a
+numeric responsiveness or decode budget; a mixed desktop input corpus and true
+host-drain cancellation run are still required.
+
 On 2026-10-12, `O26-01` and the scoped `O26-02` implementation were verified in
 the working tree based on `65843d06c1137993f6745fe789cb92811676f19f`, using the
 pinned local SDK below. This evidence includes the existing uncommitted work;

@@ -368,6 +368,15 @@ gate pass. Standalone checks retain their separately recorded results.
     incremental, and no-change Release timings. The preview corpus and true
     host-drain cancellation samples remain open until a repeatable desktop run
     is available.
+  - [x] Re-run the build extractor against the current post-hero-image source
+    with SDK `10.0.302` and preserve the report under ignored `artifacts/`.
+    The two-iteration Release baseline recorded clean median 36.837s,
+    incremental median 23.630s, and no-change median 21.490s.
+  - [x] Run the preview extractor against the current local App and RasterHost
+    logs without inventing missing lifecycle samples. The report contains 146
+    ParserHost resource samples with private-bytes p50/p95 14.3 MiB and HANDLE
+    p50/p95 263, but zero first-paint, cancellation, and RasterHost image-stage
+    samples. Mixed desktop input and host-drain evidence remains open.
 - [ ] `E26-03` Improve input responsiveness using the measured baseline.
   Separate Explorer selection COM work from the Rust hook message pump, bound
   and coalesce queued work, and preserve generation/cancellation ownership.
