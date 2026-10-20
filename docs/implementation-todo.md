@@ -377,6 +377,14 @@ gate pass. Standalone checks retain their separately recorded results.
     ParserHost resource samples with private-bytes p50/p95 14.3 MiB and HANDLE
     p50/p95 263, but zero first-paint, cancellation, and RasterHost image-stage
     samples. Mixed desktop input and host-drain evidence remains open.
+  - [x] Add and run `tools/measure-raster-latency.ps1` against the Release
+    RasterHost integration fixture. The current report has 12 samples per mode
+    across PNG/ICO/JPEG/BMP: normal open-to-complete 11.08 ms p50 / 58.27 ms
+    p95, immediate-close cancellation-to-replacement 11.94 ms p50 / 84.40 ms
+    p95, and close-to-writable recovery below 1 ms p50 in both modes. The
+    fixture is repeatable evidence for the mixed-format source and ownership
+    recovery path; it is not first-paint or direct worker-drain latency and does
+    not set a product-wide budget.
 - [ ] `E26-03` Improve input responsiveness using the measured baseline.
   Separate Explorer selection COM work from the Rust hook message pump, bound
   and coalesce queued work, and preserve generation/cancellation ownership.
@@ -386,8 +394,11 @@ gate pass. Standalone checks retain their separately recorded results.
     one-item bounded request channel; the hook pump now only classifies input,
     arms/cancels its timer, and posts bounded work. Close-generation tokens drop
     queued stale OPEN/SWITCH requests.
-  - [ ] Add/collect the mixed input-flow latency corpus and host-drain
-    cancellation evidence before setting a numeric responsiveness budget.
+  - [ ] Extend the mixed input-flow corpus to real desktop navigation and
+    collect direct host-drain cancellation evidence before setting a numeric
+    responsiveness budget. The current RasterHost fixture supplies a
+    repeatable mixed-format integration source but remains a proxy for those
+    desktop and worker-drain measurements.
 - [ ] `E26-04` Reduce measured image and retained-resource costs.
   Prioritize the static HANDLE packet's intermediate BGRA copy, then codec
   target-size decode and cancellation where measurements justify them. Extend

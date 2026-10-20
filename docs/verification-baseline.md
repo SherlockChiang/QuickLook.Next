@@ -65,6 +65,18 @@ samples, so those statistics remain null. The current data does not justify a
 numeric responsiveness or decode budget; a mixed desktop input corpus and true
 host-drain cancellation run are still required.
 
+The repeatable RasterHost mixed-format probe was then run with the bundled
+`10.0.302` SDK. It covered 12 PNG/ICO/JPEG/BMP opens in each mode (normal and
+close-before-receiving) and wrote `artifacts/raster-latency-working.json` using
+the `quicklook-next.raster-latency.v1` schema. Normal open-to-complete latency
+was 11.08 ms p50 / 58.27 ms p95; close-to-writable recovery was 0.44 ms p50 /
+33.00 ms p95. The immediate-close mode measured 11.94 ms p50 / 84.40 ms p95
+from cancellation to replacement completion, with 0.46 ms p50 / 0.86 ms p95
+close-to-writable recovery. These are host integration observations rather than
+first-paint or direct worker-drain measurements; the report records the fixed
+small corpus and those limitations. They establish a reproducible mixed-format
+sample source, but do not set a product-wide budget.
+
 On 2026-10-12, `O26-01` and the scoped `O26-02` implementation were verified in
 the working tree based on `65843d06c1137993f6745fe789cb92811676f19f`, using the
 pinned local SDK below. This evidence includes the existing uncommitted work;
