@@ -371,6 +371,11 @@ gate pass. Standalone checks retain their separately recorded results.
     The independent `tools/test-release-artifacts.ps1` guard also passed against
     the ZIP, checksum, expected certificate, version `1.0.1.65535`, and tested
     `dist/` tree without installing or changing a certificate store.
+    With owner authorization, the installer was then run on 2026-10-21 over the
+    existing 1.0.0.5 package. The current-user package upgraded to 1.0.1.65535,
+    reported status `Ok`, and launched App, RasterHost, and ParserHost with
+    successful readiness handshakes. The App was closed normally after the check;
+    uninstall and Store acquisition remain separate acceptance steps.
 - [ ] `E26-02` Establish measurable preview and build performance baselines.
   Reuse lifecycle timing and host tests; record cold/warm first paint and
   cancellation p50/p95, sample counts, private bytes, HANDLE counts, and recovery

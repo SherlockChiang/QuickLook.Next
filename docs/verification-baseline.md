@@ -84,6 +84,20 @@ the exact eight-file installer contents, embedded MSIX signer and certificate,
 manifest identity and architecture, required host payloads, and selected hashes
 against `dist/` without installing the package or changing a certificate store.
 
+### Local installation and startup verification
+
+With owner authorization, the generated installer ZIP was extracted to a
+temporary directory and its bundled `Install.ps1` was run on 2026-10-21. The
+machine already had QuickLook Next `1.0.0.5`; the script upgraded the current
+user package to `SherlockChiang.QuickLookNext_1.0.1.65535_x64__h15wpwpnx7nvt`.
+Post-install checks reported package status `Ok`, publisher `CN=QuickLook Next
+Development`, x64 architecture, and the expected manifest identity and
+executable. The installed App, ParserHost, RasterHost, and ShellBroker files
+were present; launching the installed App produced one App process, started
+RasterHost and ParserHost, completed both pipe handshakes, and reached HostReady
+and ParserHost ready states in the application logs. The App was then closed
+normally; no package was removed and no certificate trust was deleted.
+
 ### Current build and preview measurements
 
 On 2026-10-20, `tools/measure-build-baseline.ps1 -Iterations 2` collected a
