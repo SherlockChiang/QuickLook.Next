@@ -58,6 +58,25 @@ The tested-release proof records the current payload identity and hashes under
 `artifacts/.tested-release-build.json`. Packaging, installation, manual UI,
 physical HDR, Store, remote CI, and publication acceptance remain open.
 
+### Current local package candidate
+
+On 2026-10-21, `tools/pack-msix.ps1 -SkipBuild` was run against the tested
+Release payload at commit `8dc32c0` with the bundled SDK `10.0.302` and the
+repository release certificate. The packager validated the tested payload,
+generated the MSIX, signed it successfully, created the installer ZIP, and
+validated the installer script, embedded MSIX signature, manifest, and payload.
+
+| Artifact | Size | SHA-256 |
+|---|---:|---|
+| `QuickLook.Next-1.0.1-win-x64.msix` | 52,103,821 bytes | `621CFA59624F05EEE78257C05E61CDCF622EB0A9CD84E4E47A4D3241AAB0202C` |
+| `QuickLook.Next-Installer-1.0.1-win-x64.zip` | 55,036,946 bytes | `492D475C7603457269CF361B944F03A3EB9C6E2900B8F5B47EFCD60EA46C216D` |
+
+The ZIP contains the MSIX, `Install.ps1`, `Install.cmd`, `Install-ZH-CN.cmd`,
+the release certificate, license, README, and third-party notices. The local
+signature verifies as valid with the expected development certificate. This is
+a local candidate artifact proof; installation, Store acquisition, and public
+publication acceptance remain separate.
+
 ### Current build and preview measurements
 
 On 2026-10-20, `tools/measure-build-baseline.ps1 -Iterations 2` collected a
