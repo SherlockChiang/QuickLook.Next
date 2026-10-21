@@ -362,11 +362,15 @@ gate pass. Standalone checks retain their separately recorded results.
       acceptance remain open.
   - [x] `E26-01d` Validate local packaging and preserve the tested-payload proof.
     Verified 2026-10-21 at commit `8dc32c0` for version 1.0.1. The command
-    `tools/pack-msix.ps1 -SkipBuild` generated and validated the signed MSIX and installer ZIP with
+    `tools/pack-msix.ps1 -SkipBuild` generated and validated the signed MSIX and
+    installer ZIP with
     the bundled SDK `10.0.302`; the packager checked the tested payload proof,
     manifest, embedded payload, installer script, and signature. SHA-256 values
     are recorded in `docs/verification-baseline.md`. Product installation, Store
     acquisition, remote integration PR, and publication still need owner approval.
+    The independent `tools/test-release-artifacts.ps1` guard also passed against
+    the ZIP, checksum, expected certificate, version `1.0.1.65535`, and tested
+    `dist/` tree without installing or changing a certificate store.
 - [ ] `E26-02` Establish measurable preview and build performance baselines.
   Reuse lifecycle timing and host tests; record cold/warm first paint and
   cancellation p50/p95, sample counts, private bytes, HANDLE counts, and recovery

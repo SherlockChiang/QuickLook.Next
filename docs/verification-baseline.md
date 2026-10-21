@@ -77,6 +77,13 @@ signature verifies as valid with the expected development certificate. This is
 a local candidate artifact proof; installation, Store acquisition, and public
 publication acceptance remain separate.
 
+The independent `tools/test-release-artifacts.ps1` guard also passed against
+the generated ZIP, checksum file, expected certificate, version
+`1.0.1.65535`, and the tested `dist/` tree. It verified the installer checksum,
+the exact eight-file installer contents, embedded MSIX signer and certificate,
+manifest identity and architecture, required host payloads, and selected hashes
+against `dist/` without installing the package or changing a certificate store.
+
 ### Current build and preview measurements
 
 On 2026-10-20, `tools/measure-build-baseline.ps1 -Iterations 2` collected a
