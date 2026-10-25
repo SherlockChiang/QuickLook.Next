@@ -5,6 +5,80 @@ step stops the authoritative sequence; later steps are **not run**, not passed.
 Compilation, source-pattern checks, runtime tests, packaged UI acceptance, and
 Store certification are separate claims.
 
+## 2026-10-25 project review follow-up
+
+The owner requested ordinary project review and sequential commits, without
+Codex Security. This batch contains:
+
+| Commit | Change and focused coverage |
+|---|---|
+| `015a0d2` | Normalize malformed update metadata as `FormatException`; missing/null/wrong-type fields and invalid roots are covered. |
+| `fb1b6ab` | Bound headers and response-body reads by one five-second deadline; cancel on settings close. Update suites passed 29/29. |
+| `658cde5` | Monitor UI stalls independently of the dispatcher, using monotonic time and one pending acknowledgement. Both heartbeat tests passed. |
+| `6dfa3de` | Wait for current text rendering before reveal and completion timing; reject replaced/canceled work and observe render failures. Four completion tests passed. |
+| `4a8bfa9` | Batch filmstrip metadata off the UI thread behind one worker, at most 64 paths; use metadata snapshots for cache identity. Three snapshot/cache tests passed. |
+| `5f9edee` | Add read-only toolchain diagnostics. PowerShell, fixed SDK, Rust MSVC, MSVC tools, and Windows SDK checks passed. |
+| `0f17192` | Add the owner's manual desktop regression checklist and explicit log/sample instructions. |
+
+The source baseline is the working tree after `5f9edee`; the subsequent changes
+are documentation only. It includes the owner's pre-existing uncommitted
+`TextPreviewPolicy.cs`, display-trimming changes in `TextPreviewPresenter.cs`,
+and two `CoreBoundaryTests`. Those changes were preserved and excluded from
+the commits above. The test counts therefore do not describe a clean checkout
+of those commits alone.
+
+The exact SDK `10.0.302` was downloaded from Microsoft's official build endpoint
+with owner authorization after an initial automatic approval rejection. Its
+SHA-512 was verified before extraction to ignored
+`artifacts/tools/dotnet-10.0.302`; `global.json` and the system SDK were unchanged.
+The verified archive SHA-512 is
+`7d170ed75fa9af34c00646621d92011dbd71943952e2787cd15df9be78e6452b55dadef34d7eff77b802e6af4959e071a55855ac649afeac70901c3a2a258716`.
+
+Validation used process-scoped `DOTNET_ROOT`, `DOTNET_ROOT_X64` and `PATH` to
+select that SDK. Builds/tests ran outside the restricted execution sandbox
+after its toolchain/pipe/file access failures. Final results:
+
+- Release solution build: zero warnings and zero errors.
+- Managed solution tests, serialized across projects: Core 412/412, ParserHost
+  49/49, ShellBroker 13/13; RasterHost 52/53 on the first run.
+- RasterHost failure: `Repeated_image_handle_previews_release_sources_without_linear_handle_growth`,
+  warmup peak 654, measured peak/last 680, growth budget 12. Focused 1/1 and
+  complete 53/53 reruns passed unchanged. The cause remains unconfirmed and the
+  budget was not increased; this is a recurrence of `E26-04`.
+- Rust workspace: 364 passed, one ignored external-corpus test. Rust formatting
+  and all-target/all-feature Clippy passed.
+- Changed-C# `dotnet format --verify-no-changes`: exit 0, with workspace-load
+  warnings. No unrelated formatting was applied.
+- Complete architecture guard with `-SkipDist`: passed, including native/managed
+  ABI fixtures, FFI behavior/mutation checks, stale-callback/text/thumbnail
+  guards, restricted-host launch, and localization. Separate native image corpus
+  passed 10/10; system codecs decoded 4/5 (optional JXL unavailable). An initial
+  guard invocation omitted the local SDK environment and stopped at managed ABI
+  fixtures; the complete rerun with that environment passed.
+
+The mixed-format RasterHost latency fixture passed both modes (12 samples each)
+and wrote `artifacts/raster-latency-2026-10-25.json`. Normal open-to-complete
+p50/p95 was 24.05/180.50 ms; immediate-close to replacement-complete was
+23.27/153.96 ms. Close-to-writable p50/p95 was 1.49/11.62 ms for normal mode and
+1.24/1.95 ms for immediate-close mode. This run overlapped compilation/guard
+work, so it is diagnostic evidence, not a controlled comparison with the earlier
+baseline or a product budget. These metrics are neither desktop first paint nor
+direct host worker-drain time.
+
+Manual desktop input remains pending under the
+[desktop regression checklist](desktop-regression-checklist.md). An automated
+launch attempt returned `ShellExecuteW` error 2 and did not reach a test window;
+the owner then chose to perform clicks manually. No desktop interaction pass is
+claimed. Packaging, installation, remote CI, publication, physical HDR and Store
+acceptance were not performed for this batch.
+
+The extracted heartbeat, content-completion and thumbnail-snapshot helpers
+address demonstrated testability/ownership boundaries. Further broad file splits
+remain in `E26-05`. Plain text without line numbers retains continuous
+cross-line selection; blanket row virtualization would change that behavior.
+Large-text layout changes require profiling and explicit selection/search
+acceptance, rather than using file length or virtualization alone as success.
+
 ## October external review: host lookup and FFI contracts
 
 ### Hero image FFI behavior

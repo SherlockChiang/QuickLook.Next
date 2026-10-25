@@ -6,22 +6,32 @@ left visible instead of hidden behind vague TODOs.
 
 ## Current Verification And Priority
 
-The active order is the October external-review follow-up, followed by the
-remaining September evidence-first queue in
-[`implementation-todo.md`](implementation-todo.md). The complete local
-`tools/release.ps1 -SkipPackage` sequence passed on 2026-09-05 at `8c3d732`
-using pinned SDK `10.0.302`: Rust 343/1 plus explicit external-corpus smoke,
-Core 351, ParserHost 45, RasterHost 29, and ShellBroker 13 tests. The full
-architecture sequence, including the previously blocked MSBuild fixture,
-restricted-host launch, and image corpus checks, completed successfully.
-See [`verification-baseline.md`](verification-baseline.md) for the exact SHA,
-log hash, optional JXL limitation, and checks not performed.
+The active work is tracked in [`implementation-todo.md`](implementation-todo.md).
+The 2026-10-25 review follow-up comprises six focused implementation/tooling
+commits, `015a0d2` through `5f9edee`, followed by a manual regression checklist
+in `0f17192`. Release built with zero warnings/errors using pinned SDK
+`10.0.302`. Core 412, ParserHost 49, and ShellBroker 13 tests passed. RasterHost
+initially passed 52/53 because its repeat-preview HANDLE budget was exceeded;
+focused 1/1 and full 53/53 reruns passed without code changes. The unexplained
+failure remains open in `E26-04`. Rust passed 364 with one ignored corpus test;
+format/Clippy, changed-C# format, and the full architecture `-SkipDist` gate
+passed, including the separate 10-image native corpus. System codecs decoded
+4/5 samples under the existing optional-JXL policy.
 
-That is a local source/build baseline, not a new signed package, manual UI
-acceptance, remote CI pass, or Store certification. Published `v1.0.1` and the
-latest verified remote CI remain at `a64b60c`; subsequent local changes are not
-released. Measure input/first-paint/cancellation latency and resource recovery
-before resuming broad module extraction or adding format fidelity.
+These checks include the owner's pre-existing uncommitted text display policy
+and two tests; they are a working-tree baseline, not proof of a clean checkout
+at those commits. See [`verification-baseline.md`](verification-baseline.md) for
+the exact scope, first failures, latency sample conditions, and limitations.
+Manual clicks are assigned to the owner using the
+[desktop regression checklist](desktop-regression-checklist.md) and remain
+unverified.
+
+The earlier complete release sequence passed on 2026-10-20 at `7579b93`; local
+packaging and installation were separately verified on 2026-10-21. Those
+artifacts predate this batch. No package, installation, remote CI, publication,
+or Store acceptance was performed for the 2026-10-25 changes. Continue measuring
+input/first-paint/cancellation latency and resource recovery before broad module
+extraction or added format fidelity.
 
 The September 2026 HDR follow-up adds deterministic PQ/scRGB selection,
 generation-tagged display refresh, HLG SDR fallback, and bounded hdr decision
@@ -34,6 +44,16 @@ failure remains historical evidence rather than a current verified blocker.
 
 ## Fixed And Hardened
 
+- Update metadata rejects malformed shapes through one `FormatException`
+  contract. Update checks share a five-second header/body deadline and cancel
+  when settings closes; completion cannot update a closed settings window.
+- UI heartbeat monitoring runs independently of the dispatcher, with a single
+  queued acknowledgement. Text reveal waits for the latest committed render
+  task and rejects canceled/stale completions. Filmstrip metadata uses bounded
+  background snapshots; its cache performs no filesystem queries on the UI path.
+- `tools/doctor.ps1` provides read-only pinned toolchain checks. Heartbeat,
+  text readiness, and thumbnail snapshots have focused helper boundaries and
+  behavior tests. Broader MainWindow/Rust splits remain evidence-driven work.
 - Rust-first preview path: text, folders, archives, packages, mail, certificates,
   executables, torrents, and lightweight Office previews are handled by the
   native layer rather than the legacy .NET plugin pipeline.

@@ -9,6 +9,31 @@ and commit so changes remain independently reviewable and revertible.
 All planned 0.3.1 batches and the focused 0.3.2/0.3.3/0.3.4 hardening batches are complete;
 remaining work below stays ordered by risk and user-visible impact.
 
+## 2026-10-25 project review follow-up
+
+The owner requested sequential fixes and commits, with no Codex Security.
+Evidence and limitations are recorded in
+[verification-baseline.md](verification-baseline.md#2026-10-25-project-review-follow-up).
+
+- [x] Normalize malformed update metadata failures (`015a0d2`).
+- [x] Bound the complete update request and cancel on settings close (`fb1b6ab`).
+- [x] Monitor UI stalls independently of the dispatcher (`658cde5`).
+- [x] Reveal text only after current content commits, preserving stale/cancel
+  checks and truthful timing (`6dfa3de`).
+- [x] Move filmstrip metadata reads off the UI thread and keep cache lookups
+  free of filesystem I/O (`4a8bfa9`).
+- [x] Add read-only development prerequisites diagnostics (`5f9edee`).
+- [x] Supply a reproducible manual interaction checklist (`0f17192`).
+- [ ] Owner performs and records the [desktop regression checklist](desktop-regression-checklist.md).
+  Collect controlled cold/warm samples and direct host-drain evidence before
+  setting performance budgets; these remain part of `E26-02`/`E26-03`.
+- [ ] Diagnose the recurring RasterHost HANDLE-budget fluctuation under `E26-04`;
+  unchanged focused/full reruns passed, which does not explain the first failure.
+
+Focused heartbeat/render-completion/thumbnail helpers satisfy the demonstrated
+extraction needs in this batch. Broader restructuring stays in `E26-05`; preserve
+continuous cross-line selection when evaluating plain-text virtualization.
+
 ## October 2026 external review follow-up
 
 This queue incorporates the 2026-10-12 static review of the external report.
@@ -428,6 +453,9 @@ gate pass. Standalone checks retain their separately recorded results.
     increasing the budget. On 2026-10-12 the first full run measured 478 baseline
     peak and 493 measured peak against a growth budget of 12; focused 1/1 and
     complete 53/53 reruns passed without code changes. The cause is unconfirmed.
+    On 2026-10-25 it recurred with warmup peak 654 and measured peak/last 680;
+    focused 1/1 and full 53/53 reruns again passed unchanged. Retain both failures
+    and the original budget while investigating.
   - [x] Remove the temporary Rust packet allocation for static HANDLE images;
     the native writer now emits the fixed header and decoded BGRA directly into
     the caller buffer. ABI layout and bounded output checks are unchanged.
