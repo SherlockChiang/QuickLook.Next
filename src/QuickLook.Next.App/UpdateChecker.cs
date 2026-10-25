@@ -9,25 +9,37 @@ internal static class UpdateChecker
 
     public static async Task<UpdateMetadata> CheckAsync(CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("QuickLook-Next-Update-Check");
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        return await CheckAsync(client, TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<UpdateMetadata> CheckAsync(
+        HttpClient client, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
+        CancellationToken token = deadline.Token;
         using var request = new HttpRequestMessage(HttpMethod.Get, FeedUri);
+        request.Headers.UserAgent.ParseAdd("QuickLook-Next-Update-Check");
         request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         if (response.Content.Headers.ContentLength is > MaxResponseBytes)
             throw new InvalidDataException("Update metadata is too large.");
-        await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
         using var buffer = new MemoryStream(MaxResponseBytes);
         byte[] chunk = new byte[4096];
         while (true)
         {
-            int read = await stream.ReadAsync(chunk, cancellationToken);
+            int read = await stream.ReadAsync(chunk, token).ConfigureAwait(false);
             if (read == 0) break;
             if (buffer.Length + read > MaxResponseBytes)
                 throw new InvalidDataException("Update metadata is too large.");
             buffer.Write(chunk, 0, read);
         }
-        return UpdateMetadata.Parse(buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
+        token.ThrowIfCancellationRequested();
+        UpdateMetadata metadata = UpdateMetadata.Parse(buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
+        token.ThrowIfCancellationRequested();
+        return metadata;
     }
 }

@@ -24,6 +24,8 @@ public sealed partial class SettingsWindow : Window
     private bool _resizePending;
     private bool _diagnosticsBusy;
     private bool _updateCheckBusy;
+    private bool _closed;
+    private CancellationTokenSource? _updateCheckCts;
     private bool _autoStartBusy = true;
 
     public SettingsWindow(
@@ -45,6 +47,11 @@ public sealed partial class SettingsWindow : Window
         ApplyStrings();
         ApplyWindowAppearance();
         Activated += OnActivated;
+        Closed += (_, _) =>
+        {
+            _closed = true;
+            _updateCheckCts?.Cancel();
+        };
 
         AutoStartToggle.IsEnabled = false;
         SelectComboItem(WindowLevelCombo, AppSettings.Current.PreviewWindowLevel);
@@ -420,14 +427,17 @@ public sealed partial class SettingsWindow : Window
 
     private async void OnCheckUpdatesClick(object sender, RoutedEventArgs e)
     {
-        if (_updateCheckBusy) return;
+        if (_updateCheckBusy || _closed) return;
         _updateCheckBusy = true;
+        using var cancellation = new CancellationTokenSource();
+        _updateCheckCts = cancellation;
         CheckUpdatesButton.IsEnabled = false;
         CheckUpdatesButtonText.Text = UiStrings.SettingsCheckingForUpdates;
         UpdateInfo.IsOpen = false;
         try
         {
-            UpdateMetadata metadata = await UpdateChecker.CheckAsync(CancellationToken.None);
+            UpdateMetadata metadata = await UpdateChecker.CheckAsync(cancellation.Token);
+            if (_closed) return;
             if (!ReleaseVersion.TryParse(ApplicationVersion.Current, out ReleaseVersion? installed))
                 throw new FormatException("Invalid installed version.");
             int comparison = installed!.CompareTo(metadata.Version);
@@ -450,9 +460,13 @@ public sealed partial class SettingsWindow : Window
             }
             UpdateInfo.IsOpen = true;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException or FormatException or System.Text.Json.JsonException)
+        catch (OperationCanceledException) when (_closed)
+        {
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException or InvalidDataException or FormatException or System.Text.Json.JsonException)
         {
             DiagLog.Write("Settings", "update check failed: " + ex.GetType().Name);
+            if (_closed) return;
             UpdateInfo.Severity = InfoBarSeverity.Error;
             UpdateInfo.Title = UiStrings.UpdateCheckFailedTitle;
             UpdateInfo.Message = UiStrings.UpdateCheckFailedMessage;
@@ -461,9 +475,13 @@ public sealed partial class SettingsWindow : Window
         finally
         {
             _updateCheckBusy = false;
-            CheckUpdatesButton.IsEnabled = true;
-            CheckUpdatesButtonText.Text = UiStrings.SettingsCheckForUpdates;
-            QueueResizeToContent();
+            _updateCheckCts = null;
+            if (!_closed)
+            {
+                CheckUpdatesButton.IsEnabled = true;
+                CheckUpdatesButtonText.Text = UiStrings.SettingsCheckForUpdates;
+                QueueResizeToContent();
+            }
         }
     }
 

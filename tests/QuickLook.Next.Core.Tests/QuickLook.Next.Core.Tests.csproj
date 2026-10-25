@@ -18,6 +18,8 @@
                       Private="false" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\src\QuickLook.Next.App\UpdateChecker.cs"
+             Link="AppModel\UpdateChecker.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewSession.cs"
              Link="AppModel\PreviewSession.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\ImageDisplayRefreshState.cs"
