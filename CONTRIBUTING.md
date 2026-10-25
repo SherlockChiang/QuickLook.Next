@@ -229,6 +229,10 @@ A pull request should include:
 - Screenshots for visible UI changes on desktop and, when relevant, constrained window sizes.
 - Documentation and localization updates required by the change.
 
+For preview input, text readiness, filmstrip, or settings changes, use the
+[desktop regression checklist](docs/desktop-regression-checklist.md) and record
+manual results separately from automated tests.
+
 Before submitting, check `git diff --check`, review the complete diff for secrets and accidental
 artifacts, and ensure the worktree contains only intended changes. Do not use a `release:` commit or
 pull-request title for ordinary work; that prefix is reserved for the stable release workflow.
