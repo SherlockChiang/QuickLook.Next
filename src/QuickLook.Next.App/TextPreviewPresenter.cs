@@ -64,6 +64,7 @@ internal sealed class TextPreviewPresenter
     private double _textScale = 1;
     private string _textSize = "default";
     private bool _focusContent;
+    public Task ContentReady { get; private set; } = Task.CompletedTask;
     private TextLineIndex? _textLineIndex;
     private IReadOnlyList<TextLineItem>? _textLines;
     private MarkdownPresentation? _markdownPresentation;
@@ -160,34 +161,11 @@ internal sealed class TextPreviewPresenter
         _textBlock.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         _textBlock.MaxWidth = isMarkdown ? 980 : Math.Max(1, maxContent.Width - 48);
 
-        try
-        {
-            if (ready.Markdown is not null)
-                RenderVirtualMarkdown(_markdownPresentation!);
-            else if (ready.TextFormat == "markdown")
-                RenderMarkdown(text);
-            else if (useLineList)
-                _ = RenderVirtualTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
-            else
-                _ = RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
-        }
-        catch (Exception ex)
-        {
-            DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
-            if (isMarkdown)
-            {
-                _scrollViewer.Visibility = Visibility.Visible;
-                _textListView.Visibility = Visibility.Collapsed;
-                _markdownListView.Visibility = Visibility.Collapsed;
-                _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
-            }
-            else
-            {
-                _scrollViewer.Visibility = Visibility.Visible;
-                _textListView.Visibility = Visibility.Collapsed;
-                _ = RenderCodeOrPlainTextAsync(text, "text", renderVersion);
-            }
-        }
+        ContentReady = RenderContentAsync(ready, text, useLineList, renderVersion);
+        // Preference/theme rerenders also need to observe terminal failures.
+        _ = ContentReady.ContinueWith(
+            task => DiagLog.Write("App", "text render fallback failed: " + task.Exception),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
 
         ApplyOutlineVisibility();
         if (focusContent)
@@ -205,6 +183,30 @@ internal sealed class TextPreviewPresenter
         return new TextPreviewResult(UiStrings.BuildPreviewStatus(ready.Kind, ready.Title), size.Width, size.Height);
     }
 
+    private async Task RenderContentAsync(PreviewReady ready, string text, bool useLineList, int renderVersion)
+    {
+        try
+        {
+            if (ready.Markdown is not null)
+                RenderVirtualMarkdown(_markdownPresentation!);
+            else if (ready.TextFormat == "markdown")
+                RenderMarkdown(text);
+            else if (useLineList)
+                await RenderVirtualTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
+            else
+                await RenderCodeOrPlainTextAsync(text, ready.TextLanguage ?? "text", renderVersion);
+        }
+        catch (Exception ex)
+        {
+            if (renderVersion != _renderVersion) return;
+            DiagLog.Write("App", "text render FAILED; falling back to plain text: " + ex);
+            _scrollViewer.Visibility = Visibility.Visible;
+            _textListView.Visibility = Visibility.Collapsed;
+            _markdownListView.Visibility = Visibility.Collapsed;
+            await RenderCodeOrPlainTextAsync(text, "text", renderVersion);
+        }
+    }
+
     public void Clear()
     {
         _lastReady = null;
@@ -215,6 +217,7 @@ internal sealed class TextPreviewPresenter
         _nextMarkdownSearchSegment = 0;
         ClearSearch();
         _renderVersion++;
+        ContentReady = Task.CompletedTask;
         _textBlock.Blocks.Clear();
         _textListView.ItemsSource = null;
         _markdownListView.ItemsSource = null;

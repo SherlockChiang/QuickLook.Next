@@ -18,6 +18,8 @@
                       Private="false" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\src\QuickLook.Next.App\PreviewContentCompletion.cs"
+             Link="AppModel\PreviewContentCompletion.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\DispatcherHeartbeat.cs"
              Link="AppModel\DispatcherHeartbeat.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\UpdateChecker.cs"

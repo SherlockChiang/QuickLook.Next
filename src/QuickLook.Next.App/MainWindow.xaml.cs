@@ -1403,6 +1403,14 @@ public sealed partial class MainWindow : Window
 
     private void RevealPreviewWindow(bool activate, bool finalContent = true)
     {
+        if (finalContent && TextPreviewContainer.Visibility == Visibility.Visible
+            && _textPresenter is { } presenter && !presenter.ContentReady.IsCompletedSuccessfully)
+        {
+            _ = RevealTextWhenReadyAsync(activate, _previewSession.Generation, CurrentPreviewToken);
+            return;
+        }
+        if (finalContent && TextPreviewContainer.Visibility == Visibility.Visible)
+            MarkPreviewPhase(_previewSession.Generation, "text-render-complete");
         DiagLog.Write("App", $"preview reveal; activate={activate}; visible={_previewVisible}; tempHidden={_previewTemporarilyHidden}");
         _previewRevealPending = false;
         _keyboardCloseQueued = false;
@@ -1443,6 +1451,27 @@ public sealed partial class MainWindow : Window
             CompositionTarget.Rendering += OnPreviewFinalFirstFrame;
         }
         _duplicateOpenCloseGuard.NoteReveal(_previewSession.CurrentPath, Environment.TickCount64);
+    }
+
+    private async Task RevealTextWhenReadyAsync(bool activate, int generation, CancellationToken token)
+    {
+        try
+        {
+            bool ready = await PreviewContentCompletion.WaitAsync(
+                () => _textPresenter!.ContentReady,
+                () => IsPreviewGenerationCurrent(generation, token)
+                    && TextPreviewContainer.Visibility == Visibility.Visible,
+                token);
+            if (ready) RevealPreviewWindow(activate);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            DiagLog.Write("App", "text presentation failed: " + ex);
+            if (IsPreviewGenerationCurrent(generation, token)
+                && _previewSession.TryGetActiveSnapshot(_previewSession.ActivePath ?? "", out var session))
+                TryShowErrorPreview(session, new PreviewFailure(PreviewFailureKind.Content, true), "text-render");
+        }
     }
 
     private void OnPreviewFinalFirstFrame(object? sender, object e)
@@ -2437,7 +2466,7 @@ public sealed partial class MainWindow : Window
             AppSettings.Current.TextSize,
             AppSettings.Current.TextLineNumbers,
             _previewSession.ShouldFocusContent());
-        MarkPreviewPhase(_previewSession.Generation, "text-render-complete", $"status={result.Status}");
+        MarkPreviewPhase(_previewSession.Generation, "text-render-scheduled", $"status={result.Status}");
         StartPreviewHeroLoad(ready);
         ResizeWindowForContent(result.Width, result.Height, MaxTextWindowWidth, MaxTextWindowHeight);
         return result.Status;

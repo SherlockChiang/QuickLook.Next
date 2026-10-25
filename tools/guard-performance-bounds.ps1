@@ -906,8 +906,10 @@ Require-Pattern $textPresenter 'public sealed record MarkdownListItem\(MarkdownR
     "Virtual Markdown item models must remain data-only."
 Require-Pattern $textPresenter 'useLineList\s*=\s*!isMarkdown\s*&&\s*_showLineNumbers[\s\S]*_scrollViewer\.Visibility\s*=\s*!isStructuredMarkdown\s*&&\s*!useLineList' `
     "Plain text must use one continuous document unless persistent line numbers require virtual rows."
-Require-Pattern $textPresenter 'else\s*\r?\n\s*_\s*=\s*RenderCodeOrPlainTextAsync\(text' `
+Require-Pattern $textPresenter 'else\s*\r?\n\s*await\s+RenderCodeOrPlainTextAsync\(text' `
     "Plain text must render as a continuous selectable document, not ListView rows."
+Require-Pattern $textPresenter 'ContentReady\s*=\s*RenderContentAsync\(ready,\s*text,\s*useLineList,\s*renderVersion\)' `
+    "Text presentation must expose the completion of its actual rendering work."
 Require-Pattern $textPresenter 'paragraph\.Inlines\.Add\(new Run \{ Text = code \}\)' `
     "Plain text must retain the complete bounded payload when syntax highlighting is disabled."
 $mainWindowText = Get-Content -LiteralPath $mainWindow -Raw
