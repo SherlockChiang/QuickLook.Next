@@ -19,7 +19,9 @@ Use Windows x64 with the Desktop C++/MSVC toolchain and the pinned toolchains:
   [`rust-toolchain.toml`](rust-toolchain.toml).
 - PowerShell 7 or newer, invoked as `pwsh`.
 
-Use the focused local entry point from the repository root:
+Run `pwsh -NoProfile -File tools/doctor.ps1` first for read-only checks of the
+pinned SDK, Rust, MSVC, and Windows SDK. Then use the focused local entry point
+from the repository root:
 
 ```powershell
 .\build.ps1
