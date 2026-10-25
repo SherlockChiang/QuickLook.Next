@@ -24,7 +24,7 @@ internal sealed class ImageSidecarController
     private readonly Func<string, int, CancellationToken, bool> _isPathCurrent;
     private readonly Func<string, int, CancellationToken, Task<NativeRasterImage?>> _loadThumbnail;
     private readonly Func<NativeRasterImage, ImageSource?> _createBitmapSource;
-    private readonly ImageThumbnailCache _thumbnailCache = new(MaxImageThumbnailCacheItems);
+    private readonly ImageThumbnailCache<ImageSource> _thumbnailCache = new(MaxImageThumbnailCacheItems);
     private Dictionary<string, ImageFilmstripItem> _itemsByPath = new(StringComparer.OrdinalIgnoreCase);
     private string[] _siblingPaths = [];
 
@@ -101,31 +101,30 @@ internal sealed class ImageSidecarController
                 SelectCurrent(path);
                 _filmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
             });
-            _ = PrefetchAdjacentImagesAsync(path, siblings, generation, token);
+            string[] thumbnailPaths = ImageFilmstripPlanner.PrioritizeWithDistance(siblings, path)
+                .TakeWhile(item => item.Distance <= ImmediateFilmstripThumbnailRadius)
+                .Select(item => item.Path).ToArray();
+            string[] adjacentPaths = ImageFilmstripPlanner.AdjacentPaths(siblings, path, AdjacentImagePrefetchRadius).ToArray();
+            var snapshots = await ThumbnailFileSnapshots.ReadAsync(thumbnailPaths.Concat(adjacentPaths), token);
+            if (!_isPathCurrent(path, generation, token)) return;
+            _ = PrefetchAdjacentImagesAsync(path, adjacentPaths, snapshots, generation, token);
 
             var thumbnailBatch = new List<(string Path, ImageSource Source)>(FilmstripThumbnailBatchSize);
             int thumbnailAttempts = 0;
-            foreach ((string sibling, _) in ImageFilmstripPlanner
-                .PrioritizeWithDistance(siblings, path)
-                .TakeWhile(item => item.Distance <= ImmediateFilmstripThumbnailRadius))
+            foreach (string sibling in thumbnailPaths)
             {
                 token.ThrowIfCancellationRequested();
                 if (!_isPathCurrent(path, generation, token))
                     return;
 
                 thumbnailAttempts++;
-                if (_thumbnailCache.TryGet(sibling, 96, out ImageSource? cachedSource) && cachedSource is not null)
+                if (!snapshots.TryGetValue(sibling, out var snapshot) || !snapshot.IsLocal) continue;
+                if (_thumbnailCache.TryGet(snapshot, 96, out ImageSource? cachedSource) && cachedSource is not null)
                 {
                     thumbnailBatch.Add((sibling, cachedSource));
                     FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
                     continue;
                 }
-                if (CloudFileStatus.MayRequireHydration(sibling))
-                {
-                    DiagLog.Write("App", $"image filmstrip skipped cloud placeholder: {sibling}");
-                    continue;
-                }
-
                 NativeRasterImage? raster = await _loadThumbnail(sibling, 96, token);
                 if (!_isPathCurrent(path, generation, token))
                     return;
@@ -135,7 +134,7 @@ internal sealed class ImageSidecarController
                 ImageSource? source = _createBitmapSource(raster);
                 if (source is null)
                     continue;
-                _thumbnailCache.Add(sibling, 96, source);
+                _thumbnailCache.Add(snapshot, 96, source);
 
                 thumbnailBatch.Add((sibling, source));
                 FlushThumbnailBatchIfNeeded(path, generation, token, thumbnailBatch);
@@ -235,13 +234,14 @@ internal sealed class ImageSidecarController
         });
     }
 
-    private async Task PrefetchAdjacentImagesAsync(string currentPath, string[] siblings, int generation, CancellationToken token)
+    private async Task PrefetchAdjacentImagesAsync(
+        string currentPath, string[] adjacentPaths, IReadOnlyDictionary<string, ThumbnailFileSnapshot> snapshots,
+        int generation, CancellationToken token)
     {
         try
         {
-            string[] targets = ImageFilmstripPlanner.AdjacentPaths(siblings, currentPath, AdjacentImagePrefetchRadius)
-                .Where(path => !_thumbnailCache.Contains(path, 128))
-                .Where(path => !CloudFileStatus.MayRequireHydration(path))
+            string[] targets = adjacentPaths
+                .Where(path => snapshots.TryGetValue(path, out var file) && file.IsLocal && !_thumbnailCache.Contains(file, 128))
                 .ToArray();
             if (targets.Length == 0)
                 return;
@@ -273,7 +273,7 @@ internal sealed class ImageSidecarController
                     ImageSource? source = _createBitmapSource(raster);
                     if (source is null)
                         return;
-                    _thumbnailCache.Add(target, 128, source);
+                    _thumbnailCache.Add(snapshots[target], 128, source);
                     if (_itemsByPath.TryGetValue(target, out ImageFilmstripItem? item)
                         && item.Thumbnail is null)
                         item.Thumbnail = source;

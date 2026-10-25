@@ -1,20 +1,15 @@
-using Microsoft.UI.Xaml.Media;
-
 namespace QuickLook.Next.App;
 
-internal sealed class ImageThumbnailCache(int capacity)
+internal sealed class ImageThumbnailCache<TSource>(int capacity) where TSource : class
 {
-    private const int MaxMetadataItems = 512;
-    private const long MetadataLifetimeMilliseconds = 1000;
     private readonly Dictionary<CacheKey, CacheEntry> _cache = new();
     private readonly LinkedList<CacheKey> _lru = new();
-    private readonly Dictionary<string, MetadataEntry> _metadata = new(StringComparer.OrdinalIgnoreCase);
 
-    public bool Contains(string path, int size) => _cache.ContainsKey(CreateKey(path, size));
+    public bool Contains(ThumbnailFileSnapshot file, int size) => _cache.ContainsKey(CreateKey(file, size));
 
-    public bool TryGet(string path, int size, out ImageSource? source)
+    public bool TryGet(ThumbnailFileSnapshot file, int size, out TSource? source)
     {
-        CacheKey key = CreateKey(path, size);
+        CacheKey key = CreateKey(file, size);
         if (_cache.TryGetValue(key, out CacheEntry? entry))
         {
             source = entry.Source;
@@ -26,9 +21,9 @@ internal sealed class ImageThumbnailCache(int capacity)
         return false;
     }
 
-    public void Add(string path, int size, ImageSource source)
+    public void Add(ThumbnailFileSnapshot file, int size, TSource source)
     {
-        CacheKey key = CreateKey(path, size);
+        CacheKey key = CreateKey(file, size);
         RemoveStaleVersions(key);
         if (_cache.TryGetValue(key, out CacheEntry? existing))
         {
@@ -49,7 +44,6 @@ internal sealed class ImageThumbnailCache(int capacity)
 
     public void Remove(string path)
     {
-        _metadata.Remove(path);
         foreach (CacheKey key in _cache.Keys.Where(key => key.Path.Equals(path, StringComparison.OrdinalIgnoreCase)).ToArray())
         {
             RemoveEntry(key);
@@ -81,43 +75,14 @@ internal sealed class ImageThumbnailCache(int capacity)
         }
     }
 
-    private CacheKey CreateKey(string path, int size)
+    private static CacheKey CreateKey(ThumbnailFileSnapshot file, int size)
+        => new(file.Path.ToUpperInvariant(), file.ModifiedTicks, file.Length, size);
+
+    private sealed class CacheEntry(TSource source, LinkedListNode<CacheKey> node)
     {
-        long now = Environment.TickCount64;
-        if (_metadata.TryGetValue(path, out MetadataEntry cached)
-            && now - cached.CreatedAt < MetadataLifetimeMilliseconds)
-        {
-            return new CacheKey(cached.NormalizedPath, cached.ModifiedTicks, cached.Length, size);
-        }
-
-        string normalizedPath = path.ToUpperInvariant();
-        long modifiedTicks = 0;
-        long length = 0;
-        try
-        {
-            var info = new FileInfo(path);
-            modifiedTicks = info.LastWriteTimeUtc.Ticks;
-            length = info.Length;
-        }
-        catch
-        {
-        }
-
-        if (_metadata.Count >= MaxMetadataItems)
-        {
-            string oldest = _metadata.MinBy(static pair => pair.Value.CreatedAt).Key;
-            _metadata.Remove(oldest);
-        }
-        _metadata[path] = new MetadataEntry(normalizedPath, modifiedTicks, length, now);
-        return new CacheKey(normalizedPath, modifiedTicks, length, size);
-    }
-
-    private sealed class CacheEntry(ImageSource source, LinkedListNode<CacheKey> node)
-    {
-        public ImageSource Source { get; set; } = source;
+        public TSource Source { get; set; } = source;
         public LinkedListNode<CacheKey> Node { get; } = node;
     }
 
-    private readonly record struct MetadataEntry(string NormalizedPath, long ModifiedTicks, long Length, long CreatedAt);
     private readonly record struct CacheKey(string Path, long ModifiedTicks, long Length, int Size);
 }

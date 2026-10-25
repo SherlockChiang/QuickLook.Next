@@ -18,6 +18,10 @@
                       Private="false" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\src\QuickLook.Next.App\ThumbnailFileSnapshot.cs"
+             Link="AppModel\ThumbnailFileSnapshot.cs" />
+    <Compile Include="..\..\src\QuickLook.Next.App\ImageThumbnailCache.cs"
+             Link="AppModel\ImageThumbnailCache.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\PreviewContentCompletion.cs"
              Link="AppModel\PreviewContentCompletion.cs" />
     <Compile Include="..\..\src\QuickLook.Next.App\DispatcherHeartbeat.cs"

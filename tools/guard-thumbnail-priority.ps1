@@ -59,6 +59,17 @@ if (Test-Path $sidecarPath) {
     if ($sidecarText -notmatch 'Task<NativeRasterImage\?>') {
         Add-Failure "ImageSidecarController thumbnail loader must stay async so background work can yield to foreground"
     }
+    if ($sidecarText -match 'CloudFileStatus\.MayRequireHydration|new\s+FileInfo') {
+        Add-Failure "Filmstrip metadata and cloud state must be collected off the UI thread."
+    }
+    if ($sidecarText -notmatch 'await\s+ThumbnailFileSnapshots\.ReadAsync') {
+        Add-Failure "Filmstrip thumbnails must use bounded asynchronous file snapshots."
+    }
+}
+
+$cacheText = Get-Content -LiteralPath (Join-Path $appRoot "ImageThumbnailCache.cs") -Raw
+if ($cacheText -match 'FileInfo|\bFile\.(Get|Open|Read|Exists)|Directory\.|CloudFileStatus') {
+    Add-Failure "UI thumbnail-cache lookups must not perform filesystem I/O."
 }
 
 if (Test-Path $schedulerPath) {
