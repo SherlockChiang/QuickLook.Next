@@ -24,9 +24,13 @@ Evidence and limitations are recorded in
   free of filesystem I/O (`4a8bfa9`).
 - [x] Add read-only development prerequisites diagnostics (`5f9edee`).
 - [x] Supply a reproducible manual interaction checklist (`0f17192`).
-- [ ] Owner performs and records the [desktop regression checklist](desktop-regression-checklist.md).
-  Collect controlled cold/warm samples and direct host-drain evidence before
-  setting performance budgets; these remain part of `E26-02`/`E26-03`.
+- [x] Owner performed and recorded the scoped [desktop regression checklist](desktop-regression-checklist.md).
+  The 2026-10-26 record preserves the original search/thumbnail failures,
+  verifies the repaired TXT/Markdown Esc sequence, CMYK current-item thumbnail,
+  and image HWND-focus Esc path. Large-file loading cancellation, cloud/network
+  placeholders, rapid-pressure navigation, and hardware HDR remain explicit
+  uncovered rows; controlled cold/warm samples and direct host-drain evidence
+  remain part of `E26-02`/`E26-03`.
 - [ ] Diagnose the recurring RasterHost HANDLE-budget fluctuation under `E26-04`;
   unchanged focused/full reruns passed, which does not explain the first failure.
 

@@ -76,6 +76,32 @@ The extracted heartbeat, content-completion and thumbnail-snapshot helpers
 address demonstrated testability/ownership boundaries. Further broad file splits
 remain in `E26-05`. Plain text without line numbers retains continuous
 cross-line selection; blanket row virtualization would change that behavior.
+
+## 2026-10-26 desktop repair follow-up
+
+The working tree added bounded current-image thumbnails and explicit Esc ownership
+after the manual regression found two user-visible defects. Native Esc now emits
+the close intent only while Explorer owns the foreground; WinUI search/filter
+controls get first refusal, and the preview HWND hook handles the same priority
+when image rendering leaves focus outside the XAML tree. A thumbnail is sampled
+from already-decoded SDR BGRA pixels at no more than 96x96 (36 KiB), with request,
+cancellation, dimension, and exact-length validation. Neighbor cache misses keep
+their placeholder rather than reusing a stale current-image payload.
+
+The final Release build passed with zero warnings/errors. The full .NET suite
+passed 544 tests before the final HWND-only Esc follow-up; the follow-up rebuild
+passed the focused search, focus, stale-callback, thumbnail, performance-bound,
+and managed-ABI guards. Rust passed 364 tests with one pre-existing ignored
+external-corpus test, and the complete architecture gate passed before the
+follow-up with the same focused guards passing afterward.
+
+The desktop run used the existing 2026-10-26 sample corpus. TXT and Markdown
+search each retained the two-step Esc behavior; CMYK displayed a validated
+current-item thumbnail; and image HWND-only focus closed through Esc. The report
+at `artifacts/desktop-regression-2026-10-26/results.md` preserves the original
+failure evidence, screenshots, session logs, and the rows that were not covered.
+It does not claim large-file loading cancellation, cloud/network placeholders,
+rapid-pressure navigation, Store-signed acquisition, or physical HDR acceptance.
 Large-text layout changes require profiling and explicit selection/search
 acceptance, rather than using file length or virtualization alone as success.
 
