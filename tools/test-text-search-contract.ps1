@@ -35,6 +35,16 @@ $xaml = Read-RequiredFile "src/QuickLook.Next.App/MainWindow.xaml"
 $mainWindow = Read-RequiredFile "src/QuickLook.Next.App/MainWindow.xaml.cs"
 $presenter = Read-RequiredFile "src/QuickLook.Next.App/TextPreviewPresenter.cs"
 $uiStrings = Read-RequiredFile "src/QuickLook.Next.App/UiStrings.cs"
+$native = Read-RequiredFile "native/quicklook_next_native/src/lib.rs"
+Require-Pattern $native 'explorer_foreground && preview_visible && !foreground_text_input' `
+    "Native Esc must be restricted to Explorer; Win32 focus classes cannot identify XAML search boxes."
+Require-Pattern $mainWindow 'VirtualKey\.Escape && TryHandlePreviewWindowEscape\(\)' `
+    "Unhandled preview-window Escape must close the preview after search controls have first refusal."
+$keyboardHook = Read-RequiredFile 'src/QuickLook.Next.App/PreviewKeyboardHook.cs'
+Require-Pattern $keyboardHook 'VK_ESCAPE = 0x1B[\s\S]*_onEscape = onEscape[\s\S]*if \(!repeat\)[\s\S]{0,100}?_escapeDownHandled = _onEscape\(\)[\s\S]{0,100}?return 0' `
+    'HWND-only focus must route one Escape through the App and consume it without repeated dismissal.'
+Require-Pattern $mainWindow 'private bool TryHandlePreviewWindowEscape\(\)[\s\S]{0,900}?_isModalDialogOpen[\s\S]{0,900}?CloseTextSearch\(\)[\s\S]{0,900}?ClosePdfSearch\(\)[\s\S]{0,900}?TextBox or PasswordBox or AutoSuggestBox[\s\S]{0,300}?ClosePreviewFromKeyboard\(\)' `
+    'The window Escape fallback must preserve modal, search, and focused editor ownership.'
 
 if ($xaml.Length -gt 0) {
     Require-Pattern $xaml '<Border\s+[^>]*x:Name="TextSearchBar"[^>]*Grid\.Row="1"[^>]*Visibility="Collapsed"[^>]*>' `

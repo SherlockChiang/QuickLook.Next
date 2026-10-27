@@ -29,6 +29,9 @@
     <None Include="..\..\testdata\image-corpus\external\jpeg-wide-gamut-icc.jpg"
           Link="Fixtures\static.jpg"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\testdata\image-corpus\external\jpeg-cmyk.jpg"
+          Link="Fixtures\cmyk.jpg"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="StageRasterHost" AfterTargets="Build">
     <ItemGroup>

@@ -47,6 +47,7 @@ internal sealed class RasterHostSupervisor
     public event Action<PreviewSurface>? SurfaceReceived;
     public event Action<PreviewPageError>? PageErrorReceived;
     public event Action<PreviewImageWaveform>? ImageWaveformReceived;
+    public event Action<PreviewImageThumbnail>? ImageThumbnailReceived;
     public event Action<PreviewImageRefreshError>? ImageRefreshFailed;
 
     public long AdapterLuid { get; private set; }
@@ -226,6 +227,10 @@ internal sealed class RasterHostSupervisor
                 break;
             case PreviewImageWaveform waveform:
                 _ui.TryEnqueue(() => ImageWaveformReceived?.Invoke(waveform));
+                break;
+            case PreviewImageThumbnail thumbnail:
+                if (thumbnail.HasValidPixels())
+                    _ui.TryEnqueue(() => ImageThumbnailReceived?.Invoke(thumbnail));
                 break;
             case PreviewImageRefreshError refreshError:
                 _ui.TryEnqueue(() => ImageRefreshFailed?.Invoke(refreshError));

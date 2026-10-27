@@ -32,7 +32,7 @@ so new keys can be added against the same contract instead of reverse-engineerin
 | Arrow keys | Delayed selection switch: generation-checked 80 ms timer re-reads the Explorer selection (`WM_QL_SWITCH_DELAYED`) | PDF Left/Up and Right/Down move by whole pages; image Left/Right moves between neighboring files; other previews retain their local list/scroll behavior |
 | Page Up / Page Down | — | PDF previous/next page |
 | Mouse click on an Explorer item | Delayed selection switch (`mouse_proc`) | Ownership transfer to the preview window |
-| Esc | Close preview (`WM_QL_CLOSE`) | The hook closes the preview only when no text input in the preview has focus; the text search or filter box dismisses itself first without closing the preview |
+| Esc | Close a visible preview (`WM_QL_CLOSE`) unless an Explorer text input has focus | WinUI controls/search bars dismiss themselves first; the root event or HWND-only focus fallback calls `TryHandlePreviewWindowEscape` |
 | Ctrl+F | — (the hook ignores chords) | Text search (`OpenTextSearch`) or listing filter (`FocusFilter`) |
 | F3 / Shift+F3 | — | Search next/previous |
 | + / - (OEM or numpad) | Zoom in/out (`WM_QL_ZOOM_IN` / `WM_QL_ZOOM_OUT`) | — |
@@ -43,9 +43,11 @@ so new keys can be added against the same contract instead of reverse-engineerin
 
 - Hook-driven keys require no modifiers, suppress text inputs
   (`foreground_text_input_active` class check for Edit/RichEdit on the foreground window's
-  focus), and — except F5/F11 and Esc — additionally require Explorer to be the foreground
-  window. Esc is checked against the actual focus owner so dismissing the preview's own search
-  or filter box never also closes the preview.
+  focus), and — except F5/F11 — additionally require Explorer to be the foreground
+  window. The hook never emits Esc close outside Explorer: Win32 class names do not identify
+  text input focus inside XAML. Preview-window Esc is owned by the App: XAML routes control
+  dismissal, while `PreviewKeyboardHook` handles HWND-only focus after image transitions. A
+  handled HWND Esc is consumed (including repeats) so it cannot dismiss both search and preview.
 - Switch messages carry `PREVIEW_VISIBILITY_GENERATION`. The pump re-validates with
   `accepts_switch_event` before arming the 80 ms timer, and `switch_timer_proc` re-checks
   `SWITCH_GENERATION` and `PREVIEW_VISIBLE` at fire time. Hiding posts `WM_QL_CANCEL_SWITCH`;

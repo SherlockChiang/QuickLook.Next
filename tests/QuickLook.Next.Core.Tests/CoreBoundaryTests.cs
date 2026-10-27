@@ -872,6 +872,28 @@ public sealed class CoreBoundaryTests : IDisposable
     }
 
     [Fact]
+    public void Text_preview_display_budget_truncates_large_parser_payloads()
+    {
+        string source = new string('x', TextPreviewPolicy.MaxDisplayedCharacters + 1);
+
+        string displayed = TextPreviewPolicy.TrimForDisplay(source, "[truncated]");
+
+        Assert.All(
+            displayed[..TextPreviewPolicy.MaxDisplayedCharacters],
+            character => Assert.Equal('x', character));
+        Assert.EndsWith("\n\n[truncated]", displayed, StringComparison.Ordinal);
+        Assert.Equal(TextPreviewPolicy.MaxDisplayedCharacters + 13, displayed.Length);
+    }
+
+    [Fact]
+    public void Text_preview_display_budget_preserves_small_payloads()
+    {
+        const string source = "<html><body>small</body></html>";
+
+        Assert.Same(source, TextPreviewPolicy.TrimForDisplay(source, "[truncated]"));
+    }
+
+    [Fact]
     public void ProtocolJson_round_trips_hero_raster_message()
     {
         var message = new HeroRasterExtracted("0".PadLeft(32, '0'), 1234, 3080, 32, 24);

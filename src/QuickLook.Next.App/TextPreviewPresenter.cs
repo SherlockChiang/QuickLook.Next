@@ -116,7 +116,7 @@ internal sealed class TextPreviewPresenter
         _lastReady = ready;
         _lastMaxContent = maxContent;
         bool isMarkdown = ready.TextFormat == "markdown" || ready.Markdown is not null;
-        string sourceText = isMarkdown ? TrimForDisplay(ready.TextContent ?? "") : ready.TextContent ?? "";
+        string sourceText = TrimForDisplay(ready.TextContent ?? "");
         _markdownPresentation = ready.Markdown is null
             ? null
             : MarkdownPresentationPolicy.Flatten(ready.Markdown, UiStrings.TextPreviewTruncated);
@@ -1853,9 +1853,11 @@ internal sealed class TextPreviewPresenter
     }
 
     private static string TrimForDisplay(string text)
-        => text.Length <= MaxHighlightedChars
-            ? text
-            : text[..MaxHighlightedChars] + "\n\n" + UiStrings.Format(UiStrings.TextPreviewTruncatedAtCharacterCountFormat, MaxHighlightedChars);
+        => TextPreviewPolicy.TrimForDisplay(
+            text,
+            UiStrings.Format(
+                UiStrings.TextPreviewTruncatedAtCharacterCountFormat,
+                TextPreviewPolicy.MaxDisplayedCharacters));
 
     private static Paragraph CreateParagraph(double fontSize, string fontFamily, double top, double bottom)
         => new()

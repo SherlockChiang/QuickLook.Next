@@ -154,7 +154,8 @@ public sealed class RasterHostAnimationTests
         bool surfaceReceived = false;
         bool readyReceived = false;
         bool waveformReceived = false;
-        while (!surfaceReceived || !readyReceived || (expectWaveform && !waveformReceived))
+        bool thumbnailReceived = false;
+        while (!surfaceReceived || !readyReceived || (expectWaveform && (!waveformReceived || !thumbnailReceived)))
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
                 ?? throw new EndOfStreamException("RasterHost closed during mixed animation preview");
@@ -182,6 +183,14 @@ public sealed class RasterHostAnimationTests
                     Assert.Equal(requestId, waveform.RequestId);
                     Assert.True(ImageWaveformBuilder.IsValid(waveform.Waveform));
                     waveformReceived = true;
+                    break;
+                case PreviewImageThumbnail thumbnail:
+                    Assert.True(expectWaveform);
+                    Assert.True(readyReceived);
+                    Assert.False(thumbnailReceived);
+                    Assert.Equal(requestId, thumbnail.RequestId);
+                    Assert.True(thumbnail.HasValidPixels());
+                    thumbnailReceived = true;
                     break;
                 default:
                     throw new Xunit.Sdk.XunitException($"Unexpected mixed preview message: {message}");
@@ -513,11 +522,11 @@ public sealed class RasterHostAnimationTests
         }
 
         // The animation packet can win the serialized host write before the static preview's
-        // optional waveform. Keep one final receive active so named-pipe backpressure cannot
+        // optional sidecars. Keep a bounded drain active so named-pipe backpressure cannot
         // prevent PreviewClose from reaching the parent HANDLE cleanup. No reads follow this
         // helper, so canceling a partial line cannot affect later protocol framing.
         using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<ControlMessage?> optionalWaveform = channel.ReceiveAsync(drainCts.Token);
+        Task optionalSidecars = DrainSidecarsAsync();
         try
         {
             await WaitUntilAsync(releaseCondition, cancellationToken);
@@ -527,15 +536,36 @@ public sealed class RasterHostAnimationTests
             drainCts.Cancel();
             try
             {
-                if (await optionalWaveform is { } trailing)
-                {
-                    PreviewImageWaveform waveform = Assert.IsType<PreviewImageWaveform>(trailing);
-                    Assert.Equal(previewRequestId, waveform.RequestId);
-                    Assert.True(ImageWaveformBuilder.IsValid(waveform.Waveform));
-                }
+                await optionalSidecars;
             }
             catch (OperationCanceledException) when (drainCts.IsCancellationRequested)
             {
+            }
+        }
+
+        async Task DrainSidecarsAsync()
+        {
+            bool thumbnailReceived = false;
+            bool waveformReceived = false;
+            for (int i = 0; i < 2; i++)
+            {
+                ControlMessage? trailing = await channel.ReceiveAsync(drainCts.Token);
+                if (trailing is null) return;
+                if (trailing is PreviewImageThumbnail thumbnail)
+                {
+                    Assert.False(thumbnailReceived);
+                    thumbnailReceived = true;
+                    Assert.Equal(previewRequestId, thumbnail.RequestId);
+                    Assert.True(thumbnail.HasValidPixels());
+                }
+                else
+                {
+                    var waveform = Assert.IsType<PreviewImageWaveform>(trailing);
+                    Assert.False(waveformReceived);
+                    waveformReceived = true;
+                    Assert.Equal(previewRequestId, waveform.RequestId);
+                    Assert.True(ImageWaveformBuilder.IsValid(waveform.Waveform));
+                }
             }
         }
     }

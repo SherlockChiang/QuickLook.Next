@@ -559,16 +559,14 @@ fn accepts_switch_event(
     preview_visible && message_visibility_generation == current_visibility_generation
 }
 
-/// A physical Esc may close the preview only while the shell or the preview window is the
-/// foreground focus owner, and only when that owner has no text input focused. Typing Esc into
-/// the preview's own search or filter box must dismiss that control without closing the preview
-/// underneath it.
+/// Native owns Esc only in Explorer. WinUI routes preview-window Esc through its controls first;
+/// HWND class names cannot identify focus inside a XAML search box.
 fn esc_close_should_fire(
     explorer_foreground: bool,
     preview_visible: bool,
     foreground_text_input: bool,
 ) -> bool {
-    (explorer_foreground || preview_visible) && !foreground_text_input
+    explorer_foreground && preview_visible && !foreground_text_input
 }
 
 /// Keep this callback cheap: classify the key, post a thread message, return immediately.
@@ -627,21 +625,12 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 };
             }
         } else if kb.vkCode == VK_ESCAPE_U32 {
-            // Esc closes the preview only while the shell or the preview window owns focus and
-            // neither has a text input focused. The foreground check is lazy so non-Esc keys
-            // never pay for GetGUIThreadInfo on the hook thread.
             let preview_visible = PREVIEW_VISIBLE.load(Ordering::SeqCst);
-            if is_down && (explorer_foreground || preview_visible) {
-                // SAFETY: Focus queries use live local output buffers and do not retain HWNDs.
-                let foreground_text_input = unsafe { foreground_text_input_active() };
-                if esc_close_should_fire(
-                    explorer_foreground,
-                    preview_visible,
-                    foreground_text_input,
-                ) {
-                    // SAFETY: This private message has no pointer payload.
-                    let _ = unsafe { PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0)) };
-                }
+            if is_down
+                && esc_close_should_fire(explorer_foreground, preview_visible, text_input_active)
+            {
+                // SAFETY: This private message has no pointer payload.
+                let _ = unsafe { PostThreadMessageW(tid, WM_QL_CLOSE, WPARAM(0), LPARAM(0)) };
             }
         } else if matches!(kb.vkCode, VK_OEM_PLUS_U32 | VK_ADD_U32) {
             if is_down && explorer_foreground && bare_key && PREVIEW_VISIBLE.load(Ordering::SeqCst)
@@ -2992,18 +2981,19 @@ mod tests {
     }
 
     #[test]
-    fn esc_close_spares_text_input_focus_in_either_owner() {
+    fn esc_close_is_owned_only_by_explorer_with_a_visible_preview() {
         // Shell owns focus over plain content: Esc closes.
         assert!(esc_close_should_fire(true, true, false));
         // Shell owns focus with an Explorer rename/search box focused: suppressed.
         assert!(!esc_close_should_fire(true, true, true));
-        // Preview owns focus over plain content: Esc closes.
-        assert!(esc_close_should_fire(false, true, false));
-        // Preview owns focus over its own search or filter box: suppressed so one physical Esc
-        // cannot dismiss both the control and the preview.
+        // WinUI (or another app) owns focus: native never emits a competing close, even when
+        // the XAML search box looks like plain content to the Win32 focus query.
+        assert!(!esc_close_should_fire(false, true, false));
         assert!(!esc_close_should_fire(false, true, true));
         // Neither owner: never fires.
         assert!(!esc_close_should_fire(false, false, false));
+        assert!(!esc_close_should_fire(false, false, true));
+        assert!(!esc_close_should_fire(true, false, false));
         assert!(!esc_close_should_fire(true, false, true));
     }
 

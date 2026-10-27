@@ -393,6 +393,7 @@ public sealed partial class MainWindow : Window
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             ShouldHandleSpaceAsPreviewClose,
             ClosePreviewFromKeyboard,
+            TryHandlePreviewWindowEscape,
             OnWindowMouseWheel);
         PreviewRoot.SizeChanged += OnRootSizeChanged;
         AnimatedImagePreviewRoot.SizeChanged += OnAnimatedImageRootSizeChanged;
@@ -496,6 +497,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
+            _supervisor.ImageThumbnailReceived += OnImageThumbnailReceived;
             _supervisor.ImageRefreshFailed += OnImageRefreshFailed;
             _native.Start(OnNativeIntent);
             AppStartupTiming.Mark("native-hook-ready");
@@ -729,6 +731,7 @@ public sealed partial class MainWindow : Window
             _supervisor.SurfaceReceived += OnSurfaceReceived;
             _supervisor.PageErrorReceived += OnPdfPageErrorReceived;
             _supervisor.ImageWaveformReceived += OnImageWaveformReceived;
+            _supervisor.ImageThumbnailReceived += OnImageThumbnailReceived;
             _supervisor.ImageRefreshFailed += OnImageRefreshFailed;
         }
 
@@ -2270,6 +2273,18 @@ public sealed partial class MainWindow : Window
             _imageWaveformPresenter?.Show(message.Waveform);
     }
 
+    private void OnImageThumbnailReceived(PreviewImageThumbnail message)
+    {
+        if (!_previewSession.IsCurrentRequest(message.RequestId)
+            || _previewSession.CurrentPath is not { } path
+            || !message.HasValidPixels())
+            return;
+
+        ImageSource? source = CreateBitmapSource(new NativeRasterImage(message.Bgra, message.Width, message.Height));
+        if (source is not null)
+            _imageSidecarController?.SetPreviewThumbnail(path, source);
+    }
+
     private bool IsCurrentGifPreview()
         => string.Equals(
             Path.GetExtension(_previewSession.CurrentPath),
@@ -3659,6 +3674,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Controls and search bars get first refusal. Native handles Esc only in Explorer,
+        // so one physical key cannot both dismiss a XAML control and close the preview.
+        if (e.Key == Windows.System.VirtualKey.Escape && TryHandlePreviewWindowEscape())
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (ListingPanel.Visibility == Visibility.Visible && controlDown && e.Key == Windows.System.VirtualKey.F)
         {
             _listingPresenter?.FocusFilter();
@@ -4042,6 +4065,21 @@ public sealed partial class MainWindow : Window
                 ? TextListView
                 : TextPreviewBlock;
         focusTarget.Focus(FocusState.Programmatic);
+    }
+
+    private bool TryHandlePreviewWindowEscape()
+    {
+        if (!IsPreviewActiveForClose() || _isModalDialogOpen)
+            return false;
+        if (TextPreviewContainer.Visibility == Visibility.Visible && TextSearchBar.Visibility == Visibility.Visible)
+            CloseTextSearch();
+        else if (PdfScrollViewer.Visibility == Visibility.Visible && PdfSearchBar.Visibility == Visibility.Visible)
+            ClosePdfSearch();
+        else if (FocusManager.GetFocusedElement() is TextBox or PasswordBox or AutoSuggestBox)
+            return false; // The focused editor/filter owns its dismissal.
+        else
+            ClosePreviewFromKeyboard();
+        return true;
     }
 
     private void ClosePreviewFromKeyboard()

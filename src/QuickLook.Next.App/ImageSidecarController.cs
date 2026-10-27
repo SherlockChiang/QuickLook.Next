@@ -27,6 +27,8 @@ internal sealed class ImageSidecarController
     private readonly ImageThumbnailCache<ImageSource> _thumbnailCache = new(MaxImageThumbnailCacheItems);
     private Dictionary<string, ImageFilmstripItem> _itemsByPath = new(StringComparer.OrdinalIgnoreCase);
     private string[] _siblingPaths = [];
+    private string? _previewThumbnailPath;
+    private ImageSource? _previewThumbnail;
 
     public ImageSidecarController(
         ListView filmstripList,
@@ -53,12 +55,28 @@ internal sealed class ImageSidecarController
 
     public void Clear()
     {
+        _previewThumbnailPath = null;
+        _previewThumbnail = null;
         _siblingPaths = [];
         _itemsByPath.Clear();
         Items.Clear();
         _filmstripList.SelectedItem = null;
         _filmstrip.Visibility = Visibility.Collapsed;
     }
+
+    public void SetPreviewThumbnail(string path, ImageSource source)
+    {
+        // Retain only the active request's surface thumbnail. Do not cache it under a fresh path
+        // snapshot: the path could have been renamed/replaced since the host adopted its HANDLE.
+        _previewThumbnailPath = path;
+        _previewThumbnail = source;
+        if (_itemsByPath.TryGetValue(path, out ImageFilmstripItem? item))
+            item.Thumbnail = source;
+    }
+
+    private ImageSource? PreviewThumbnailFor(string path)
+        => string.Equals(path, _previewThumbnailPath, StringComparison.OrdinalIgnoreCase)
+            ? _previewThumbnail : null;
 
     public async Task LoadFilmstripAsync(string path, int generation, CancellationToken token)
     {
@@ -97,6 +115,8 @@ internal sealed class ImageSidecarController
                 _siblingPaths = siblings;
                 Items = new ObservableCollection<ImageFilmstripItem>(siblingItems);
                 _itemsByPath = siblingItems.ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
+                foreach (ImageFilmstripItem item in siblingItems)
+                    item.Thumbnail = PreviewThumbnailFor(item.Path);
                 _filmstripList.ItemsSource = Items;
                 SelectCurrent(path);
                 _filmstrip.Visibility = siblings.Length > 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -229,7 +249,7 @@ internal sealed class ImageSidecarController
             foreach ((string path, ImageSource source) in updates)
             {
                 if (_itemsByPath.TryGetValue(path, out ImageFilmstripItem? item))
-                    item.Thumbnail = source;
+                    item.Thumbnail = PreviewThumbnailFor(path) ?? source;
             }
         });
     }

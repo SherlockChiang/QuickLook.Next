@@ -32,6 +32,7 @@ public sealed class RasterHostStaticImageHandleTests
                 "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEElEQVR42mP4z8DwH4QZGBgAAL8BA/2t7mQAAAAASUVORK5CYII=")),
             ("ico", await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.ico"), timeout.Token)),
             ("jpg", await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "static.jpg"), timeout.Token)),
+            ("jpg", await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "cmyk.jpg"), timeout.Token)),
             ("bmp", CreateOnePixelBmp()),
         ];
         using Process host = Process.Start(new ProcessStartInfo(hostPath)
@@ -989,7 +990,8 @@ public sealed class RasterHostStaticImageHandleTests
         PreviewSurface? surface = null;
         PreviewReady? ready = null;
         PreviewImageWaveform? waveform = null;
-        while (surface is null || ready is null || waveform is null)
+        PreviewImageThumbnail? thumbnail = null;
+        while (surface is null || ready is null || waveform is null || thumbnail is null)
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
                 ?? throw new EndOfStreamException("RasterHost closed before completing the parent image preview.");
@@ -1004,6 +1006,7 @@ public sealed class RasterHostStaticImageHandleTests
                         continue;
                     case PreviewReady canceledReady when canceledReady.RequestId == canceledRequestId:
                     case PreviewImageWaveform canceledWaveform when canceledWaveform.RequestId == canceledRequestId:
+                    case PreviewImageThumbnail canceledThumbnail when canceledThumbnail.RequestId == canceledRequestId:
                     case PreviewError canceledError when canceledError.RequestId == canceledRequestId:
                         continue;
                 }
@@ -1023,11 +1026,20 @@ public sealed class RasterHostStaticImageHandleTests
             }
             ready = message as PreviewReady ?? ready;
             waveform = message as PreviewImageWaveform ?? waveform;
+            if (message is PreviewImageThumbnail receivedThumbnail)
+            {
+                Assert.NotNull(ready); // Optional sidecars must follow readiness, never delay it.
+                thumbnail = receivedThumbnail;
+            }
         }
 
         Assert.Equal(requestId, ready.RequestId);
         Assert.Equal(requestId, surface.RequestId);
         Assert.Equal(requestId, waveform.RequestId);
+        Assert.Equal(requestId, thumbnail.RequestId);
+        Assert.True(thumbnail.HasValidPixels());
+        Assert.Contains(Enumerable.Range(0, thumbnail.Width * thumbnail.Height),
+            pixel => thumbnail.Bgra[pixel * 4 + 3] > 0);
     }
 
     private static bool TryOverwriteFile(string path)

@@ -22,14 +22,18 @@ These checks include the owner's pre-existing uncommitted text display policy
 and two tests; they are a working-tree baseline, not proof of a clean checkout
 at those commits. See [`verification-baseline.md`](verification-baseline.md) for
 the exact scope, first failures, latency sample conditions, and limitations.
-Manual clicks are assigned to the owner using the
-[desktop regression checklist](desktop-regression-checklist.md) and remain
-unverified.
+Manual clicks were executed against the same local Release sample set using the
+[desktop regression checklist](desktop-regression-checklist.md). The repaired
+TXT/Markdown search Esc sequence, CMYK current-item thumbnail, and image
+HWND-focus Esc path passed. The report retains the first-failure evidence and
+lists loading cancellation, cloud/network placeholders, rapid-pressure input,
+and physical HDR as uncovered.
 
 The earlier complete release sequence passed on 2026-10-20 at `7579b93`; local
 packaging and installation were separately verified on 2026-10-21. Those
-artifacts predate this batch. No package, installation, remote CI, publication,
-or Store acceptance was performed for the 2026-10-25 changes. Continue measuring
+artifacts predate this batch. The current repair has not yet been packaged or
+published; Store-signed acquisition and physical acceptance remain separate.
+Continue measuring
 input/first-paint/cancellation latency and resource recovery before broad module
 extraction or added format fidelity.
 
@@ -392,6 +396,12 @@ The shared bounded-reader helpers now live in `preview/bounded.rs`. Its
 - Keep improving the primary image path:
   - Thumbnail filmstrip loading should keep prioritizing the current image and
     nearby siblings, with LRU eviction to bound memory in large folders.
+    RasterHost now sends an optional 96x96 (at most 36 KiB) thumbnail after the
+    current image's surface and readiness, sampled from its existing SDR pixels.
+    The App validates dimensions/length and the current request before applying
+    it. This active-request fallback is cleared on reset and is never cached under
+    a newly resolved path. Neighbor lookups remain Shell-cache-only; cache misses
+    display an image placeholder rather than an empty tile.
   - Adjacent image prefetch should remain cancellation-aware so quick Explorer
     selection changes do not keep decoding old images.
   - Large image decode should keep checking the native cancellation callback

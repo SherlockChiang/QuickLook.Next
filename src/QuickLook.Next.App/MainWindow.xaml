@@ -1097,9 +1097,15 @@
                                          BorderThickness="1"
                                          AutomationProperties.Name="{Binding Name}"
                                          ToolTipService.ToolTip="{Binding Name}">
-                                    <Image Source="{Binding Thumbnail, Mode=OneWay}"
-                                           Margin="3"
-                                           Stretch="Uniform" />
+                                    <Grid>
+                                        <FontIcon Glyph="&#xEB9F;"
+                                                  FontSize="24"
+                                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                  Visibility="{Binding PlaceholderVisibility, Mode=OneWay}" />
+                                        <Image Source="{Binding Thumbnail, Mode=OneWay}"
+                                               Margin="3"
+                                               Stretch="Uniform" />
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ListView.ItemTemplate>

@@ -95,6 +95,14 @@ request that is already in progress.
   fail closed after adoption. Shell thumbnails remain available only to explicit path-based
   cloud/legacy compatibility requests and never receive a path derived from a HANDLE request.
   Replacing the original path after local handoff cannot change the rendered bytes.
+- RasterHost may publish a `PreviewImageThumbnail` after the image surface and readiness. This
+  at-most-96x96 BGRA sidecar samples the already-decoded SDR pixels without opening a path or
+  decoding another input. The control channel carries at most 36 KiB of thumbnail pixels;
+  full preview pixels still use shared surfaces. Publication checks cancellation and the active
+  request under the surface gate. The App validates dimensions and exact byte length, rejects
+  stale request IDs, and retains only the active request's fallback until reset. It never inserts
+  those pixels into a cache keyed by a later path snapshot; adjacent Shell-cache misses use a
+  placeholder and do not trigger extra decoding or hydration.
 - Optional image metadata is a separate parent-bound child request. RasterHost immediately acquires
   an independent metadata lease from the retained local image and calls capability bit 19
   `ql_preview_image_metadata_handle`; the logical basename is only a format hint and is never

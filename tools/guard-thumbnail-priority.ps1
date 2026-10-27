@@ -115,6 +115,24 @@ if ((Test-Path $nativeFfiPath) -and (Test-Path $nativeShellPath)) {
     }
 }
 
+$protocolText = Get-Content -LiteralPath (Join-Path $Root 'src/QuickLook.Next.Core/Protocol.cs') -Raw
+$builderText = Get-Content -LiteralPath (Join-Path $Root 'src/QuickLook.Next.RasterHost/ImageThumbnailBuilder.cs') -Raw
+$rasterText = Get-Content -LiteralPath (Join-Path $Root 'src/QuickLook.Next.RasterHost/Program.cs') -Raw
+if ($protocolText -notmatch 'MaxEdge = 96' -or
+    $protocolText -notmatch 'Bgra.Length == Width \* Height \* 4' -or
+    $builderText -notmatch 'cancellationToken.ThrowIfCancellationRequested\(\)' -or
+    $builderText -match '\bFile\.|\bDirectory\.|TryDecode') {
+    Add-Failure 'Current-image thumbnails must sample bounded existing pixels without opening or decoding another file.'
+}
+if ($rasterText -notmatch '(?s)surfacePublishGate.Release\(\);.*ImageThumbnailBuilder.Create.*activeRequestId.*SendAsync\(thumbnail, cancellationToken\)' -or
+    $mainWindowText -notmatch 'void OnImageThumbnailReceived[\s\S]{0,240}?IsCurrentRequest\(message.RequestId\)[\s\S]{0,180}?HasValidPixels\(\)') {
+    Add-Failure 'Thumbnail sidecars must follow surface publication and retain cancellation/current-request validation.'
+}
+if ($sidecarText -notmatch '(?s)void Clear\(\).*?_previewThumbnail = null' -or
+    $sidecarText -notmatch 'PreviewThumbnailFor\(path\) \?\? source') {
+    Add-Failure 'Active surface thumbnails must clear on reset and take precedence over Shell cache batches.'
+}
+
 if ($failures.Count -gt 0) {
     Write-Host ""
     Write-Host "Thumbnail priority guard failed:" -ForegroundColor Red

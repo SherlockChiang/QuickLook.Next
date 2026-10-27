@@ -813,6 +813,25 @@ async Task<bool> HandleImageOpenAsync(
         surfacePublishGate.Release();
     }
 
+    PreviewImageThumbnail? thumbnail = Path.GetExtension(open.Path).Equals(".gif", StringComparison.OrdinalIgnoreCase)
+        ? null
+        : ImageThumbnailBuilder.Create(open.RequestId, image, cancellationToken);
+    if (thumbnail is not null)
+    {
+        await surfacePublishGate.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(open.RequestId, activeRequestId, StringComparison.Ordinal))
+                return false;
+            await channel.SendAsync(thumbnail, cancellationToken);
+        }
+        finally
+        {
+            surfacePublishGate.Release();
+        }
+    }
+
     return await PublishImageWaveformAsync(open, image, cancellationToken);
 }
 

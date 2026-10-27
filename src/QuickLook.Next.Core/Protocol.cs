@@ -5,8 +5,9 @@ namespace QuickLook.Next.Core;
 
 /// <summary>
 /// App ⇄ preview-host control-channel messages (line-delimited JSON over a named pipe).
-/// Bulk pixels never travel here — they flow through the shared composition surface referenced by
+/// Full preview pixels flow through the shared composition surface referenced by
 /// <see cref="PreviewSurface"/>. Validated by Spike 1 (see spikes/spike1-composition/SPIKE1_FINDINGS.md).
+/// Optional thumbnail sidecars are limited to 96x96 BGRA pixels (36 KiB before JSON encoding).
 ///
 /// Contract invariant: the App accepts at most one terminal Host message per <c>RequestId</c>.
 /// It may instead stop waiting because of client cancellation, timeout, disconnect, or service
@@ -22,6 +23,7 @@ namespace QuickLook.Next.Core;
 [JsonDerivedType(typeof(PreviewOpenSqliteHandles), "preview.open.sqlite-handles")]
 [JsonDerivedType(typeof(PreviewSurface), "preview.surface")]
 [JsonDerivedType(typeof(PreviewImageWaveform), "preview.image.waveform")]
+[JsonDerivedType(typeof(PreviewImageThumbnail), "preview.image.thumbnail")]
 [JsonDerivedType(typeof(PreviewImageRefresh), "preview.image.refresh")]
 [JsonDerivedType(typeof(PreviewImageRefreshClose), "preview.image.refresh.close")]
 [JsonDerivedType(typeof(PreviewImageRefreshError), "preview.image.refresh.error")]
@@ -145,6 +147,16 @@ public sealed record ImageWaveform(int Width, int Height, byte[] RgbDensity);
 
 /// <summary>RasterHost → App: optional image analysis computed after the first surface is published.</summary>
 public sealed record PreviewImageWaveform(string RequestId, ImageWaveform Waveform) : ControlMessage;
+
+/// <summary>RasterHost → App: bounded presentation pixels from the already-decoded current image.</summary>
+public sealed record PreviewImageThumbnail(string RequestId, int Width, int Height, byte[] Bgra) : ControlMessage
+{
+    public const int MaxEdge = 96;
+
+    public bool HasValidPixels()
+        => Width is > 0 and <= MaxEdge && Height is > 0 and <= MaxEdge
+            && Bgra is not null && Bgra.Length == Width * Height * 4;
+}
 
 /// <summary>
 /// App → RasterHost: read optional metadata from an already-open exact image HANDLE. The child
