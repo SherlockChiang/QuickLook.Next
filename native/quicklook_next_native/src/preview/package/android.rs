@@ -576,7 +576,10 @@ fn android_resource_candidates<R: Read + Seek>(
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        let path = entry.name().replace('\\', "/");
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let path = entry_name.replace('\\', "/");
         let lower = path.to_ascii_lowercase();
         let Some(file_name) = lower.rsplit('/').next() else {
             continue;

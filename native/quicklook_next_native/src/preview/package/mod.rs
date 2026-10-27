@@ -104,7 +104,10 @@ pub(crate) fn render_package_reader<R: Read + Seek>(
             Ok(e) => e,
             Err(_) => continue,
         };
-        let name = entry.name().replace('\\', "/");
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let name = entry_name.replace('\\', "/");
         let lower_name = name.to_ascii_lowercase();
         if lower_name.is_empty() {
             continue;
@@ -123,7 +126,7 @@ pub(crate) fn render_package_reader<R: Read + Seek>(
         }
         if lower_name == "appxmanifest.xml" && entry.size() <= MAX_APPX_MANIFEST_BYTES {
             has_manifest = true;
-            appx_manifest_name = Some(entry.name().to_string());
+            appx_manifest_name = Some(entry_name.to_string());
         }
         if lower_name.ends_with(".dex") {
             dex_count += 1;
@@ -365,7 +368,10 @@ pub(crate) fn extract_package_icon_bgra_reader<R: Read + Seek>(
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        let raw_name = entry.name().to_string();
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let raw_name = entry_name.into_owned();
         let normalized_name = raw_name.replace('\\', "/");
         let score = package_icon_candidate_score(&normalized_name)
             + manifest_icon_candidate_score(&normalized_name, &manifest_icons);

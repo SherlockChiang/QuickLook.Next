@@ -34,7 +34,10 @@ pub(super) fn office_media_entries<R: Read + Seek>(
             continue;
         }
 
-        let Some(normalized) = canonical_office_media_ref(entry.name(), None) else {
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let Some(normalized) = canonical_office_media_ref(&entry_name, None) else {
             continue;
         };
         let folded = normalized.to_ascii_lowercase();
@@ -167,7 +170,10 @@ pub(super) fn read_office_layout_image_reference<R: Read + Seek>(
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        let Some(actual_ref) = canonical_office_media_ref(entry.name(), Some(expected_root)) else {
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let Some(actual_ref) = canonical_office_media_ref(&entry_name, Some(expected_root)) else {
             continue;
         };
         if actual_ref == requested_ref {
@@ -257,7 +263,10 @@ pub(in crate::preview) fn extract_office_image_bgra_reader<R: Read + Seek>(
             continue;
         }
 
-        let raw_name = entry.name().to_string();
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let raw_name = entry_name.into_owned();
         let normalized_name = raw_name.replace('\\', "/");
         let lower = normalized_name.to_ascii_lowercase();
         if !roots.iter().any(|root| lower.starts_with(root)) || !is_supported_zip_image_name(&lower)
@@ -361,10 +370,13 @@ pub(in crate::preview) fn extract_office_layout_image_bgra_reader<R: Read + Seek
         let Ok(entry) = zip.by_index_raw(i) else {
             continue;
         };
-        if entry.name() != canonical_ref {
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        if entry_name != canonical_ref {
             continue;
         }
-        if canonical_office_media_ref(entry.name(), Some(expected_root)).as_deref()
+        if canonical_office_media_ref(&entry_name, Some(expected_root)).as_deref()
             != Some(canonical_ref.as_str())
             || selected.is_some()
         {

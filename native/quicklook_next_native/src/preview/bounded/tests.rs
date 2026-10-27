@@ -3,6 +3,7 @@ use std::io::{Cursor, Write};
 use super::{
     open_validated_zip, read_limited_to_end, read_reader_exact_bounded_cancelable,
     validate_zip_container, MAX_ZIP_CENTRAL_DIRECTORY_BYTES, ZIP_EOCD_MAX_TAIL_BYTES,
+    ZIP_EOCD_MIN_BYTES,
 };
 use crate::preview::archive::MAX_ARCHIVE_ZIP_ENTRIES;
 use crate::preview::ReaderPreviewError;
@@ -107,6 +108,8 @@ fn zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback() {
         .expect("start ZIP entry");
     writer.write_all(b"bounded").expect("write ZIP entry");
     let mut bytes = writer.finish().expect("finish ZIP").into_inner();
+    let real_eocd = bytes[bytes.len() - ZIP_EOCD_MIN_BYTES as usize..].to_vec();
+    assert_eq!(real_eocd.get(..4), Some(&b"PK\x05\x06"[..]));
     bytes.resize(
         bytes.len()
             + MAX_ZIP_CENTRAL_DIRECTORY_BYTES as usize
@@ -114,8 +117,11 @@ fn zip_open_rechecks_authoritative_directory_tail_after_eocd_fallback() {
             + 1024,
         0,
     );
-    // The EOCD fields are structurally valid, but its one-byte central directory cannot contain
-    // the declared entry. The ZIP reader must reject it and may fall back to the real EOCD.
+    // The ZIP reader only searches the EOCD comment window, so repeat the real EOCD there. It
+    // still names the distant central directory; the reader finds that directory by scanning.
+    bytes.extend_from_slice(&real_eocd);
+    // The last EOCD fields are structurally valid, but its one-byte central directory cannot
+    // contain the declared entry. The ZIP reader must reject it and fall back to the real EOCD.
     let fake_central_offset = bytes.len() as u32;
     bytes.push(0);
     bytes.extend_from_slice(b"PK\x05\x06");

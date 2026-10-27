@@ -247,7 +247,10 @@ fn docx_header_footer_entries<R: Read + Seek>(
         if entry.size() > 1024 * 1024 {
             continue;
         }
-        let normalized = entry.name().replace('\\', "/");
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let normalized = entry_name.replace('\\', "/");
         if is_docx_header_footer_name(&normalized) {
             entries.push(normalized);
         }

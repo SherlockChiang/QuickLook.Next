@@ -31,7 +31,10 @@ fn count_numbered_parts<R: Read + Seek>(
         let Ok(entry) = zip.by_index_raw(index) else {
             continue;
         };
-        let normalized = entry.name().replace('\\', "/").to_ascii_lowercase();
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let normalized = entry_name.replace('\\', "/").to_ascii_lowercase();
         let Some(file_name) = normalized.strip_prefix(directory) else {
             continue;
         };

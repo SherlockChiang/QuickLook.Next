@@ -348,15 +348,17 @@ pub(in crate::preview) fn render_zip_archive_from_zip<R: Read + Seek>(
             Ok(e) => e,
             Err(_) => continue,
         };
-        let full_name = entry
-            .name()
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let full_name = entry_name
             .replace('\\', "/")
             .trim_start_matches('/')
             .to_string();
         if full_name.is_empty() {
             continue;
         }
-        let is_folder = full_name.ends_with('/') || entry.name().is_empty();
+        let is_folder = full_name.ends_with('/') || entry_name.is_empty();
         let size = entry.size() as i64;
         let packed = entry.compressed_size() as i64;
         let is_encrypted = entry.encrypted();

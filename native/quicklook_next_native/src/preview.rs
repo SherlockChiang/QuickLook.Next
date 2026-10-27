@@ -289,7 +289,10 @@ fn read_zip_text<R: Read + Seek>(
 
     for i in 0..zip.len().min(MAX_OFFICE_ZIP_ENTRIES) {
         let mut entry = zip.by_index(i).ok()?;
-        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
+        if !entry
+            .name()
+            .is_ok_and(|entry_name| entry_name.replace('\\', "/").eq_ignore_ascii_case(name))
+        {
             continue;
         }
         if entry.size() > max_size {
@@ -604,7 +607,10 @@ fn read_office_zip_bytes<R: Read + Seek>(
             Ok(entry) => entry,
             Err(_) => return Ok(None),
         };
-        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
+        if !entry
+            .name()
+            .is_ok_and(|entry_name| entry_name.replace('\\', "/").eq_ignore_ascii_case(name))
+        {
             continue;
         }
         if entry.size() > max_size {

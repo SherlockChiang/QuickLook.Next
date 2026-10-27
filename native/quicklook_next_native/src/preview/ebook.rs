@@ -254,7 +254,10 @@ fn read_ebook_zip_text<R: Read + Seek>(
             }
             Err(_) => continue,
         };
-        if !entry.name().replace('\\', "/").eq_ignore_ascii_case(name) {
+        if !entry
+            .name()
+            .is_ok_and(|entry_name| entry_name.replace('\\', "/").eq_ignore_ascii_case(name))
+        {
             continue;
         }
         if entry.size() > max_size {
@@ -351,7 +354,10 @@ fn find_epub_opf_path<R: Read + Seek>(
             }
             continue;
         };
-        let name = entry.name().replace('\\', "/");
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        let name = entry_name.replace('\\', "/");
         if name.to_ascii_lowercase().ends_with(".opf") {
             return Ok(Some(name));
         }

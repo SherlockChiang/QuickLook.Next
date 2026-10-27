@@ -114,7 +114,10 @@ pub(crate) fn extract_archive_entry_to_writer_reader<R: Read + Seek, W: Write>(
             Ok(entry) => entry,
             Err(_) => continue,
         };
-        if normalize_archive_entry_path(entry.name()).as_deref() == Some(normalized.as_str()) {
+        let Ok(entry_name) = entry.name() else {
+            continue;
+        };
+        if normalize_archive_entry_path(&entry_name).as_deref() == Some(normalized.as_str()) {
             if entry.is_dir() || entry.encrypted() {
                 return Err(ReaderPreviewError::Malformed);
             }
