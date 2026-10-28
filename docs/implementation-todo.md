@@ -33,6 +33,12 @@ Evidence and limitations are recorded in
   remain part of `E26-02`/`E26-03`.
 - [ ] Diagnose the recurring RasterHost HANDLE-budget fluctuation under `E26-04`;
   unchanged focused/full reruns passed, which does not explain the first failure.
+  It recurred in two remote 1.0.2 runs; see
+  [verification-baseline.md](verification-baseline.md#2026-10-27-remote-ci-host-test-flakes).
+- [ ] Diagnose the early RasterHost pipe closure in
+  `Image_metadata_child_keeps_an_independent_handle_lease_after_parent_close`
+  (CI run 40650433905 attempt 1, website-only `7ff3a88`). The unchanged job
+  rerun passed; the log has no host exit code, so the cause is unconfirmed.
 
 Focused heartbeat/render-completion/thumbnail helpers satisfy the demonstrated
 extraction needs in this batch. Broader restructuring stays in `E26-05`; preserve

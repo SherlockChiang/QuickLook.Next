@@ -105,6 +105,29 @@ rapid-pressure navigation, Store-signed acquisition, or physical HDR acceptance.
 Large-text layout changes require profiling and explicit selection/search
 acceptance, rather than using file length or virtualization alone as success.
 
+## 2026-10-27 remote CI host-test flakes
+
+GitHub-hosted runs for the 1.0.2 release commit and the following website
+dependency update each failed one RasterHost integration test. Rerunning only
+the failed job, without changes, passed every time. No budget, timeout, or
+assertion was changed.
+
+| Run (attempt) | Commit | Failing test and evidence |
+|---|---|---|
+| CI 40497270284 (1) | `11972b2` | `Repeated_image_handle_previews_release_sources_without_linear_handle_growth`: warmupPeak 391, measuredPeak/last 408, budget 12. |
+| Microsoft Store Candidate 40501318373 (1) | `11972b2` | Same test: warmupPeak 391, measuredPeak/last 404, budget 12. |
+| CI 40650433905 (1) | `7ff3a88` | `Image_metadata_child_keeps_an_independent_handle_lease_after_parent_close`: RasterHost closed the pipe before returning HANDLE image metadata (`EndOfStreamException`); RasterHost 69/70. |
+
+Attempt 2 of each run passed, as did the Release workflow for `11972b2`
+(run 40497270257). The first two failures are recurrences of `E26-04`.
+
+`7ff3a88` changes only `website/` files, so the metadata failure is not
+attributed to it. RasterHost acquires the child metadata lease synchronously
+before it handles the parent close that follows on the same pipe, so lease
+ordering does not explain the closure. The log has no RasterHost exit code or
+crash record, and the cause is unconfirmed. It is tracked as a separate open
+item in `implementation-todo.md`, not counted as a first-run pass.
+
 ## October external review: host lookup and FFI contracts
 
 ### Hero image FFI behavior
