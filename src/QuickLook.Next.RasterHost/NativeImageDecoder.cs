@@ -179,7 +179,26 @@ internal static class NativeImageDecoder
             || (prefix.StartsWith("<?xml"u8) && prefix.IndexOf("<svg"u8) >= 0);
     }
 
-    public static async Task<NativeDecodedImage?> TryDecodeHandleAsync(
+    public static Task<NativeDecodedImage?> TryDecodeHandleAsync(
+        SafeFileHandle sourceHandle,
+        long sourceLength,
+        string logicalPath,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        uint targetWidth,
+        uint targetHeight)
+        => TryDecodeHandleAsync(
+            DecodeGate,
+            sourceHandle,
+            sourceLength,
+            logicalPath,
+            timeout,
+            cancellationToken,
+            targetWidth,
+            targetHeight);
+
+    internal static async Task<NativeDecodedImage?> TryDecodeHandleAsync(
+        SemaphoreSlim decodeGate,
         SafeFileHandle sourceHandle,
         long sourceLength,
         string logicalPath,
@@ -190,9 +209,13 @@ internal static class NativeImageDecoder
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
-        await DecodeGate.WaitAsync(timeoutCts.Token);
+        bool enteredGate = false;
         try
         {
+            // The deadline includes this wait. A request queued behind a canceled decode must
+            // time out as a failed decode, not escape as cancellation of a request still owed a reply.
+            await decodeGate.WaitAsync(timeoutCts.Token);
+            enteredGate = true;
             return await Task.Run(
                 () => TryDecodeHandle(
                     sourceHandle,
@@ -205,11 +228,15 @@ internal static class NativeImageDecoder
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            DiagLog.Write(
+                "RasterHost",
+                $"native HANDLE image decode timed out; timeout={timeout.TotalMilliseconds:0}ms queued={!enteredGate}");
             return null;
         }
         finally
         {
-            DecodeGate.Release();
+            if (enteredGate)
+                decodeGate.Release();
         }
     }
 
