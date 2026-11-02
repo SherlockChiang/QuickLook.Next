@@ -128,6 +128,41 @@ ordering does not explain the closure. The log has no RasterHost exit code or
 crash record, and the cause is unconfirmed. It is tracked as a separate open
 item in `implementation-todo.md`, not counted as a first-run pass.
 
+## 2026-11-02 RasterHost flake diagnosis
+
+More hosted failures appeared on PRs that cannot affect RasterHost: Dependabot
+PRs that change only GitHub Actions, and the docs-only PR #40. Each passed on an
+unchanged rerun:
+
+- `Mixed_format_reopens_release_sources_and_ignore_previous_request_close(cancelBeforeReceiving: True)`
+  hit its 45 s test timeout (run 41280841004).
+- `Image_handle_decodes_without_an_input_anchor_or_logical_path(format: "png")`
+  reported "Image preview failed." (runs 33478069302 and 33478080235).
+- `E26-04` recurred on PR #40 (run 40672330909): warmupPeak 399, measuredPeak
+  414, measuredLast 410, budget 12.
+
+Local reproduction limited the RasterHost integration assembly to four logical
+processors with process affinity, on a Core Ultra 7 155H. This matches the hosted
+runner's processor count and the xUnit parallelism it implies.
+
+| Finding | Evidence | Outcome |
+|---|---|---|
+| Native HANDLE decode deadline under contention | Alone under CPU load, the SVG test failed 3/6 times. The host log showed no native result, then a system-codec failure, because WIC has no SVG decoder. In full parallel runs it failed 1 in 8-10 runs. | By design, a decode past the 2.5 s deadline fails. That timeout previously wrote nothing to the host log; it now logs `native HANDLE image decode timed out`. The deadline is unchanged. |
+| Gate wait escaped the deadline handler | `TryDecodeHandleAsync` awaited its decode gate outside the handler. A request queued behind a canceled decode therefore surfaced its timeout as `OperationCanceledException`. The open worker logged "open canceled" and sent no reply, which matches the 45 s failure. Parallel runs: 1/8 before the fix, 0/10 after. | Fixed in `0c27790`. Two tests hold the gate and cover both deadline and caller cancellation. Moving the wait back outside the handler makes the deadline test fail. |
+| `E26-04` handle growth | Thread counts now accompany the budget (`d71cd90`). Five local failures: 411→425 handles with 23→26 or 23→27 threads, 416→431 with 23→26 or 24→27, and 422→437 with 24→27. That is 3.5-5 handles per added thread. Runs without thread growth showed no handle growth. | The growth matches late runtime thread creation, not per-preview handle retention. The budget, cycle counts and assertion are unchanged. |
+| Test parallelism | Serialized runs (`xUnit.ParallelizeTestCollections=false`) failed 2/8, all `E26-04`. | Parallelism alone does not explain the flakes. The setting was not changed. |
+| Early pipe closure in the metadata child-lease test | Eight runs of the test alone under CPU load passed. | Not reproduced. When the pipe closes before an expected reply, integration tests now report the RasterHost exit code. Codes 31-33 identify the drain watchdogs. |
+
+Final verification: Release solution build passed with zero warnings and zero
+errors. Core 412/412, ParserHost 49/49, RasterHost 72/72 and ShellBroker 13/13
+tests passed. The first architecture guard run stopped at the performance
+bounds guard: the PDF shared-render rule requires the literal call shape
+`ReceiveSurfaceAsync(channel, requestId, 2`, and the new `host` argument had
+been inserted before `requestId`. Moving `host` after the page generation
+restored that shape without changing the guard. The complete architecture guard
+with `-SkipDist` then passed, and so did `git diff --check`. Rust code is
+unchanged, so the Rust gates were not rerun.
+
 ## October external review: host lookup and FFI contracts
 
 ### Hero image FFI behavior
