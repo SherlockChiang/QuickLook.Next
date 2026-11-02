@@ -59,7 +59,7 @@ public sealed class RasterHostSvgTests
             while (surface is null || ready is null || waveform is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before completing the SVG preview");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before completing the SVG preview");
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (message is PreviewSurface receivedSurface)

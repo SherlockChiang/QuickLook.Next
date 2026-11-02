@@ -64,12 +64,12 @@ public sealed class RasterHostPdfTests
                     timeout.Token);
                 pinned.Handle.Dispose();
 
-                PreviewReady ready = Assert.IsType<PreviewReady>(await ReceiveUntilAsync<PreviewReady>(channel, timeout.Token));
+                PreviewReady ready = Assert.IsType<PreviewReady>(await ReceiveUntilAsync<PreviewReady>(channel, host, timeout.Token));
                 Assert.Equal(1, ready.PageCount);
                 long generation = cycle + 1;
                 await channel.SendAsync(new PreviewPageOpen(requestId, 0, generation, 1), timeout.Token);
                 PreviewSurface surface = Assert.IsType<PreviewSurface>(
-                    await ReceiveUntilAsync<PreviewSurface>(channel, timeout.Token));
+                    await ReceiveUntilAsync<PreviewSurface>(channel, host, timeout.Token));
                 Assert.Equal((requestId, 0, generation), (surface.RequestId, surface.PageIndex, surface.PageGeneration));
                 using (var localSurface = new Microsoft.Win32.SafeHandles.SafeFileHandle(
                     WindowsHandleTransfer.DuplicateHandleFromProcess(host.SafeHandle, surface.SharedHandle), ownsHandle: true))
@@ -161,7 +161,7 @@ public sealed class RasterHostPdfTests
 
             string inputDirectory = Path.Combine(
                 Path.GetTempPath(), "QuickLookNext", "raster-inputs", host.Id.ToString(), "input-" + requestId);
-            var ready = Assert.IsType<PreviewReady>(await ReceiveUntilAsync<PreviewReady>(channel, timeout.Token));
+            var ready = Assert.IsType<PreviewReady>(await ReceiveUntilAsync<PreviewReady>(channel, host, timeout.Token));
             Assert.Equal("pdf", ready.Kind);
             Assert.Equal(1, ready.PageCount);
             Assert.Equal(400d, ready.PageWidth, precision: 3);
@@ -171,12 +171,12 @@ public sealed class RasterHostPdfTests
             Assert.False(TryOverwriteFile(physicalPath));
 
             await channel.SendAsync(new PreviewPageOpen(requestId, 1, 1, 1), timeout.Token);
-            var pageError = Assert.IsType<PreviewPageError>(await ReceiveUntilAsync<PreviewPageError>(channel, timeout.Token));
+            var pageError = Assert.IsType<PreviewPageError>(await ReceiveUntilAsync<PreviewPageError>(channel, host, timeout.Token));
             Assert.Equal((requestId, 1, 1L), (pageError.RequestId, pageError.PageIndex, pageError.PageGeneration));
             Assert.False(pageError.TimedOut);
 
             await channel.SendAsync(new PreviewPageOpen(requestId, 0, 2, 1), timeout.Token);
-            var surface = Assert.IsType<PreviewSurface>(await ReceiveUntilAsync<PreviewSurface>(channel, timeout.Token));
+            var surface = Assert.IsType<PreviewSurface>(await ReceiveUntilAsync<PreviewSurface>(channel, host, timeout.Token));
             Assert.Equal((requestId, 0, 2L), (surface.RequestId, surface.PageIndex, surface.PageGeneration));
             Assert.Equal(400u, surface.Width);
             Assert.Equal(267u, surface.Height);
@@ -328,7 +328,7 @@ public sealed class RasterHostPdfTests
             if (explicitlyCloseOldGeneration)
                 await channel.SendAsync(new PreviewPageClose(requestId, 0, 1), timeout.Token);
 
-            PreviewSurface secondSurface = await ReceiveSurfaceAsync(channel, requestId, 2, timeout.Token);
+            PreviewSurface secondSurface = await ReceiveSurfaceAsync(channel, requestId, 2, host, timeout.Token);
             Assert.Equal((requestId, 0, 2L),
                 (secondSurface.RequestId, secondSurface.PageIndex, secondSurface.PageGeneration));
             await channel.SendAsync(new PreviewSurfaceRelease(secondSurface.TransferId), timeout.Token);
@@ -370,18 +370,21 @@ public sealed class RasterHostPdfTests
             cancellationToken);
         pinned.Handle.Dispose();
         PreviewReady ready = Assert.IsType<PreviewReady>(
-            await ReceiveUntilAsync<PreviewReady>(channel, cancellationToken));
+            await ReceiveUntilAsync<PreviewReady>(channel, host, cancellationToken));
         Assert.Equal(requestId, ready.RequestId);
         return requestId;
     }
 
-    private static async Task<ControlMessage> ReceiveUntilAsync<T>(PipeChannel channel, CancellationToken cancellationToken)
+    private static async Task<ControlMessage> ReceiveUntilAsync<T>(
+        PipeChannel channel,
+        Process host,
+        CancellationToken cancellationToken)
         where T : ControlMessage
     {
         while (true)
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
-                ?? throw new EndOfStreamException("RasterHost closed before completing the PDF request.");
+                ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before completing the PDF request.");
             if (message is PreviewError error)
                 throw new Xunit.Sdk.XunitException(error.Message);
             if (message is T)
@@ -393,12 +396,13 @@ public sealed class RasterHostPdfTests
         PipeChannel channel,
         string requestId,
         long pageGeneration,
+        Process host,
         CancellationToken cancellationToken)
     {
         while (true)
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
-                ?? throw new EndOfStreamException("RasterHost closed before completing the PDF page request.");
+                ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before completing the PDF page request.");
             if (message is PreviewError error)
                 throw new Xunit.Sdk.XunitException(error.Message);
             if (message is PreviewPageError pageError && pageError.PageGeneration == pageGeneration)
