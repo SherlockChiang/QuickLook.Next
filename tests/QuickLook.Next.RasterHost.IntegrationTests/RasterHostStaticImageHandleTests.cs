@@ -205,7 +205,7 @@ public sealed class RasterHostStaticImageHandleTests
                 while (surface is null || ready is null || waveform is null)
                 {
                     ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                        ?? throw new EndOfStreamException("RasterHost closed during system-codec cycle preview");
+                        ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed during system-codec cycle preview");
                     if (message is PreviewError error)
                         throw new Xunit.Sdk.XunitException(error.Message);
                     if (message is PreviewSurface receivedSurface)
@@ -303,6 +303,11 @@ public sealed class RasterHostStaticImageHandleTests
             int baselinePeakHandles = 0;
             int peakHandles = 0;
             int lastMeasuredHandles = 0;
+            // Thread counts are diagnostics only: each runtime thread owns handles, so they show
+            // whether a budget failure follows thread growth or a per-preview resource.
+            int baselinePeakThreads = 0;
+            int peakThreads = 0;
+            int lastMeasuredThreads = 0;
             for (int cycle = 0; cycle <= warmupCycleCount + measuredCycleCount; cycle++)
             {
                 await File.WriteAllBytesAsync(physicalPath, image, timeout.Token);
@@ -332,7 +337,7 @@ public sealed class RasterHostStaticImageHandleTests
                 while (surface is null || ready is null || waveform is null)
                 {
                     ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                        ?? throw new EndOfStreamException("RasterHost closed during cycle preview");
+                        ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed during cycle preview");
                     if (message is PreviewError error)
                         throw new Xunit.Sdk.XunitException(error.Message);
                     if (message is PreviewSurface receivedSurface)
@@ -352,12 +357,18 @@ public sealed class RasterHostStaticImageHandleTests
                 await WaitUntilAsync(() => TryOverwriteFile(physicalPath), timeout.Token);
                 host.Refresh();
                 int handleCount = host.HandleCount;
+                int threadCount = host.Threads.Count;
                 if (cycle > warmupCycleCount - baselineWindowCycleCount && cycle <= warmupCycleCount)
+                {
                     baselinePeakHandles = Math.Max(baselinePeakHandles, handleCount);
+                    baselinePeakThreads = Math.Max(baselinePeakThreads, threadCount);
+                }
                 else if (cycle > warmupCycleCount)
                 {
                     peakHandles = Math.Max(peakHandles, handleCount);
                     lastMeasuredHandles = handleCount;
+                    peakThreads = Math.Max(peakThreads, threadCount);
+                    lastMeasuredThreads = threadCount;
                 }
             }
 
@@ -365,7 +376,9 @@ public sealed class RasterHostStaticImageHandleTests
             Assert.True(
                 peakHandles <= baselinePeakHandles + handleGrowthBudget,
                 $"RasterHost handle growth exceeded the bounded budget: warmupPeak={baselinePeakHandles}, " +
-                $"measuredPeak={peakHandles}, measuredLast={lastMeasuredHandles}, budget={handleGrowthBudget}.");
+                $"measuredPeak={peakHandles}, measuredLast={lastMeasuredHandles}, budget={handleGrowthBudget}; " +
+                $"threads warmupPeak={baselinePeakThreads}, measuredPeak={peakThreads}, " +
+                $"measuredLast={lastMeasuredThreads}.");
             Assert.False(File.Exists(logicalPath));
         }
         finally
@@ -456,7 +469,7 @@ public sealed class RasterHostStaticImageHandleTests
             while (surface is null || ready is null || waveform is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before completing the image preview");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before completing the image preview");
                 messageOrder.Add(message.GetType());
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
@@ -593,7 +606,7 @@ public sealed class RasterHostStaticImageHandleTests
             while (metadataReady is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before returning HANDLE image metadata.");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before returning HANDLE image metadata.");
                 if (message is PreviewError error && error.RequestId == metadataRequestId)
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (message is PreviewImageMetadataReady ready
@@ -706,7 +719,7 @@ public sealed class RasterHostStaticImageHandleTests
             while (metadataReady is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before returning WIC HANDLE image metadata.");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before returning WIC HANDLE image metadata.");
                 if (message is PreviewError error && error.RequestId == metadataRequestId)
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (message is PreviewImageMetadataReady ready
@@ -994,7 +1007,7 @@ public sealed class RasterHostStaticImageHandleTests
         while (surface is null || ready is null || waveform is null || thumbnail is null)
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
-                ?? throw new EndOfStreamException("RasterHost closed before completing the parent image preview.");
+                ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before completing the parent image preview.");
             // Output may have been queued before the host processed close. Dispose its transfer
             // without letting it satisfy the replacement request's completion conditions.
             if (canceledRequestId is not null)

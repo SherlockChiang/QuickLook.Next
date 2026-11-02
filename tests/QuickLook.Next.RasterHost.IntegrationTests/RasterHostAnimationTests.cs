@@ -158,7 +158,7 @@ public sealed class RasterHostAnimationTests
         while (!surfaceReceived || !readyReceived || (expectWaveform && (!waveformReceived || !thumbnailReceived)))
         {
             ControlMessage message = await channel.ReceiveAsync(cancellationToken)
-                ?? throw new EndOfStreamException("RasterHost closed during mixed animation preview");
+                ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed during mixed animation preview");
             switch (message)
             {
                 case PreviewSurface surface:
@@ -310,7 +310,7 @@ public sealed class RasterHostAnimationTests
             while (frames is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed before returning animation frames");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed before returning animation frames");
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);
                 if (extension == "gif")
@@ -456,7 +456,7 @@ public sealed class RasterHostAnimationTests
             while (surface is null || ready is null)
             {
                 ControlMessage message = await channel.ReceiveAsync(timeout.Token)
-                    ?? throw new EndOfStreamException("RasterHost closed during GIF static preview");
+                    ?? throw RasterHostProcessTestHelper.HostClosed(host, "RasterHost closed during GIF static preview");
                 Assert.False(message is PreviewImageWaveform, "GIF static first frame must not publish RGB waveform data.");
                 if (message is PreviewError error)
                     throw new Xunit.Sdk.XunitException(error.Message);

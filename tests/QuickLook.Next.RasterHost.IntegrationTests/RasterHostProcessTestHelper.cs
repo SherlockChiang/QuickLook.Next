@@ -13,7 +13,27 @@ internal static class RasterHostProcessTestHelper
     // paths and a genuine hang never exits, so the timeout only removes load flake.
     private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ClosedPipeExitWait = TimeSpan.FromSeconds(5);
     private static readonly ConditionalWeakTable<Process, CompletionState> CompletionStates = new();
+
+    // An early pipe EOF throws before AssertCleanExit can run, so record the exit code here. It
+    // separates fail-closed exits (31-33 drain watchdogs) from crashes and protocol shutdowns.
+    public static EndOfStreamException HostClosed(Process host, string message)
+    {
+        string exitState;
+        try
+        {
+            exitState = host.WaitForExit(ClosedPipeExitWait)
+                ? $"exited with code {host.ExitCode} (0x{host.ExitCode:X8})"
+                : $"was still running after {ClosedPipeExitWait.TotalSeconds:0}s";
+        }
+        catch (Exception exception)
+        {
+            exitState = $"has no readable exit state ({exception.GetType().Name})";
+        }
+
+        return new EndOfStreamException($"{message.TrimEnd('.')}; RasterHost process {exitState}.");
+    }
 
     public static async Task<bool> CompleteAsync(NamedPipeServerStream pipe, Process host)
     {
