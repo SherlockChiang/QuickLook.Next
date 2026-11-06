@@ -67,8 +67,14 @@ MSIX SHA-256
 `586a6848a42bde43f8353e9f19c3aecd469402b5d67d6d56bdda0a0ee9d538b1` and
 MSIXUPLOAD SHA-256
 `62d70c45472289cdd66416952111aa1dbe803179618a1b87ad725bd8d615729f`.
+The authenticated GitHub Actions run
+`42256375469` (`Microsoft Store Candidate #6`) then passed on rerun attempt 2
+from the documentation commit `93274fa`. The workflow validated Partner Center
+identity configuration, reran the release and Store guards, built the x64
+candidate, attested its provenance, and uploaded the workflow artifact.
 Partner Center upload, WACK, Store certification, Store-signed acquisition,
-install/update/uninstall, and final listing evidence remain open.
+install/update/uninstall, and final listing evidence remain open because this
+workflow stops at candidate packaging and artifact upload.
 
 The following acceptance tracks remain intentionally uncovered for this batch.
 
