@@ -86,6 +86,26 @@ The following acceptance tracks remain intentionally uncovered for this batch.
 - Store-signed installation/update/uninstall evidence and Partner Center
   publication confirmation.
 
+## 2026-11-07 physical HDR spot check
+
+The installed `1.0.3` package was opened on the active HDR display with the
+generated PQ/BT.2020 10-bit AVIF
+`artifacts/hdr-manual-2026-11-07/pq-bt2020-test.avif`. Its SHA-256 is
+`AAD935DAA2804C6CD1AC57AEEA22D0E5B8AB1AA740AF5162346ED9995B6C70F9`.
+The App log reported `capability=HighDynamicRange; hdrEnabled=True`, and
+RasterHost reported `hdrScRgbSurfaceSupported=True` together with
+`sourceProfile=PqBt2020`, `sourceBitDepth=10`,
+`sourceMetadataComplete=True`, `decodedHdrPayload=True`, and
+`selectedFormat=R16G16B16A16_FLOAT_SCRGB`. The App attached the same FP16
+surface with `hdr=True`.
+
+The path and transport checks passed. The synthetic sample showed severe
+magenta/white block artifacts in the preview, so visual-golden acceptance is
+not passed. This sample is a generated smoke input rather than a licensed
+reference image. The raw evidence remains in
+`%LOCALAPPDATA%\\QuickLookNext\\logs\\app.log` and
+`%LOCALAPPDATA%\\QuickLookNext\\logs\\raster-host.log`.
+
 The September 2026 HDR follow-up adds deterministic PQ/scRGB selection,
 generation-tagged display refresh, HLG SDR fallback, and bounded hdr decision
 diagnostics. See [hdr-validation-matrix.md](hdr-validation-matrix.md).
