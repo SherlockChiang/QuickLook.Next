@@ -470,7 +470,7 @@ internal sealed unsafe class CompositionProducer : IDisposable
             var data = new D3D11_SUBRESOURCE_DATA
             {
                 pSysMem = p,
-                SysMemPitch = (uint)(width * 4),
+                SysMemPitch = (uint)(width * bytesPerPixel),
                 SysMemSlicePitch = (uint)expected,
             };
 

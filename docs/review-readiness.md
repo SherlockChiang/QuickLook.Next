@@ -106,11 +106,26 @@ reference image. The raw evidence remains in
 `%LOCALAPPDATA%\\QuickLookNext\\logs\\app.log` and
 `%LOCALAPPDATA%\\QuickLookNext\\logs\\raster-host.log`.
 
+The artifact was then rebuilt with the HDR upload fix in
+`src/QuickLook.Next.RasterHost/CompositionProducer.cs`. The FP16 upload path
+now uses `width * bytesPerPixel` for `SysMemPitch`, so
+`R16G16B16A16_FLOAT` rows use eight bytes per pixel while SDR rows continue to
+use four. The separately installed local package `1.0.3.1` was reopened with
+the same PQ sample. The complete test pattern rendered without duplicated rows
+or magenta/white block artifacts. RasterHost again reported the same complete
+PQ metadata and FP16 scRGB selection, and App attached the HDR surface.
+
+The focused .NET test host could not connect within 90 seconds in the current
+isolated SDK environment, so the manual retest and build logs are the evidence
+for this fix. The pinned release SDK environment remains required for the
+formal test gate.
+
 The September 2026 HDR follow-up adds deterministic PQ/scRGB selection,
 generation-tagged display refresh, HLG SDR fallback, and bounded hdr decision
 diagnostics. See [hdr-validation-matrix.md](hdr-validation-matrix.md).
-Release build/Core/RasterHost focused verification passed; physical HDR-panel
-and visual-golden acceptance remain pending. An earlier run failed to create
+Release build/Core/RasterHost focused verification passed; the synthetic HDR
+smoke retest now passes after the row-stride fix, while physical HDR-panel and
+licensed visual-golden acceptance remain pending. An earlier run failed to create
 the restricted token (CreateRestrictedToken, Win32 87). The full local architecture
 sequence and restricted-host launch smoke passed on 2026-10-12; that earlier
 failure remains historical evidence rather than a current verified blocker.
