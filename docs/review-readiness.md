@@ -37,6 +37,49 @@ Continue measuring
 input/first-paint/cancellation latency and resource recovery before broad module
 extraction or added format fidelity.
 
+## 2026-11-06 release validation for 1.0.3
+
+The clean `ad7c0382e45edddbcffe7c1257ca30c7ba9d66fc` checkout passed the
+authoritative `tools/release.ps1 -ExpectedVersion 1.0.3` sequence with the
+pinned local .NET SDK `10.0.302`. The final run passed the Rust format/Clippy
+checks, native tests, Release build, solution tests, architecture guard, and
+signed sideload packaging. The first full test pass observed the known
+RasterHost HANDLE-budget fluctuation under `E26-04`; four focused reruns of
+`Repeated_image_handle_previews_release_sources_without_linear_handle_growth`
+then passed, and the subsequent full release run passed.
+
+The local sideload artifacts are `artifacts/QuickLook.Next-1.0.3-win-x64.msix`
+with SHA-256
+`45432de783c24b875fd0ad4cb98f9c6133224e66285b1e0004ca2236bd9d568a` and
+`artifacts/QuickLook.Next-Installer-1.0.3-win-x64.zip` with SHA-256
+`d4a5cdd107c1b4f76b7b025132b3363f9fe62c2ebcbf308672085d1653932938`.
+
+GitHub `v1.0.3` is already published from this commit and its Actions package,
+publish, build-and-test, and website checks are successful. The remote installer
+hash differs from the local rebuild because the packaging output is not byte
+reproducible, so the published asset remains the workflow-produced artifact.
+
+The Store-identity candidate was generated locally and passed the Store package
+guards. It is x64, unsigned for Microsoft re-signing, version `1.0.3.0`, and
+uses `Uranus92.QuickLookNext` with publisher
+`CN=FDE9F71C-A397-410B-81EE-36E18F4325E5`. The candidate manifest records
+MSIX SHA-256
+`586a6848a42bde43f8353e9f19c3aecd469402b5d67d6d56bdda0a0ee9d538b1` and
+MSIXUPLOAD SHA-256
+`62d70c45472289cdd66416952111aa1dbe803179618a1b87ad725bd8d615729f`.
+Partner Center upload, WACK, Store certification, Store-signed acquisition,
+install/update/uninstall, and final listing evidence remain open.
+
+The following acceptance tracks remain intentionally uncovered for this batch.
+
+- physical HDR-panel and visual-golden acceptance;
+- loading cancellation timing, cloud/network placeholders, rapid-pressure input,
+  and measured host-drain/resource-latency budgets;
+- packaged UI/manual regression evidence for the newly rebuilt Store-identity
+  package;
+- Store-signed installation/update/uninstall evidence and Partner Center
+  publication confirmation.
+
 The September 2026 HDR follow-up adds deterministic PQ/scRGB selection,
 generation-tagged display refresh, HLG SDR fallback, and bounded hdr decision
 diagnostics. See [hdr-validation-matrix.md](hdr-validation-matrix.md).
