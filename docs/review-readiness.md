@@ -130,6 +130,49 @@ the restricted token (CreateRestrictedToken, Win32 87). The full local architect
 sequence and restricted-host launch smoke passed on 2026-10-12; that earlier
 failure remains historical evidence rather than a current verified blocker.
 
+## 2026-11-08 release candidate validation for 1.0.4
+
+Version `1.0.4` includes the FP16 HDR upload stride fix from commit `9f9ed0c`.
+Rust format/Clippy and native tests passed, with 364 tests passed and one
+ignored corpus test. The pinned .NET SDK `10.0.302` restored the locked solution
+and produced a Release build with seven `NU1900` vulnerability-feed warnings.
+The local release script's .NET format step was blocked by the isolated
+BuildHost named-pipe permission error. A temporary validation copy skipped only
+that formatter step. The solution build passed, while the Core, ParserHost,
+RasterHost, and ShellBroker integration testhosts each failed to connect within
+the 180-second environment timeout. No managed test assertion failure was
+reported.
+
+The attached user image was recorded as
+`artifacts/hdr-manual-2026-11-07/user-downloaded-hdr-test.jpg`, SHA-256
+`3268D7A568FBD63D1E0FDDC75B534B8ACCA2A45325631E696E7B7CDB058D7E72`.
+It is an SDR JPEG sanity sample viewed on the active HDR display. The PQ/BT.2020
+synthetic sample remains the HDR acceptance input, and the corrected local
+preview showed no duplicated rows or magenta/white blocks after the row-pitch
+fix.
+
+The locally signed sideload package passed `tools/test-release-artifacts.ps1`.
+The MSIX `artifacts/QuickLook.Next-1.0.4-win-x64.msix` has SHA-256
+`0d7929beae3f0331774631761420cc5b450b747a0d273a3dac83d68d034479bd`.
+The installer `artifacts/QuickLook.Next-Installer-1.0.4-win-x64.zip` has
+SHA-256 `08c6a90fb844d28116ed75836861b26c087d07a267d433f11bbc37c38138d0d3`.
+
+The local Microsoft Store candidate is unsigned for Microsoft re-signing,
+version `1.0.4.0`, identity `Uranus92.QuickLookNext`, publisher
+`CN=FDE9F71C-A397-410B-81EE-36E18F4325E5`, and publisher display name
+`Uranus92`. Its MSIX SHA-256 is
+`f1249ed996481b71937ac7eed4fdd5a565662e2d79eabbe6d899e5c63971c3eb` and its
+MSIXUPLOAD SHA-256 is
+`609027919df08fb47f6e7989b093cc1a9dced3e75376bd26327764efb770b2e1`.
+The manifest is `artifacts/QuickLook.Next-Store-1.0.4.0-manifest.json`.
+
+The authoritative GitHub Actions release workflow and the manually dispatched
+Microsoft Store Candidate workflow still need to run from the release commit.
+Those hosted Windows runs are the remaining release gates for the official
+GitHub Release assets and the workflow-produced Store candidate. Partner Center
+submission, WACK, Store-signed acquisition, install/update/uninstall, physical
+HDR-panel acceptance, and licensed visual-golden comparison remain open.
+
 ## Fixed And Hardened
 
 - Update metadata rejects malformed shapes through one `FormatException`
