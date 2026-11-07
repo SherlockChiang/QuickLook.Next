@@ -173,6 +173,23 @@ GitHub Release assets and the workflow-produced Store candidate. Partner Center
 submission, WACK, Store-signed acquisition, install/update/uninstall, physical
 HDR-panel acceptance, and licensed visual-golden comparison remain open.
 
+The hosted gates then completed successfully. CI run `42393485170` passed, and
+Release run `42393485169` passed in 20m 59s. GitHub published
+[`v1.0.4`](https://github.com/SherlockChiang/QuickLook.Next/releases/tag/v1.0.4)
+from `d099291`; the workflow installer asset SHA-256 is
+`de3a815e47dbd0165b4c5445006ae4b99f58f76e0fff19e618fd5a966b040418`.
+The release run also uploaded the SPDX manifest, release metadata, update feed,
+and build attestation. The only hosted annotation was the repository's existing
+Node.js 20 deprecation warning for the pinned artifact-upload action.
+
+Microsoft Store Candidate run `42395758391` (#7) passed in 25m 0s from the same
+commit and uploaded artifact `QuickLook.Next-Microsoft-Store-7` with GitHub
+artifact digest
+`sha256:ac8d4865b405d7eba8dec2d97c3ba8b2b8539e12af26e63b2af5417335d06a08`.
+This workflow ends at unsigned candidate packaging, provenance attestation, and
+artifact upload. Partner Center submission and all Store-signed acceptance
+items remain open.
+
 ## Fixed And Hardened
 
 - Update metadata rejects malformed shapes through one `FormatException`
