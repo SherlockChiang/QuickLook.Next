@@ -102,7 +102,7 @@ media, folders, and more without leaving your workflow.
 
 ## 已发布帖子
 
-- [r/opensource](https://www.reddit.com/r/opensource/comments/1xwof9e/i_built_quicklook_next_a_native_windows_explorer/)，使用 `Promotional` 标签，发布时间为 2026-11-15。
+- `r/opensource` 帖子曾使用 `Promotional` 标签发布，随后因账号 karma 不满足社区要求被版主移除，用户已手动删除。
 - [r/windowsapps](https://www.reddit.com/r/windowsapps/comments/1xwofop/quicklook_next_a_spacekey_file_previewer_for/)，使用 `Developer` 标签，发布时间为 2026-11-15。
 - Hacker News 暂未发布，提交页要求登录 HN 账号。
 
