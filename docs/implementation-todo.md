@@ -44,9 +44,9 @@ Evidence and limitations are recorded in
   (CI run 40650433905 attempt 1, website-only `7ff3a88`). The unchanged job
   rerun passed; the log has no host exit code, so the cause is unconfirmed.
   Eight stressed local runs passed. Integration failures now report the host
-  exit code (`d71cd90`), so a recurrence will separate watchdog exits from crashes.
+  exit code (`fb58765`), so a recurrence will separate watchdog exits from crashes.
 - [x] Return a decode failure, not request cancellation, when a native HANDLE
-  decode reaches its deadline while queued behind the decode gate (`0c27790`).
+  decode reaches its deadline while queued behind the decode gate (`7b36b8d`).
 
 Focused heartbeat/render-completion/thumbnail helpers satisfy the demonstrated
 extraction needs in this batch. Broader restructuring stays in `E26-05`; preserve
