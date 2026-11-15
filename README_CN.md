@@ -9,9 +9,8 @@
 ![架构](https://img.shields.io/badge/architecture-x64-555555)
 [![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-certified-107C10?logo=microsoft)](https://apps.microsoft.com/detail/9PM0XKBFJC6R)
 
-**QuickLook Next 1.0.0.0（x64）已通过 Microsoft Store 认证。** Store 版本使用
-Microsoft 分配的 Store 身份并由 Microsoft 签名；下方 GitHub Releases 仍是独立的
-开发签名侧载和直接下载渠道。
+Microsoft Store 版本使用 Microsoft 分配的 Store 身份并由 Microsoft 签名。
+下方 GitHub Releases 提供签名侧载包和直接下载渠道。
 
 <a href="https://apps.microsoft.com/detail/9PM0XKBFJC6R?hl=zh-cn&amp;gl=CN">
   <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="从 Microsoft Store 获取 QuickLook Next" />

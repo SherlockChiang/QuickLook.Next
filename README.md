@@ -9,10 +9,9 @@
 ![Architecture](https://img.shields.io/badge/architecture-x64-555555)
 [![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-certified-107C10?logo=microsoft)](https://apps.microsoft.com/detail/9PM0XKBFJC6R)
 
-The Microsoft Store submission for **QuickLook Next 1.0.0.0 (x64)** has passed
-certification. The Store build uses Microsoft's Store identity and signing;
-the GitHub release channel below remains the signed sideload distribution for
-development and direct downloads.
+The Microsoft Store listing uses Microsoft's Store identity and signing. The
+GitHub release channel below provides signed sideload packages and direct
+downloads.
 
 <a href="https://apps.microsoft.com/detail/9PM0XKBFJC6R?hl=en-us&amp;gl=US">
   <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get QuickLook Next from the Microsoft Store" />
