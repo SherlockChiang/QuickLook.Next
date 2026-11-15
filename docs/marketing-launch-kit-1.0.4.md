@@ -106,3 +106,15 @@ media, folders, and more without leaving your workflow.
 - [r/windowsapps](https://www.reddit.com/r/windowsapps/comments/1xwofop/quicklook_next_a_spacekey_file_previewer_for/)，使用 `Developer` 标签，发布时间为 2026-11-15。
 - Hacker News 暂未发布，提交页要求登录 HN 账号。
 
+## Reddit 商店补充段落
+
+用于保留的 `r/windowsapps` 帖子追加以下内容：
+
+> Microsoft Store product page: https://apps.microsoft.com/detail/9PM0XKBFJC6R
+>
+> The Store listing is the signed distribution channel for QuickLook Next. The
+> GitHub release remains available for source, release notes, and direct download.
+
+桌面浏览器会话退出后，当前无法自动编辑 Reddit 帖子。恢复浏览器登录后，
+将这段文字追加到 [r/windowsapps 帖子](https://www.reddit.com/r/windowsapps/comments/1xwofop/quicklook_next_a_spacekey_file_previewer_for/)。
+
